@@ -235,7 +235,10 @@ function splitSteps(parts: Part[]): Part[][] {
   return steps
 }
 
-function richPerSection(parts: Part[], s: InternalsSettings, live: boolean): RichBlock[] {
+// these build the FINAL, static message only. The live draft never shows
+// collapsible content — see buildLiveBlocks — so there's nothing here to keep
+// in sync with closeStreamingTable's half-row heuristic.
+function richPerSection(parts: Part[], s: InternalsSettings): RichBlock[] {
   const out: RichBlock[] = []
   for (const p of parts) {
     if (p.kind === "reasoning") {
@@ -243,13 +246,13 @@ function richPerSection(parts: Part[], s: InternalsSettings, live: boolean): Ric
     } else if (p.kind === "tool") {
       if (s.tools !== "off") out.push(toolBlock(p, s.tools === "expanded"))
     } else if (p.kind === "text") {
-      if (p.text.trim()) out.push(...mdToRich(live ? closeStreamingTable(p.text) : p.text))
+      if (p.text.trim()) out.push(...mdToRich(p.text))
     }
   }
   return out
 }
 
-function richCombined(parts: Part[], s: InternalsSettings, live: boolean): RichBlock[] {
+function richCombined(parts: Part[], s: InternalsSettings): RichBlock[] {
   const out: RichBlock[] = []
   const reasoning = reasoningOf(parts)
   const tools = parts.filter((p): p is ToolCallPart => p.kind === "tool")
@@ -262,11 +265,11 @@ function richCombined(parts: Part[], s: InternalsSettings, live: boolean): RichB
     out.push(detailsBlock(`⚙ Tools (${tools.length})`, inner, s.tools === "expanded"))
   }
   const text = textOf(parts)
-  if (text) out.push(...mdToRich(live ? closeStreamingTable(text) : text))
+  if (text) out.push(...mdToRich(text))
   return out
 }
 
-function richPerStep(parts: Part[], s: InternalsSettings, live: boolean): RichBlock[] {
+function richPerStep(parts: Part[], s: InternalsSettings): RichBlock[] {
   const out: RichBlock[] = []
   for (const step of splitSteps(parts)) {
     const reasoning = reasoningOf(step)
@@ -288,19 +291,36 @@ function richPerStep(parts: Part[], s: InternalsSettings, live: boolean): RichBl
       out.push(detailsBlock(bits.join(" · "), inner, open))
     }
     const text = textOf(step)
-    if (text) out.push(...mdToRich(live ? closeStreamingTable(text) : text))
+    if (text) out.push(...mdToRich(text))
   }
   return out
 }
 
-function buildRich(parts: Part[], s: InternalsSettings, live = false): RichBlock[] {
-  if (s.layout === "combined") return richCombined(parts, s, live)
+function buildRich(parts: Part[], s: InternalsSettings): RichBlock[] {
+  if (s.layout === "combined") return richCombined(parts, s)
   if (s.layout === "per-section") {
-    const blocks = richPerSection(parts, s, live)
+    const blocks = richPerSection(parts, s)
     // too many collapses → roll up so the message still sends
-    return blocks.filter((b) => b.type === "details").length > MAX_DETAILS ? richCombined(parts, s, live) : blocks
+    return blocks.filter((b) => b.type === "details").length > MAX_DETAILS ? richCombined(parts, s) : blocks
   }
-  return richPerStep(parts, s, live)
+  return richPerStep(parts, s)
+}
+
+// the live draft, in contrast: no collapsible content at all (nothing to
+// expand mid-stream means nothing for Telegram's full-content-replace edits
+// to reset). Finished reasoning/tool parts are flushed as their own
+// permanent messages (see #freeText) and excluded here via `flushedIdx`; a
+// tool still running shows as a plain, non-expandable status line.
+function buildLiveBlocks(parts: Part[], s: InternalsSettings, flushedToolIDs: Set<string>): RichBlock[] {
+  const out: RichBlock[] = []
+  for (const p of parts) {
+    if (p.kind === "tool") {
+      if (s.tools !== "off" && !flushedToolIDs.has(p.id)) out.push({ type: "paragraph", text: toolHeader(p) })
+    } else if (p.kind === "text") {
+      if (p.text.trim()) out.push(...mdToRich(closeStreamingTable(p.text)))
+    }
+  }
+  return out
 }
 
 const quoteLines = (title: string, body: string): string => `> **${title}**\n> ${body.split("\n").join("\n> ")}`
@@ -950,10 +970,49 @@ export class TelegramBot {
     // those message ids and skip them so the prompt never leaks into the draft
     const userMessages = new Set<string>()
 
+    // tool calls and reasoning blocks already posted as their own permanent
+    // message, tracked by their stable opencode part id. Expanding one of
+    // those sticks, since nothing ever edits it again. Kept out of both the
+    // live draft (buildLiveBlocks) and the final combined message
+    // (dropFlushed below) so nothing shows twice. `turn`/`liveParts` are two
+    // separately-derived arrays of the same turn (see below), so identity
+    // has to survive across them — position doesn't.
+    const flushedToolIDs = new Set<string>()
+    const flushedReasoningIDs = new Set<string>()
+    const flushTool = async (p: ToolCallPart) => {
+      if (internals.tools === "off" || flushedToolIDs.has(p.id)) return
+      flushedToolIDs.add(p.id)
+      try {
+        await this.#tg.sendRichMessage({ chatID, rich_message: { blocks: [toolBlock(p, internals.tools === "expanded")] } })
+      } catch (err) {
+        console.error(`[card] tool send failed: ${(err as Error)?.message ?? err}`)
+      }
+    }
+    // a finished reasoning part has no explicit "done" event of its own, but
+    // opencode's step-finish marker tells us the step (and its reasoning) is over
+    const flushPendingReasoning = async () => {
+      if (internals.thinking === "off") return
+      for (const p of liveParts) {
+        if (p.kind !== "reasoning" || !p.id || !p.text.trim() || flushedReasoningIDs.has(p.id)) continue
+        flushedReasoningIDs.add(p.id)
+        try {
+          await this.#tg.sendRichMessage({ chatID, rich_message: { blocks: [reasoningBlock(p.text, internals.thinking === "expanded")] } })
+        } catch (err) {
+          console.error(`[card] reasoning send failed: ${(err as Error)?.message ?? err}`)
+        }
+      }
+    }
+    const dropFlushed = (parts: Part[]): Part[] =>
+      parts.filter((p) => {
+        if (p.kind === "tool") return !flushedToolIDs.has(p.id)
+        if (p.kind === "reasoning") return !p.id || !flushedReasoningIDs.has(p.id)
+        return true
+      })
+
     // re-render the live draft from the parts collected so far (throttled by the
     // caller). Rich draft → blocks; text/placeholder → plain tail.
     const renderLive = async () => {
-      const blocks = buildRich(liveParts, internals, true)
+      const blocks = buildLiveBlocks(liveParts, internals, flushedToolIDs)
       const json = JSON.stringify(blocks)
       if (json === lastRich) return
       lastRich = json
@@ -1082,7 +1141,7 @@ export class TelegramBot {
             // reasoning deltas build the collapsible 💭 block but never the answer text
             if (evt.partType === "reasoning") {
               reasoningBuf.set(evt.partID, (reasoningBuf.get(evt.partID) ?? "") + evt.text)
-              upsert(evt.partID, { kind: "reasoning", text: reasoningBuf.get(evt.partID)! })
+              upsert(evt.partID, { kind: "reasoning", text: reasoningBuf.get(evt.partID)!, id: evt.partID })
             } else {
               textBuf.set(evt.partID, (textBuf.get(evt.partID) ?? "") + evt.text)
               upsert(evt.partID, { kind: "text", text: textBuf.get(evt.partID)! })
@@ -1090,7 +1149,17 @@ export class TelegramBot {
             if (Date.now() - lastEdit > 700) await renderLive()
           } else if (evt.type === "part.updated" && evt.part) {
             upsert(evt.partID, evt.part)
-            if (Date.now() - lastEdit > 700) await renderLive()
+            let settled = false
+            if (evt.part.kind === "tool" && (evt.part.status === "completed" || evt.part.status === "error")) {
+              await flushTool(evt.part)
+              settled = true
+            } else if (evt.part.kind === "other" && evt.part.nativeType === "step-finish") {
+              await flushPendingReasoning()
+              settled = true
+            }
+            // a card just left the draft for its own permanent message — redraw
+            // now so it doesn't linger as a flat status line until the next tick
+            if (settled || Date.now() - lastEdit > 700) await renderLive()
           } else if (evt.type === "permission.requested") {
             await this.#permissionPrompt(chatID, sessionID, evt.permissionID)
           }
@@ -1117,13 +1186,15 @@ export class TelegramBot {
         /* fall back to the single returned message */
       }
       const media = turn.filter((p): p is FilePart => p.kind === "file")
-      const shown = await presentParts(turn, internals)
+      // tool/reasoning parts already posted as their own message during
+      // streaming stay out of the final combined message (dropFlushed)
+      const shown = await presentParts(dropFlushed(turn), internals)
       if (!shown && textOf(turn).trim()) await presentBody(textOf(turn), media)
       else if (!shown && placeholder) await this.#tg.deleteMessage({ chatID, messageID: placeholder.message_id })
     } catch (err) {
       if (ac.signal.aborted) {
         // render whatever we streamed so far (partial details included)
-        const shown = await presentParts(liveParts, internals)
+        const shown = await presentParts(dropFlushed(liveParts), internals)
         if (!shown) await presentBody("(stopped)")
       } else {
         const text = `⚠️ ${(err as Error).message}`.slice(-MAX_MSG)

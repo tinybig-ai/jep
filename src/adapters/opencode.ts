@@ -83,7 +83,7 @@ function mapPart(part: any, workspace: string): Part {
         metadata: part.state?.metadata,
       }
     case "reasoning":
-      return { kind: "reasoning", text: part.text ?? "" }
+      return { kind: "reasoning", text: part.text ?? "", id: part.id ?? "" }
     case "snapshot":
       return { kind: "snapshot" }
     case "file": {

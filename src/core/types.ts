@@ -30,6 +30,11 @@ export interface ToolCallPart {
 export interface ReasoningPart {
   kind: "reasoning"
   text: string
+  // harness's stable part id, when known — lets a live-streamed reasoning
+  // block be matched back to itself once a later, separately-fetched
+  // snapshot of the same turn comes in (text content alone isn't a safe key:
+  // two different steps can produce identical short reasoning)
+  id?: string
 }
 
 export interface SnapshotPart {
