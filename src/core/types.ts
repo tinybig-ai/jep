@@ -35,6 +35,9 @@ export interface ReasoningPart {
   // snapshot of the same turn comes in (text content alone isn't a safe key:
   // two different steps can produce identical short reasoning)
   id?: string
+  // wall-clock time actually spent on this reasoning block, when the harness
+  // reports it (only once finalized — never present while still streaming)
+  durationMs?: number
 }
 
 export interface SnapshotPart {

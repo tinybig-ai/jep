@@ -201,8 +201,19 @@ const detailsBlock = (summary: string, blocks: RichBlock[], open: boolean): Rich
   blocks,
 })
 
-const reasoningBlock = (text: string, open: boolean): RichBlock =>
-  detailsBlock("💭 Thinking", [{ type: "paragraph", text: capText(text.trim()) }], open)
+// "Thought for Ns" once we know how long it actually took (sub-second rounds
+// up to 1s rather than printing "0s"); "Thinking" while that's still unknown
+const thinkingPhrase = (ms?: number): string => (ms != null ? `Thought for ${fmtDuration(Math.max(ms, 1000))}` : "Thinking")
+// several reasoning parts (one per step) can end up merged into one combined
+// block/label — sum whatever duration each part actually reports, or give up
+// and show no duration if none of them have it
+const reasoningMs = (parts: ReasoningPart[]): number | undefined => {
+  const known = parts.filter((p) => p.durationMs != null)
+  return known.length ? known.reduce((sum, p) => sum + p.durationMs!, 0) : undefined
+}
+
+const reasoningBlock = (text: string, open: boolean, ms?: number): RichBlock =>
+  detailsBlock(`💭 ${thinkingPhrase(ms)}`, [{ type: "paragraph", text: capText(text.trim()) }], open)
 
 const toolBlock = (t: ToolCallPart, open: boolean): RichBlock => {
   const body = capText(toolBody(t))
@@ -254,7 +265,7 @@ function richPerSection(parts: Part[], s: InternalsSettings): RichBlock[] {
   const out: RichBlock[] = []
   for (const p of parts) {
     if (p.kind === "reasoning") {
-      if (s.thinking !== "off" && p.text.trim()) out.push(reasoningBlock(p.text, s.thinking === "expanded"))
+      if (s.thinking !== "off" && p.text.trim()) out.push(reasoningBlock(p.text, s.thinking === "expanded", p.durationMs))
     } else if (p.kind === "tool") {
       if (s.tools !== "off") out.push(toolBlock(p, s.tools === "expanded"))
     } else if (p.kind === "text") {
@@ -268,7 +279,10 @@ function richCombined(parts: Part[], s: InternalsSettings): RichBlock[] {
   const out: RichBlock[] = []
   const reasoning = reasoningOf(parts)
   const tools = parts.filter((p): p is ToolCallPart => p.kind === "tool")
-  if (s.thinking !== "off" && reasoning) out.push(reasoningBlock(reasoning, s.thinking === "expanded"))
+  if (s.thinking !== "off" && reasoning) {
+    const ms = reasoningMs(parts.filter((p): p is ReasoningPart => p.kind === "reasoning"))
+    out.push(reasoningBlock(reasoning, s.thinking === "expanded", ms))
+  }
   if (s.tools !== "off" && tools.length) {
     const inner: RichBlock[] = tools.map((t) => {
       const lang = toolLang(t)
@@ -290,7 +304,10 @@ function richPerStep(parts: Part[], s: InternalsSettings): RichBlock[] {
     const showTools = s.tools !== "off" && tools.length > 0
     if (showReasoning || showTools) {
       const bits: string[] = []
-      if (showReasoning) bits.push("💭 Thinking")
+      if (showReasoning) {
+        const ms = reasoningMs(step.filter((p): p is ReasoningPart => p.kind === "reasoning"))
+        bits.push(`💭 ${thinkingPhrase(ms)}`)
+      }
       if (showTools) bits.push(tools.length === 1 ? toolHeader(tools[0]!) : `⚙ ${tools.length} tools`)
       const inner: RichBlock[] = []
       if (showReasoning) inner.push({ type: "paragraph", text: capText(reasoning) })
@@ -314,7 +331,7 @@ function richPerStep(parts: Part[], s: InternalsSettings): RichBlock[] {
 function richMinimal(parts: Part[], s: InternalsSettings): RichBlock[] {
   const bits: string[] = []
   for (const p of parts) {
-    if (p.kind === "reasoning" && s.thinking !== "off" && p.text.trim()) bits.push("💭 thinking")
+    if (p.kind === "reasoning" && s.thinking !== "off" && p.text.trim()) bits.push(`💭 ${thinkingPhrase(p.durationMs).toLowerCase()}`)
     else if (p.kind === "tool" && s.tools !== "off") bits.push(toolIcon(p))
   }
   const out: RichBlock[] = []
@@ -340,15 +357,25 @@ function buildRich(parts: Part[], s: InternalsSettings): RichBlock[] {
 // to reset). Finished reasoning/tool parts are flushed as their own
 // permanent messages (see #freeText) and excluded here via `flushedIdx`; a
 // tool still running shows as a plain, non-expandable status line.
-function buildLiveBlocks(parts: Part[], s: InternalsSettings, flushedToolIDs: Set<string>): RichBlock[] {
+function buildLiveBlocks(
+  parts: Part[],
+  s: InternalsSettings,
+  flushedToolIDs: Set<string>,
+  reasoningStarted: Map<string, number>,
+): RichBlock[] {
   if (s.layout === "minimal") {
     // nothing ever gets flushed to its own message in minimal mode (there's
     // nothing collapsible to protect) — same icon-line-then-text shape live
     // as in the final message, just growing in place as parts stream in.
+    // durationMs isn't known yet mid-stream, so estimate it from when we
+    // first saw this part.
     const bits: string[] = []
     for (const p of parts) {
-      if (p.kind === "reasoning" && s.thinking !== "off" && p.text.trim()) bits.push("💭 thinking")
-      else if (p.kind === "tool" && s.tools !== "off") bits.push(toolIcon(p))
+      if (p.kind === "reasoning" && s.thinking !== "off" && p.text.trim()) {
+        const started = p.id ? reasoningStarted.get(p.id) : undefined
+        const ms = p.durationMs ?? (started !== undefined ? Date.now() - started : undefined)
+        bits.push(`💭 ${thinkingPhrase(ms).toLowerCase()}`)
+      } else if (p.kind === "tool" && s.tools !== "off") bits.push(toolIcon(p))
     }
     const out: RichBlock[] = []
     if (bits.length) out.push({ type: "paragraph", text: bits.join("  ") })
@@ -373,7 +400,7 @@ function partsToMarkdown(parts: Part[], s: InternalsSettings): string {
   if (s.layout === "minimal") {
     const bits: string[] = []
     for (const p of parts) {
-      if (p.kind === "reasoning" && s.thinking !== "off" && p.text.trim()) bits.push("💭 thinking")
+      if (p.kind === "reasoning" && s.thinking !== "off" && p.text.trim()) bits.push(`💭 ${thinkingPhrase(p.durationMs).toLowerCase()}`)
       else if (p.kind === "tool" && s.tools !== "off") bits.push(toolIcon(p))
     }
     return [bits.length ? bits.join("  ") : "", textOf(parts)].filter(Boolean).join("\n\n")
@@ -381,7 +408,10 @@ function partsToMarkdown(parts: Part[], s: InternalsSettings): string {
   const out: string[] = []
   const reasoning = reasoningOf(parts)
   const tools = parts.filter((p): p is ToolCallPart => p.kind === "tool")
-  if (s.thinking !== "off" && reasoning) out.push(quoteLines("💭 Thinking", capText(reasoning)))
+  if (s.thinking !== "off" && reasoning) {
+    const ms = reasoningMs(parts.filter((p): p is ReasoningPart => p.kind === "reasoning"))
+    out.push(quoteLines(`💭 ${thinkingPhrase(ms)}`, capText(reasoning)))
+  }
   if (s.tools !== "off" && tools.length)
     out.push(quoteLines(`⚙ Tools (${tools.length})`, capText(tools.map((t) => `${toolHeader(t)}\n\n${toolBody(t)}`).join("\n\n"))))
   const text = textOf(parts)
@@ -1017,6 +1047,9 @@ export class TelegramBot {
       }
     }
     const reasoningBuf = new Map<string, string>()
+    // when we first saw each reasoning part — durationMs isn't known until
+    // the harness finalizes the part, so this is the live estimate
+    const reasoningStarted = new Map<string, number>()
     const textBuf = new Map<string, string>()
     // `message.part.updated` fires for the user's own message parts too — track
     // those message ids and skip them so the prompt never leaks into the draft
@@ -1048,8 +1081,10 @@ export class TelegramBot {
       for (const p of liveParts) {
         if (p.kind !== "reasoning" || !p.id || !p.text.trim() || flushedReasoningIDs.has(p.id)) continue
         flushedReasoningIDs.add(p.id)
+        const started = reasoningStarted.get(p.id)
+        const ms = p.durationMs ?? (started !== undefined ? Date.now() - started : undefined)
         try {
-          await this.#tg.sendRichMessage({ chatID, rich_message: { blocks: [reasoningBlock(p.text, internals.thinking === "expanded")] } })
+          await this.#tg.sendRichMessage({ chatID, rich_message: { blocks: [reasoningBlock(p.text, internals.thinking === "expanded", ms)] } })
         } catch (err) {
           console.error(`[card] reasoning send failed: ${(err as Error)?.message ?? err}`)
         }
@@ -1065,7 +1100,7 @@ export class TelegramBot {
     // re-render the live draft from the parts collected so far (throttled by the
     // caller). Rich draft → blocks; text/placeholder → plain tail.
     const renderLive = async () => {
-      const blocks = buildLiveBlocks(liveParts, internals, flushedToolIDs)
+      const blocks = buildLiveBlocks(liveParts, internals, flushedToolIDs, reasoningStarted)
       const json = JSON.stringify(blocks)
       if (json === lastRich) return
       lastRich = json
@@ -1193,6 +1228,7 @@ export class TelegramBot {
           if (evt.type === "part.delta" && evt.text) {
             // reasoning deltas build the collapsible 💭 block but never the answer text
             if (evt.partType === "reasoning") {
+              if (!reasoningStarted.has(evt.partID)) reasoningStarted.set(evt.partID, Date.now())
               reasoningBuf.set(evt.partID, (reasoningBuf.get(evt.partID) ?? "") + evt.text)
               upsert(evt.partID, { kind: "reasoning", text: reasoningBuf.get(evt.partID)!, id: evt.partID })
             } else {
@@ -1202,6 +1238,7 @@ export class TelegramBot {
             if (Date.now() - lastEdit > 700) await renderLive()
           } else if (evt.type === "part.updated" && evt.part) {
             upsert(evt.partID, evt.part)
+            if (evt.part.kind === "reasoning" && !reasoningStarted.has(evt.partID)) reasoningStarted.set(evt.partID, Date.now())
             let settled = false
             if (evt.part.kind === "tool" && (evt.part.status === "completed" || evt.part.status === "error")) {
               await flushTool(evt.part)

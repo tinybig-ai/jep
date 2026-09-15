@@ -82,8 +82,12 @@ function mapPart(part: any, workspace: string): Part {
         title: part.state?.title,
         metadata: part.state?.metadata,
       }
-    case "reasoning":
-      return { kind: "reasoning", text: part.text ?? "", id: part.id ?? "" }
+    case "reasoning": {
+      const start = part.time?.start
+      const end = part.time?.end
+      const durationMs = typeof start === "number" && typeof end === "number" ? end - start : undefined
+      return { kind: "reasoning", text: part.text ?? "", id: part.id ?? "", ...(durationMs !== undefined ? { durationMs } : {}) }
+    }
     case "snapshot":
       return { kind: "snapshot" }
     case "file": {
