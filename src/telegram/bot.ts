@@ -947,31 +947,35 @@ export class TelegramBot {
     }
     const sorted = [...sessions].sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))
     const shown = sorted.slice(0, MAX_LIST)
-    const list = shown.map((s) => {
+    // 🗑 first (left of the title, not right) reads as "here's the destructive
+    // action, then the thing it acts on" and lines up under itself row to row
+    const rows: InlineButton[][] = shown.map((s, i) => {
       const marker = s.id === c.sessionID ? "  ◀" : ""
-      const title = this.#displayTitle(s.id, s.title)
-      return `${shown.indexOf(s) + 1}. "${title}"${marker}`
+      return [
+        { ...btn("🗑", `deld:${i}`), style: "danger" as const },
+        btn(`${i + 1}. ${this.#displayTitle(s.id, s.title)}${marker}`, `open:${i}`),
+      ]
     })
-    const rows: InlineButton[][] = shown.map((s, i) => [
-      btn(`${i + 1}. ${this.#displayTitle(s.id, s.title)}`, `open:${i}`),
-      { ...btn("🗑", `deld:${i}`), style: "danger" as const },
-    ])
-    const lines = [caption, "", ...list, ...(sorted.length > MAX_LIST ? [`… and ${sorted.length - MAX_LIST} more`] : [])]
+    const more = sorted.length > MAX_LIST ? [`… and ${sorted.length - MAX_LIST} more`] : []
 
     let messageID: number | undefined
     if (forceReply) {
       // force_reply only exists on the classic keyboard — rich message
       // buttons (below) can't carry it, so /use's "type or tap" prompt keeps
-      // the classic, evenly-split row. Nothing else needs forceReply.
+      // the classic, evenly-split row. It also needs the text list (unlike
+      // the button-only paths below): forceReply means typing is expected,
+      // and there's nothing to read a title off of while composing a reply.
+      const list = shown.map((s, i) => `${i + 1}. "${this.#displayTitle(s.id, s.title)}"${s.id === c.sessionID ? "  ◀" : ""}`)
       const markup = kin(rows)
       markup.force_reply = true
-      const msg = await this.#tg.sendMessage({ chatID, text: lines.join("\n"), replyMarkup: markup })
+      const msg = await this.#tg.sendMessage({ chatID, text: [caption, "", ...list, ...more].join("\n"), replyMarkup: markup })
       messageID = msg.message_id
     } else {
       // rich message buttons (same format #menu uses for Settings) size each
       // button to its own label instead of splitting the row evenly, so the
-      // 🗑 actually reads as smaller than the conversation button next to it
-      messageID = (await this.#menu(chatID, lines, rows)).messageID
+      // 🗑 actually reads as smaller than the conversation button next to it.
+      // No separate text list — the buttons already say what they need to.
+      messageID = (await this.#menu(chatID, [caption, ...more], rows)).messageID
     }
     if (messageID === undefined) return
     c.picker = { messageID, ws: c.workspace, sessions: shown.map((s) => s.id) }
