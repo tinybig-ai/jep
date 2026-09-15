@@ -143,8 +143,14 @@ async function buildMockApi(): Promise<TelegramApi> {
 
 async function main() {
   syncOpenCodeAuth()
+  const mockMode = process.env.JEP_TG_MOCK === "1"
   const dirs = (process.env.JEP_WORKSPACES ?? "").split(":").filter(Boolean)
-  const workspaceDirs = dirs.length ? dirs : DEFAULT_WORKSPACES
+  // no env var to set up before the bot is useful: outside mock mode, the
+  // workspace defaults to wherever this process was launched from/with (the
+  // plist's WorkingDirectory, or wherever you `cd`'d before running it).
+  // Mock mode keeps the bundled two-workspace fixtures so switching between
+  // workspaces stays testable regardless of the caller's own cwd.
+  const workspaceDirs = dirs.length ? dirs : mockMode ? DEFAULT_WORKSPACES : [process.cwd()]
   const workspaces: Ws[] = []
 
   for (const dir of workspaceDirs) {
@@ -154,7 +160,6 @@ async function main() {
   }
   const activeWsName = workspaces[0]!.name
 
-  const mockMode = process.env.JEP_TG_MOCK === "1"
   const tg = mockMode ? await buildMockApi() : createTelegramApi(process.env.JEP_TG_TOKEN ?? "")
 
   const pairFile = join(DATA_HOME, "pairing.json")

@@ -59,7 +59,7 @@ fixture/
 | `JEP_TG_TOKEN` | Telegram bot token (live mode) |
 | `JEP_DATA_HOME` | data dir (pairing.json, store.json, opencode/). Default: temp dir |
 | `JEP_TG_MOCK=1` | mock mode — reads JSON-lines updates from stdin, dumps calls |
-| `JEP_WORKSPACES` | `:`-separated workspace dirs (default: the two fixtures) |
+| `JEP_WORKSPACES` | `:`-separated workspace dirs (default: `process.cwd()` — mock mode: the two fixtures) |
 | `JEP_TG_PAIR_CODE` | fixed pairing code (default: generated) |
 | `JEP_TG_OWNER` | seed the owner (default: 000000000 via pairing.json) |
 | `JEP_TG_PAIR_MAX/WINDOW/ROTATE` | pairing-attempt limits, window, rotation |
