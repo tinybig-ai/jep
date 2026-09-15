@@ -2,8 +2,9 @@ import { readFileSync, writeFileSync } from "node:fs"
 
 /** how much of a part (thinking / tool call) to show */
 export type DetailMode = "off" | "collapsed" | "expanded"
-/** how reasoning + tool calls are grouped in the reply */
-export type InternalsLayout = "per-step" | "per-section" | "combined"
+/** how reasoning + tool calls are grouped in the reply. "minimal" ignores
+ * collapse entirely — just an icon+name line up front, then the answer. */
+export type InternalsLayout = "per-step" | "per-section" | "combined" | "minimal"
 
 export interface InternalsSettings {
   thinking: DetailMode

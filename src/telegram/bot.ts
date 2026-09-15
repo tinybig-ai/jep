@@ -155,6 +155,18 @@ function toolHeader(t: ToolCallPart): string {
 
 const toolLang = (t: ToolCallPart): string | undefined => (t.name === "edit" ? "diff" : undefined)
 
+// layout "minimal": just an icon + the tool's generic name, nothing call-specific
+const TOOL_ICON: Record<string, string> = {
+  edit: "✏️ edit",
+  write: "📝 write",
+  bash: "⚙ bash",
+  read: "📖 read",
+  glob: "🔎 glob",
+  grep: "🔎 grep",
+  task: "🤖 task",
+}
+const toolIcon = (t: ToolCallPart): string => TOOL_ICON[t.name] ?? `⚙ ${t.name}`
+
 function toolBody(t: ToolCallPart): string {
   const meta = toolMeta(t)
   const input = toolInput(t)
@@ -296,7 +308,24 @@ function richPerStep(parts: Part[], s: InternalsSettings): RichBlock[] {
   return out
 }
 
+// no collapse at all: one icon+name per reasoning/tool part, in order, as a
+// single line up front — then the plain answer text. Nothing to expand,
+// nothing for a Telegram edit to ever reset.
+function richMinimal(parts: Part[], s: InternalsSettings): RichBlock[] {
+  const bits: string[] = []
+  for (const p of parts) {
+    if (p.kind === "reasoning" && s.thinking !== "off" && p.text.trim()) bits.push("💭 thinking")
+    else if (p.kind === "tool" && s.tools !== "off") bits.push(toolIcon(p))
+  }
+  const out: RichBlock[] = []
+  if (bits.length) out.push({ type: "paragraph", text: bits.join("  ") })
+  const text = textOf(parts)
+  if (text) out.push(...mdToRich(text))
+  return out
+}
+
 function buildRich(parts: Part[], s: InternalsSettings): RichBlock[] {
+  if (s.layout === "minimal") return richMinimal(parts, s)
   if (s.layout === "combined") return richCombined(parts, s)
   if (s.layout === "per-section") {
     const blocks = richPerSection(parts, s)
@@ -312,6 +341,20 @@ function buildRich(parts: Part[], s: InternalsSettings): RichBlock[] {
 // permanent messages (see #freeText) and excluded here via `flushedIdx`; a
 // tool still running shows as a plain, non-expandable status line.
 function buildLiveBlocks(parts: Part[], s: InternalsSettings, flushedToolIDs: Set<string>): RichBlock[] {
+  if (s.layout === "minimal") {
+    // nothing ever gets flushed to its own message in minimal mode (there's
+    // nothing collapsible to protect) — same icon-line-then-text shape live
+    // as in the final message, just growing in place as parts stream in.
+    const bits: string[] = []
+    for (const p of parts) {
+      if (p.kind === "reasoning" && s.thinking !== "off" && p.text.trim()) bits.push("💭 thinking")
+      else if (p.kind === "tool" && s.tools !== "off") bits.push(toolIcon(p))
+    }
+    const out: RichBlock[] = []
+    if (bits.length) out.push({ type: "paragraph", text: bits.join("  ") })
+    for (const p of parts) if (p.kind === "text" && p.text.trim()) out.push(...mdToRich(closeStreamingTable(p.text)))
+    return out
+  }
   const out: RichBlock[] = []
   for (const p of parts) {
     if (p.kind === "tool") {
@@ -327,6 +370,14 @@ const quoteLines = (title: string, body: string): string => `> **${title}**\n> $
 
 // HTML fallback: blockquotes (not collapsible) instead of rich details blocks
 function partsToMarkdown(parts: Part[], s: InternalsSettings): string {
+  if (s.layout === "minimal") {
+    const bits: string[] = []
+    for (const p of parts) {
+      if (p.kind === "reasoning" && s.thinking !== "off" && p.text.trim()) bits.push("💭 thinking")
+      else if (p.kind === "tool" && s.tools !== "off") bits.push(toolIcon(p))
+    }
+    return [bits.length ? bits.join("  ") : "", textOf(parts)].filter(Boolean).join("\n\n")
+  }
   const out: string[] = []
   const reasoning = reasoningOf(parts)
   const tools = parts.filter((p): p is ToolCallPart => p.kind === "tool")
@@ -338,14 +389,15 @@ function partsToMarkdown(parts: Part[], s: InternalsSettings): string {
   return out.join("\n\n")
 }
 
-const PRESETS: Record<"simple" | "detailed" | "debug", InternalsSettings> = {
+const PRESETS: Record<"simple" | "minimal" | "detailed" | "debug", InternalsSettings> = {
   simple: { thinking: "off", tools: "off", layout: "per-step" },
+  minimal: { thinking: "collapsed", tools: "collapsed", layout: "minimal" },
   detailed: { thinking: "collapsed", tools: "collapsed", layout: "per-step" },
   debug: { thinking: "expanded", tools: "expanded", layout: "per-section" },
 }
 
-function internalsPreset(s: InternalsSettings): "simple" | "detailed" | "debug" | "custom" {
-  for (const name of ["simple", "detailed", "debug"] as const) {
+function internalsPreset(s: InternalsSettings): "simple" | "minimal" | "detailed" | "debug" | "custom" {
+  for (const name of ["simple", "minimal", "detailed", "debug"] as const) {
     const p = PRESETS[name]
     if (p.thinking === s.thinking && p.tools === s.tools && p.layout === s.layout) return name
   }
@@ -354,7 +406,7 @@ function internalsPreset(s: InternalsSettings): "simple" | "detailed" | "debug" 
 
 const cycleMode = (m: DetailMode): DetailMode => (m === "off" ? "collapsed" : m === "collapsed" ? "expanded" : "off")
 const cycleLayout = (l: InternalsLayout): InternalsLayout =>
-  l === "per-step" ? "per-section" : l === "per-section" ? "combined" : "per-step"
+  l === "per-step" ? "per-section" : l === "per-section" ? "combined" : l === "combined" ? "minimal" : "per-step"
 
 const HELP = [
   "jep — your coding agent, on the go.",
@@ -980,7 +1032,8 @@ export class TelegramBot {
     const flushedToolIDs = new Set<string>()
     const flushedReasoningIDs = new Set<string>()
     const flushTool = async (p: ToolCallPart) => {
-      if (internals.tools === "off" || flushedToolIDs.has(p.id)) return
+      // minimal layout has nothing collapsible to protect — never splits cards out
+      if (internals.tools === "off" || internals.layout === "minimal" || flushedToolIDs.has(p.id)) return
       flushedToolIDs.add(p.id)
       try {
         await this.#tg.sendRichMessage({ chatID, rich_message: { blocks: [toolBlock(p, internals.tools === "expanded")] } })
@@ -991,7 +1044,7 @@ export class TelegramBot {
     // a finished reasoning part has no explicit "done" event of its own, but
     // opencode's step-finish marker tells us the step (and its reasoning) is over
     const flushPendingReasoning = async () => {
-      if (internals.thinking === "off") return
+      if (internals.thinking === "off" || internals.layout === "minimal") return
       for (const p of liveParts) {
         if (p.kind !== "reasoning" || !p.id || !p.text.trim() || flushedReasoningIDs.has(p.id)) continue
         flushedReasoningIDs.add(p.id)
@@ -1415,7 +1468,7 @@ export class TelegramBot {
   async #settingsInternals(chatID: number, messageID: number): Promise<void> {
     const s = this.#store.internals(chatID)
     const preset = internalsPreset(s)
-    const presetBtn = (label: string, name: "simple" | "detailed" | "debug"): InlineButton => {
+    const presetBtn = (label: string, name: "simple" | "minimal" | "detailed" | "debug"): InlineButton => {
       const b = btn(label, `intp:${name}`)
       if (preset === name) b.style = "success"
       return b
@@ -1426,7 +1479,8 @@ export class TelegramBot {
     custom.disabled = true
     if (preset === "custom") custom.style = "success"
     const rows: InlineButton[][] = [
-      [presetBtn("Simple", "simple"), presetBtn("Detailed", "detailed"), presetBtn("Debug", "debug"), custom],
+      [presetBtn("Simple", "simple"), presetBtn("Minimal", "minimal")],
+      [presetBtn("Detailed", "detailed"), presetBtn("Debug", "debug"), custom],
       [btn(`💭 Thinking · ${s.thinking}`, "int:think")],
       [btn(`⚙ Tool calls · ${s.tools}`, "int:tools")],
       [btn(`🧩 Layout · ${s.layout}`, "int:layout")],
@@ -1602,7 +1656,7 @@ export class TelegramBot {
         break
       }
       case "intp": {
-        const preset = PRESETS[rest as "simple" | "detailed" | "debug"]
+        const preset = PRESETS[rest as "simple" | "minimal" | "detailed" | "debug"]
         if (!preset) {
           await tg.answerCallbackQuery({ id: cq.id, text: "unknown preset" })
           break
