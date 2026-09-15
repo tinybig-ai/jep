@@ -948,13 +948,13 @@ export class TelegramBot {
     const sorted = [...sessions].sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))
     const shown = sorted.slice(0, MAX_LIST)
     // 🗑 first (left of the title, not right) reads as "here's the destructive
-    // action, then the thing it acts on" and lines up under itself row to row
+    // action, then the thing it acts on" and lines up under itself row to row.
+    // The active conversation is green (same style Settings uses), not a
+    // marker glued onto the label.
     const rows: InlineButton[][] = shown.map((s, i) => {
-      const marker = s.id === c.sessionID ? "  ◀" : ""
-      return [
-        { ...btn("🗑", `deld:${i}`), style: "danger" as const },
-        btn(`${i + 1}. ${this.#displayTitle(s.id, s.title)}${marker}`, `open:${i}`),
-      ]
+      const openBtn = btn(`${i + 1}. ${this.#displayTitle(s.id, s.title)}`, `open:${i}`)
+      if (s.id === c.sessionID) openBtn.style = "success"
+      return [{ ...btn("🗑", `deld:${i}`), style: "danger" as const }, openBtn]
     })
     const more = sorted.length > MAX_LIST ? [`… and ${sorted.length - MAX_LIST} more`] : []
 
