@@ -19,6 +19,12 @@ export interface ToolCallPart {
   input: unknown
   output: unknown
   status?: "pending" | "running" | "completed" | "error"
+  // harness-supplied display hint (e.g. the file path an edit/read/write
+  // touched, or a subagent's description) and free-form structured detail
+  // (e.g. a computed diff) — richer than input/output, which are the model's
+  // literal call args/result and often don't carry a diff or match count
+  title?: string
+  metadata?: unknown
 }
 
 export interface ReasoningPart {

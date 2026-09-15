@@ -79,6 +79,8 @@ function mapPart(part: any, workspace: string): Part {
         input: part.state?.input ?? part.input ?? {},
         output: part.state?.output ?? part.output ?? {},
         status: part.state?.status,
+        title: part.state?.title,
+        metadata: part.state?.metadata,
       }
     case "reasoning":
       return { kind: "reasoning", text: part.text ?? "" }

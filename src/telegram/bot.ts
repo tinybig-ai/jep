@@ -111,7 +111,68 @@ const isEmptyValue = (v: unknown): boolean => {
   return false
 }
 
+const toolMeta = (t: ToolCallPart): Record<string, any> => (t.metadata ?? {}) as Record<string, any>
+const toolInput = (t: ToolCallPart): Record<string, any> => (t.input ?? {}) as Record<string, any>
+
+// opencode's tool result carries far more than the model-facing input/output:
+// edit's real diff and write's file path live in `title`/`metadata`, which the
+// generic input/output dump below would otherwise never show.
+function toolHeader(t: ToolCallPart): string {
+  const meta = toolMeta(t)
+  const input = toolInput(t)
+  switch (t.name) {
+    case "edit": {
+      const stats = meta.filediff ? ` (+${meta.filediff.additions ?? 0} -${meta.filediff.deletions ?? 0})` : ""
+      return `✏️ edit ${t.title ?? input.filePath ?? ""}${stats}`
+    }
+    case "write":
+      return `📝 write ${t.title ?? input.filePath ?? ""}`
+    case "bash": {
+      const exit = meta.exit
+      const mark = exit === 0 || exit == null ? "" : ` ✗(${exit})`
+      const cmd = String(t.title ?? input.command ?? "").split("\n")[0]!
+      const short = cmd.length > 60 ? `${cmd.slice(0, 57)}…` : cmd
+      return `⚙ bash${mark}${short ? `: ${short}` : ""}`
+    }
+    case "read": {
+      const disp = meta.display
+      const range = disp?.type === "file" ? ` (lines ${disp.lineStart}-${disp.lineEnd} of ${disp.totalLines})` : ""
+      return `📖 read ${t.title ?? input.filePath ?? ""}${range}`
+    }
+    case "glob": {
+      // glob's `title` is the searched directory, not the pattern
+      const dir = t.title && t.title !== "." ? ` in ${t.title}` : ""
+      return `🔎 glob ${input.pattern ?? ""}${dir} (${meta.count ?? 0})`
+    }
+    case "grep":
+      return `🔎 grep ${t.title ?? input.pattern ?? ""} (${meta.matches ?? 0})`
+    case "task":
+      return `🤖 ${input.subagent_type ? `@${input.subagent_type}` : "subagent"}: ${t.title ?? input.description ?? ""}${meta.background ? " (background)" : ""}`
+    default:
+      return `⚙ ${t.name}`
+  }
+}
+
+const toolLang = (t: ToolCallPart): string | undefined => (t.name === "edit" ? "diff" : undefined)
+
 function toolBody(t: ToolCallPart): string {
+  const meta = toolMeta(t)
+  const input = toolInput(t)
+  if (t.name === "edit") {
+    const diff = meta.diff ?? meta.filediff?.patch
+    if (typeof diff === "string" && diff.trim()) return diff
+  }
+  if (t.name === "write" && typeof input.content === "string" && input.content) return input.content
+  if (t.name === "bash" && typeof t.output === "string" && t.output.trim()) return t.output
+  if (t.name === "read") {
+    const disp = meta.display
+    if (disp?.type === "file" && typeof disp.text === "string") return disp.text
+    if (disp?.type === "directory" && Array.isArray(disp.entries)) return disp.entries.join("\n")
+  }
+  if (t.name === "task" && typeof t.output === "string") {
+    const m = t.output.match(/<task_(?:result|error)>\n?([\s\S]*?)\n?<\/task_(?:result|error)>/)
+    if (m) return m[1]!.trim()
+  }
   const inp = isEmptyValue(t.input) ? "" : stringifyTool(t.input)
   const out = isEmptyValue(t.output) ? "" : stringifyTool(t.output)
   const parts: string[] = []
@@ -133,7 +194,8 @@ const reasoningBlock = (text: string, open: boolean): RichBlock =>
 
 const toolBlock = (t: ToolCallPart, open: boolean): RichBlock => {
   const body = capText(toolBody(t))
-  return detailsBlock(`⚙ ${t.name}`, body ? [{ type: "pre", text: body }] : [], open)
+  const lang = toolLang(t)
+  return detailsBlock(toolHeader(t), body ? [{ type: "pre", text: body, ...(lang ? { language: lang } : {}) }] : [], open)
 }
 
 const textOf = (parts: Part[]): string =>
@@ -193,7 +255,10 @@ function richCombined(parts: Part[], s: InternalsSettings, live: boolean): RichB
   const tools = parts.filter((p): p is ToolCallPart => p.kind === "tool")
   if (s.thinking !== "off" && reasoning) out.push(reasoningBlock(reasoning, s.thinking === "expanded"))
   if (s.tools !== "off" && tools.length) {
-    const inner: RichBlock[] = tools.map((t) => ({ type: "pre", text: capText(`⚙ ${t.name}\n\n${toolBody(t)}`) }))
+    const inner: RichBlock[] = tools.map((t) => {
+      const lang = toolLang(t)
+      return { type: "pre", text: capText(`${toolHeader(t)}\n\n${toolBody(t)}`), ...(lang ? { language: lang } : {}) }
+    })
     out.push(detailsBlock(`⚙ Tools (${tools.length})`, inner, s.tools === "expanded"))
   }
   const text = textOf(parts)
@@ -214,7 +279,11 @@ function richPerStep(parts: Part[], s: InternalsSettings, live: boolean): RichBl
       if (showTools) bits.push(`⚙ ${tools.map((t) => t.name).join(", ")}`)
       const inner: RichBlock[] = []
       if (showReasoning) inner.push({ type: "paragraph", text: capText(reasoning) })
-      if (showTools) for (const t of tools) inner.push({ type: "pre", text: capText(`⚙ ${t.name}\n\n${toolBody(t)}`) })
+      if (showTools)
+        for (const t of tools) {
+          const lang = toolLang(t)
+          inner.push({ type: "pre", text: capText(`${toolHeader(t)}\n\n${toolBody(t)}`), ...(lang ? { language: lang } : {}) })
+        }
       const open = (showReasoning && s.thinking === "expanded") || (showTools && s.tools === "expanded")
       out.push(detailsBlock(bits.join(" · "), inner, open))
     }
@@ -243,7 +312,7 @@ function partsToMarkdown(parts: Part[], s: InternalsSettings): string {
   const tools = parts.filter((p): p is ToolCallPart => p.kind === "tool")
   if (s.thinking !== "off" && reasoning) out.push(quoteLines("💭 Thinking", capText(reasoning)))
   if (s.tools !== "off" && tools.length)
-    out.push(quoteLines(`⚙ Tools (${tools.length})`, capText(tools.map((t) => `⚙ ${t.name}\n\n${toolBody(t)}`).join("\n\n"))))
+    out.push(quoteLines(`⚙ Tools (${tools.length})`, capText(tools.map((t) => `${toolHeader(t)}\n\n${toolBody(t)}`).join("\n\n"))))
   const text = textOf(parts)
   if (text) out.push(text)
   return out.join("\n\n")
