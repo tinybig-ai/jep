@@ -120,7 +120,7 @@ dump.
 
 ## 10. Small, coherent verbs; a command does exactly one thing
 
-`/status` reports state, deleting a conversation touches that conversation
+`/settings` reports state, deleting a conversation touches that conversation
 and nothing else, `/abort` stops the turn. Destructive actions stay narrowly
 scoped to what they name; nothing a user does should ever reach further into
 persistent state than it promises. Clearing a chat's visible history

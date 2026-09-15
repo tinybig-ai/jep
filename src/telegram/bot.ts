@@ -488,8 +488,7 @@ export class TelegramBot {
   static commands = [
     { command: "new", description: "start a fresh conversation" },
     { command: "ls", description: "your conversations" },
-    { command: "status", description: "what am I connected to" },
-    { command: "settings", description: "model · rename · workspace" },
+    { command: "settings", description: "status · model · rename · workspace" },
     { command: "log", description: "this conversation's history" },
     { command: "remind", description: "remind me later (e.g. /remind 2h build)" },
   ]
@@ -785,22 +784,6 @@ export class TelegramBot {
         break
       case "ls": {
         await this.#listPicker(chatID, "Conversations:")
-        break
-      }
-      case "status": {
-        const sessions = await ws.adapter.listSessions()
-        const active = c.sessionID ? await ws.adapter.getSession(c.sessionID) : null
-        const label = active ? this.#displayTitle(active.id, active.title) : "(none)"
-        await tg.sendMessage({
-          chatID,
-          text: [
-            `workspace: ${c.workspace}`,
-            `engine: ${c.harness ?? ws.adapter.id}`,
-            `model: ${this.#store.model(chatID) ?? "default"}`,
-            `conversation: "${label}"`,
-            `total conversations: ${sessions.length}`,
-          ].join("\n"),
-        })
         break
       }
       case "log": {
@@ -1453,6 +1436,7 @@ export class TelegramBot {
     const active = c.sessionID ? await ws.adapter.getSession(c.sessionID) : null
     const label = active ? this.#displayTitle(active.id, active.title) : "(none)"
     const model = this.#store.model(chatID) ?? "default"
+    const total = (await ws.adapter.listSessions()).length
 
     const lines = [
       "⚙️ Settings",
@@ -1461,6 +1445,7 @@ export class TelegramBot {
       `model: ${model}`,
       `conversation: "${label}"`,
       `workspace: ${c.workspace}`,
+      `total conversations: ${total}`,
     ]
     const rows: InlineButton[][] = [
       [btn(`🤖 Model · ${model}`, "set:model")],

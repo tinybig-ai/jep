@@ -6,4 +6,4 @@
 {"update_id":6,"message":{"message_id":6,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"/cancel"}}
 {"update_id":7,"message":{"message_id":7,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"/use"}}
 {"update_id":8,"message":{"message_id":8,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"New conversation"}}
-{"update_id":9,"message":{"message_id":9,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"/status"}}
+{"update_id":9,"message":{"message_id":9,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"/settings"}}
