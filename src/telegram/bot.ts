@@ -1,13 +1,14 @@
 import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { HarnessAdapter, ModelCaps, ModelRef } from "../core/ports.ts"
-import type { FilePart } from "../core/types.ts"
+import type { FilePart, Part, TextPart, ReasoningPart, ToolCallPart } from "../core/types.ts"
 import { mdToHtml } from "./html.ts"
-import { mdToRich } from "./rich.ts"
+import { closeStreamingTable, mdToRich } from "./rich.ts"
+import type { RichBlock } from "./rich.ts"
 import type { TelegramApi, TgMessage, TgUpdate, InlineButton, ReplyMarkup } from "./api.ts"
 import { runComplianceSuite } from "../core/compliance.ts"
 import type { Pairing } from "./pair.ts"
-import type { ChatStore } from "./store.ts"
+import type { ChatStore, InternalsSettings, DetailMode, InternalsLayout } from "./store.ts"
 
 interface Ws {
   name: string
@@ -22,8 +23,9 @@ interface ChatState {
   sessionID: string | null
   harness: string | null
   inflight: AbortController | null
-  // permissionID -> { sessionID, messageID } for in-flight keyboard prompts
-  pending: Map<string, { sessionID: string; messageID: number }>
+  // permissionID -> prompt message for in-flight keyboard prompts; ephemeralID
+  // is set when the prompt was sent as a group ephemeral message
+  pending: Map<string, { sessionID: string; messageID: number; ephemeralID?: number }>
   // snapshot behind the /ls, /del and settings pickers
   picker: { messageID: number; ws: string; sessions: string[] } | null
   del: { messageID: number; i: number } | null
@@ -40,17 +42,230 @@ interface ChatState {
   suggestedImage: string | null
   // last draft_id used for streaming previews (Bot API 9.4+), per chat
   draft: number
+  // the chat's type ("private", "group", "supergroup", …) and the last
+  // human sender — needed to scope ephemeral group prompts to that person
+  chatType: string | null
+  lastUserID: number | null
 }
 
 const MAX_MSG = 4000
 const MAX_LIST = 10
 const WIPE_PAGE = 4
 const WIPE_DELETE_CAP = 30
+// files embedded into one rich message via attach:// (keep multipart modest)
+const MAX_RICH_FILES = 4
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 const kin = (rows: InlineButton[][]): ReplyMarkup => ({ inline_keyboard: rows })
 const btn = (text: string, data: string): InlineButton => ({ text, callback_data: data })
+
+// "/remind 2h build" → { ms: 7_200_000, what: "build" }; null when malformed or
+// outside the 5s–7d window we bother supporting.
+function parseRemind(arg: string): { ms: number; what: string } | null {
+  const m = arg.match(/^\s*(\d+)\s*([smhd])\s+([\s\S]+)$/)
+  if (!m) return null
+  const per = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2]!] ?? 0
+  const ms = Number(m[1]) * per
+  const what = m[3]!.trim()
+  if (!what || !Number.isFinite(ms) || ms < 5_000 || ms > 7 * 86_400_000) return null
+  return { ms, what }
+}
+
+const fmtDuration = (ms: number): string => {
+  const s = Math.round(ms / 1000)
+  if (s < 60) return `${s}s`
+  if (s < 3600) return `${Math.round(s / 60)}m`
+  if (s < 86_400) return `${Math.round(s / 3600)}h`
+  return `${Math.round(s / 86_400)}d`
+}
+
+// ─── agent-internals rendering (thinking + tool calls as collapsible details) ───
+
+const MAX_TOOL_CHARS = 1500
+// beyond this many collapses we roll per-section up to one block (message limits)
+const MAX_DETAILS = 12
+
+const stringifyTool = (v: unknown): string => {
+  if (v == null) return ""
+  if (typeof v === "string") return v
+  try {
+    return JSON.stringify(v, null, 2)
+  } catch {
+    return String(v)
+  }
+}
+
+// keep both ends of a long payload; the middle is rarely the interesting part
+function capText(s: string, max = MAX_TOOL_CHARS): string {
+  if (s.length <= max) return s
+  const head = s.slice(0, Math.ceil(max * 0.6))
+  const tail = s.slice(-Math.floor(max * 0.4))
+  return `${head}\n… (truncated) …\n${tail}`
+}
+
+const isEmptyValue = (v: unknown): boolean => {
+  if (v == null) return true
+  if (typeof v === "string") return v.trim() === ""
+  if (typeof v === "object") return Object.keys(v).length === 0
+  return false
+}
+
+function toolBody(t: ToolCallPart): string {
+  const inp = isEmptyValue(t.input) ? "" : stringifyTool(t.input)
+  const out = isEmptyValue(t.output) ? "" : stringifyTool(t.output)
+  const parts: string[] = []
+  if (inp) parts.push(`input:\n${inp}`)
+  if (out) parts.push(`output:\n${out}`)
+  if (!parts.length) return t.status === "completed" ? "(no output)" : "…"
+  return parts.join("\n\n")
+}
+
+const detailsBlock = (summary: string, blocks: RichBlock[], open: boolean): RichBlock => ({
+  type: "details",
+  summary,
+  ...(open ? { is_open: true } : {}),
+  blocks,
+})
+
+const reasoningBlock = (text: string, open: boolean): RichBlock =>
+  detailsBlock("💭 Thinking", [{ type: "paragraph", text: capText(text.trim()) }], open)
+
+const toolBlock = (t: ToolCallPart, open: boolean): RichBlock => {
+  const body = capText(toolBody(t))
+  return detailsBlock(`⚙ ${t.name}`, body ? [{ type: "pre", text: body }] : [], open)
+}
+
+const textOf = (parts: Part[]): string =>
+  parts
+    .filter((p): p is TextPart => p.kind === "text")
+    .map((p) => p.text.trim())
+    .filter(Boolean)
+    .join("\n\n")
+
+const reasoningOf = (parts: Part[]): string =>
+  parts
+    .filter((p): p is ReasoningPart => p.kind === "reasoning")
+    .map((p) => p.text.trim())
+    .filter(Boolean)
+    .join("\n\n")
+
+// split parts on opencode's step-start / step-finish markers
+function splitSteps(parts: Part[]): Part[][] {
+  const steps: Part[][] = []
+  let cur: Part[] | null = null
+  for (const p of parts) {
+    if (p.kind === "other" && p.nativeType === "step-start") {
+      cur = []
+      steps.push(cur)
+      continue
+    }
+    if (p.kind === "other" && p.nativeType === "step-finish") {
+      cur = null
+      continue
+    }
+    if (!cur) {
+      cur = []
+      steps.push(cur)
+    }
+    cur.push(p)
+  }
+  return steps
+}
+
+function richPerSection(parts: Part[], s: InternalsSettings, live: boolean): RichBlock[] {
+  const out: RichBlock[] = []
+  for (const p of parts) {
+    if (p.kind === "reasoning") {
+      if (s.thinking !== "off" && p.text.trim()) out.push(reasoningBlock(p.text, s.thinking === "expanded"))
+    } else if (p.kind === "tool") {
+      if (s.tools !== "off") out.push(toolBlock(p, s.tools === "expanded"))
+    } else if (p.kind === "text") {
+      if (p.text.trim()) out.push(...mdToRich(live ? closeStreamingTable(p.text) : p.text))
+    }
+  }
+  return out
+}
+
+function richCombined(parts: Part[], s: InternalsSettings, live: boolean): RichBlock[] {
+  const out: RichBlock[] = []
+  const reasoning = reasoningOf(parts)
+  const tools = parts.filter((p): p is ToolCallPart => p.kind === "tool")
+  if (s.thinking !== "off" && reasoning) out.push(reasoningBlock(reasoning, s.thinking === "expanded"))
+  if (s.tools !== "off" && tools.length) {
+    const inner: RichBlock[] = tools.map((t) => ({ type: "pre", text: capText(`⚙ ${t.name}\n\n${toolBody(t)}`) }))
+    out.push(detailsBlock(`⚙ Tools (${tools.length})`, inner, s.tools === "expanded"))
+  }
+  const text = textOf(parts)
+  if (text) out.push(...mdToRich(live ? closeStreamingTable(text) : text))
+  return out
+}
+
+function richPerStep(parts: Part[], s: InternalsSettings, live: boolean): RichBlock[] {
+  const out: RichBlock[] = []
+  for (const step of splitSteps(parts)) {
+    const reasoning = reasoningOf(step)
+    const tools = step.filter((p): p is ToolCallPart => p.kind === "tool")
+    const showReasoning = s.thinking !== "off" && !!reasoning
+    const showTools = s.tools !== "off" && tools.length > 0
+    if (showReasoning || showTools) {
+      const bits: string[] = []
+      if (showReasoning) bits.push("💭 Thinking")
+      if (showTools) bits.push(`⚙ ${tools.map((t) => t.name).join(", ")}`)
+      const inner: RichBlock[] = []
+      if (showReasoning) inner.push({ type: "paragraph", text: capText(reasoning) })
+      if (showTools) for (const t of tools) inner.push({ type: "pre", text: capText(`⚙ ${t.name}\n\n${toolBody(t)}`) })
+      const open = (showReasoning && s.thinking === "expanded") || (showTools && s.tools === "expanded")
+      out.push(detailsBlock(bits.join(" · "), inner, open))
+    }
+    const text = textOf(step)
+    if (text) out.push(...mdToRich(live ? closeStreamingTable(text) : text))
+  }
+  return out
+}
+
+function buildRich(parts: Part[], s: InternalsSettings, live = false): RichBlock[] {
+  if (s.layout === "combined") return richCombined(parts, s, live)
+  if (s.layout === "per-section") {
+    const blocks = richPerSection(parts, s, live)
+    // too many collapses → roll up so the message still sends
+    return blocks.filter((b) => b.type === "details").length > MAX_DETAILS ? richCombined(parts, s, live) : blocks
+  }
+  return richPerStep(parts, s, live)
+}
+
+const quoteLines = (title: string, body: string): string => `> **${title}**\n> ${body.split("\n").join("\n> ")}`
+
+// HTML fallback: blockquotes (not collapsible) instead of rich details blocks
+function partsToMarkdown(parts: Part[], s: InternalsSettings): string {
+  const out: string[] = []
+  const reasoning = reasoningOf(parts)
+  const tools = parts.filter((p): p is ToolCallPart => p.kind === "tool")
+  if (s.thinking !== "off" && reasoning) out.push(quoteLines("💭 Thinking", capText(reasoning)))
+  if (s.tools !== "off" && tools.length)
+    out.push(quoteLines(`⚙ Tools (${tools.length})`, capText(tools.map((t) => `⚙ ${t.name}\n\n${toolBody(t)}`).join("\n\n"))))
+  const text = textOf(parts)
+  if (text) out.push(text)
+  return out.join("\n\n")
+}
+
+const PRESETS: Record<"simple" | "detailed" | "debug", InternalsSettings> = {
+  simple: { thinking: "off", tools: "off", layout: "per-step" },
+  detailed: { thinking: "collapsed", tools: "collapsed", layout: "per-step" },
+  debug: { thinking: "expanded", tools: "expanded", layout: "per-section" },
+}
+
+function internalsPreset(s: InternalsSettings): "simple" | "detailed" | "debug" | "custom" {
+  for (const name of ["simple", "detailed", "debug"] as const) {
+    const p = PRESETS[name]
+    if (p.thinking === s.thinking && p.tools === s.tools && p.layout === s.layout) return name
+  }
+  return "custom"
+}
+
+const cycleMode = (m: DetailMode): DetailMode => (m === "off" ? "collapsed" : m === "collapsed" ? "expanded" : "off")
+const cycleLayout = (l: InternalsLayout): InternalsLayout =>
+  l === "per-step" ? "per-section" : l === "per-section" ? "combined" : "per-step"
 
 const HELP = [
   "jep — your coding agent, on the go.",
@@ -60,6 +275,7 @@ const HELP = [
   "/new · start fresh",
   "/ls · switch chats",
   "/settings · model & cleanup",
+  "/remind · schedule a nudge (e.g. /remind 2h build)",
   "",
   "Everything else lives in the ☰ menu.",
 ].join("\n")
@@ -86,6 +302,8 @@ export class TelegramBot {
   #extraModels: string[]
   #uploadsDir: string
   #chats = new Map<number, ChatState>()
+  // in-process /remind timers (best-effort: a restart drops pending reminders)
+  #reminders = new Set<ReturnType<typeof setTimeout>>()
 
   static commands = [
     { command: "status", description: "what am I connected to" },
@@ -98,6 +316,7 @@ export class TelegramBot {
     { command: "wipe", description: "clear this chat's messages" },
     { command: "abort", description: "stop the current turn" },
     { command: "cancel", description: "give up on the current prompt" },
+    { command: "remind", description: "remind me later (e.g. /remind 2h build)" },
   ]
 
   constructor(tg: TelegramApi, workspaces: Ws[], activeWsName: string, pairing: Pairing, store: ChatStore, extraModels: string[], uploadsDir: string) {
@@ -120,12 +339,24 @@ export class TelegramBot {
       sendChatAction: (p) => tg.sendChatAction(p),
       answerCallbackQuery: (p) => tg.answerCallbackQuery(p),
       deleteMessage: (p) => tg.deleteMessage(p),
-      sendRichMessage: (p) => tg.sendRichMessage(p),
-      sendMessageDraft: (p) => tg.sendMessageDraft(p),
-      sendRichMessageDraft: (p) => tg.sendRichMessageDraft(p),
+      editRichMessage: (p) => tg.editRichMessage(p),
+      deleteEphemeralMessage: (p) => tg.deleteEphemeralMessage(p),
+      sendRichMessage: async (p) => {
+        console.error(`[send] sendRichMessage chat=${p.chatID} at=${new Date().toISOString()}`)
+        const r = await tg.sendRichMessage(p)
+        console.error(`[send] sendRichMessage -> msg=${r.message_id}`)
+        this.#chat(p.chatID).msgs.add(r.message_id)
+        return r
+      },
+      sendMessageDraft: (p) => tg.sendMessageDraft({ ...p, text: p.text !== undefined ? md(p.text) : undefined, parseMode: p.text !== undefined ? "HTML" : undefined }),
+      sendRichMessageDraft: (p) => {
+        console.error(`[send] sendRichMessageDraft chat=${p.chatID} draft=${p.draftID} at=${new Date().toISOString()}`)
+        return tg.sendRichMessageDraft(p)
+      },
       getFileContent: (f) => tg.getFileContent(f),
       editMessageText: (p) => tg.editMessageText({ ...p, text: md(p.text), parseMode: "HTML" }),
       sendMessage: async (p) => {
+        console.error(`[send] sendMessage chat=${p.chatID} at=${new Date().toISOString()} text=${JSON.stringify(p.text.slice(0, 60))}`)
         const r = await tg.sendMessage({ ...p, text: md(p.text), parseMode: "HTML" })
         this.#chat(p.chatID).msgs.add(r.message_id)
         return r
@@ -173,6 +404,8 @@ export class TelegramBot {
         settingsPage: 0,
         suggestedImage: null,
         draft: 0,
+        chatType: null,
+        lastUserID: null,
       }
       this.#chats.set(id, c)
     }
@@ -246,6 +479,7 @@ export class TelegramBot {
           return this.#tg.sendMessage({
             chatID,
             text: "🔐 Please enter the pairing code.\n\nJust paste the code and hit send (/cancel to give up).",
+            replyMarkup: { inline_keyboard: [], force_reply: true },
           })
         }
         return this.#attemptPair(chatID, code)
@@ -261,6 +495,8 @@ export class TelegramBot {
 
     console.error(`[tg] message from chat=${chatID} (${m.chat.type}) from=${m.from?.username ?? m.from?.id ?? "?"}`)
     c.msgs.add(m.message_id)
+    c.chatType = m.chat.type
+    if (m.from?.id != null) c.lastUserID = m.from.id
     if (text.startsWith("/")) {
       if (cmd === "/cancel") {
         if (c.awaiting) {
@@ -414,13 +650,29 @@ export class TelegramBot {
             return `${m.role === "user" ? "👤" : "🤖"} ${t}`
           })
           .join("\n")
-        await tg.sendMessage({ chatID, text: text.length > MAX_MSG ? text.slice(-MAX_MSG) : text })
+        const body = text.length > MAX_MSG ? text.slice(-MAX_MSG) : text
+        // 10.3 expandable blockquote: the history folds away until tapped
+        try {
+          await tg.sendRichMessage({
+            chatID,
+            rich_message: {
+              blocks: [
+                { type: "heading", size: 1, text: "📜 Conversation history" },
+                { type: "expandable_blockquote", text: body },
+              ],
+            },
+          })
+          break
+        } catch {
+          // no rich support → plain text
+        }
+        await tg.sendMessage({ chatID, text: body })
         break
       }
       case "use": {
         if (!arg) {
           c.awaiting = { kind: "use" }
-          await this.#listPicker(chatID, "Which conversation? (tap one, or type a title / paste an ID · /cancel to stop)")
+          await this.#listPicker(chatID, "Which conversation? (tap one, or type a title / paste an ID · /cancel to stop)", "ls", true)
           break
         }
         await this.#resolveUse(chatID, arg)
@@ -479,6 +731,21 @@ export class TelegramBot {
         })
         break
       }
+      case "remind": {
+        const spec = parseRemind(arg)
+        if (!spec) {
+          await tg.sendMessage({ chatID, text: "⏰ usage: /remind <5s–7d> <what>\ne.g. /remind 2h check the build" })
+          break
+        }
+        const timer = setTimeout(() => {
+          this.#reminders.delete(timer)
+          void tg.sendMessage({ chatID, text: `⏰ ${spec.what}`, disableNotification: true }).catch(() => {})
+        }, spec.ms)
+        timer.unref?.() // never keep the process alive just for a reminder
+        this.#reminders.add(timer)
+        await tg.sendMessage({ chatID, text: `⏰ ok — reminder in ${fmtDuration(spec.ms)}.` })
+        break
+      }
       default:
         await tg.sendMessage({ chatID, text: `unknown command /${cmd} (try /help)` })
     }
@@ -506,7 +773,7 @@ export class TelegramBot {
   }
 
   // list sessions as tappable title buttons; callback snapshots into c.picker
-  async #listPicker(chatID: number, caption: string, kind: "del" | "ls" = "ls"): Promise<void> {
+  async #listPicker(chatID: number, caption: string, kind: "del" | "ls" = "ls", forceReply = false): Promise<void> {
     const c = this.#chat(chatID)
     const ws = this.#ws(c.workspace)
     const sessions = await ws.adapter.listSessions()
@@ -522,10 +789,12 @@ export class TelegramBot {
       const title = this.#displayTitle(s.id, s.title)
       return `${shown.indexOf(s) + 1}. "${title}"${marker}`
     })
+    const markup = kin(shown.map((s, i) => [btn(`${i + 1}. ${this.#displayTitle(s.id, s.title)}`, `${prefix}:${i}`)]))
+    if (forceReply) markup.force_reply = true
     const msg = await this.#tg.sendMessage({
       chatID,
       text: [caption, "", ...list, ...(sorted.length > MAX_LIST ? [`… and ${sorted.length - MAX_LIST} more`] : [])].join("\n"),
-      replyMarkup: kin(shown.map((s, i) => [btn(`${i + 1}. ${this.#displayTitle(s.id, s.title)}`, `${prefix}:${i}`)])),
+      replyMarkup: markup,
     })
     c.picker = { messageID: msg.message_id, ws: c.workspace, sessions: shown.map((s) => s.id) }
     c.del = null
@@ -537,27 +806,50 @@ export class TelegramBot {
     const promptText = text || (opts?.filePaths?.length ? "see the attached file" : "")
     const sessionID = await this.#ensureSession(chatID, promptText)
     const ws = this.#ws(c.workspace)
+    const internals = this.#store.internals(chatID)
 
     const ac = new AbortController()
     c.inflight = ac
 
-    // Streaming drafts (Bot API 9.4+): an animated ephemeral preview that also
-    // carries a native stop button. Falls back to the placeholder+edit path
-    // when the API/client doesn't support drafts.
+    // Streaming draft: prefer a RICH draft (Bot API 10.1+ — tables, code and the
+    // collapsible thinking/tool details render live) with a native stop button;
+    // fall back to a plain-text draft, then the legacy placeholder.
     const draftID = c.draft + 1
     c.draft = draftID
-    let drafts = false
+    let draftMode: "rich" | "text" | "none" = "none"
     try {
-      await this.#tg.sendMessageDraft({ chatID, draftID, text: "", canStop: true })
-      drafts = true
-    } catch {
-      /* draft streaming unsupported → legacy edit-in-place below */
+      // RichBlockThinking (Bot API 10.2, <tg-thinking> in HTML): a native,
+      // client-animated "Thinking…" placeholder valid only in draft messages.
+      await this.#tg.sendRichMessageDraft({
+        chatID,
+        draftID,
+        rich_message: { blocks: [{ type: "thinking", text: "Thinking…" }] },
+        canStop: true,
+      })
+      draftMode = "rich"
+    } catch (err) {
+      console.error(`[draft] rich failed: ${(err as Error)?.message ?? err}`)
+      try {
+        await this.#tg.sendMessageDraft({ chatID, draftID, text: "", canStop: true })
+        draftMode = "text"
+      } catch (err2) {
+        console.error(`[draft] text failed too: ${(err2 as Error)?.message ?? err2}`)
+        /* draft streaming unsupported → legacy edit-in-place below */
+      }
     }
+    console.error(`[draft] mode=${draftMode} chat=${chatID}`)
     let placeholder: { message_id: number } | null = null
-    if (!drafts) {
+    if (draftMode === "none") {
       placeholder = await this.#tg.sendMessage({ chatID, text: "…", replyMarkup: kin([[btn("⏹ Stop", "abt")]]) })
     }
+    // Telegram clears the native "typing…" indicator after ~5s, so re-ping it
+    // for the whole generation — it's the only *animated* signal we have; the
+    // draft/placeholder content only updates every 700ms and sits still
+    // in between (worse, dead still before the first part arrives).
     await this.#tg.sendChatAction({ chatID, action: "typing" })
+    const typingTimer = setInterval(() => {
+      this.#tg.sendChatAction({ chatID, action: "typing" }).catch(() => {})
+    }, 4000)
 
     const mdl = this.#store.model(chatID)
     let model
@@ -567,23 +859,44 @@ export class TelegramBot {
     }
 
     const sub = new AbortController()
-    let acc = ""
     let lastEdit = 0
     let lastText: string | null = null
     let lastHadMarkup = true
+    let lastRich = ""
+    // parts assembled live from the event stream, keyed by partID so updates
+    // replace rather than duplicate; mirrors the final `reply.parts` order
+    const liveParts: Part[] = []
+    const liveIndex = new Map<string, number>()
+    const upsert = (id: string, p: Part) => {
+      const idx = liveIndex.get(id)
+      if (idx !== undefined) liveParts[idx] = p
+      else {
+        liveIndex.set(id, liveParts.length)
+        liveParts.push(p)
+      }
+    }
+    const reasoningBuf = new Map<string, string>()
+    const textBuf = new Map<string, string>()
+    // `message.part.updated` fires for the user's own message parts too — track
+    // those message ids and skip them so the prompt never leaks into the draft
+    const userMessages = new Set<string>()
 
-    // push the latest stream tail (draft animate in place; legacy edits the
-    // placeholder message). A single failed push never kills the stream.
-    const preview = async (body: string) => {
-      const text = body.slice(-MAX_MSG) || (drafts ? "" : "…")
-      if (text === lastText) return
-      lastText = text
-      lastHadMarkup = true
+    // re-render the live draft from the parts collected so far (throttled by the
+    // caller). Rich draft → blocks; text/placeholder → plain tail.
+    const renderLive = async () => {
+      const blocks = buildRich(liveParts, internals, true)
+      const json = JSON.stringify(blocks)
+      if (json === lastRich) return
+      lastRich = json
+      if (blocks.length === 0) return // nothing to show yet — keep the "…" frame
+      const tail = textOf(liveParts).slice(-(MAX_MSG - 80))
+      const hint = closeStreamingTable(tail)
       try {
-        if (drafts) await this.#tg.sendMessageDraft({ chatID, draftID, text })
-        else if (placeholder) await this.#tg.editMessageText({ chatID, messageID: placeholder.message_id, text })
-      } catch {
-        /* ignore */
+        if (draftMode === "rich") await this.#tg.sendRichMessageDraft({ chatID, draftID, rich_message: { blocks } })
+        else if (draftMode === "text") await this.#tg.sendMessageDraft({ chatID, draftID, text: hint })
+        else if (placeholder) await this.#tg.editMessageText({ chatID, messageID: placeholder.message_id, text: hint || "…" })
+      } catch (err) {
+        console.error(`[draft] renderLive send failed (mode=${draftMode}): ${(err as Error)?.message ?? err}`)
       }
       lastEdit = Date.now()
     }
@@ -597,50 +910,120 @@ export class TelegramBot {
       await this.#tg.editMessageText({ chatID, messageID: placeholder.message_id, text, replyMarkup: null })
     }
 
-    // persist the finished answer as a real message; the ephemeral draft goes
-    // away on its own as soon as a message lands in the chat.
-    const present = async (body: string) => {
-      if (!body.trim()) {
-        if (placeholder) await this.#tg.deleteMessage({ chatID, messageID: placeholder.message_id })
-        return
-      }
-      const rich = mdToRich(body)
-      if (rich.length) {
+    // persist a finished answer (plain body) as a real message. Used on abort
+    // and as the last-resort path; the normal path is presentParts.
+    const presentBody = async (body: string, media: FilePart[] = []) => {
+      const files = media
+        .filter((f): f is FilePart & { filePath: string } => !!f.filePath)
+        .slice(0, MAX_RICH_FILES)
+      const blocks = mdToRich(body)
+      const attached: Array<{ name: string; filePath: string }> = []
+      files.forEach((f, i) => {
+        const name = `f${i}`
+        attached.push({ name, filePath: f.filePath })
+        const photo = IMAGE_RE.test(f.filePath)
+        blocks.push(
+          photo
+            ? { type: "photo", photo: { type: "photo", media: `attach://${name}` } }
+            : { type: "document", document: { type: "document", media: `attach://${name}` } },
+        )
+      })
+      if (blocks.length) {
         try {
-          await this.#tg.sendRichMessage({ chatID, rich_message: { blocks: rich } })
+          await this.#tg.sendRichMessage({
+            chatID,
+            rich_message: { blocks },
+            ...(attached.length ? { files: attached } : {}),
+          })
           if (placeholder) await this.#tg.deleteMessage({ chatID, messageID: placeholder.message_id })
           lastText = body.slice(-MAX_MSG)
           lastHadMarkup = false
           return
         } catch {
-          // client or API rejected the rich message → fall back to the box render
+          // rich (or file embedding) unsupported → classic text + separate files
         }
       }
-      if (placeholder) await clearPlaceholder(body)
-      else await this.#tg.sendMessage({ chatID, text: body.slice(-MAX_MSG) })
+      if (body.trim()) {
+        if (placeholder) await clearPlaceholder(body)
+        else await this.#tg.sendMessage({ chatID, text: body.slice(-MAX_MSG) })
+      } else if (placeholder) {
+        await this.#tg.deleteMessage({ chatID, messageID: placeholder.message_id })
+      }
+      for (const f of media) await this.#sendPartFile(chatID, f)
+    }
+
+    // Structured render of a finished turn: thinking + tool calls become
+    // collapsible `details` blocks per the chat's Internals settings; produced
+    // files ride along as attach:// blocks. Falls back to markdown. Returns true
+    // when something was shown.
+    const presentParts = async (parts: Part[], s: InternalsSettings): Promise<boolean> => {
+      const media = parts.filter((p): p is FilePart => p.kind === "file")
+      const blocks = buildRich(parts, s)
+      const attached: Array<{ name: string; filePath: string }> = []
+      media
+        .filter((f): f is FilePart & { filePath: string } => !!f.filePath)
+        .slice(0, MAX_RICH_FILES)
+        .forEach((f, i) => {
+          const name = `f${i}`
+          attached.push({ name, filePath: f.filePath })
+          const photo = IMAGE_RE.test(f.filePath)
+          blocks.push(
+            photo
+              ? { type: "photo", photo: { type: "photo", media: `attach://${name}` } }
+              : { type: "document", document: { type: "document", media: `attach://${name}` } },
+          )
+        })
+      if (blocks.length) {
+        try {
+          await this.#tg.sendRichMessage({
+            chatID,
+            rich_message: { blocks },
+            ...(attached.length ? { files: attached } : {}),
+          })
+          if (placeholder) await this.#tg.deleteMessage({ chatID, messageID: placeholder.message_id })
+          lastText = textOf(parts).slice(-MAX_MSG)
+          lastHadMarkup = false
+          return true
+        } catch {
+          /* rich unsupported → markdown fallback below */
+        }
+      }
+      const md = partsToMarkdown(parts, s)
+      if (md.trim()) {
+        if (placeholder) await clearPlaceholder(md)
+        else await this.#tg.sendMessage({ chatID, text: md.slice(-MAX_MSG) })
+      } else if (placeholder) {
+        await this.#tg.deleteMessage({ chatID, messageID: placeholder.message_id })
+      }
+      for (const f of media) await this.#sendPartFile(chatID, f)
+      return blocks.length > 0 || !!md.trim()
     }
 
     const streamTask = (async () => {
       try {
         for await (const evt of ws.adapter.events(sub.signal)) {
           if (ac.signal.aborted) break
-          // opencode streams chain-of-thought as its own "reasoning" part;
-          // that must never leak into the visible answer.
-          if (
-            evt.type === "part.delta" &&
-            evt.sessionID === sessionID &&
-            evt.text &&
-            evt.partType !== "reasoning"
-          ) {
-            acc += evt.text
-            if (Date.now() - lastEdit > 700) await preview(acc)
-          } else if (evt.type === "permission.requested" && evt.sessionID === sessionID) {
-            const msg = await this.#tg.sendMessage({
-              chatID,
-              text: `🔐 ${evt.permissionID}`,
-              replyMarkup: kin([[btn("Allow", `allow:${evt.permissionID}`)], [btn("Deny", `deny:${evt.permissionID}`)]]),
-            })
-            c.pending.set(evt.permissionID, { sessionID, messageID: msg.message_id })
+          if (evt.type === "message.created" || evt.type === "message.updated") {
+            if (evt.role === "user" && evt.messageID) userMessages.add(evt.messageID)
+            continue
+          }
+          if (evt.sessionID !== sessionID) continue
+          if (userMessages.has(evt.messageID)) continue
+          if (evt.type === "part.delta" && evt.text) {
+            // reasoning deltas build the collapsible 💭 block but never the answer text
+            if (evt.partType === "reasoning") {
+              reasoningBuf.set(evt.partID, (reasoningBuf.get(evt.partID) ?? "") + evt.text)
+              upsert(evt.partID, { kind: "reasoning", text: reasoningBuf.get(evt.partID)! })
+            } else {
+              textBuf.set(evt.partID, (textBuf.get(evt.partID) ?? "") + evt.text)
+              upsert(evt.partID, { kind: "text", text: textBuf.get(evt.partID)! })
+            }
+            if (Date.now() - lastEdit > 700) await renderLive()
+          } else if (evt.type === "part.updated" && evt.part) {
+            upsert(evt.partID, evt.part)
+            if (Date.now() - lastEdit > 700) await renderLive()
+          } else if (evt.type === "permission.requested") {
+            await this.#permissionPrompt(chatID, sessionID, evt.permissionID)
           }
         }
       } catch {
@@ -654,15 +1037,26 @@ export class TelegramBot {
         ...(model ? { model } : {}),
         ...(opts?.filePaths?.length ? { filePaths: opts.filePaths } : {}),
       })
-      if (!acc) acc = reply.parts.filter((p) => p.kind === "text").map((p) => p.text).join("")
-      for (const p of reply.parts) if (p.kind === "tool") acc += `\n[⚙ ${p.name}]`
-      const media = reply.parts.filter((p): p is FilePart => p.kind === "file")
-      if (acc.trim()) await present(acc)
-      else if (placeholder) await this.#tg.deleteMessage({ chatID, messageID: placeholder.message_id })
-      for (const f of media) await this.#sendPartFile(chatID, f)
+      // prompt() only returns the LAST step of a turn; pull every assistant part
+      // since the user's message so earlier steps' reasoning + tool calls show.
+      let turn = reply.parts
+      try {
+        const all = await ws.adapter.messages(sessionID)
+        const lastUser = all.reduce((idx, m, i) => (m.role === "user" ? i : idx), -1)
+        if (lastUser >= 0 && lastUser < all.length - 1) turn = all.slice(lastUser + 1).flatMap((m) => m.parts)
+      } catch {
+        /* fall back to the single returned message */
+      }
+      const media = turn.filter((p): p is FilePart => p.kind === "file")
+      const shown = await presentParts(turn, internals)
+      if (!shown && textOf(turn).trim()) await presentBody(textOf(turn), media)
+      else if (!shown && placeholder) await this.#tg.deleteMessage({ chatID, messageID: placeholder.message_id })
     } catch (err) {
-      if (ac.signal.aborted) await present(acc.trim() ? acc : "(stopped)")
-      else {
+      if (ac.signal.aborted) {
+        // render whatever we streamed so far (partial details included)
+        const shown = await presentParts(liveParts, internals)
+        if (!shown) await presentBody("(stopped)")
+      } else {
         const text = `⚠️ ${(err as Error).message}`.slice(-MAX_MSG)
         if (placeholder) {
           lastText = text
@@ -673,9 +1067,46 @@ export class TelegramBot {
         }
       }
     } finally {
+      clearInterval(typingTimer)
       sub.abort()
       await streamTask.catch(() => {})
       c.inflight = null
+    }
+  }
+
+  // ask the user to allow/deny a tool call. In groups the prompt is sent as an
+  // ephemeral message (visible to the requester + bot only, Bot API 10.2+);
+  // anywhere it doesn't apply it degrades to a normal message.
+  async #permissionPrompt(chatID: number, sessionID: string, permissionID: string): Promise<void> {
+    const c = this.#chat(chatID)
+    const markup = kin([
+      [btn("Allow", `allow:${permissionID}`)],
+      [btn("Deny", `deny:${permissionID}`)],
+    ])
+    const isGroup = c.chatType === "group" || c.chatType === "supergroup"
+    try {
+      if (isGroup && c.lastUserID != null) {
+        try {
+          const r = await this.#tg.sendMessage({
+            chatID,
+            text: `🔐 ${permissionID}`,
+            replyMarkup: markup,
+            ephemeralMessageParameters: { receiver_user_id: c.lastUserID },
+          })
+          c.pending.set(permissionID, {
+            sessionID,
+            messageID: r.message_id,
+            ...(r.ephemeral_message_id !== undefined ? { ephemeralID: r.ephemeral_message_id } : {}),
+          })
+          return
+        } catch {
+          /* not an admin / ephemeral unsupported → plain prompt below */
+        }
+      }
+      const msg = await this.#tg.sendMessage({ chatID, text: `🔐 ${permissionID}`, replyMarkup: markup })
+      c.pending.set(permissionID, { sessionID, messageID: msg.message_id })
+    } catch (err) {
+      console.error(`[tg] permission prompt failed: ${(err as Error).message}`)
     }
   }
 
@@ -743,10 +1174,11 @@ export class TelegramBot {
       const s = sorted[ids.indexOf(id)]!
       rows.push([btn(this.#displayTitle(id, s.title), `open:${ids.indexOf(id)}`)])
     }
-    const nav: InlineButton[] = []
-    if (p > 0) nav.push(btn("‹ back", "backp"))
-    if (ids.length > from + WIPE_PAGE) nav.push(btn("See more ›", "morep"))
-    if (nav.length) rows.push(nav)
+    const back = btn("‹ back", "backp")
+    const more = btn("See more ›", "morep")
+    if (p <= 0) back.disabled = true
+    if (ids.length <= from + WIPE_PAGE) more.disabled = true
+    rows.push([back, more])
 
     const body = [
       "Which conversation do you want to continue?",
@@ -768,6 +1200,49 @@ export class TelegramBot {
 
   // ─── settings button-tree ───
 
+  // Render a menu (info lines + button rows) as a Rich Message — paragraphs plus
+  // RichBlockButtons — so options render natively in rich clients. Anything that
+  // rejects rich messages falls back to classic HTML text + inline keyboard, so
+  // menus keep working on every client.
+  async #menu(
+    chatID: number,
+    lines: string[],
+    rows: InlineButton[][],
+    edit?: { messageID: number },
+  ): Promise<{ messageID?: number }> {
+    const blocks: RichBlock[] = []
+    for (const line of lines) if (line.trim()) blocks.push({ type: "paragraph", text: line })
+    for (const row of rows) {
+      blocks.push({
+        type: "buttons",
+        align: "left",
+        buttons: row.map((b) => ({
+          text: b.text,
+          callback_data: b.callback_data,
+          ...(b.style ? { style: b.style } : {}),
+          ...(b.disabled ? { disabled: {} } : {}),
+        })),
+      })
+    }
+    try {
+      if (edit) {
+        await this.#tg.editRichMessage({ chatID, messageID: edit.messageID, rich_message: { blocks } })
+        return {}
+      }
+      const sent = await this.#tg.sendRichMessage({ chatID, rich_message: { blocks } })
+      return { messageID: sent.message_id }
+    } catch {
+      /* rich messages unavailable → classic text + inline keyboard */
+    }
+    const body = lines.join("\n")
+    if (edit) {
+      await this.#tg.editMessageText({ chatID, messageID: edit.messageID, text: body, replyMarkup: kin(rows) })
+      return {}
+    }
+    const sent = await this.#tg.sendMessage({ chatID, text: body, replyMarkup: kin(rows) })
+    return { messageID: sent.message_id }
+  }
+
   async #settingsRoot(chatID: number, messageID: number | null): Promise<void> {
     const c = this.#chat(chatID)
     const ws = this.#ws(c.workspace)
@@ -775,27 +1250,58 @@ export class TelegramBot {
     const label = active ? this.#displayTitle(active.id, active.title) : "(none)"
     const model = this.#store.model(chatID) ?? "default"
 
-    const body = [
+    const lines = [
       "⚙️ Settings",
       "",
       `engine: ${c.harness ?? ws.adapter.id}`,
       `model: ${model}`,
       `conversation: "${label}"`,
       `workspace: ${c.workspace}`,
-    ].join("\n")
-    const markup = kin([
+    ]
+    const rows: InlineButton[][] = [
       [btn(`🤖 Model · ${model}`, "set:model")],
+      [btn(`🔎 Internals · ${internalsPreset(this.#store.internals(chatID))}`, "set:internals")],
       [btn("✏️ Rename conversation", "set:rename")],
       [btn("🧽 Wipe this chat", "set:wipe")],
       [btn("‹ Done", "set:done")],
-    ])
+    ]
 
-    if (messageID === null) {
-      const reply = await this.#tg.sendMessage({ chatID, text: body, replyMarkup: markup })
-      c.settingsMsg = reply.message_id
-    } else {
-      await this.#tg.editMessageText({ chatID, messageID, text: body, replyMarkup: markup })
+    const sent = await this.#menu(chatID, lines, rows, messageID === null ? undefined : { messageID })
+    if (sent.messageID !== undefined) c.settingsMsg = sent.messageID
+  }
+
+  // 🔎 Internals: how much the agent shows per reply (thinking + tool calls).
+  // Presets set all three at once; each row also cycles independently.
+  async #settingsInternals(chatID: number, messageID: number): Promise<void> {
+    const s = this.#store.internals(chatID)
+    const preset = internalsPreset(s)
+    const presetBtn = (label: string, name: "simple" | "detailed" | "debug"): InlineButton => {
+      const b = btn(label, `intp:${name}`)
+      if (preset === name) b.style = "success"
+      return b
     }
+    // "Custom" is a status, not an action: always inert, green only when the
+    // current state matches no preset (i.e. you hand-tuned the cyclers).
+    const custom = btn("Custom", "intp:custom")
+    custom.disabled = true
+    if (preset === "custom") custom.style = "success"
+    const rows: InlineButton[][] = [
+      [presetBtn("Simple", "simple"), presetBtn("Detailed", "detailed"), presetBtn("Debug", "debug"), custom],
+      [btn(`💭 Thinking · ${s.thinking}`, "int:think")],
+      [btn(`⚙ Tool calls · ${s.tools}`, "int:tools")],
+      [btn(`🧩 Layout · ${s.layout}`, "int:layout")],
+      [btn("‹ Back", "set:root")],
+    ]
+    const lines = [
+      "🔎 Internals",
+      "",
+      "How much of the agent's work shows in its replies:",
+      "💭 chain-of-thought · ⚙ tool calls · 🧩 how they're grouped.",
+      "",
+      "Tap any value to cycle it. Collapsed blocks open on tap.",
+      `preset: ${preset}`,
+    ]
+    await this.#menu(chatID, lines, rows, { messageID })
   }
 
   async #settingsModel(chatID: number, messageID: number, requestPage?: number): Promise<void> {
@@ -833,13 +1339,14 @@ export class TelegramBot {
       rows.push([b])
     }
     if (pages > 1) {
-      const nav: InlineButton[] = [btn(`page ${page + 1} / ${pages}`, "mdlp:page")]
-      if (page > 0) nav.unshift(btn("‹ Prev", "mdlp:prev"))
-      if (page < pages - 1) nav.push(btn("Next ›", "mdlp:next"))
-      rows.push(nav)
+      const prev = btn("‹ Prev", "mdlp:prev")
+      const next = btn("Next ›", "mdlp:next")
+      if (page <= 0) prev.disabled = true
+      if (page >= pages - 1) next.disabled = true
+      rows.push([prev, btn(`page ${page + 1} / ${pages}`, "mdlp:page"), next])
     }
     rows.push([btn("‹ Back", "set:root")])
-    const body = [
+    const lines = [
       "🤖 Model",
       "",
       `current: ${current ?? "default (engine picks)"}`,
@@ -847,8 +1354,8 @@ export class TelegramBot {
       "Tap one — the next message in this chat runs on it.",
       ...(anyImage ? ["🖼 = accepts images"] : []),
       ...(pages > 1 ? [`page ${page + 1} / ${pages} (${labels.length} models)`] : []),
-    ].join("\n")
-    await this.#tg.editMessageText({ chatID, messageID, text: body, replyMarkup: kin(rows) })
+    ]
+    await this.#menu(chatID, lines, rows, { messageID })
   }
 
   // when a photo/document lands on a model we can't see it with, offer the
@@ -905,15 +1412,16 @@ export class TelegramBot {
       .slice(page * MAX_LIST, (page + 1) * MAX_LIST)
       .map((id) => [btn(this.#displayTitle(id, ""), `ren:${ids.indexOf(id)}`)])
     if (pages > 1) {
-      const nav: InlineButton[] = [btn(`page ${page + 1} / ${pages}`, "renp:page")]
-      if (page > 0) nav.unshift(btn("‹ Prev", "renp:prev"))
-      if (page < pages - 1) nav.push(btn("Next ›", "renp:next"))
-      rows.push(nav)
+      const prev = btn("‹ Prev", "renp:prev")
+      const next = btn("Next ›", "renp:next")
+      if (page <= 0) prev.disabled = true
+      if (page >= pages - 1) next.disabled = true
+      rows.push([prev, btn(`page ${page + 1} / ${pages}`, "renp:page"), next])
     }
     rows.push([btn("‹ Back", "set:root")])
     c.picker = { messageID, ws: c.workspace, sessions: ids }
     c.del = null
-    await this.#tg.editMessageText({ chatID, messageID, text: "✏️ Rename\n\nWhich conversation? (no active conversation yet)", replyMarkup: kin(rows) })
+    await this.#menu(chatID, ["✏️ Rename", "", "Which conversation? (no active conversation yet)"], rows, { messageID })
   }
 
   async #onCallback(cq: NonNullable<TgUpdate["callback_query"]>): Promise<void> {
@@ -931,6 +1439,7 @@ export class TelegramBot {
       case "set":
         if (rest === "root") await this.#settingsRoot(chatID, msg.message_id)
         else if (rest === "model") await this.#settingsModel(chatID, msg.message_id)
+        else if (rest === "internals") await this.#settingsInternals(chatID, msg.message_id)
         else if (rest === "rename") await this.#settingsRename(chatID, msg.message_id)
         else if (rest === "wipe") await this.#wipe(chatID)
         else if (rest === "done") {
@@ -942,6 +1451,28 @@ export class TelegramBot {
         }
         await tg.answerCallbackQuery({ id: cq.id })
         break
+      case "int": {
+        const s = this.#store.internals(chatID)
+        if (rest === "think") s.thinking = cycleMode(s.thinking)
+        else if (rest === "tools") s.tools = cycleMode(s.tools)
+        else if (rest === "layout") s.layout = cycleLayout(s.layout)
+        this.#store.setInternals(chatID, s)
+        await this.#settingsInternals(chatID, msg.message_id)
+        await tg.answerCallbackQuery({ id: cq.id, text: `internals: ${internalsPreset(s)}` })
+        break
+      }
+      case "intp": {
+        const preset = PRESETS[rest as "simple" | "detailed" | "debug"]
+        if (!preset) {
+          await tg.answerCallbackQuery({ id: cq.id, text: "unknown preset" })
+          break
+        }
+        const s = this.#store.internals(chatID)
+        this.#store.setInternals(chatID, { ...s, ...preset })
+        await this.#settingsInternals(chatID, msg.message_id)
+        await tg.answerCallbackQuery({ id: cq.id, text: `preset: ${rest}` })
+        break
+      }
       case "mdlp": {
         const cur = c.settingsPage ?? 0
         const next = rest === "prev" ? cur - 1 : rest === "next" ? cur + 1 : cur
@@ -1076,7 +1607,12 @@ export class TelegramBot {
         if (!pending) return tg.answerCallbackQuery({ id: cq.id, text: "already answered" })
         await ws.adapter.respondApproval(pending.sessionID, { id: rest, sessionID: pending.sessionID, title: "", metadata: {} }, verb === "allow")
         c.pending.delete(rest)
-        await this.#tg.editMessageText({ chatID, messageID: msg.message_id, text: verb === "allow" ? "✅ allowed" : "⛔ denied", replyMarkup: null })
+        if (pending.ephemeralID !== undefined) {
+          // ephemeral messages have no editable message_id — just drop the prompt
+          await this.#tg.deleteEphemeralMessage({ chatID, ephemeralMessageID: pending.ephemeralID }).catch(() => {})
+        } else {
+          await this.#tg.editMessageText({ chatID, messageID: msg.message_id, text: verb === "allow" ? "✅ allowed" : "⛔ denied", replyMarkup: null })
+        }
         await tg.answerCallbackQuery({ id: cq.id, text: verb === "allow" ? "allowed" : "denied" })
         break
       }

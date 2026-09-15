@@ -38,7 +38,7 @@ src/
 fixture/
   workspace-alpha/        // test working directories for the two harness workspaces
   workspace-beta/
-  telegram-mock*.jsonl    // mock update fixtures (pair, settings, wire, wipe)
+  telegram-mock*.jsonl    // mock update fixtures (pair, settings, wire, wipe, internals)
 ```
 
 ## 3. Runtime model
@@ -122,24 +122,28 @@ Two routes, one choke point.
    `parseMode: "HTML"`. This is why menu text, status, help, and errors all
    render markdown correctly with zero per-call code. `sendRichMessage` passes
    through untouched (rich blocks are already structured).
-2. **Streaming + finalize** (`#freeText`, `bot.ts:455`) — on Bot API 9.4+
-   clients the turn opens an animated draft (`sendMessageDraft` with
-   `can_stop: true` and an empty text, which renders a native "Thinking…"
-   placeholder plus a stop button). Every ~700 ms the latest stream tail is
-   pushed to the same draft; opencode reasoning deltas (`partType ===
-   "reasoning"`) are filtered out so chain-of-thought never leaks into the
-   reply. When the turn ends the draft is replaced with the final message:
-   `sendRichMessage` blocks, or `sendMessage` plain fallback. Older clients
-   fall back to the legacy "…" placeholder + `editMessageText` path
-   automatically. The user can also tap the native stop button, which delivers
-   a `stopped_message_generation` update that aborts the turn.
-   - Try `sendRichMessage` with `mdToRich(body)` blocks, then delete the
-     placeholder message.
-   - On **any** failure → fall back to `clearPlaceholder(body)` (edit the
-     placeholder in place with the HTML render).
-   - The HTML renderer's fallback (`callWithFallback` in `api.ts:78`): if
-     Telegram rejects the parsed entities, retry the same call **without**
-     `parse_mode`; `"message is not modified"` is swallowed silently.
+2. **Streaming + finalize** (`#freeText`, `bot.ts`) — on Bot API 9.4+ clients the
+   turn opens an animated draft (`sendMessageDraft` with `can_stop: true` and an
+   empty text, which renders a native "Thinking…" placeholder plus a stop
+   button). Every ~700 ms the latest answer tail is pushed to the same draft.
+   Reasoning deltas are **not** appended to the answer: `message.part.delta`
+   carries only a `partID` (no type), so the adapter learns each part's type from
+   its `message.part.updated` event (the `#partTypes` map in `opencode.ts`) and
+   stamps `partType` on the delta. While reasoning streams and Internals thinking
+   ≠ off, the draft shows `💭 thinking…` (then the answer tail). On completion the
+   draft is replaced by a message built from `reply.parts` **in order** (see
+   *Agent internals*): thinking/tool `details` blocks + answer blocks + embedded
+   files. Older clients fall back to the legacy "…" placeholder +
+   `editMessageText`. The native stop button delivers
+   `stopped_message_generation`, aborting the turn.
+   - Rich path: `buildRich(parts, internals)` → `sendRichMessage`. Produced files
+     (assistant `file` parts) are embedded as `photo`/`document` blocks with
+     `attach://f0` multipart uploads (Bot API 10.3), capped at `MAX_RICH_FILES`.
+   - Fallback: `partsToMarkdown(parts, internals)` → `clearPlaceholder` (HTML) +
+     files as separate `sendPhoto`/`sendDocument` messages.
+   - The HTML renderer's fallback (`callWithFallback` in `api.ts`): if Telegram
+     rejects the parsed entities, retry the same call **without** `parse_mode`;
+     `"message is not modified"` is swallowed silently.
 
 So the degrade chain for any reply is always:
 **rich blocks → HTML (box-drawn tables) → plain text.** The user never sees a
@@ -162,12 +166,52 @@ Emits genuine Telegram Rich Message blocks: `paragraph`, `heading`
 ordered `1`,`a`,`A`,`i`,`I` / checkboxes `has_checkbox`+`is_checked`),
 `blockquote` (nested blocks), `table` (`cells`, `is_bordered/striped/compact`,
 ≤ 20 columns), and inline `bold/italic/underline/code/strikethrough/url`
-parts. Used only in `finalize()`; everything degrades to the HTML render if
-the client or API rejects it.
+parts. `RichBlock` also carries `buttons` (RichBlockButtons, 10.3), `align`,
+and `credit`. Used only in `finalize()`; everything degrades to the HTML render
+if the client or API rejects it.
 
-Block shapes were confirmed verbatim from the official Bot API docs dump at
-`~/.local/share/opencode/tool-output/tool_0a2534d4e001pFWxYwQchV6S7v` (do not
-trust memory for new shapes — re-check that reference).
+Two more 10.3 shapes are built directly by `bot.ts` (not `rich.ts`):
+`expandable_blockquote` (the folded `/log` history) and the `photo`/`document`
+file blocks above.
+
+**Menus are rich too.** `bot.ts #menu` renders the settings tree (root, model,
+rename) and picker bodies as Rich Messages — `paragraph` lines plus
+`RichBlockButtons` rows — so options render natively in Nagram X, with
+`style: "success"` on the active model and `disabled: {}` on out-of-bounds
+pagination arrows. `editRichMessage` = `editMessageText` + `rich_message`
+(10.1+). Every `#menu` call has a classic text + `inline_keyboard` fallback, so
+menus work on clients that reject rich messages.
+
+Block shapes were confirmed verbatim from the official Bot API docs dumps at
+`~/.local/share/opencode/tool-output/tool_0a2df4a92001bKbjWmUGtbPVSl` (10.3)
+and `tool_0a2534d4e001pFWxYwQchV6S7v` (9.x) (do not trust memory for new
+shapes — re-check those references).
+
+### Agent internals (thinking + tool calls)
+Reasoning and tool calls render as collapsible **`details` blocks**
+(`InputRichBlockDetails`, Bot API 10.3: `summary` header always shown, `blocks`
+body, `is_open` for default-expanded). They are tap-to-expand natively, so
+"collapsed" is still fully readable on demand.
+
+Per-chat policy lives in `store.json` (`InternalsSettings`, via `ChatStore`):
+- `thinking` / `tools`: `off` | `collapsed` | `expanded` (defaults `collapsed`).
+- `layout`: `per-step` (default) | `per-section` | `combined`.
+  - `per-step` — one `details` per opencode step (`splitSteps` on
+    `step-start`/`step-finish`), holding that step's reasoning + tool calls;
+    answer text follows each step.
+  - `per-section` — one `details` per reasoning run and per tool call,
+    interleaved with the answer; auto-rolls up to `combined` past `MAX_DETAILS`
+    (12) so the message still sends.
+  - `combined` — one `💭 Thinking` + one `⚙ Tools` above the answer.
+- Tool bodies are `input` + `output` (JSON-stringified), head+tail capped at
+  `MAX_TOOL_CHARS` (1500).
+
+UI: `/settings → 🔎 Internals` (rich menu). Three **presets** — Simple
+(off/off), Detailed (collapsed/collapsed/per-step, default), Debug
+(expanded/expanded/per-section) — set all three at once (active preset shown
+green); each row also cycles independently. HTML fallback uses `> ` blockquotes
+(not collapsible).
+
 
 ## 7. Model picker
 
@@ -233,11 +277,13 @@ same hexagonal port:
   `{ type: "file", mime, url: fileURL(path) }`. The schema **rejects
   `file_path`** — extra keys 400. Output parts carry a `file://` `url`, not a
   path, so `mapPart` maps `url` → path via `fileURLToPath`.
-- **Out — the agent produces a file**: assistant `file` parts render after the
-  text turn — image extensions go through `sendPhoto`, everything else
-  `sendDocument` (multipart `FormData` upload). Both are recorded in `c.msgs`
-  so `/wipe` clears them. A media-only reply skips the text placeholder and
-  deletes it after sending.
+- **Out — the agent produces a file**: assistant `file` parts prefer to ride
+  **inside** the text reply as rich `photo`/`document` blocks with
+  `attach://f<n>` multipart uploads (Bot API 10.3, up to 4). If that isn't
+  supported, each file goes as its own message — image extensions through
+  `sendPhoto`, everything else `sendDocument` (multipart `FormData` upload).
+  All are recorded in `c.msgs` so `/wipe` clears them. A media-only reply skips
+  the text placeholder and deletes it after sending.
 - The default model is text-only: it receives the image file but declares it
   cannot read it. When that happens the bot offers the vision-capable models
   right away (`#suggestImageModel`, once per current model) — or switch
@@ -264,3 +310,26 @@ is not.
 - The model cannot read images — user feedback arrives as text.
 - The `e2e` checks above, and any numeric/behaviour tweak, were driven by this
   client; re-verify against it when rendering changes.
+
+## 13. Bot API 10.2/10.3 features in use
+
+| Feature | Where | Notes |
+|---------|-------|-------|
+| Rich menus (`RichBlockButtons`) | `#menu` | settings tree; `style`/`disabled`; classic fallback |
+| `disabled` buttons | `#settingsModel`/`#settingsRename`/`#wipePick` | pagination arrows are inert at the bounds |
+| `expandable_blockquote` | `/log` | history folded until tapped; plain-text fallback |
+| `RichBlockDocument`/`photo` + `attach://` | `present()` | agent files embedded in the reply (multipart) |
+| `is_compact` tables | `rich.ts` | compact rich tables |
+| Ephemeral messages | `#permissionPrompt` | group permission prompts scoped to the sender (`ephemeral_message_parameters.receiver_user_id`); cleaned up with `deleteEphemeralMessage`; plain fallback |
+| `force_reply` | pair-code + bare `/use` prompts | reply bar forced on the user |
+| `can_stop` + `stopped_message_generation` | `#freeText` | native stop button on streaming drafts |
+| `details` blocks (thinking/tools) | `buildRich` | collapsible per-part; per-step/per-section/combined; auto-rollup |
+| Internals toggles | `/settings → 🔎 Internals` | presets Simple/Detailed/Debug + cyclers, per-chat in `store.json` |
+
+`/remind <5s–7d> <what>` schedules a silent (`disable_notification`) nudge via
+an **in-process** `setTimeout` (`timer.unref()` so it never keeps the process
+alive). Reminders are not persisted: a daemon restart drops them. Bot API
+`schedule_date` is not used (unsupported in private chats).
+
+**Deploy:** after these changes, reload the daemon (section 5) — `pkill -9 -f
+'src/tg.ts'` — and confirm from the log that it returns in live mode.

@@ -74,8 +74,11 @@ function mapPart(part: any, workspace: string): Part {
         kind: "tool",
         id: part.id ?? "",
         name: part.tool ?? "tool",
-        input: part.input ?? {},
-        output: part.output ?? {},
+        // tool input/output live under `state` in the event stream (and in the
+        // message parts), not at the top level
+        input: part.state?.input ?? part.input ?? {},
+        output: part.state?.output ?? part.output ?? {},
+        status: part.state?.status,
       }
     case "reasoning":
       return { kind: "reasoning", text: part.text ?? "" }
@@ -124,6 +127,10 @@ export class OpenCodeAdapter implements HarnessAdapter {
   #modelsCache: ModelRef[] = []
   #capsAt = 0
   #capsCache: Map<string, ModelCaps> = new Map()
+  // opencode's message.part.delta events carry only partID (no type), so we
+  // remember each part's type from its message.part.updated event (which always
+  // precedes the deltas) to tell reasoning apart from answer text.
+  #partTypes = new Map<string, string>()
 
   constructor(child: ChildProcess, workspace: string, endpoint: string) {
     this.#child = child
@@ -407,20 +414,45 @@ export class OpenCodeAdapter implements HarnessAdapter {
       case "server.connected":
         return { type: "server.connected" }
       case "message.created":
-        return { type: "message.created", sessionID: sessionID ?? "", messageID: messageID ?? "" }
+        return {
+          type: "message.created",
+          sessionID: sessionID ?? "",
+          messageID: (props.info?.id as string | undefined) ?? messageID ?? "",
+          role: (props.info?.role as string | undefined) ?? "",
+        }
       case "message.updated":
-        return { type: "message.updated", sessionID: sessionID ?? "", messageID: messageID ?? "" }
+        return {
+          type: "message.updated",
+          sessionID: sessionID ?? "",
+          messageID: (props.info?.id as string | undefined) ?? messageID ?? "",
+          role: (props.info?.role as string | undefined) ?? "",
+        }
       case "session.idle":
         return { type: "session.idle", sessionID: sessionID ?? "" }
-      case "message.part.updated":
-        return { type: "part.updated", sessionID: sessionID ?? "", messageID: messageID ?? "", partID: partID ?? "" }
+      case "message.part.updated": {
+        const part = props.part as { id?: string; type?: string; messageID?: string } | undefined
+        if (part?.id && part.type) {
+          if (this.#partTypes.size > 5_000) this.#partTypes.clear()
+          this.#partTypes.set(part.id, part.type)
+        }
+        return {
+          type: "part.updated",
+          sessionID: sessionID ?? "",
+          messageID: part?.messageID ?? messageID ?? "",
+          partID: partID ?? "",
+          partType: (part?.type as string) ?? "",
+          part: part ? mapPart(part, this.workspace) : undefined,
+        }
+      }
       case "message.part.delta":
         return {
           type: "part.delta",
           sessionID: sessionID ?? "",
           messageID: messageID ?? "",
           partID: partID ?? "",
-          partType: (props.partType as string | undefined) ?? "",
+          // prefer the explicit field if the server ever adds it, else the
+          // type we learned from this part's message.part.updated event
+          partType: (props.partType as string | undefined) ?? this.#partTypes.get(partID ?? "") ?? "",
           text: props.field === "text" ? (props.delta ?? "") as string : "",
         }
       case "permission.updated":

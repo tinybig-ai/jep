@@ -5,7 +5,36 @@
 // code/strikethrough and tappable links. The caller falls back to the HTML
 // render whenever a rich message can't be sent.
 export {}
-import { isRow, isSep, parseTable } from "./html.ts"
+import { isRow, isSep, parseRow, parseTable } from "./html.ts"
+
+// While a table is still streaming, the header row alone renders as raw
+// "| a | b |" text until the GFM separator row ("|---|---|") lands. Once the
+// header is followed by the *start* of a second line — not just the header
+// alone, which could be any stray pipe in prose — that's decisive enough to
+// commit to a table, so synthesize the separator early and let mdToRich grow
+// the table shell row by row as real content streams in behind it.
+export function closeStreamingTable(text: string): string {
+  const lines = text.split("\n")
+  const last = lines.length - 1
+  if (last < 1) return text
+  const headerIdx = last - 1
+  const header = lines[headerIdx]!
+  const trimmedHeader = header.trim()
+  if (!isRow(header) || isSep(header)) return text
+  if (!trimmedHeader.startsWith("|") && !trimmedHeader.endsWith("|")) return text
+  // bail if the header is itself mid-table already (a prior row/sep line
+  // precedes it) — the real detector already handles that case on its own
+  if (headerIdx > 0 && (isRow(lines[headerIdx - 1]!) || isSep(lines[headerIdx - 1]!))) return text
+  const next = lines[last]!
+  if (next.length === 0) return text // second line hasn't started yet — wait for it
+  if (isSep(next)) return text // real separator already complete, nothing to do
+  if (/[^\s|:.-]/.test(next)) return text // diverged into real content, not a separator
+  const cells = parseRow(header)
+  if (cells.length < 2) return text
+  const out = lines.slice(0, last)
+  out.push("|" + cells.map(() => "---").join("|") + "|")
+  return out.join("\n")
+}
 
 export type RichText = string | RichTextPart[]
 export type RichTextPart = string | { type: string; text?: RichText; url?: string }
@@ -29,6 +58,15 @@ export interface RichBlock {
   has_checkbox?: boolean
   is_checked?: boolean
   value?: number
+  /** RichBlockButtons (10.3): a row of buttons inside the message */
+  buttons?: Array<Record<string, unknown>>
+  align?: "left" | "center" | "right"
+  /** credit line for block quotations */
+  credit?: RichText
+  /** details block header (InputRichBlockDetails, 10.3) */
+  summary?: RichText
+  /** details block starts expanded */
+  is_open?: boolean
 }
 
 const INLINE_RE =

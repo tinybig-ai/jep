@@ -73,23 +73,80 @@ export function parseTable(parsedLines: string[]): ParsedTable | null {
   return { rows, intro }
 }
 
+// usable width of a Telegram `<pre>` block before mobile clients soft-wrap it,
+// which mangles the box-drawing borders; long cells wrap onto extra lines
+// within the row instead of blowing out the table width.
+const TABLE_WIDTH = 36
+
+function wrapCell(raw: string, width: number): string[] {
+  const words = raw.split(/\s+/).filter(Boolean)
+  if (words.length === 0) return [""]
+  const lines: string[] = []
+  let cur = ""
+  for (const word of words) {
+    if (!cur) cur = word
+    else if (cur.length + 1 + word.length <= width) cur += " " + word
+    else {
+      lines.push(cur)
+      cur = word
+    }
+    while (cur.length > width) {
+      lines.push(cur.slice(0, width))
+      cur = cur.slice(width)
+    }
+  }
+  if (cur) lines.push(cur)
+  return lines
+}
+
 function renderTable(rows: string[]): string {
   const parsed = parseTable(rows)
   if (!parsed || parsed.rows.length === 0) return ""
   const cols = Math.max(...parsed.rows.map((r) => r.length))
-  const marked = parsed.rows.map((r) => Array.from({ length: cols }, (_, ci) => toMarkup(esc(r[ci] ?? ""))))
+  const raw = parsed.rows.map((r) => Array.from({ length: cols }, (_, ci) => (r[ci] ?? "").trim()))
+  const naturalWidths = Array.from({ length: cols }, (_, ci) => Math.max(...raw.map((r) => r[ci]!.length)))
+  const overhead = 3 * cols + 1
+  const budget = Math.max(TABLE_WIDTH - overhead, cols * 3)
+  const naturalTotal = naturalWidths.reduce((a, b) => a + b, 0)
+  // shrink toward budget by taking width from the widest column(s) first, so
+  // short columns (ids, names) keep their natural width and only the verbose
+  // column(s) wrap.
+  const MIN_COL = 8
+  const floors = naturalWidths.map((w) => Math.min(MIN_COL, w))
+  const targets = [...naturalWidths]
+  let over = naturalTotal - budget
+  while (over > 0) {
+    let maxIdx = -1
+    for (let i = 0; i < targets.length; i++) {
+      if (targets[i]! > floors[i]! && (maxIdx === -1 || targets[i]! > targets[maxIdx]!)) maxIdx = i
+    }
+    if (maxIdx === -1) break
+    targets[maxIdx]!--
+    over--
+  }
+  if (over > 0) {
+    // even at floors it's too wide (many columns) — scale everything down
+    const floorTotal = floors.reduce((a, b) => a + b, 0) || 1
+    for (let i = 0; i < targets.length; i++) targets[i] = Math.max(3, Math.floor((floors[i]! / floorTotal) * budget))
+  }
+  const wrapped = raw.map((r) => r.map((c, ci) => wrapCell(c, targets[ci]!).map((line) => toMarkup(esc(line)))))
   const widths = Array.from({ length: cols }, (_, ci) => {
-    return Math.max(...marked.map((r) => r[ci]!.length))
+    return Math.max(...wrapped.map((r) => Math.max(...r[ci]!.map((l) => l.length))))
   })
   const pad = (s: string, w: number) => s + " ".repeat(Math.max(0, w - s.length))
   const border = (start: string, mid: string, end: string) =>
     `${start}${widths.map((w) => "─".repeat(w + 2)).join(mid)}${end}`
-  const line = (row: string[]) => `│ ${row.map((c, ci) => pad(c, widths[ci]!)).join(" │ ")} │`
+  const rowLines = (row: string[][]) => {
+    const height = Math.max(...row.map((c) => c.length))
+    const out: string[] = []
+    for (let li = 0; li < height; li++) out.push(`│ ${row.map((c, ci) => pad(c[li] ?? "", widths[ci]!)).join(" │ ")} │`)
+    return out
+  }
   const out: string[] = [border("┌", "┬", "┐")]
-  if (parsed.rows.length > 0) out.push(line(marked[0]!))
+  out.push(...rowLines(wrapped[0]!))
   if (parsed.rows.length > 1) out.push(border("├", "┼", "┤"))
-  for (const row of marked.slice(1)) out.push(line(row))
-  if (parsed.rows.length > 0) out.push(border("└", "┴", "┘"))
+  for (const row of wrapped.slice(1)) out.push(...rowLines(row))
+  out.push(border("└", "┴", "┘"))
   return `<pre>${out.join("\n")}</pre>`
 }
 

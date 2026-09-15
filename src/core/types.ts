@@ -18,6 +18,7 @@ export interface ToolCallPart {
   name: string
   input: unknown
   output: unknown
+  status?: "pending" | "running" | "completed" | "error"
 }
 
 export interface ReasoningPart {
@@ -66,9 +67,9 @@ export interface ApprovalRequest {
 
 export type DomainEvent =
   | { type: "server.connected" }
-  | { type: "message.created"; sessionID: string; messageID: string }
-  | { type: "message.updated"; sessionID: string; messageID: string }
-  | { type: "part.updated"; sessionID: string; messageID: string; partID: string }
+  | { type: "message.created"; sessionID: string; messageID: string; role?: string }
+  | { type: "message.updated"; sessionID: string; messageID: string; role?: string }
+  | { type: "part.updated"; sessionID: string; messageID: string; partID: string; partType: string; part?: Part }
   | { type: "part.delta"; sessionID: string; messageID: string; partID: string; text: string; partType?: string }
   | { type: "session.idle"; sessionID: string }
   | { type: "permission.requested"; sessionID: string; permissionID: string }

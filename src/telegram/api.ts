@@ -18,6 +18,8 @@ export interface TgMessage {
   caption?: string
   photo?: { file_id: string; file_unique_id?: string; width?: number; height?: number; file_size?: number }[]
   document?: { file_id: string; file_unique_id?: string; file_name?: string; mime_type?: string; file_size?: number }
+  // set on group messages that were sent as ephemeral (visible to one user + bot)
+  ephemeral_message_id?: number
 }
 
 export interface TgUpdate {
@@ -38,9 +40,30 @@ export interface InlineButton {
   callback_data: string
   /** optional button background: "success" (green), "danger" (red), "primary" (blue) */
   style?: "success" | "danger" | "primary"
+  /** render the button inert — it does nothing when pressed (Bot API 10.3+) */
+  disabled?: boolean
 }
 
-export type ReplyMarkup = { inline_keyboard: InlineButton[][] }
+/** a button inside a rich message (RichBlockButtons, Bot API 10.3+) */
+export interface RichMessageButton {
+  text: string
+  callback_data: string
+  style?: "success" | "danger" | "primary" | "link"
+  disabled?: boolean
+}
+
+/** make the message visible only to `receiver_user_id` + the bot (groups only) */
+export interface EphemeralParameters {
+  receiver_user_id: number
+  callback_query_id?: string
+  replace_callback_query_message?: boolean
+}
+
+export type ReplyMarkup = {
+  inline_keyboard: InlineButton[][]
+  /** reply bar forced on the recipient, as if the message was replied to (10.3) */
+  force_reply?: boolean
+}
 
 export interface TgBotCommand {
   command: string
@@ -56,7 +79,9 @@ export interface TelegramApi {
     text: string
     replyMarkup?: ReplyMarkup
     parseMode?: ParseMode
-  }): Promise<{ message_id: number }>
+    ephemeralMessageParameters?: EphemeralParameters
+    disableNotification?: boolean
+  }): Promise<{ message_id: number; ephemeral_message_id?: number }>
   editMessageText(params: {
     chatID: number
     messageID: number
@@ -65,7 +90,18 @@ export interface TelegramApi {
     parseMode?: ParseMode
   }): Promise<void>
   deleteMessage(params: { chatID: number; messageID: number }): Promise<void>
-  sendRichMessage(params: { chatID: number; rich_message: Record<string, unknown> }): Promise<{ message_id: number }>
+  sendRichMessage(params: {
+    chatID: number
+    rich_message: Record<string, unknown>
+    ephemeralMessageParameters?: EphemeralParameters
+    disableNotification?: boolean
+    /** local files to embed via attach:// refs in the rich blocks (10.3) */
+    files?: Array<{ name: string; filePath: string }>
+  }): Promise<{ message_id: number; ephemeral_message_id?: number }>
+  /** replace a rich message in place (editMessageText + rich_message, 10.1+) */
+  editRichMessage(params: { chatID: number; messageID: number; rich_message: Record<string, unknown> }): Promise<void>
+  /** delete an ephemeral (group, single-receiver) message */
+  deleteEphemeralMessage(params: { chatID: number; ephemeralMessageID: number }): Promise<void>
   sendChatAction(params: { chatID: number; action: string }): Promise<void>
   answerCallbackQuery(params: { id: string; text?: string }): Promise<void>
   setMyCommands(commands: TgBotCommand[]): Promise<void>
@@ -74,7 +110,7 @@ export interface TelegramApi {
   sendPhoto(params: { chatID: number; filePath: string; caption?: string }): Promise<{ message_id: number }>
   sendDocument(params: { chatID: number; filePath: string; caption?: string }): Promise<{ message_id: number }>
   /** Bot API 9.4+: animated preview while the answer is being generated */
-  sendMessageDraft(params: { chatID: number; draftID: number; text?: string; canStop?: boolean }): Promise<void>
+  sendMessageDraft(params: { chatID: number; draftID: number; text?: string; canStop?: boolean; parseMode?: string }): Promise<void>
   /** Bot API 10.1+: animated rich-message preview while the answer is being generated */
   sendRichMessageDraft(params: { chatID: number; draftID: number; rich_message: Record<string, unknown>; canStop?: boolean }): Promise<void>
 }
@@ -124,6 +160,43 @@ export function createTelegramApi(token: string): TelegramApi {
     ".json": "application/json",
   }
 
+  // classic inline buttons carry text/callback plus optional style and the
+  // inert `disabled` flag (DisabledButton: an empty object, Bot API 10.3+).
+  function serialInline(b: InlineButton): Record<string, unknown> {
+    const out: Record<string, unknown> = { text: b.text, callback_data: b.callback_data }
+    if (b.style) out.style = b.style
+    if (b.disabled) out.disabled = {}
+    return out
+  }
+  const serialMarkup = (m: ReplyMarkup): Record<string, unknown> => ({
+    inline_keyboard: m.inline_keyboard.map((row) => row.map((b) => serialInline(b))),
+    ...(m.force_reply === true ? { force_reply: true } : {}),
+  })
+
+  // sendRichMessage needs multipart when blocks embed local files via
+  // `attach://<name>`; without files it stays a plain JSON call.
+  async function sendRichMultipart(
+    chatID: number,
+    richMessage: Record<string, unknown>,
+    files: Array<{ name: string; filePath: string }>,
+    extra: Record<string, unknown>,
+  ): Promise<{ message_id: number; ephemeral_message_id?: number }> {
+    const form = new FormData()
+    form.append("chat_id", String(chatID))
+    form.append("rich_message", JSON.stringify(richMessage))
+    for (const [k, v] of Object.entries(extra)) form.append(k, typeof v === "string" ? v : JSON.stringify(v))
+    for (const f of files) {
+      const bytes = await readFile(f.filePath)
+      const name = basename(f.filePath)
+      const ext = name.slice(name.lastIndexOf(".")).toLowerCase()
+      form.append(f.name, new Blob([new Uint8Array(bytes)], { type: MIME_BY_EXT[ext] ?? "application/octet-stream" }), name)
+    }
+    const res = await fetch(url("sendRichMessage"), { method: "POST", body: form })
+    const json = (await res.json()) as { ok: boolean; result: { message_id: number; ephemeral_message_id?: number }; description?: string }
+    if (!json.ok) throw new Error(`telegram sendRichMessage: ${json.description ?? "unknown error"}`)
+    return json.result
+  }
+
   async function sendMultipart(method: "sendPhoto" | "sendDocument", chatID: number, filePath: string, caption?: string) {
     const bytes = await readFile(filePath)
     const name = basename(filePath)
@@ -148,11 +221,13 @@ export function createTelegramApi(token: string): TelegramApi {
       })
     },
     sendMessage(params) {
-      return callWithFallback<{ message_id: number }>("sendMessage", {
+      return callWithFallback<{ message_id: number; ephemeral_message_id?: number }>("sendMessage", {
         chat_id: params.chatID,
         text: params.text,
-        ...(params.replyMarkup ? { reply_markup: params.replyMarkup } : {}),
+        ...(params.replyMarkup ? { reply_markup: serialMarkup(params.replyMarkup) } : {}),
         ...(params.parseMode ? { parse_mode: params.parseMode } : {}),
+        ...(params.ephemeralMessageParameters ? { ephemeral_message_parameters: params.ephemeralMessageParameters } : {}),
+        ...(params.disableNotification ? { disable_notification: true } : {}),
       })
     },
     editMessageText(params) {
@@ -161,7 +236,7 @@ export function createTelegramApi(token: string): TelegramApi {
         message_id: params.messageID,
         text: params.text,
       }
-      if (params.replyMarkup !== undefined) body.reply_markup = params.replyMarkup ?? { inline_keyboard: [] }
+      if (params.replyMarkup !== undefined) body.reply_markup = params.replyMarkup ? serialMarkup(params.replyMarkup) : { inline_keyboard: [] }
       if (params.parseMode) body.parse_mode = params.parseMode
       return callWithFallback<void>("editMessageText", body).catch((err) => {
         if (err instanceof Error && /message is not modified/.test(err.message)) return
@@ -172,10 +247,28 @@ export function createTelegramApi(token: string): TelegramApi {
       return call<void>("deleteMessage", { chat_id: params.chatID, message_id: params.messageID })
     },
     sendRichMessage(params) {
-      return call<{ message_id: number }>("sendRichMessage", {
+      const extra: Record<string, unknown> = {}
+      if (params.ephemeralMessageParameters) extra.ephemeral_message_parameters = params.ephemeralMessageParameters
+      if (params.disableNotification) extra.disable_notification = true
+      if (params.files?.length) return sendRichMultipart(params.chatID, params.rich_message, params.files, extra)
+      return call<{ message_id: number; ephemeral_message_id?: number }>("sendRichMessage", {
         chat_id: params.chatID,
         rich_message: params.rich_message,
+        ...extra,
       })
+    },
+    editRichMessage(params) {
+      return callWithFallback<void>("editMessageText", {
+        chat_id: params.chatID,
+        message_id: params.messageID,
+        rich_message: params.rich_message,
+      }).catch((err) => {
+        if (err instanceof Error && /message is not modified/.test(err.message)) return
+        throw err
+      })
+    },
+    deleteEphemeralMessage(params) {
+      return call<void>("deleteEphemeralMessage", { chat_id: params.chatID, ephemeral_message_id: params.ephemeralMessageID })
     },
     sendChatAction(params) {
       return call<void>("sendChatAction", { chat_id: params.chatID, action: params.action })
@@ -200,10 +293,11 @@ export function createTelegramApi(token: string): TelegramApi {
       return sendMultipart("sendDocument", params.chatID, params.filePath, params.caption)
     },
     sendMessageDraft(params) {
-      return call<void>("sendMessageDraft", {
+      return callWithFallback<void>("sendMessageDraft", {
         chat_id: params.chatID,
         draft_id: params.draftID,
         ...(params.text !== undefined ? { text: params.text } : {}),
+        ...(params.parseMode ? { parse_mode: params.parseMode } : {}),
         ...(params.canStop ? { can_stop: true } : {}),
       })
     },

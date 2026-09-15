@@ -23,8 +23,10 @@ interface CallRec {
   messageID?: number
   text?: string
   parse_mode?: string
-  reply_markup?: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> }
+  reply_markup?: { inline_keyboard: Array<Array<Record<string, unknown>>>; force_reply?: boolean }
   rich?: unknown
+  silent?: boolean
+  ephemeral?: number
 }
 
 interface Ws {
@@ -64,8 +66,17 @@ async function buildMockApi(): Promise<TelegramApi> {
         .splice(0)
     },
     async sendMessage(params) {
-      calls.push({ method: "sendMessage", chatID: params.chatID, text: params.text, ...(params.parseMode ? { parse_mode: params.parseMode } : {}), ...(params.replyMarkup ? { reply_markup: params.replyMarkup } : {}) })
-      return { message_id: nextID++ }
+      calls.push({
+        method: "sendMessage",
+        chatID: params.chatID,
+        text: params.text,
+        ...(params.parseMode ? { parse_mode: params.parseMode } : {}),
+        ...(params.replyMarkup ? { reply_markup: params.replyMarkup } : {}),
+        ...(params.disableNotification ? { silent: true } : {}),
+        ...(params.ephemeralMessageParameters ? { ephemeral: params.ephemeralMessageParameters.receiver_user_id } : {}),
+      })
+      const id = nextID++
+      return params.ephemeralMessageParameters ? { message_id: id, ephemeral_message_id: nextID++ } : { message_id: id }
     },
     async editMessageText(params) {
       calls.push({ method: "editMessageText", chatID: params.chatID, messageID: params.messageID, text: params.text, ...(params.parseMode ? { parse_mode: params.parseMode } : {}) })
@@ -74,8 +85,22 @@ async function buildMockApi(): Promise<TelegramApi> {
       calls.push({ method: "deleteMessage", chatID: params.chatID, messageID: params.messageID })
     },
     async sendRichMessage(params) {
-      calls.push({ method: "sendRichMessage", chatID: params.chatID, rich: params.rich_message })
-      return { message_id: nextID++ }
+      calls.push({
+        method: "sendRichMessage",
+        chatID: params.chatID,
+        rich: params.rich_message,
+        ...(params.files?.length ? { text: `files=${params.files.map((f) => f.name).join(",")}` } : {}),
+        ...(params.disableNotification ? { silent: true } : {}),
+        ...(params.ephemeralMessageParameters ? { ephemeral: params.ephemeralMessageParameters.receiver_user_id } : {}),
+      })
+      const id = nextID++
+      return params.ephemeralMessageParameters ? { message_id: id, ephemeral_message_id: nextID++ } : { message_id: id }
+    },
+    async editRichMessage(params) {
+      calls.push({ method: "editRichMessage", chatID: params.chatID, messageID: params.messageID, rich: params.rich_message })
+    },
+    async deleteEphemeralMessage(params) {
+      calls.push({ method: "deleteEphemeralMessage", chatID: params.chatID, messageID: params.ephemeralMessageID })
     },
     async sendMessageDraft(params) {
       calls.push({ method: "sendMessageDraft", chatID: params.chatID, text: `draft=${params.draftID} text=${JSON.stringify(params.text ?? "")} can_stop=${params.canStop === true}` })
@@ -109,8 +134,8 @@ async function buildMockApi(): Promise<TelegramApi> {
     },
     dump() {
       for (const c of calls) {
-        console.log(`CALL ${c.method} chat=${c.chatID}${c.messageID ? ` msg=${c.messageID}` : ""}${c.parse_mode ? ` mode=${c.parse_mode}` : ""}${c.rich ? ` rich=${JSON.stringify(c.rich).slice(0, 220)}` : ""} text=${JSON.stringify(c.text ?? "")}`)
-        if (c.reply_markup) console.log(`     keyboard: ${JSON.stringify(c.reply_markup.inline_keyboard)}`)
+        console.log(`CALL ${c.method} chat=${c.chatID}${c.messageID ? ` msg=${c.messageID}` : ""}${c.parse_mode ? ` mode=${c.parse_mode}` : ""}${c.silent ? " silent" : ""}${c.ephemeral != null ? ` ephemeral=${c.ephemeral}` : ""}${c.rich ? ` rich=${JSON.stringify(c.rich).slice(0, 220)}` : ""} text=${JSON.stringify(c.text ?? "")}`)
+        if (c.reply_markup) console.log(`     keyboard: ${JSON.stringify(c.reply_markup.inline_keyboard)}${c.reply_markup.force_reply ? " force_reply" : ""}`)
       }
     },
   }
