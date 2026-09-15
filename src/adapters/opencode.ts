@@ -279,11 +279,17 @@ export class OpenCodeAdapter implements HarnessAdapter {
     }
   }
 
+  // every workspace jep spawns shares one opencode data home (same dataHome
+  // passed to startOpenCodeServer for each), and opencode's own session store
+  // is global to that data home regardless of which directory created a
+  // session — confirmed empirically: a second `opencode serve` rooted
+  // elsewhere but sharing the data home already sees the first one's
+  // sessions via its own /session. So a session stays reachable no matter
+  // how many times the configured workspace directory changes; jep doesn't
+  // need to filter by directory itself to get that.
   async listSessions(): Promise<SessionSummary[]> {
     const sessions = await this.#json<any[]>("/session")
-    return sessions
-      .filter((s) => (s.directory ?? this.workspace) === this.workspace)
-      .map((s) => this.#toSummary(s))
+    return sessions.map((s) => this.#toSummary(s))
   }
 
   #toSummary(s: any): SessionSummary {
