@@ -938,19 +938,29 @@ export class TelegramBot {
       const title = this.#displayTitle(s.id, s.title)
       return `${shown.indexOf(s) + 1}. "${title}"${marker}`
     })
-    const markup = kin(
-      shown.map((s, i) => [
-        btn(`${i + 1}. ${this.#displayTitle(s.id, s.title)}`, `open:${i}`),
-        { ...btn("🗑", `deld:${i}`), style: "danger" as const },
-      ]),
-    )
-    if (forceReply) markup.force_reply = true
-    const msg = await this.#tg.sendMessage({
-      chatID,
-      text: [caption, "", ...list, ...(sorted.length > MAX_LIST ? [`… and ${sorted.length - MAX_LIST} more`] : [])].join("\n"),
-      replyMarkup: markup,
-    })
-    c.picker = { messageID: msg.message_id, ws: c.workspace, sessions: shown.map((s) => s.id) }
+    const rows: InlineButton[][] = shown.map((s, i) => [
+      btn(`${i + 1}. ${this.#displayTitle(s.id, s.title)}`, `open:${i}`),
+      { ...btn("🗑", `deld:${i}`), style: "danger" as const },
+    ])
+    const lines = [caption, "", ...list, ...(sorted.length > MAX_LIST ? [`… and ${sorted.length - MAX_LIST} more`] : [])]
+
+    let messageID: number | undefined
+    if (forceReply) {
+      // force_reply only exists on the classic keyboard — rich message
+      // buttons (below) can't carry it, so /use's "type or tap" prompt keeps
+      // the classic, evenly-split row. Nothing else needs forceReply.
+      const markup = kin(rows)
+      markup.force_reply = true
+      const msg = await this.#tg.sendMessage({ chatID, text: lines.join("\n"), replyMarkup: markup })
+      messageID = msg.message_id
+    } else {
+      // rich message buttons (same format #menu uses for Settings) size each
+      // button to its own label instead of splitting the row evenly, so the
+      // 🗑 actually reads as smaller than the conversation button next to it
+      messageID = (await this.#menu(chatID, lines, rows)).messageID
+    }
+    if (messageID === undefined) return
+    c.picker = { messageID, ws: c.workspace, sessions: shown.map((s) => s.id) }
     c.del = null
     c.page = 0
   }
