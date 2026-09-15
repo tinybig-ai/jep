@@ -117,37 +117,37 @@ const toolInput = (t: ToolCallPart): Record<string, any> => (t.input ?? {}) as R
 // opencode's tool result carries far more than the model-facing input/output:
 // edit's real diff and write's file path live in `title`/`metadata`, which the
 // generic input/output dump below would otherwise never show.
+const MAX_HEADER_CHARS = 48
+const capHeader = (s: string): string => (s.length > MAX_HEADER_CHARS ? `${s.slice(0, MAX_HEADER_CHARS - 1)}…` : s)
+// a collapsed details block always shows its summary, even closed — keep it
+// to a glance (icon + the one thing that matters), not a full sentence. The
+// rest (diff, output, line range, match count…) belongs in the body.
+const baseName = (p: string): string => p.split(/[/\\]/).pop() || p
+
 function toolHeader(t: ToolCallPart): string {
   const meta = toolMeta(t)
   const input = toolInput(t)
   switch (t.name) {
     case "edit": {
-      const stats = meta.filediff ? ` (+${meta.filediff.additions ?? 0} -${meta.filediff.deletions ?? 0})` : ""
-      return `✏️ edit ${t.title ?? input.filePath ?? ""}${stats}`
+      const stats = meta.filediff ? ` +${meta.filediff.additions ?? 0}-${meta.filediff.deletions ?? 0}` : ""
+      return capHeader(`✏️ ${baseName(t.title ?? input.filePath ?? "edit")}${stats}`)
     }
     case "write":
-      return `📝 write ${t.title ?? input.filePath ?? ""}`
+      return capHeader(`📝 ${baseName(t.title ?? input.filePath ?? "write")}`)
     case "bash": {
       const exit = meta.exit
-      const mark = exit === 0 || exit == null ? "" : ` ✗(${exit})`
-      const cmd = String(t.title ?? input.command ?? "").split("\n")[0]!
-      const short = cmd.length > 60 ? `${cmd.slice(0, 57)}…` : cmd
-      return `⚙ bash${mark}${short ? `: ${short}` : ""}`
+      const mark = exit === 0 || exit == null ? "" : ` ✗${exit}`
+      const cmd = String(t.title ?? input.command ?? "bash").split("\n")[0]!
+      return capHeader(`⚙ ${cmd}${mark}`)
     }
-    case "read": {
-      const disp = meta.display
-      const range = disp?.type === "file" ? ` (lines ${disp.lineStart}-${disp.lineEnd} of ${disp.totalLines})` : ""
-      return `📖 read ${t.title ?? input.filePath ?? ""}${range}`
-    }
-    case "glob": {
-      // glob's `title` is the searched directory, not the pattern
-      const dir = t.title && t.title !== "." ? ` in ${t.title}` : ""
-      return `🔎 glob ${input.pattern ?? ""}${dir} (${meta.count ?? 0})`
-    }
+    case "read":
+      return capHeader(`📖 ${baseName(t.title ?? input.filePath ?? "read")}`)
+    case "glob":
+      return capHeader(`🔎 ${input.pattern ?? "glob"}`)
     case "grep":
-      return `🔎 grep ${t.title ?? input.pattern ?? ""} (${meta.matches ?? 0})`
+      return capHeader(`🔎 ${t.title ?? input.pattern ?? "grep"}`)
     case "task":
-      return `🤖 ${input.subagent_type ? `@${input.subagent_type}` : "subagent"}: ${t.title ?? input.description ?? ""}${meta.background ? " (background)" : ""}`
+      return capHeader(`🤖 @${input.subagent_type ?? "subagent"}: ${t.title ?? input.description ?? ""}`)
     default:
       return `⚙ ${t.name}`
   }
@@ -279,7 +279,7 @@ function richPerStep(parts: Part[], s: InternalsSettings): RichBlock[] {
     if (showReasoning || showTools) {
       const bits: string[] = []
       if (showReasoning) bits.push("💭 Thinking")
-      if (showTools) bits.push(`⚙ ${tools.map((t) => t.name).join(", ")}`)
+      if (showTools) bits.push(tools.length === 1 ? toolHeader(tools[0]!) : `⚙ ${tools.length} tools`)
       const inner: RichBlock[] = []
       if (showReasoning) inner.push({ type: "paragraph", text: capText(reasoning) })
       if (showTools)
@@ -288,7 +288,7 @@ function richPerStep(parts: Part[], s: InternalsSettings): RichBlock[] {
           inner.push({ type: "pre", text: capText(`${toolHeader(t)}\n\n${toolBody(t)}`), ...(lang ? { language: lang } : {}) })
         }
       const open = (showReasoning && s.thinking === "expanded") || (showTools && s.tools === "expanded")
-      out.push(detailsBlock(bits.join(" · "), inner, open))
+      out.push(detailsBlock(capHeader(bits.join(" · ")), inner, open))
     }
     const text = textOf(step)
     if (text) out.push(...mdToRich(text))
