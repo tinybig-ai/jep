@@ -1,0 +1,266 @@
+# jep — Processes
+
+How this project actually runs, gets tested, and gets shipped to the live bot.
+Written so a future session can reorient from scratch.
+
+## 1. What this is
+
+`jep` is a phone-first control plane for coding agents. A Telegram bot (front
+end) talks to opencode serve (the agent backend). You text the bot, the bot
+turns your words into a prompt on a workspace, the agent does the work, and the
+bot renders the reply — markdown, tables, and all — in Telegram.
+
+No git repo. Everything lives in `/Users/user/Documents/code/jep`.
+
+## 2. File map (separation at a glance)
+
+```
+src/
+  cli.ts                  // TUI harness (probe / scratch builds)
+  probe.ts                // quick adapter probes
+  tg.ts                   // ENTRYPOINT — dependency wiring, env, mock/live, auth sync
+  core/
+    ports.ts              // hexagonal seam: HarnessAdapter + ModelRef surface
+    types.ts              // Message, DomainEvent, SessionSummary, ApprovalRequest
+    compliance.ts         // assertAdapterImplements + compliance suites
+  adapters/
+    opencode.ts           // the one real harness: opencode serve session lifecycle,
+                          // prompt/events/models, spawn + health + close
+  telegram/
+    bot.ts                // ORCHESTRATION ONLY — chat state, commands, callbacks,
+                          // streaming placeholder, #recording choke point, pickers
+    api.ts                // TELEGRAM WIRE — raw/fallback calls, parse modes,
+                          // getUpdates + allowed_updates, TelegramApi interface
+    html.ts               // PURE RENDERER — markdown → Telegram HTML (box tables)
+    rich.ts               // PURE RENDERER — markdown → Rich Message blocks
+    store.ts              // PERSISTENCE — titles + per-chat model pick, JSON file
+    pair.ts               // OWNERSHIP — pairing codes, owner lock, rotation
+fixture/
+  workspace-alpha/        // test working directories for the two harness workspaces
+  workspace-beta/
+  telegram-mock*.jsonl    // mock update fixtures (pair, settings, wire, wipe)
+```
+
+## 3. Runtime model
+
+- Node v26 native TypeScript, run with `--experimental-strip-types`.
+- One harness per workspace. The bot owns a list of workspaces; the first is
+  the default. Each workspace gets its own `HarnessAdapter` (a spawned
+  `opencode serve` child). Sessions live on disk and survive bot restarts.
+- All sessions run inside an **isolated data home** so the bot never touches the
+  user's CLI/opencode store. The user's `auth.json` is mirrored there at boot
+  so registry models (zen + opencode-go) still run (see `syncOpenCodeAuth` in
+  `src/tg.ts:37`).
+
+## 4. Environment variables
+
+| Var | Meaning |
+|-----|---------|
+| `JEP_TG_TOKEN` | Telegram bot token (live mode) |
+| `JEP_DATA_HOME` | data dir (pairing.json, store.json, opencode/). Default: temp dir |
+| `JEP_TG_MOCK=1` | mock mode — reads JSON-lines updates from stdin, dumps calls |
+| `JEP_WORKSPACES` | `:`-separated workspace dirs (default: the two fixtures) |
+| `JEP_TG_PAIR_CODE` | fixed pairing code (default: generated) |
+| `JEP_TG_OWNER` | seed the owner (default: 000000000 via pairing.json) |
+| `JEP_TG_PAIR_MAX/WINDOW/ROTATE` | pairing-attempt limits, window, rotation |
+| `JEP_TG_MODELS` | comma-separated extra model labels appended to the picker |
+| `OPENCODE_BIN` | path to the opencode CLI (default: `opencode` on PATH) |
+
+## 5. Commands
+
+The live bot runs under **launchd** (`~/Library/LaunchAgents/com.jep.tg.plist`),
+so it survives crashes and the "silent daemon death" failure mode (a transient
+Telegram `getUpdates` 502 used to `process.exit(1)` — now the poll loop retries
+with backoff, and launchd `KeepAlive` restarts anything that still dies):
+
+```sh
+# reload after a code change: SIGKILL it, launchd brings it back with new code
+pkill -9 -f 'src/tg.ts'; sleep 5; pgrep -fl 'src/tg.ts'   # expect a running node
+```
+
+Manual management (only if you edit the plist):
+
+```sh
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.jep.tg.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jep.tg.plist
+launchctl list | grep 'com.jep.tg'                        # expect loaded, exit 0
+tail -3 /tmp/jep-tg-live.log   # expect "mode: live · owner: 000000000 · paired chats: 1"
+```
+
+The plist pins the env (token, `JEP_DATA_HOME=/tmp/jep-tg-data`, `PATH` so the
+`opencode` CLI is found) and truncates `StandardOutPath`/`StandardErrorPath` to
+`/tmp/jep-tg-live.log` on each launch. The live bot **re-attaches to the
+existing pairing** (no re-pair, no new pairing code) because the owner is
+already persisted in `/tmp/jep-tg-data`.
+
+Mock replay of a fixture:
+
+```sh
+JEP_DATA_HOME=/tmp/jep-tg-mock JEP_TG_PAIR_CODE=TESTCODE JEP_TG_MOCK=1 \
+  node --experimental-strip-types src/tg.ts < fixture/telegram-mock-settings.jsonl
+```
+
+Syntax check any single file:
+
+```sh
+node --experimental-strip-types --check src/telegram/rich.ts
+```
+
+**Type-stripping gotcha:** `--experimental-strip-types` (amaro) crashes at
+*runtime* with `ERR_INVALID_TYPESCRIPT_SYNTAX` on inline type literals that use
+`?:` inside a generic call argument (e.g.
+`#json<{ all?: Array<{ models?: ... }> }>(...)`). It even passes `--check`.
+Keep such shapes as module-level `interface`/`type` aliases and pass the name
+as the generic — see `ProviderRoot` in `src/adapters/opencode.ts`.
+
+## 6. The render pipeline
+
+Two routes, one choke point.
+
+1. **Choke point `#recording`** (`src/telegram/bot.ts:98`) — every outbound
+   `sendMessage`/`editMessageText` text passes through `mdToHtml()` with
+   `parseMode: "HTML"`. This is why menu text, status, help, and errors all
+   render markdown correctly with zero per-call code. `sendRichMessage` passes
+   through untouched (rich blocks are already structured).
+2. **Streaming + finalize** (`#freeText`, `bot.ts:455`) — on Bot API 9.4+
+   clients the turn opens an animated draft (`sendMessageDraft` with
+   `can_stop: true` and an empty text, which renders a native "Thinking…"
+   placeholder plus a stop button). Every ~700 ms the latest stream tail is
+   pushed to the same draft; opencode reasoning deltas (`partType ===
+   "reasoning"`) are filtered out so chain-of-thought never leaks into the
+   reply. When the turn ends the draft is replaced with the final message:
+   `sendRichMessage` blocks, or `sendMessage` plain fallback. Older clients
+   fall back to the legacy "…" placeholder + `editMessageText` path
+   automatically. The user can also tap the native stop button, which delivers
+   a `stopped_message_generation` update that aborts the turn.
+   - Try `sendRichMessage` with `mdToRich(body)` blocks, then delete the
+     placeholder message.
+   - On **any** failure → fall back to `clearPlaceholder(body)` (edit the
+     placeholder in place with the HTML render).
+   - The HTML renderer's fallback (`callWithFallback` in `api.ts:78`): if
+     Telegram rejects the parsed entities, retry the same call **without**
+     `parse_mode`; `"message is not modified"` is swallowed silently.
+
+So the degrade chain for any reply is always:
+**rich blocks → HTML (box-drawn tables) → plain text.** The user never sees a
+400.
+
+### HTML renderer (`html.ts`)
+- Escapes everything **first**, then applies markup, so malformed input
+  degrades to plain text.
+- Supports: `**bold**`, `__underline__`, `~~strike~~`, `_em_`, `\`code\``,
+  links, checkboxes (☑/☐), bullets (•), quotes, headings 1–4 as `<b>`,
+  fenced code, and tables.
+- Tables have no native Telegram form → drawn as a box grid with `─│┌┬┐`
+  characters inside a `<pre>`.
+- Streaming-safe: inline tags never span markdown line boundaries, so
+  mid-stream slices of the placeholder never break markup.
+
+### Rich renderer (`rich.ts`)
+Emits genuine Telegram Rich Message blocks: `paragraph`, `heading`
+(`size` 1–6, 1 = largest), `pre` (+ `language`), `divider`, `list` (bullets /
+ordered `1`,`a`,`A`,`i`,`I` / checkboxes `has_checkbox`+`is_checked`),
+`blockquote` (nested blocks), `table` (`cells`, `is_bordered/striped/compact`,
+≤ 20 columns), and inline `bold/italic/underline/code/strikethrough/url`
+parts. Used only in `finalize()`; everything degrades to the HTML render if
+the client or API rejects it.
+
+Block shapes were confirmed verbatim from the official Bot API docs dump at
+`~/.local/share/opencode/tool-output/tool_0a2534d4e001pFWxYwQchV6S7v` (do not
+trust memory for new shapes — re-check that reference).
+
+## 7. Model picker
+
+Sources, in priority order (merged, deduped, default always first):
+
+1. Default `localfree-models-proxy/auto` (the free proxy; engine picks) —
+   `MODEL_REF` in `src/adapters/opencode.ts`.
+2. Config providers + their `models` maps from
+   `~/.config/opencode/opencode.json` (`providers.*.models`).
+3. Registry models from the **`opencode models` CLI** — provider lines
+   `opencode/*` (7 free "zen" models, incl. `opencode/big-pickle`) and
+   `opencode-go/*` (27 paid, Go subscription, authenticated in `auth.json`).
+   Only `opencode`, `opencode-go`, and config-registered providers are merged.
+   15 s timeout, swallowed on failure, 60 s cache.
+
+A per-chat pick (`mdl:...`) is persisted in `store.json`; the next message in
+that chat runs on it. Clear back to engine-picked with `mdl:off`. The pick is
+passed to `prompt()` as `{ providerID, modelID }` — never pinned globally.
+
+Vision capability: `GET /provider` reports every model's
+`capabilities.{ attachment, input.image }`; the picker marks accepted-image
+models with `🖼` (legend in the body) via `adapter.capabilities()`. The same
+map drives the one-time suggestion (`#suggestImageModel`) that appears when a
+photo/document lands on a model that can't read it — it offers up to 3
+vision-capable models as direct `mdl:` buttons plus "All models ›".
+
+**Live constraint:** the bot's isolated opencode only runs auth'd models if
+`auth.json` is mirrored in (done automatically at boot). Verify after restart:
+`/tmp/jep-tg-data/opencode/auth.json` exists and matches the user's real
+`~/.local/share/opencode/auth.json` (keys: `['opencode-go']`).
+
+## 8. Ownership / pairing
+
+- New bots print a pairing code; `/pair <code>` claims the bot and locks it to
+  that chat id. The owner is persisted to `pairing.json`, so restarts keep
+  ownership (live: owner 000000000, no re-pair).
+- Pairing has attempt limits and code rotation (env-tunable).
+- Commands and even plain free text are ignored for non-owner chats.
+
+## 9. `/wipe` semantics
+
+"Clear the visible Telegram chat" is the contract — **Telegram-side only**:
+
+- Deletes the bot's recorded messages in the chat (what the user visibly
+  scrolls), rate-limited, with a delete cap.
+- Never touches backend storage: harness sessions, store.json titles, and the
+  per-chat model pick all stay. Aborts an in-flight turn (non-destructive).
+- Answers with "🧽 chat cleared — bot messages removed. conversations are
+  untouched."
+- A previous version deleted every backend session — that was wrong, and was
+  reverted. Do not reintroduce backend deletion behind `/wipe`.
+
+## 10. Media flow (both directions)
+
+The bot's one message pipeline is text-first, but attachments pass through the
+same hexagonal port:
+
+- **In — user sends a photo/document**: `#gatedMessage` detects `photo` /
+  `document`, downloads bytes via `getFileContent` (Telegram `getFile` +
+  binary fetch), writes them to `<data home>/uploads/upl-*`, and hands the
+  absolute path to `adapter.prompt(..., { filePaths })`. The opencode adapter
+  converts each path to a `FilePartInput`-shaped part:
+  `{ type: "file", mime, url: fileURL(path) }`. The schema **rejects
+  `file_path`** — extra keys 400. Output parts carry a `file://` `url`, not a
+  path, so `mapPart` maps `url` → path via `fileURLToPath`.
+- **Out — the agent produces a file**: assistant `file` parts render after the
+  text turn — image extensions go through `sendPhoto`, everything else
+  `sendDocument` (multipart `FormData` upload). Both are recorded in `c.msgs`
+  so `/wipe` clears them. A media-only reply skips the text placeholder and
+  deletes it after sending.
+- The default model is text-only: it receives the image file but declares it
+  cannot read it. When that happens the bot offers the vision-capable models
+  right away (`#suggestImageModel`, once per current model) — or switch
+  manually in /settings, where `🖼` marks models that accept images.
+
+## 11. Verification ritual
+
+1. `node --experimental-strip-types --check <file>` on every edited file.
+2. Mock end-to-end through a fixture (pair → act → assert the `CALL ...` dump).
+   The mock reads JSON-lines updates from stdin and prints
+   `CALL <method> chat=<id> msg=<id> mode=<HTML> [rich=<json>] text="..."`
+   plus one indented `keyboard: ...` line per callback reply.
+3. Live restart (section 5) + `tail` the log + a real Telegram check by the
+   user. After the user confirms, the feature is "shipped".
+
+Never move on from a broken state: partial features are fine, broken live bot
+is not.
+
+## 12. Client truth
+
+- The user's Telegram client is **Nagram X** (its rendering drove the rich
+  message work: plain `<pre>`/HTML tables looked bad, native Rich Blocks look
+  right).
+- The model cannot read images — user feedback arrives as text.
+- The `e2e` checks above, and any numeric/behaviour tweak, were driven by this
+  client; re-verify against it when rendering changes.

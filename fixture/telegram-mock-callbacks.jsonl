@@ -1,0 +1,11 @@
+{"update_id":1,"message":{"message_id":1,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"/pair TESTCODE"}}
+{"update_id":2,"message":{"message_id":2,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"/new"}}
+{"update_id":3,"message":{"message_id":3,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"Reply with the single word: yes"}}
+{"update_id":4,"message":{"message_id":4,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"/ls"}}
+{"update_id":5,"callback_query":{"id":"c1","from":{"id":123},"message":{"message_id":4,"chat":{"id":123}},"data":"open:0"}}
+{"update_id":6,"message":{"message_id":6,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"/del"}}
+{"update_id":7,"callback_query":{"id":"c2","from":{"id":123},"message":{"message_id":6,"chat":{"id":123}},"data":"deld:0"}}
+{"update_id":8,"callback_query":{"id":"c3","from":{"id":123},"message":{"message_id":6,"chat":{"id":123}},"data":"dely"}}
+{"update_id":9,"message":{"message_id":9,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"/status"}}
+{"update_id":10,"message":{"message_id":10,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"/ws"}}
+{"update_id":11,"callback_query":{"id":"c4","from":{"id":123},"message":{"message_id":9,"chat":{"id":123}},"data":"wsw:workspace-beta"}}

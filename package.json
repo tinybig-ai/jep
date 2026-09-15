@@ -1,0 +1,13 @@
+{
+  "name": "jep",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "Hexagonal integration layer + phone-first frontend for coding agents (opencode first)",
+  "scripts": {
+    "probe": "node --experimental-strip-types src/probe.ts",
+    "cli": "node --experimental-strip-types src/cli.ts",
+    "tg": "node --experimental-strip-types src/tg.ts",
+    "tg:mock": "JEP_TG_PAIR_CODE=TESTCODE JEP_TG_MOCK=1 node --experimental-strip-types src/tg.ts < fixture/telegram-mock.jsonl"
+  }
+}
