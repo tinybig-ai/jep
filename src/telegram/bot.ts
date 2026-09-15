@@ -31,8 +31,7 @@ interface ChatState {
   del: { messageID: number; i: number } | null
   // an arg-taking command was sent bare; next plain text is the answer
   awaiting: Awaiting | null
-  // message ids (own + user's) so /wipe can clear this chat; page = wipe picker page
-  msgs: Set<number>
+  // page shown now, shared across the rename/ls/del/continuation pickers
   page: number
   // the message the settings menu tree is currently drawn on
   settingsMsg: number | null
@@ -51,11 +50,8 @@ interface ChatState {
 const MAX_MSG = 4000
 const MAX_LIST = 10
 const WIPE_PAGE = 4
-const WIPE_DELETE_CAP = 30
 // files embedded into one rich message via attach:// (keep multipart modest)
 const MAX_RICH_FILES = 4
-
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 const kin = (rows: InlineButton[][]): ReplyMarkup => ({ inline_keyboard: rows })
 const btn = (text: string, data: string): InlineButton => ({ text, callback_data: data })
@@ -445,7 +441,7 @@ const HELP = [
   "",
   "/new · start fresh",
   "/ls · switch chats",
-  "/settings · model & cleanup",
+  "/settings · model, workspace & more",
   "/remind · schedule a nudge (e.g. /remind 2h build)",
   "",
   "Everything else lives in the ☰ menu.",
@@ -476,17 +472,20 @@ export class TelegramBot {
   // in-process /remind timers (best-effort: a restart drops pending reminders)
   #reminders = new Set<ReturnType<typeof setTimeout>>()
 
+  // ordered by expected use — most-reached-for first. /ws, /abort, /cancel
+  // stay fully functional but out of this menu: /ws moved under
+  // ⚙️ Settings (a command tree, not a flat list) now that there's a home
+  // for it there; /abort and /cancel are already handed to the user as an
+  // explicit "⏹ Stop" button / "/cancel to stop" text exactly when each is
+  // relevant, so listing them here too would just be a second, redundant
+  // way to reach something already in front of you at the right moment.
   static commands = [
-    { command: "status", description: "what am I connected to" },
     { command: "new", description: "start a fresh conversation" },
     { command: "ls", description: "your conversations" },
+    { command: "status", description: "what am I connected to" },
+    { command: "settings", description: "model · rename · workspace" },
     { command: "log", description: "this conversation's history" },
     { command: "del", description: "delete a conversation" },
-    { command: "ws", description: "switch workspace" },
-    { command: "settings", description: "model · rename · wipe" },
-    { command: "wipe", description: "clear this chat's messages" },
-    { command: "abort", description: "stop the current turn" },
-    { command: "cancel", description: "give up on the current prompt" },
     { command: "remind", description: "remind me later (e.g. /remind 2h build)" },
   ]
 
@@ -500,8 +499,8 @@ export class TelegramBot {
     this.#uploadsDir = uploadsDir
   }
 
-  // records every bot-sent message id per chat so /wipe can clear them, and
-  // renders every outgoing text through markdown → Telegram HTML
+  // renders every outgoing text through markdown → Telegram HTML, and logs
+  // every send for diagnostics
   #recording(tg: TelegramApi): TelegramApi {
     const md = (text: string) => mdToHtml(text)
     return {
@@ -516,7 +515,6 @@ export class TelegramBot {
         console.error(`[send] sendRichMessage chat=${p.chatID} at=${new Date().toISOString()}`)
         const r = await tg.sendRichMessage(p)
         console.error(`[send] sendRichMessage -> msg=${r.message_id}`)
-        this.#chat(p.chatID).msgs.add(r.message_id)
         return r
       },
       sendMessageDraft: (p) => tg.sendMessageDraft({ ...p, text: p.text !== undefined ? md(p.text) : undefined, parseMode: p.text !== undefined ? "HTML" : undefined }),
@@ -528,20 +526,10 @@ export class TelegramBot {
       editMessageText: (p) => tg.editMessageText({ ...p, text: md(p.text), parseMode: "HTML" }),
       sendMessage: async (p) => {
         console.error(`[send] sendMessage chat=${p.chatID} at=${new Date().toISOString()} text=${JSON.stringify(p.text.slice(0, 60))}`)
-        const r = await tg.sendMessage({ ...p, text: md(p.text), parseMode: "HTML" })
-        this.#chat(p.chatID).msgs.add(r.message_id)
-        return r
+        return tg.sendMessage({ ...p, text: md(p.text), parseMode: "HTML" })
       },
-      sendPhoto: async (p) => {
-        const r = await tg.sendPhoto(p)
-        this.#chat(p.chatID).msgs.add(r.message_id)
-        return r
-      },
-      sendDocument: async (p) => {
-        const r = await tg.sendDocument(p)
-        this.#chat(p.chatID).msgs.add(r.message_id)
-        return r
-      },
+      sendPhoto: (p) => tg.sendPhoto(p),
+      sendDocument: (p) => tg.sendDocument(p),
     }
   }
 
@@ -569,7 +557,6 @@ export class TelegramBot {
         picker: null,
         del: null,
         awaiting: null,
-        msgs: new Set(),
         page: 0,
         settingsMsg: null,
         settingsPage: 0,
@@ -665,7 +652,6 @@ export class TelegramBot {
     }
 
     console.error(`[tg] message from chat=${chatID} (${m.chat.type}) from=${m.from?.username ?? m.from?.id ?? "?"}`)
-    c.msgs.add(m.message_id)
     c.chatType = m.chat.type
     if (m.from?.id != null) c.lastUserID = m.from.id
     if (text.startsWith("/")) {
@@ -785,9 +771,6 @@ export class TelegramBot {
       case "settings":
         await this.#settingsRoot(chatID, null)
         break
-      case "wipe":
-        await this.#wipe(chatID)
-        break
       case "ls": {
         await this.#listPicker(chatID, "Conversations:")
         break
@@ -873,9 +856,7 @@ export class TelegramBot {
           await tg.sendMessage({ chatID, text: `workspace: ${arg}` })
           break
         }
-        const current = c.workspace
-        const rows = names.map((n) => [btn(n, `wsw:${n}`)])
-        await tg.sendMessage({ chatID, text: `Workspaces (current: ${current}):`, replyMarkup: kin(rows) })
+        await this.#settingsWorkspace(chatID, null)
         break
       }
       case "ver": {
@@ -1351,43 +1332,6 @@ export class TelegramBot {
     }
   }
 
-  // ─── wipe: Telegram-side only. Clears the visible chat (bot's own messages)
-  // and never touches backend storage — sessions, store.json, titles and model
-  // picks all stay. Deleting conversation history is not this command's job. ───
-
-  async #wipe(chatID: number): Promise<void> {
-    const c = this.#chat(chatID)
-    const ws = this.#ws(c.workspace)
-    if (c.inflight) {
-      try {
-        await ws.adapter.abort(c.sessionID ?? "")
-      } catch {
-        /* ignore */
-      }
-      c.inflight.abort()
-      c.inflight = null
-    }
-
-    const ids = [...c.msgs].slice(-WIPE_DELETE_CAP)
-    c.msgs.clear()
-    for (let i = 0; i < ids.length; i++) {
-      try {
-        await this.#tg.deleteMessage({ chatID, messageID: ids[i]! })
-      } catch {
-        /* older than 48h / already gone */
-      }
-      if (i > 0 && i % 7 === 6) await sleep(150)
-    }
-
-    c.picker = null
-    c.del = null
-    c.awaiting = null
-    c.pending.clear()
-    c.settingsMsg = null
-
-    await this.#tg.sendMessage({ chatID, text: "🧽 chat cleared — bot messages removed. conversations are untouched." })
-  }
-
   // continuation picker: new conversation, 4 most recent, paginated "see more"
   async #wipePick(chatID: number, page: number, messageID: number | null): Promise<void> {
     const c = this.#chat(chatID)
@@ -1492,12 +1436,26 @@ export class TelegramBot {
       [btn(`🤖 Model · ${model}`, "set:model")],
       [btn(`🔎 Internals · ${internalsPreset(this.#store.internals(chatID))}`, "set:internals")],
       [btn("✏️ Rename conversation", "set:rename")],
-      [btn("🧽 Wipe this chat", "set:wipe")],
+      ...(this.#workspaces.length > 1 ? [[btn(`🗂 Workspace · ${c.workspace}`, "set:ws")]] : []),
       [btn("‹ Done", "set:done")],
     ]
 
     const sent = await this.#menu(chatID, lines, rows, messageID === null ? undefined : { messageID })
     if (sent.messageID !== undefined) c.settingsMsg = sent.messageID
+  }
+
+  // 🗂 Workspace: only worth showing when there's more than one to pick from —
+  // switching starts a fresh conversation there (sessions are per-workspace).
+  async #settingsWorkspace(chatID: number, messageID: number | null): Promise<void> {
+    const c = this.#chat(chatID)
+    const rows: InlineButton[][] = this.#workspaces.map((w) => {
+      const b = btn(w.name, `wsw:${w.name}`)
+      if (w.name === c.workspace) b.style = "success"
+      return [b]
+    })
+    rows.push([btn("‹ Back", "set:root")])
+    const lines = ["🗂 Workspace", "", `current: ${c.workspace}`, "", "Tap one to switch — starts a fresh conversation there."]
+    await this.#menu(chatID, lines, rows, messageID === null ? undefined : { messageID })
   }
 
   // 🔎 Internals: how much the agent shows per reply (thinking + tool calls).
@@ -1613,12 +1571,11 @@ export class TelegramBot {
     const rows: InlineButton[][] = picks.map((label) => [btn(`🖼 ${label}`, `mdl:${label}`)])
     rows.push([btn("All models ›", "set:model")])
     c.suggestedImage = current
-    const reply = await this.#tg.sendMessage({
+    await this.#tg.sendMessage({
       chatID,
       text: "🖼 This model can't read images. Switch to a vision-capable one?",
       replyMarkup: kin(rows),
     })
-    c.msgs.add(reply.message_id)
   }
 
   async #settingsRename(chatID: number, messageID: number, requestPage?: number): Promise<void> {
@@ -1672,7 +1629,7 @@ export class TelegramBot {
         else if (rest === "model") await this.#settingsModel(chatID, msg.message_id)
         else if (rest === "internals") await this.#settingsInternals(chatID, msg.message_id)
         else if (rest === "rename") await this.#settingsRename(chatID, msg.message_id)
-        else if (rest === "wipe") await this.#wipe(chatID)
+        else if (rest === "ws") await this.#settingsWorkspace(chatID, msg.message_id)
         else if (rest === "done") {
           c.settingsMsg = null
           await this.#tg.editMessageText({ chatID, messageID: msg.message_id, text: "⚙️ closed", replyMarkup: null })
@@ -1821,8 +1778,8 @@ export class TelegramBot {
         c.picker = null
         c.del = null
         c.page = 0
-        await this.#tg.editMessageText({ chatID, messageID: msg.message_id, text: `workspace: ${rest}`, replyMarkup: null })
-        await tg.answerCallbackQuery({ id: cq.id, text: "switched" })
+        await this.#settingsWorkspace(chatID, msg.message_id)
+        await tg.answerCallbackQuery({ id: cq.id, text: `workspace: ${rest}` })
         break
       }
       case "abt": {

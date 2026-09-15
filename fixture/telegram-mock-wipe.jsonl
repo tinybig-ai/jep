@@ -1,6 +1,0 @@
-{"update_id":1,"message":{"message_id":1,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"/pair TESTCODE"}}
-{"update_id":2,"message":{"message_id":2,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"/new"}}
-{"update_id":3,"message":{"message_id":3,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"hi"}}
-{"update_id":4,"message":{"message_id":4,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"/status"}}
-{"update_id":5,"message":{"message_id":5,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"/wipe"}}
-{"update_id":6,"message":{"message_id":6,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"/status"}}

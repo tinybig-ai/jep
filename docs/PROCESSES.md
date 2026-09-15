@@ -38,7 +38,7 @@ src/
 fixture/
   workspace-alpha/        // test working directories for the two harness workspaces
   workspace-beta/
-  telegram-mock*.jsonl    // mock update fixtures (pair, settings, wire, wipe, internals)
+  telegram-mock*.jsonl    // mock update fixtures (pair, settings, callbacks, internals)
 ```
 
 ## 3. Runtime model
@@ -251,20 +251,7 @@ vision-capable models as direct `mdl:` buttons plus "All models ›".
 - Pairing has attempt limits and code rotation (env-tunable).
 - Commands and even plain free text are ignored for non-owner chats.
 
-## 9. `/wipe` semantics
-
-"Clear the visible Telegram chat" is the contract — **Telegram-side only**:
-
-- Deletes the bot's recorded messages in the chat (what the user visibly
-  scrolls), rate-limited, with a delete cap.
-- Never touches backend storage: harness sessions, store.json titles, and the
-  per-chat model pick all stay. Aborts an in-flight turn (non-destructive).
-- Answers with "🧽 chat cleared — bot messages removed. conversations are
-  untouched."
-- A previous version deleted every backend session — that was wrong, and was
-  reverted. Do not reintroduce backend deletion behind `/wipe`.
-
-## 10. Media flow (both directions)
+## 9. Media flow (both directions)
 
 The bot's one message pipeline is text-first, but attachments pass through the
 same hexagonal port:
@@ -282,14 +269,13 @@ same hexagonal port:
   `attach://f<n>` multipart uploads (Bot API 10.3, up to 4). If that isn't
   supported, each file goes as its own message — image extensions through
   `sendPhoto`, everything else `sendDocument` (multipart `FormData` upload).
-  All are recorded in `c.msgs` so `/wipe` clears them. A media-only reply skips
-  the text placeholder and deletes it after sending.
+  A media-only reply skips the text placeholder and deletes it after sending.
 - The default model is text-only: it receives the image file but declares it
   cannot read it. When that happens the bot offers the vision-capable models
   right away (`#suggestImageModel`, once per current model) — or switch
   manually in /settings, where `🖼` marks models that accept images.
 
-## 11. Verification ritual
+## 10. Verification ritual
 
 1. `node --experimental-strip-types --check <file>` on every edited file.
 2. Mock end-to-end through a fixture (pair → act → assert the `CALL ...` dump).
@@ -302,7 +288,7 @@ same hexagonal port:
 Never move on from a broken state: partial features are fine, broken live bot
 is not.
 
-## 12. Client truth
+## 11. Client truth
 
 - The user's Telegram client is **Nagram X** (its rendering drove the rich
   message work: plain `<pre>`/HTML tables looked bad, native Rich Blocks look
@@ -311,7 +297,7 @@ is not.
 - The `e2e` checks above, and any numeric/behaviour tweak, were driven by this
   client; re-verify against it when rendering changes.
 
-## 13. Bot API 10.2/10.3 features in use
+## 12. Bot API 10.2/10.3 features in use
 
 | Feature | Where | Notes |
 |---------|-------|-------|

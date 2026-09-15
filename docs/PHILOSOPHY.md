@@ -43,8 +43,8 @@ by hand (it always goes through the `#tg` interface).
 ## 3. One choke point for all output
 
 `#recording` wraps the `TelegramApi` handed to `bot.ts`, so **every outbound
-`sendMessage`/`editMessageText` is markdown→HTML + `parseMode:"HTML"`** and the
-message id is recorded for `/wipe`. Consequences:
+`sendMessage`/`editMessageText` is markdown→HTML + `parseMode:"HTML"`**.
+Consequences:
 
 - No call site can forget to render. New messages are correct by construction.
 - Menu text, help, errors, and streamed updates share one formatting policy.
@@ -114,15 +114,17 @@ dump.
   nothing burns money unless a chat explicitly picks (and persists) a model.
 - Registry models (free zen `opencode/*`, paid `opencode-go/*`) are **listed**
   in the picker but never selected implicitly. Presence in the picker ≠ use.
-- Restarts keep ownership and history; wiping is explicit and destructive on
-  purpose.
+- Restarts keep ownership and history; deleting a conversation (`/del`) is
+  explicit and destructive on purpose — nothing is ever cleared implicitly.
 
 ## 10. Small, coherent verbs; a command does exactly one thing
 
-`/status` reports state, `/wipe` clears the *visible Telegram chat only*
-(never backend storage — no session deletion, no store mutation), `/abort`
-stops the turn. Destructive commands stay Telegram-scoped; nothing a user
-types should ever reach into the agent backend to erase persistent state.
+`/status` reports state, `/del` deletes one conversation and nothing else,
+`/abort` stops the turn. Destructive commands stay narrowly scoped to what
+they name; nothing a user types should ever reach further into persistent
+state than its own description promises. Clearing a chat's visible history
+is Telegram's own job now (its native "Clear History") — jep doesn't
+duplicate platform features it doesn't need to own.
 State lives in one place (`ChatState` + `store.json`); pickers keep a snapshot
 so navigating never mutates the thing being chosen.
 
