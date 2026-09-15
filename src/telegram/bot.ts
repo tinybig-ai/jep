@@ -21,6 +21,12 @@ type Awaiting = { kind: "pair" } | { kind: "use" } | { kind: "rename"; sessionID
 interface ChatState {
   workspace: string
   sessionID: string | null
+  // sessionID was just cleared by deleting the active conversation — the next
+  // message should start a brand new one, not silently resume the most
+  // recent survivor (#ensureSession's default when sessionID is null, e.g.
+  // after a restart). Explicitly reset to false anywhere else sessionID is
+  // cleared (workspace switches), so it never outlives the delete it's for.
+  freshOnNext: boolean
   harness: string | null
   inflight: AbortController | null
   // permissionID -> prompt message for in-flight keyboard prompts; ephemeralID
@@ -550,6 +556,7 @@ export class TelegramBot {
       c = {
         workspace: this.#activeWsName,
         sessionID: null,
+        freshOnNext: false,
         harness: null,
         inflight: null,
         pending: new Map(),
@@ -574,18 +581,24 @@ export class TelegramBot {
   }
 
   // one persistent conversation per chat: resume the newest session if any,
-  // otherwise create one (title = first message snippet).
+  // otherwise create one (title = first message snippet) — unless
+  // freshOnNext says the last one was just deleted out from under us, in
+  // which case skip straight to creating a new one.
   async #ensureSession(chatID: number, firstText?: string): Promise<string> {
     const c = this.#chat(chatID)
     if (c.sessionID) return c.sessionID
     const ws = this.#ws(c.workspace)
-    const list = await ws.adapter.listSessions()
-    const newest = list
-      .map((s) => ({ s, t: s.time?.updated ?? 0 }))
-      .sort((a, b) => b.t - a.t)[0]
-    if (newest) {
-      c.sessionID = newest.s.id
-      return newest.s.id
+    if (c.freshOnNext) {
+      c.freshOnNext = false
+    } else {
+      const list = await ws.adapter.listSessions()
+      const newest = list
+        .map((s) => ({ s, t: s.time?.updated ?? 0 }))
+        .sort((a, b) => b.t - a.t)[0]
+      if (newest) {
+        c.sessionID = newest.s.id
+        return newest.s.id
+      }
     }
     const title = (firstText ?? "").slice(0, 40) || "My chat"
     const s = await ws.adapter.createSession(title)
@@ -845,6 +858,7 @@ export class TelegramBot {
           if (!names.includes(arg)) return tg.sendMessage({ chatID, text: `no workspace '${arg}'` })
           c.workspace = arg
           c.sessionID = null
+          c.freshOnNext = false
           c.picker = null
           c.del = null
           c.page = 0
@@ -1768,7 +1782,10 @@ export class TelegramBot {
         const id = p.sessions[d.i]
         if (id) {
           await ws.adapter.deleteSession(id)
-          if (c.sessionID === id) c.sessionID = null
+          if (c.sessionID === id) {
+            c.sessionID = null
+            c.freshOnNext = true
+          }
         }
         c.picker = null
         c.del = null
@@ -1787,6 +1804,7 @@ export class TelegramBot {
         if (!this.#workspaces.some((w) => w.name === rest)) return tg.answerCallbackQuery({ id: cq.id, text: "no such workspace" })
         c.workspace = rest
         c.sessionID = null
+        c.freshOnNext = false
         c.picker = null
         c.del = null
         c.page = 0
