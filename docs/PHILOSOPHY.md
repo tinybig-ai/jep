@@ -114,15 +114,16 @@ dump.
   nothing burns money unless a chat explicitly picks (and persists) a model.
 - Registry models (free zen `opencode/*`, paid `opencode-go/*`) are **listed**
   in the picker but never selected implicitly. Presence in the picker ≠ use.
-- Restarts keep ownership and history; deleting a conversation (`/del`) is
-  explicit and destructive on purpose — nothing is ever cleared implicitly.
+- Restarts keep ownership and history; deleting a conversation (the 🗑 next
+  to it in `/ls`, with a confirm step) is explicit and destructive on
+  purpose — nothing is ever cleared implicitly.
 
 ## 10. Small, coherent verbs; a command does exactly one thing
 
-`/status` reports state, `/del` deletes one conversation and nothing else,
-`/abort` stops the turn. Destructive commands stay narrowly scoped to what
-they name; nothing a user types should ever reach further into persistent
-state than its own description promises. Clearing a chat's visible history
+`/status` reports state, deleting a conversation touches that conversation
+and nothing else, `/abort` stops the turn. Destructive actions stay narrowly
+scoped to what they name; nothing a user does should ever reach further into
+persistent state than it promises. Clearing a chat's visible history
 is Telegram's own job now (its native "Clear History") — jep doesn't
 duplicate platform features it doesn't need to own.
 State lives in one place (`ChatState` + `store.json`); pickers keep a snapshot

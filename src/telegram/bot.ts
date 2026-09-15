@@ -26,12 +26,12 @@ interface ChatState {
   // permissionID -> prompt message for in-flight keyboard prompts; ephemeralID
   // is set when the prompt was sent as a group ephemeral message
   pending: Map<string, { sessionID: string; messageID: number; ephemeralID?: number }>
-  // snapshot behind the /ls, /del and settings pickers
+  // snapshot behind the /ls and settings pickers
   picker: { messageID: number; ws: string; sessions: string[] } | null
   del: { messageID: number; i: number } | null
   // an arg-taking command was sent bare; next plain text is the answer
   awaiting: Awaiting | null
-  // page shown now, shared across the rename/ls/del/continuation pickers
+  // page shown now, shared across the rename/ls/continuation pickers
   page: number
   // the message the settings menu tree is currently drawn on
   settingsMsg: number | null
@@ -485,7 +485,6 @@ export class TelegramBot {
     { command: "status", description: "what am I connected to" },
     { command: "settings", description: "model · rename · workspace" },
     { command: "log", description: "this conversation's history" },
-    { command: "del", description: "delete a conversation" },
     { command: "remind", description: "remind me later (e.g. /remind 2h build)" },
   ]
 
@@ -826,14 +825,10 @@ export class TelegramBot {
       case "use": {
         if (!arg) {
           c.awaiting = { kind: "use" }
-          await this.#listPicker(chatID, "Which conversation? (tap one, or type a title / paste an ID · /cancel to stop)", "ls", true)
+          await this.#listPicker(chatID, "Which conversation? (tap one, or type a title / paste an ID · /cancel to stop)", true)
           break
         }
         await this.#resolveUse(chatID, arg)
-        break
-      }
-      case "del": {
-        await this.#listPicker(chatID, "Delete which conversation?", "del")
         break
       }
       case "abort": {
@@ -925,7 +920,10 @@ export class TelegramBot {
   }
 
   // list sessions as tappable title buttons; callback snapshots into c.picker
-  async #listPicker(chatID: number, caption: string, kind: "del" | "ls" = "ls", forceReply = false): Promise<void> {
+  // each row: the conversation (tap to switch) + a small 🗑 next to it (tap
+  // for a delete confirmation, via the existing deld/dely/deln flow) — one
+  // view does both jobs, so there's no separate delete-only picker anymore.
+  async #listPicker(chatID: number, caption: string, forceReply = false): Promise<void> {
     const c = this.#chat(chatID)
     const ws = this.#ws(c.workspace)
     const sessions = await ws.adapter.listSessions()
@@ -935,13 +933,17 @@ export class TelegramBot {
     }
     const sorted = [...sessions].sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))
     const shown = sorted.slice(0, MAX_LIST)
-    const prefix = kind === "del" ? "deld" : "open"
     const list = shown.map((s) => {
       const marker = s.id === c.sessionID ? "  ◀" : ""
       const title = this.#displayTitle(s.id, s.title)
       return `${shown.indexOf(s) + 1}. "${title}"${marker}`
     })
-    const markup = kin(shown.map((s, i) => [btn(`${i + 1}. ${this.#displayTitle(s.id, s.title)}`, `${prefix}:${i}`)]))
+    const markup = kin(
+      shown.map((s, i) => [
+        btn(`${i + 1}. ${this.#displayTitle(s.id, s.title)}`, `open:${i}`),
+        { ...btn("🗑", `deld:${i}`), style: "danger" as const },
+      ]),
+    )
     if (forceReply) markup.force_reply = true
     const msg = await this.#tg.sendMessage({
       chatID,
@@ -1735,7 +1737,7 @@ export class TelegramBot {
       }
       case "deld": {
         const p = c.picker
-        if (!p || p.ws !== c.workspace) return tg.answerCallbackQuery({ id: cq.id, text: "menu expired - run /del again" })
+        if (!p || p.ws !== c.workspace) return tg.answerCallbackQuery({ id: cq.id, text: "menu expired - run /ls again" })
         const id = p.sessions[i]
         if (!id) return tg.answerCallbackQuery({ id: cq.id, text: "no such conversation" })
         c.del = { messageID: p.messageID, i }
