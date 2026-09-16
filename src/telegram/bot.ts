@@ -1554,6 +1554,12 @@ export class TelegramBot {
     let lastText: string | null = null
     let lastHadMarkup = true
     let lastRich = ""
+    // Set the moment the turn stops being live. The event stream outlives the
+    // prompt() call — it is only torn down in the finally — so without this a
+    // late event could re-post the draft *after* the final message had already
+    // been sent, showing up as a duplicate with the still-generating spinner
+    // stuck on the end of it.
+    let finished = false
     // parts assembled live from the event stream, keyed by partID so updates
     // replace rather than duplicate; mirrors the final `reply.parts` order
     const liveParts: Part[] = []
@@ -1624,6 +1630,7 @@ export class TelegramBot {
       // a fault here escaped renderLive, killed the stream event loop, and took
       // the rest of the turn's live output with it — invisibly. Rendering is
       // decoration: a failure must cost the animation, never the answer.
+      if (finished) return // the final message is already out; nothing to preview
       try {
         const blocks = buildLiveBlocks(liveParts, internals, flushedToolIDs, reasoningStarted, true)
         const json = JSON.stringify(blocks)
@@ -1798,6 +1805,9 @@ export class TelegramBot {
         ...(opts?.filePaths?.length ? { filePaths: opts.filePaths } : {}),
         ...(agent ? { agent } : {}),
       })
+      // the turn is over: no more live previews, and stop pulling events
+      finished = true
+      sub.abort()
       // prompt() only returns the LAST step of a turn; pull every assistant part
       // since the user's message so earlier steps' reasoning + tool calls show.
       let turn = reply.parts
@@ -1841,6 +1851,10 @@ export class TelegramBot {
       }
       void this.#updateStatus(chatID).catch(logFail("status"))
     } catch (err) {
+      // same here: stopping mid-stream must not leave the draft racing the
+      // message that replaces it
+      finished = true
+      sub.abort()
       if (ac.signal.aborted) {
         // render whatever we streamed so far (partial details included)
         const shown = await presentParts(dropFlushed(liveParts), internals)
