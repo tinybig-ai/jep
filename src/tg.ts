@@ -258,10 +258,10 @@ async function main() {
 
   // only offer harnesses that are actually installed here — a picker row that
   // always fails is worse than no row
-  const available: Array<{ id: string; label: string }> = []
+  const available: Array<{ id: string; label: string; icon: string }> = []
   for (const h of harnesses) {
     if (mockMode && h.id !== DEFAULT_HARNESS) continue
-    if (await h.available()) available.push({ id: h.id, label: h.label })
+    if (await h.available()) available.push({ id: h.id, label: h.label, icon: h.icon })
     else console.error(`[harness] ${h.id} unavailable — not offering it`)
   }
   console.error(`harnesses: ${available.map((h) => h.id).join(", ") || "(none)"}`)

@@ -9,19 +9,27 @@ import type { HarnessAdapter, HarnessSupervisor } from "./ports.ts"
  * compliance suite) only ever sees a HarnessAdapter, so adding a harness means
  * adding a row here and nothing else.
  */
-export interface HarnessInfo extends HarnessSupervisor {
+export interface HarnessDef extends HarnessSupervisor {
   readonly id: string
   /**
-   * Shown in the picker, and its leading emoji marks each /ls row.
+   * The harness's mark: one emoji, unique across the registry. It stands alone
+   * on every /ls row, so it has to identify the harness with no text beside it
+   * — which is also why uniqueness is enforced rather than hoped for.
    *
-   * Kept to U+1F535–1F53A (Unicode 6.0, 2010): the coloured circles added in
-   * Unicode 12 render as missing-glyph boxes on fonts that never shipped them.
-   * Distinct by *shape* as well as colour, since at list-row size a colour
-   * difference alone is easy to miss.
+   * Keep to U+1F535–1F53A (Unicode 6.0, 2010) or older. The coloured circles
+   * added in Unicode 12 render as missing-glyph boxes on fonts that never
+   * shipped them. Prefer a distinct *shape*: at list-row size a colour
+   * difference alone is easy to miss, and a shape survives a monochrome
+   * fallback.
    */
-  readonly label: string
+  readonly icon: string
   /** false when the harness isn't installed/usable on this machine */
   available(): Promise<boolean>
+}
+
+export interface HarnessInfo extends HarnessDef {
+  /** "<icon> <id>", for buttons — never parsed back apart */
+  readonly label: string
 }
 
 export interface HarnessOpts {
@@ -30,10 +38,32 @@ export interface HarnessOpts {
 }
 
 export function buildHarnesses(opts: HarnessOpts = {}): HarnessInfo[] {
+  return seal(defineHarnesses(opts))
+}
+
+// Ids and icons must both be unique: the id routes sessions and the icon is
+// the only thing distinguishing one conversation's harness from another's in
+// a list. A collision is a programming error, so it fails at startup rather
+// than silently mislabelling rows.
+function seal(defs: HarnessDef[]): HarnessInfo[] {
+  const ids = new Set<string>()
+  const icons = new Set<string>()
+  for (const d of defs) {
+    if (!d.id) throw new Error("[harness] a harness has no id")
+    if (ids.has(d.id)) throw new Error(`[harness] duplicate id '${d.id}'`)
+    if (!d.icon) throw new Error(`[harness] '${d.id}' has no icon`)
+    if (icons.has(d.icon)) throw new Error(`[harness] icon ${d.icon} is used by more than one harness ('${d.id}')`)
+    ids.add(d.id)
+    icons.add(d.icon)
+  }
+  return defs.map((d) => ({ ...d, label: `${d.icon} ${d.id}` }))
+}
+
+function defineHarnesses(opts: HarnessOpts): HarnessDef[] {
   return [
     {
       id: "opencode",
-      label: "🔵 opencode",
+      icon: "🔵",
       async start(workspace: string): Promise<HarnessAdapter> {
         return startOpenCodeServer(workspace, opts.dataHome ? { dataHome: opts.dataHome } : {})
       },
@@ -45,7 +75,7 @@ export function buildHarnesses(opts: HarnessOpts = {}): HarnessInfo[] {
     },
     {
       id: "codex",
-      label: "🔺 codex",
+      icon: "🔺",
       async start(workspace: string): Promise<HarnessAdapter> {
         return startCodexAdapter(workspace)
       },
@@ -63,7 +93,7 @@ export function buildHarnesses(opts: HarnessOpts = {}): HarnessInfo[] {
     },
     {
       id: "claude",
-      label: "🔶 claude",
+      icon: "🔶",
       async start(workspace: string): Promise<HarnessAdapter> {
         return startClaudeAdapter(workspace)
       },

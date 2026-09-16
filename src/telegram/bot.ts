@@ -648,7 +648,7 @@ export class TelegramBot {
   // adds a brand new one, without a restart
   #spawn: (dir: string, harness?: string) => Promise<Ws>
   /** every harness this build can start, for the picker */
-  #harnessList: Array<{ id: string; label: string }>
+  #harnessList: Array<{ id: string; label: string; icon: string }>
 
   constructor(
     tg: TelegramApi,
@@ -659,7 +659,7 @@ export class TelegramBot {
     extraModels: string[],
     uploadsDir: string,
     spawn: (dir: string, harness?: string) => Promise<Ws>,
-    harnessList: Array<{ id: string; label: string }>,
+    harnessList: Array<{ id: string; label: string; icon: string }>,
     reminders: ReminderStore,
   ) {
     this.#tg = this.#recording(tg)
@@ -1490,7 +1490,7 @@ export class TelegramBot {
     const icon = (sessionID: string): string => {
       const id = this.#harnessOf(sessionID)
       const known = id ? this.#harnessList.find((h) => h.id === id) : undefined
-      return known ? `${known.label.split(" ")[0]} ` : ""
+      return known ? `${known.icon} ` : ""
     }
     const label = ({ s, ws }: (typeof shown)[number]) => {
       const age = timeAgo(s.updatedAt)
