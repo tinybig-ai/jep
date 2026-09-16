@@ -1409,6 +1409,9 @@ export class TelegramBot {
     // preserve the originating /ls or /use command message across a refresh
     // (e.g. after a delete) so "‹ Back" can still clean it up later
     const cmdID = cmdMessageID ?? (edit ? c.picker?.cmdMessageID : undefined)
+    // a fresh /ls starts at the top; an in-place redraw (paging, or the
+    // refresh after a delete) keeps the page you are on
+    if (!edit) c.page = 0
     // resolved (not raw c.sessionID) so the active row still highlights right
     // after a bot restart, before the in-memory pointer is re-derived
     const currentSessionID = await this.#resolveSessionID(chatID)
@@ -1452,7 +1455,12 @@ export class TelegramBot {
       return
     }
     const sorted = entries.sort((a, b) => b.s.updatedAt - a.s.updatedAt)
-    const shown = sorted.slice(0, MAX_LIST)
+    // paged rather than truncated: a codex workspace can hold hundreds of
+    // threads, and "… and 85 more" made every one of them unreachable
+    const pages = Math.max(1, Math.ceil(sorted.length / MAX_LIST))
+    const page = Math.min(Math.max(c.page, 0), pages - 1)
+    c.page = page
+    const shown = sorted.slice(page * MAX_LIST, page * MAX_LIST + MAX_LIST)
     // a row from a workspace other than the active one gets tagged with its
     // origin, since the list can now span several projects at once.
     const label = ({ s, ws }: (typeof shown)[number]) => {
@@ -1473,8 +1481,15 @@ export class TelegramBot {
     // button on every row crowded the list for an action used far less than
     // opening or deleting. "‹ Back" dismisses the picker entirely (deletes the
     // message, not just its keyboard) — the way out without typing /cancel.
+    if (pages > 1) {
+      const prev = btn("‹ Prev", "lsp:prev")
+      const next = btn("Next ›", "lsp:next")
+      if (page <= 0) prev.disabled = true
+      if (page >= pages - 1) next.disabled = true
+      rows.push([prev, btn(`page ${page + 1} / ${pages}`, "lsp:page"), next])
+    }
     rows.push([btn("‹ Back", "lsb"), ...(currentSessionID ? [btn("✏️ Rename current", "renc")] : [])])
-    const more = sorted.length > MAX_LIST ? [`… and ${sorted.length - MAX_LIST} more`] : []
+    const more = pages > 1 ? [`${sorted.length} conversations`] : []
 
     let messageID: number | undefined
     if (forceReply) {
@@ -1501,7 +1516,6 @@ export class TelegramBot {
     // opened — its workspace is started on demand at that point, not now
     c.picker = { messageID, sessions: shown.map(({ s, ws, dir }) => ({ id: s.id, ws, dir })), ...(cmdID !== undefined ? { cmdMessageID: cmdID } : {}) }
     c.del = null
-    c.page = 0
   }
 
   async #freeText(chatID: number, text: string, opts?: { filePaths?: string[] }): Promise<void> {
@@ -2692,6 +2706,14 @@ export class TelegramBot {
         // back to the list in place, instead of a dead-end "canceled" string
         if (d) await this.#listPicker(chatID, "Conversations:", false, { messageID: d.messageID })
         await tg.answerCallbackQuery({ id: cq.id, text: "canceled" })
+        break
+      }
+      case "lsp": {
+        if (rest === "page") return tg.answerCallbackQuery({ id: cq.id, text: `page ${c.page + 1}` })
+        c.page = Math.max(0, c.page + (rest === "prev" ? -1 : 1))
+        const p = c.picker
+        await this.#listPicker(chatID, "Conversations:", false, p ? { messageID: p.messageID } : undefined)
+        await tg.answerCallbackQuery({ id: cq.id })
         break
       }
       case "lsb": {

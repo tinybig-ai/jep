@@ -1,4 +1,5 @@
 import { spawn, execFile, type ChildProcess } from "node:child_process"
+import { DatabaseSync } from "node:sqlite"
 import { readFile, readdir } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import os from "node:os"
@@ -168,30 +169,75 @@ export class CodexAdapter implements HarnessAdapter {
     return out
   }
 
+  // Codex's own thread metadata: id, cwd, timestamps and — crucially — the
+  // names it shows in its own UI. Reading this beats walking the rollout files
+  // on every call, and it is the only place the assigned name exists at all.
+  #threadsFromDb(): SessionSummary[] | null {
+    const file = path.join(CODEX_HOME, "state_5.sqlite")
+    if (!existsSync(file)) return null
+    let db: DatabaseSync | undefined
+    try {
+      db = new DatabaseSync(file, { readOnly: true })
+      const rows = db
+        .prepare(
+          `SELECT id, name, preview, created_at_ms, updated_at_ms, recency_at_ms
+             FROM threads WHERE cwd = ? ORDER BY COALESCE(recency_at_ms, updated_at_ms, 0) DESC`,
+        )
+        .all(this.workspace) as Array<Record<string, unknown>>
+      return rows.map((r) => {
+        const updated = Number(r.recency_at_ms ?? r.updated_at_ms ?? 0) || 0
+        return {
+          id: toInternalId(String(r.id)),
+          // `name` is what Codex assigned (it only names some threads);
+          // `preview` is the opening user message, which is what its own list
+          // falls back to as well.
+          // preview is the raw opening prompt and can be a whole paragraph;
+          // a list row has no room for that
+          title: clip(str(r.name) || str(r.preview)),
+          workspace: this.workspace,
+          createdAt: Number(r.created_at_ms ?? 0) || updated,
+          updatedAt: updated,
+        }
+      })
+    } catch (err) {
+      console.error(`[codex] threads db unreadable, falling back to rollout scan: ${(err as Error)?.message ?? err}`)
+      return null
+    } finally {
+      try {
+        db?.close()
+      } catch {
+        /* already closed */
+      }
+    }
+  }
+
   async listSessions(): Promise<SessionSummary[]> {
+    const out = this.#threadsFromDb() ?? (await this.#sessionsFromRollouts())
+    // sessions created but not yet given a turn have no thread on disk yet
+    for (const [pending, { title, createdAt }] of this.#pendingTitles) {
+      if (this.#alias.has(pending)) continue
+      out.push({ id: toInternalId(pending), title, workspace: this.workspace, createdAt, updatedAt: createdAt })
+    }
+    return out.sort((a, b) => b.updatedAt - a.updatedAt)
+  }
+
+  // Fallback for a Codex too old (or too new) to have the threads table.
+  async #sessionsFromRollouts(): Promise<SessionSummary[]> {
     const idx = await this.#index()
     const out: SessionSummary[] = []
     for (const file of await this.#rolloutFiles()) {
       const meta = await this.#meta(file)
-      // scoped to this adapter's own directory, mirroring how opencode scopes
-      // /session to the instance's project
       if (!meta || meta.cwd !== this.workspace) continue
       const extra = idx.get(meta.id)
       out.push({
         id: toInternalId(meta.id),
-        // the index's name wins when it has one — it is what Codex itself shows
         title: extra?.title || meta.title,
         workspace: meta.cwd,
         createdAt: meta.createdAt,
         updatedAt: extra?.updatedAt || meta.createdAt,
       })
     }
-    // sessions created but not yet given a turn have no rollout on disk yet
-    for (const [pending, { title, createdAt }] of this.#pendingTitles) {
-      if (this.#alias.has(pending)) continue
-      out.push({ id: toInternalId(pending), title, workspace: this.workspace, createdAt, updatedAt: createdAt })
-    }
-    return out.sort((a, b) => b.updatedAt - a.updatedAt)
+    return out
   }
 
   async createSession(title?: string): Promise<SessionSummary> {
@@ -583,6 +629,12 @@ function mapItem(item: any, workspace: string): Part | null {
     default:
       return { kind: "other", nativeType: type || "unknown" }
   }
+}
+
+const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "")
+const clip = (t: string, max = 48): string => {
+  const flat = t.replace(/\s+/g, " ").trim()
+  return flat.length > max ? `${flat.slice(0, max)}…` : flat
 }
 
 // First thing the user actually said, as a title. Only the head of the file is
