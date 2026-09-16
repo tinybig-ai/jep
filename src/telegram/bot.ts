@@ -132,9 +132,13 @@ const fmtCount = (n: number): string => {
   return String(n)
 }
 
-// display form of a workspace directory: "/<folder>" — just the basename
-// with a leading slash so it still reads as a path, not a made-up label.
-const fmtWsPath = (dir: string): string => `/${basename(dir)}`
+// display form of a workspace directory: just the folder name
+const fmtWsPath = (dir: string): string => basename(dir)
+
+// the agent shown as its Settings icon rather than spelled out — 🔨 executes
+// tools, 📝 is read-only. Same two icons the agent menu uses, so the pin and
+// the menu teach each other.
+const agentIcon = (agent: string): string => (agent === "plan" ? "📝" : "🔨")
 
 // full path, but with $HOME folded back to "~" — the browser shows whole
 // paths (you need to know where you are) and a phone screen is narrow.
@@ -1284,7 +1288,7 @@ export class TelegramBot {
       .flatMap((dir) =>
         this.#store.indexedSessions(dir).map((s) => ({
           s: { id: s.id, title: s.title, updatedAt: s.updatedAt, createdAt: s.updatedAt, workspace: dir },
-          ws: fmtWsPath(dir).slice(1),
+          ws: fmtWsPath(dir),
           dir,
         })),
       )
@@ -1753,7 +1757,9 @@ export class TelegramBot {
         console.error(`[status] diff read failed: ${(err as Error)?.message ?? err}`)
       }
     }
-    const text = [`» ${model} · ${agent} · ${fmtWsPath(ws.dir)}`, tokensLine].join("\n")
+    // one line, one separator, widest-scope first: where you are, what's
+    // answering, how full it is, what it's allowed to do
+    const text = [fmtWsPath(ws.dir), model, tokensLine, agentIcon(agent)].join(" · ")
 
     const existing = this.#store.statusMsg(chatID)
     if (existing) {
