@@ -1319,7 +1319,7 @@ export class TelegramBot {
     // button on every row crowded the list for an action used far less than
     // opening or deleting. "‹ Back" dismisses the picker entirely (deletes the
     // message, not just its keyboard) — the way out without typing /cancel.
-    rows.push([...(currentSessionID ? [btn("✏️ Rename current", "renc")] : []), btn("‹ Back", "lsb")])
+    rows.push([btn("‹ Back", "lsb"), ...(currentSessionID ? [btn("✏️ Rename current", "renc")] : [])])
     const more = sorted.length > MAX_LIST ? [`… and ${sorted.length - MAX_LIST} more`] : []
 
     let messageID: number | undefined
