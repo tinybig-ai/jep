@@ -132,6 +132,14 @@ const fmtCount = (n: number): string => {
   return String(n)
 }
 
+// A list row is one line on a phone, shared with the harness icon, the age
+// and sometimes a workspace tag. Codex titles in particular are whole opening
+// prompts, and an untrimmed one pushes everything after it off the end.
+const clipTitle = (t: string, max = 30): string => {
+  const flat = t.replace(/\s+/g, " ").trim()
+  return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat
+}
+
 // "how long since this conversation last moved", for list rows. Coarse on
 // purpose: the point is to tell yesterday's thread from the one you were in
 // ten minutes ago, not to report a duration.
@@ -1494,7 +1502,7 @@ export class TelegramBot {
     }
     const label = ({ s, ws }: (typeof shown)[number]) => {
       const age = timeAgo(s.updatedAt)
-      return `${icon(s.id)}${this.#displayTitle(s.id, s.title)}${ws !== c.workspace ? ` · ${ws}` : ""}${age ? ` (${age})` : ""}`
+      return `${icon(s.id)}${clipTitle(this.#displayTitle(s.id, s.title))}${ws !== c.workspace ? ` · ${ws}` : ""}${age ? ` (${age})` : ""}`
     }
     // 🗑 first (left of the title, not right) reads as "here's the destructive
     // action, then the thing it acts on" and lines up under itself row to row.
@@ -2499,7 +2507,7 @@ export class TelegramBot {
       .slice(page * MAX_LIST, (page + 1) * MAX_LIST)
       .map((id) => {
         const age = timeAgo(sorted.find((x) => x.id === id)?.updatedAt ?? 0)
-        return [btn(`${this.#displayTitle(id, "")}${age ? ` (${age})` : ""}`, `ren:${ids.indexOf(id)}`)]
+        return [btn(`${clipTitle(this.#displayTitle(id, ""))}${age ? ` (${age})` : ""}`, `ren:${ids.indexOf(id)}`)]
       })
     if (pages > 1) {
       const prev = btn("‹ Prev", "renp:prev")
