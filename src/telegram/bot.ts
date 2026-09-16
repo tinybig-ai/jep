@@ -1918,7 +1918,6 @@ export class TelegramBot {
     const active = sessionID ? await ws.adapter.getSession(sessionID) : null
     const label = active ? this.#displayTitle(active.id, active.title) : "(none)"
     const model = this.#store.model(chatID) ?? "default"
-    const total = (await ws.adapter.listSessions()).length
 
     // Only fields with no button of their own belong here. Anything a button
     // already carries (model, agent, internals, context, workspace) would
@@ -1928,7 +1927,6 @@ export class TelegramBot {
       "",
       `engine: ${c.harness ?? ws.adapter.id}`,
       `conversation: "${label}"`,
-      `total conversations: ${total}`,
     ]
     const rows: InlineButton[][] = [
       [btn(`🤖 Model · ${model}`, "set:model")],
@@ -2409,13 +2407,24 @@ export class TelegramBot {
           console.error(`[open] cannot serve ${row.dir}: ${(err as Error)?.message ?? err}`)
           return tg.answerCallbackQuery({ id: cq.id, text: "couldn't open that project" })
         }
+        // switching projects is a side effect of opening the conversation, not
+        // something the user asked for — it changes where every later message
+        // runs, so it gets said out loud rather than only showing up in the pin
+        const movedFrom = c.workspace !== target.name ? c.workspace : null
         c.workspace = target.name
         c.sessionID = row.id
         c.del = null
         c.awaiting = null
         const s = await target.adapter.getSession(row.id)
-        await this.#tg.editMessageText({ chatID, messageID: p.messageID, text: `▶ "${this.#displayTitle(row.id, s?.title ?? "")}"`, replyMarkup: null })
-        await tg.answerCallbackQuery({ id: cq.id, text: "opened" })
+        const opened = `▶ "${this.#displayTitle(row.id, s?.title ?? "")}"`
+        await this.#tg.editMessageText({
+          chatID,
+          messageID: p.messageID,
+          text: movedFrom ? `${opened}\n\n🗂 workspace: ${movedFrom} → ${target.name}` : opened,
+          replyMarkup: null,
+        })
+        await tg.answerCallbackQuery({ id: cq.id, text: movedFrom ? `opened · ${target.name}` : "opened" })
+        void this.#updateStatus(chatID).catch(logFail("status"))
         break
       }
       case "deld": {
