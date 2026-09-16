@@ -167,13 +167,24 @@ async function buildMockApi(): Promise<TelegramApi> {
 async function main() {
   syncOpenCodeAuth()
   const mockMode = process.env.JEP_TG_MOCK === "1"
+  const store = ChatStore.load(join(DATA_HOME, "store.json"))
   const dirs = (process.env.JEP_WORKSPACES ?? "").split(":").filter(Boolean)
   // no env var to set up before the bot is useful: outside mock mode, the
   // workspace defaults to wherever this process was launched from/with (the
   // plist's WorkingDirectory, or wherever you `cd`'d before running it).
   // Mock mode keeps the bundled two-workspace fixtures so switching between
   // workspaces stays testable regardless of the caller's own cwd.
-  const workspaceDirs = dirs.length ? dirs : mockMode ? DEFAULT_WORKSPACES : [process.cwd()]
+  const bootDirs = dirs.length ? dirs : mockMode ? DEFAULT_WORKSPACES : [process.cwd()]
+  // ...plus anything added from the phone. Env dirs stay first, so the active
+  // workspace is still whatever the machine was configured with. A saved dir
+  // that has since been deleted is dropped rather than failing the boot.
+  const saved = store.workspaces().filter((d) => {
+    if (existsSync(d)) return true
+    console.error(`[ws] forgetting ${d} — no longer on disk`)
+    store.removeWorkspace(d)
+    return false
+  })
+  const workspaceDirs = [...new Set([...bootDirs, ...saved])]
 
   const workspaces: Ws[] = []
 
@@ -187,7 +198,16 @@ async function main() {
     return { name: uniqueWsName(dir, workspaces), dir, adapter: ad }
   }
 
-  for (const dir of workspaceDirs) workspaces.push(await spawnWorkspace(dir))
+  // one bad directory must not take the whole bot down with it — a saved
+  // workspace can rot (moved repo, unreadable mount) long after it was added
+  for (const dir of workspaceDirs) {
+    try {
+      workspaces.push(await spawnWorkspace(dir))
+    } catch (err) {
+      console.error(`[ws] skipping ${dir}: ${(err as Error)?.message ?? err}`)
+    }
+  }
+  if (!workspaces.length) throw new Error(`no workspace could be started (tried: ${workspaceDirs.join(", ")})`)
   const activeWsName = workspaces[0]!.name
 
   const tg = mockMode ? await buildMockApi() : createTelegramApi(process.env.JEP_TG_TOKEN ?? "")
@@ -210,7 +230,7 @@ async function main() {
     console.error(`owner: ${pairing.owner}  ·  paired chats: ${pairing.count()}`)
   }
 
-  const bot = new TelegramBot(tg, workspaces, activeWsName, pairing, ChatStore.load(join(DATA_HOME, "store.json")), (process.env.JEP_TG_MODELS ?? "")
+  const bot = new TelegramBot(tg, workspaces, activeWsName, pairing, store, (process.env.JEP_TG_MODELS ?? "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean), UPLOADS_DIR, spawnWorkspace, ReminderStore.load(join(DATA_HOME, "reminders.json")))

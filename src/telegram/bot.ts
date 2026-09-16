@@ -1,5 +1,9 @@
-import { mkdir, writeFile } from "node:fs/promises"
-import { basename, join } from "node:path"
+import { mkdir, readdir, writeFile } from "node:fs/promises"
+import { existsSync } from "node:fs"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
+import { homedir } from "node:os"
+import { basename, dirname, join, resolve } from "node:path"
 import type { HarnessAdapter, ModelCaps, ModelRef } from "../core/ports.ts"
 import type { FilePart, Part, ProjectSummary, TextPart, ReasoningPart, ToolCallPart } from "../core/types.ts"
 import { mdToHtml } from "./html.ts"
@@ -17,7 +21,12 @@ interface Ws {
   adapter: HarnessAdapter
 }
 
-type Awaiting = { kind: "pair" } | { kind: "use" } | { kind: "rename"; sessionID: string }
+type Awaiting =
+  | { kind: "pair" }
+  | { kind: "use" }
+  | { kind: "rename"; sessionID: string }
+  | { kind: "newfolder"; dir: string }
+  | { kind: "clone"; dir: string }
 
 interface ChatState {
   workspace: string
@@ -43,6 +52,10 @@ interface ChatState {
   del: { messageID: number; i: number } | null
   // an arg-taking command was sent bare; next plain text is the answer
   awaiting: Awaiting | null
+  // directory browser state: the folder being shown and the subfolders in it.
+  // Buttons address entries by index because callback_data caps at 64 bytes,
+  // which a real path blows straight through.
+  browse: { cwd: string; dirs: string[]; page: number } | null
   // page shown now, shared across the rename/ls/continuation pickers
   page: number
   // the message the settings menu tree is currently drawn on
@@ -67,6 +80,10 @@ const MAX_LIST = 10
 // clock — but total silence is not. Only a turn that has emitted no events at
 // all for this long gets abandoned.
 const TURN_IDLE_MS = Number(process.env.JEP_TURN_IDLE_MS ?? "") || 5 * 60_000
+// a shallow clone of anything sane is well under this; past it, assume the
+// remote is wedged rather than leaving the chat waiting indefinitely
+const CLONE_TIMEOUT_MS = 10 * 60_000
+const execFileAsync = promisify(execFile)
 const WIPE_PAGE = 4
 // files embedded into one rich message via attach:// (keep multipart modest)
 const MAX_RICH_FILES = 4
@@ -107,6 +124,15 @@ const fmtCount = (n: number): string => {
 // display form of a workspace directory: "/<folder>" — just the basename
 // with a leading slash so it still reads as a path, not a made-up label.
 const fmtWsPath = (dir: string): string => `/${basename(dir)}`
+
+// full path, but with $HOME folded back to "~" — the browser shows whole
+// paths (you need to know where you are) and a phone screen is narrow.
+const fmtHome = (dir: string): string => {
+  const h = homedir()
+  return dir === h ? "~" : dir.startsWith(h + "/") ? `~${dir.slice(h.length)}` : dir
+}
+
+const styled = (b: InlineButton, style: InlineButton["style"]): InlineButton => (style ? { ...b, style } : b)
 
 // ─── agent-internals rendering (thinking + tool calls as collapsible details) ───
 
@@ -669,6 +695,7 @@ export class TelegramBot {
         picker: null,
         del: null,
         awaiting: null,
+        browse: null,
         page: 0,
         settingsMsg: null,
         settingsPage: 0,
@@ -916,9 +943,71 @@ export class TelegramBot {
     this.#chat(chatID).awaiting = null
     if (a.kind === "pair") return this.#attemptPair(chatID, text)
     if (a.kind === "use") return this.#resolveUse(chatID, text)
+    if (a.kind === "newfolder") return this.#resolveNewFolder(chatID, a.dir, text)
+    if (a.kind === "clone") return this.#resolveClone(chatID, a.dir, text)
     const t = text.trim()
     this.#store.setTitle(a.sessionID, t)
     await this.#tg.sendMessage({ chatID, text: `✏️ renamed to "${this.#store.title(a.sessionID) ?? t}"` })
+  }
+
+  // Creates <parent>/<name>, gives it a git repo (opencode's project unit is
+  // the worktree, so a bare folder makes a degenerate one) and serves it.
+  async #resolveNewFolder(chatID: number, parent: string, name: string): Promise<void> {
+    const clean = name.trim().replace(/^\/+|\/+$/g, "")
+    if (!clean || clean.includes("/") || clean.startsWith(".")) {
+      await this.#tg.sendMessage({ chatID, text: "⚠️ that's not a usable folder name — try again from ➕ Add project" })
+      return
+    }
+    const dir = join(parent, clean)
+    if (existsSync(dir)) {
+      await this.#tg.sendMessage({ chatID, text: `⚠️ ${fmtHome(dir)} already exists` })
+      return
+    }
+    const sent = await this.#tg.sendMessage({ chatID, text: `📁 creating ${fmtHome(dir)}…` })
+    try {
+      await mkdir(dir, { recursive: true })
+      await execFileAsync("git", ["init", "-q"], { cwd: dir })
+    } catch (err) {
+      await this.#tg.editMessageText({
+        chatID,
+        messageID: sent.message_id,
+        text: `⚠️ couldn't create it: ${((err as Error)?.message ?? String(err)).slice(0, 300)}`,
+      })
+      return
+    }
+    await this.#addWorkspace(chatID, dir, sent.message_id)
+  }
+
+  // git clone into the browsed folder, then serve the result. Cloning is slow
+  // and entirely outside our control, so it runs on the chat's turn queue —
+  // the update loop (and Stop) stays live while it works.
+  async #resolveClone(chatID: number, parent: string, url: string): Promise<void> {
+    const src = url.trim()
+    if (!/^(https?:\/\/|git@|ssh:\/\/)/.test(src)) {
+      await this.#tg.sendMessage({ chatID, text: "⚠️ that doesn't look like a repo URL — try again from ➕ Add project" })
+      return
+    }
+    const name = (src.split("/").pop() ?? "").replace(/\.git$/, "")
+    if (!name) {
+      await this.#tg.sendMessage({ chatID, text: "⚠️ couldn't work out a folder name from that URL" })
+      return
+    }
+    const dir = join(parent, name)
+    if (existsSync(dir)) {
+      await this.#tg.sendMessage({ chatID, text: `⚠️ ${fmtHome(dir)} already exists` })
+      return
+    }
+    const sent = await this.#tg.sendMessage({ chatID, text: `⬇︎ cloning ${name}…` })
+    this.#runTurn(chatID, async () => {
+      try {
+        await execFileAsync("git", ["clone", "--depth", "1", src, dir], { timeout: CLONE_TIMEOUT_MS })
+      } catch (err) {
+        const msg = (err as Error)?.message ?? String(err)
+        await this.#tg.editMessageText({ chatID, messageID: sent.message_id, text: `⚠️ clone failed: ${msg.slice(0, 300)}` })
+        return
+      }
+      await this.#addWorkspace(chatID, dir, sent.message_id)
+    })
   }
 
   async #resolveUse(chatID: number, term: string): Promise<void> {
@@ -1756,18 +1845,114 @@ export class TelegramBot {
     if (sent.messageID !== undefined) c.settingsMsg = sent.messageID
   }
 
-  // 🗂 Workspace: only worth showing when there's more than one to pick from —
-  // switching starts a fresh conversation there (sessions are per-workspace).
+  // 🗂 Workspace: switch between projects, or add a new one. Switching starts
+  // a fresh conversation there (sessions are per-workspace).
   async #settingsWorkspace(chatID: number, messageID: number | null): Promise<void> {
     const c = this.#chat(chatID)
+    const added = new Set(this.#store.workspaces())
     const rows: InlineButton[][] = this.#workspaces.map((w) => {
       const b = btn(w.name, `wsw:${w.name}`)
       if (w.name === c.workspace) b.style = "success"
-      return [b]
+      // only offer 🗑 for projects added from the phone — the ones that came
+      // from JEP_WORKSPACES belong to the machine's config, and "removing"
+      // one here would silently come back on the next restart
+      return added.has(w.dir) ? [styled(btn("🗑", `wsrm:${w.name}`), "danger"), b] : [b]
     })
+    rows.push([btn("➕ Add project", "wsadd")])
     rows.push([btn("‹ Back", "set:root")])
     const lines = ["🗂 Workspace", "", `current: ${c.workspace}`, "", "Tap one to switch — starts a fresh conversation there."]
     await this.#menu(chatID, lines, rows, messageID === null ? undefined : { messageID })
+  }
+
+  // The browser is bounded to one root (JEP_BROWSE_ROOT, default $HOME) so a
+  // tap can't wander into /etc, and so "⬆︎ Up" has somewhere to stop.
+  #browseRoot(): string {
+    return resolve(process.env.JEP_BROWSE_ROOT || homedir())
+  }
+
+  // 📂 Directory browser. Everything is addressed by index (callback_data is
+  // capped at 64 bytes, nowhere near a path), so the listing behind the
+  // buttons is kept on ChatState and re-read on every render.
+  async #browsePicker(chatID: number, dir: string, messageID: number | null, page = 0): Promise<void> {
+    const c = this.#chat(chatID)
+    const root = this.#browseRoot()
+    // never above the root, and never outside it via a symlink or "..":
+    const cwd = resolve(dir).startsWith(root) ? resolve(dir) : root
+    let dirs: string[] = []
+    try {
+      dirs = (await readdir(cwd, { withFileTypes: true }))
+        .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+        .map((e) => e.name)
+        .sort((a, b) => a.localeCompare(b))
+    } catch (err) {
+      // unreadable directory — show it as empty rather than dead-ending
+      console.error(`[browse] cannot read ${cwd}: ${(err as Error)?.message ?? err}`)
+    }
+    const PER = 8
+    const pages = Math.max(1, Math.ceil(dirs.length / PER))
+    const p = Math.min(Math.max(page, 0), pages - 1)
+    const slice = dirs.slice(p * PER, p * PER + PER)
+    const rows: InlineButton[][] = slice.map((name, k) => {
+      const idx = p * PER + k
+      // a git repo is what opencode treats as a project, so flag it — picking
+      // a plain subfolder works but gives you a degenerate one
+      const marker = existsSync(join(cwd, name, ".git")) ? "📦" : "📁"
+      return [btn(`${marker} ${name}`, `wsb:${idx}`)]
+    })
+    if (pages > 1) {
+      const prev = btn("‹", `wsbp:${p - 1}`)
+      const next = btn("›", `wsbp:${p + 1}`)
+      if (p <= 0) prev.disabled = true
+      if (p >= pages - 1) next.disabled = true
+      rows.push([prev, btn(`page ${p + 1} / ${pages}`, "wsbp:x"), next])
+    }
+    const already = this.#workspaces.some((w) => w.dir === cwd)
+    rows.push([
+      styled(btn("✅ Use this folder", "wsuse"), already ? undefined : "success"),
+      ...(cwd === root ? [] : [btn("⬆︎ Up", "wsup")]),
+    ])
+    rows.push([btn("📁+ New folder", "wsnew"), btn("⬇︎ Clone repo", "wscl")])
+    rows.push([btn("‹ Back", "set:ws")])
+    c.browse = { cwd, dirs, page: p }
+    const lines = [
+      "📂 Add project",
+      "",
+      fmtHome(cwd),
+      "",
+      dirs.length ? "📦 = git repo" : "(no subfolders here)",
+      ...(already ? ["", "already a workspace"] : []),
+    ]
+    await this.#menu(chatID, lines, rows, messageID === null ? undefined : { messageID })
+  }
+
+  // Brings a directory up as a workspace and points this chat at it. Spawning
+  // an opencode server takes a few seconds, which is an eternity with no
+  // feedback, so the caller's message is edited to say what's happening.
+  async #addWorkspace(chatID: number, dir: string, messageID: number): Promise<void> {
+    const c = this.#chat(chatID)
+    const existing = this.#workspaces.find((w) => w.dir === dir)
+    if (!existing) {
+      await this.#menu(chatID, ["📂 Add project", "", `starting ${fmtHome(dir)}…`], [], { messageID })
+      try {
+        this.#workspaces.push(await this.#spawn(dir))
+      } catch (err) {
+        const msg = (err as Error)?.message ?? String(err)
+        await this.#menu(chatID, ["📂 Add project", "", `⚠️ couldn't start there:`, msg.slice(0, 300)], [[btn("‹ Back", "wsadd")]], { messageID })
+        return
+      }
+      this.#store.addWorkspace(dir)
+    }
+    const w = this.#workspaces.find((x) => x.dir === dir)!
+    c.workspace = w.name
+    c.sessionID = null
+    c.freshOnNext = false
+    c.sessionFresh = false
+    c.picker = null
+    c.del = null
+    c.page = 0
+    c.browse = null
+    void this.#updateStatus(chatID).catch(() => {})
+    await this.#settingsWorkspace(chatID, messageID)
   }
 
   // 🧭 Agent: build (executes) vs plan (read-only, no edit tools) — a relay of
@@ -2159,6 +2344,77 @@ export class TelegramBot {
         c.page = 0
         await this.#settingsWorkspace(chatID, msg.message_id)
         await tg.answerCallbackQuery({ id: cq.id, text: `workspace: ${rest}` })
+        break
+      }
+      // ── directory browser (see #browsePicker) ──
+      case "wsadd": {
+        // start next to the workspace you're in — that's almost always the
+        // same folder your other projects live in
+        const start = dirname(this.#ws(c.workspace).dir)
+        await this.#browsePicker(chatID, start, msg.message_id)
+        await tg.answerCallbackQuery({ id: cq.id })
+        break
+      }
+      case "wsb": {
+        const b = c.browse
+        const name = b?.dirs[i]
+        if (!b || !name) return tg.answerCallbackQuery({ id: cq.id, text: "stale — reopen" })
+        await this.#browsePicker(chatID, join(b.cwd, name), msg.message_id)
+        await tg.answerCallbackQuery({ id: cq.id })
+        break
+      }
+      case "wsbp": {
+        if (!c.browse || rest === "x") return tg.answerCallbackQuery({ id: cq.id })
+        await this.#browsePicker(chatID, c.browse.cwd, msg.message_id, i)
+        await tg.answerCallbackQuery({ id: cq.id })
+        break
+      }
+      case "wsup": {
+        if (!c.browse) return tg.answerCallbackQuery({ id: cq.id, text: "stale — reopen" })
+        await this.#browsePicker(chatID, dirname(c.browse.cwd), msg.message_id)
+        await tg.answerCallbackQuery({ id: cq.id })
+        break
+      }
+      case "wsuse": {
+        if (!c.browse) return tg.answerCallbackQuery({ id: cq.id, text: "stale — reopen" })
+        await tg.answerCallbackQuery({ id: cq.id, text: "starting…" })
+        await this.#addWorkspace(chatID, c.browse.cwd, msg.message_id)
+        break
+      }
+      case "wsnew":
+      case "wscl": {
+        if (!c.browse) return tg.answerCallbackQuery({ id: cq.id, text: "stale — reopen" })
+        const clone = verb === "wscl"
+        c.awaiting = clone ? { kind: "clone", dir: c.browse.cwd } : { kind: "newfolder", dir: c.browse.cwd }
+        const prompt = clone
+          ? ["⬇︎ Clone repo", "", `into ${fmtHome(c.browse.cwd)}`, "", "Send the repository URL (/cancel to stop)."]
+          : ["📁+ New folder", "", `in ${fmtHome(c.browse.cwd)}`, "", "Send a name for it (/cancel to stop)."]
+        await this.#menu(chatID, prompt, [[btn("‹ Back", "wsadd")]], { messageID: msg.message_id })
+        await tg.answerCallbackQuery({ id: cq.id })
+        break
+      }
+      case "wsrm": {
+        const w = this.#workspaces.find((x) => x.name === rest)
+        if (!w) return tg.answerCallbackQuery({ id: cq.id, text: "no such workspace" })
+        if (this.#workspaces.length < 2) return tg.answerCallbackQuery({ id: cq.id, text: "that's the only one" })
+        this.#store.removeWorkspace(w.dir)
+        this.#workspaces.splice(this.#workspaces.indexOf(w), 1)
+        // the files stay put — this only stops serving them
+        try {
+          await w.adapter.close()
+        } catch {
+          /* already gone */
+        }
+        if (c.workspace === w.name) {
+          c.workspace = this.#workspaces[0]!.name
+          c.sessionID = null
+          c.freshOnNext = false
+          c.picker = null
+          c.del = null
+          void this.#updateStatus(chatID).catch(() => {})
+        }
+        await this.#settingsWorkspace(chatID, msg.message_id)
+        await tg.answerCallbackQuery({ id: cq.id, text: `removed ${w.name}` })
         break
       }
       case "abt": {

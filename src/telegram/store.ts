@@ -32,6 +32,11 @@ export interface StoreData {
   // chat id -> whether a fresh session's first prompt gets the jep context
   // header prepended (default: on — see StoreData.injectContext)
   injectContext?: Record<string, boolean>
+  // workspace directories added from the phone. JEP_WORKSPACES is the
+  // boot-time env list and can only be changed at a keyboard; these are the
+  // ones picked through the browser, and they have to outlive a restart or
+  // adding a project on mobile would be a per-session ritual.
+  workspaces?: string[]
 }
 
 export class ChatStore {
@@ -41,41 +46,28 @@ export class ChatStore {
   #agents: Record<string, string>
   #statusMsgs: Record<string, number>
   #injectContext: Record<string, boolean>
+  #workspaces: string[]
   #file: string | null
 
-  constructor(
-    titles: Record<string, string>,
-    models: Record<string, string>,
-    internals: Record<string, InternalsSettings>,
-    agents: Record<string, string>,
-    statusMsgs: Record<string, number>,
-    injectContext: Record<string, boolean>,
-    file: string | null,
-  ) {
-    this.#titles = titles
-    this.#models = models
-    this.#internals = internals
-    this.#agents = agents
-    this.#statusMsgs = statusMsgs
-    this.#injectContext = injectContext
+  // takes the persisted shape as-is: this grew to seven positional args and
+  // every new field was another chance to line them up wrong
+  constructor(d: StoreData, file: string | null) {
+    this.#titles = d.titles ?? {}
+    this.#models = d.models ?? {}
+    this.#internals = d.internals ?? {}
+    this.#agents = d.agents ?? {}
+    this.#statusMsgs = d.statusMsgs ?? {}
+    this.#injectContext = d.injectContext ?? {}
+    this.#workspaces = d.workspaces ?? []
     this.#file = file
   }
 
   static load(file: string | null): ChatStore {
-    if (!file) return new ChatStore({}, {}, {}, {}, {}, {}, null)
+    if (!file) return new ChatStore({} as StoreData, null)
     try {
-      const d = JSON.parse(readFileSync(file, "utf8")) as StoreData
-      return new ChatStore(
-        d.titles ?? {},
-        d.models ?? {},
-        d.internals ?? {},
-        d.agents ?? {},
-        d.statusMsgs ?? {},
-        d.injectContext ?? {},
-        file,
-      )
+      return new ChatStore(JSON.parse(readFileSync(file, "utf8")) as StoreData, file)
     } catch {
-      return new ChatStore({}, {}, {}, {}, {}, {}, file)
+      return new ChatStore({} as StoreData, file)
     }
   }
 
@@ -118,6 +110,24 @@ export class ChatStore {
     this.#save()
   }
 
+  /** workspace directories added from the phone (not the JEP_WORKSPACES env) */
+  workspaces(): string[] {
+    return [...this.#workspaces]
+  }
+
+  addWorkspace(dir: string): void {
+    if (this.#workspaces.includes(dir)) return
+    this.#workspaces.push(dir)
+    this.#save()
+  }
+
+  removeWorkspace(dir: string): void {
+    const i = this.#workspaces.indexOf(dir)
+    if (i < 0) return
+    this.#workspaces.splice(i, 1)
+    this.#save()
+  }
+
   setTitle(id: string, title: string): void {
     if (title.trim()) this.#titles[id] = title.trim()
     else delete this.#titles[id]
@@ -157,6 +167,7 @@ export class ChatStore {
           agents: this.#agents,
           statusMsgs: this.#statusMsgs,
           injectContext: this.#injectContext,
+          workspaces: this.#workspaces,
         },
         null,
         2,
