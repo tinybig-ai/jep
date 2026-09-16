@@ -178,10 +178,20 @@ export class CodexAdapter implements HarnessAdapter {
     let db: DatabaseSync | undefined
     try {
       db = new DatabaseSync(file, { readOnly: true })
+      // thread_source is Codex's own classification: "user" for one a person
+      // (or jep, via codex exec) started, "subagent" for one an agent spawned
+      // to do a sub-task, null for a session imported from another tool.
+      // Subagents are never something you meant to open — they are an
+      // implementation detail of somebody else's turn — so they never list.
+      const onlyUser = process.env.JEP_CODEX_ONLY_USER === "1"
       const rows = db
         .prepare(
           `SELECT id, name, preview, created_at_ms, updated_at_ms, recency_at_ms
-             FROM threads WHERE cwd = ? ORDER BY COALESCE(recency_at_ms, updated_at_ms, 0) DESC`,
+             FROM threads
+            WHERE cwd = ?
+              AND COALESCE(thread_source, '') <> 'subagent'
+              ${onlyUser ? "AND thread_source = 'user'" : ""}
+            ORDER BY COALESCE(recency_at_ms, updated_at_ms, 0) DESC`,
         )
         .all(this.workspace) as Array<Record<string, unknown>>
       return rows.map((r) => {
