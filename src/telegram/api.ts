@@ -18,6 +18,21 @@ export interface TgMessage {
   caption?: string
   photo?: { file_id: string; file_unique_id?: string; width?: number; height?: number; file_size?: number }[]
   document?: { file_id: string; file_unique_id?: string; file_name?: string; mime_type?: string; file_size?: number }
+  sticker?: {
+    file_id: string
+    file_unique_id?: string
+    /** the emoji this sticker stands for — its actual semantic content */
+    emoji?: string
+    set_name?: string
+    /** .tgs Lottie animation: not an image anything can read */
+    is_animated?: boolean
+    /** .webm video sticker: likewise */
+    is_video?: boolean
+    width?: number
+    height?: number
+    /** static preview, present for animated/video stickers */
+    thumbnail?: { file_id: string }
+  }
   // set on group messages that were sent as ephemeral (visible to one user + bot)
   ephemeral_message_id?: number
 }

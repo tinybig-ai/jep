@@ -547,6 +547,26 @@ const imageExt = (mime?: string): string | null => {
   return byMime[m ?? ""] ?? null
 }
 
+// Stickers and photo thumbnails arrive with no file name and no mime type, so
+// the extension has to come from the bytes. Getting it wrong matters: the
+// harness derives the mime it sends the model from the extension alone, so a
+// WEBP called .jpg is rejected as corrupt rather than read.
+const sniffImageExt = (b: Buffer): string | null => {
+  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return ".jpg"
+  if (b.length >= 4 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return ".png"
+  if (b.length >= 12 && b.toString("ascii", 0, 4) === "RIFF" && b.toString("ascii", 8, 12) === "WEBP") return ".webp"
+  if (b.length >= 4 && b.toString("ascii", 0, 4) === "GIF8") return ".gif"
+  return null
+}
+
+// what a sticker actually means, for the harness: the emoji is the content,
+// the set name is context. Sent as text so an animated sticker we can't
+// render still says something instead of arriving as an empty message.
+const stickerPrompt = (s: NonNullable<TgMessage["sticker"]>): string => {
+  const parts = [s.emoji, s.set_name ? `from the "${s.set_name}" sticker set` : ""].filter(Boolean)
+  return `[sticker${parts.length ? `: ${parts.join(" ")}` : ""}]`
+}
+
 export class TelegramBot {
   #tg: TelegramApi
   #workspaces: Ws[]
@@ -855,7 +875,9 @@ export class TelegramBot {
     const chatID = m.chat.id
     const text = (m.text ?? m.caption ?? "").trim()
     const mediaFileID = this.#mediaFileID(m)
-    if (!text && !mediaFileID) return
+    // an animated sticker with no thumbnail has nothing to download, but its
+    // emoji is still a message — don't drop it as empty
+    if (!text && !mediaFileID && !m.sticker) return
     const c = this.#chat(chatID)
     const [cmd, ...rest] = text.split(/\s+/)
 
@@ -909,11 +931,14 @@ export class TelegramBot {
         try {
           filePaths = [await this.#ingestMedia(chatID, m)]
         } catch (err) {
-          await this.#tg.sendMessage({ chatID, text: `⚠️ couldn't read the image: ${(err as Error).message}` })
+          await this.#tg.sendMessage({ chatID, text: `⚠️ couldn't read the attachment: ${(err as Error).message}` })
         }
       }
+      // a sticker on its own carries no text, so say what it was — the image
+      // alone doesn't tell the model it's a sticker or which emoji it stands for
+      const prompt = text || (m.sticker ? stickerPrompt(m.sticker) : text)
       this.#runTurn(chatID, async () => {
-        await this.#freeText(chatID, text, { filePaths })
+        await this.#freeText(chatID, prompt, { filePaths })
         if (mediaFileID) await this.#suggestImageModel(chatID)
       })
     }
@@ -922,6 +947,15 @@ export class TelegramBot {
   #mediaFileID(m: TgMessage): string | null {
     if (m.photo?.length) return m.photo[m.photo.length - 1]!.file_id // biggest variant
     if (m.document?.file_id) return m.document.file_id
+    if (m.sticker) {
+      // a static sticker is just a .webp image. Animated (.tgs Lottie) and
+      // video (.webm) ones aren't images a model can read, so fall back to
+      // their static thumbnail — and if there's none, the emoji in the
+      // synthesized prompt still carries what the sticker meant.
+      const s = m.sticker
+      if (!s.is_animated && !s.is_video) return s.file_id
+      return s.thumbnail?.file_id ?? null
+    }
     return null
   }
 
@@ -932,8 +966,9 @@ export class TelegramBot {
     if (!fileID) throw new Error("no attachment")
     const docName = m.document?.file_name
     const docMime = m.document?.mime_type
-    const ext = docName?.slice(docName.lastIndexOf(".")).toLowerCase() || imageExt(docMime) || ".jpg"
     const bytes = await this.#tg.getFileContent(fileID)
+    const ext =
+      docName?.slice(docName.lastIndexOf(".")).toLowerCase() || imageExt(docMime) || sniffImageExt(bytes) || ".jpg"
     const name = `upl-${chatID}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`
     await mkdir(this.#uploadsDir, { recursive: true })
     const filePath = join(this.#uploadsDir, name)
