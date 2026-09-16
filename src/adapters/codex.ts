@@ -125,8 +125,9 @@ export class CodexAdapter implements HarnessAdapter {
     if (this.#metaCache.has(file)) return this.#metaCache.get(file)!
     let meta: SessionMeta | null = null
     try {
-      const head = (await readFile(file, "utf8")).split("\n", 1)[0] ?? ""
-      const row = JSON.parse(head)
+      const raw = await readFile(file, "utf8")
+      const lines = raw.split("\n")
+      const row = JSON.parse(lines[0] ?? "")
       const p = row?.payload
       if (row?.type === "session_meta" && p?.cwd) {
         const created = Date.parse(p.timestamp ?? row.timestamp ?? "") || Date.now()
@@ -135,7 +136,10 @@ export class CodexAdapter implements HarnessAdapter {
           cwd: p.cwd,
           createdAt: created,
           updatedAt: created,
-          title: "",
+          // session_index.jsonl only names a fraction of the sessions on disk,
+          // so most would otherwise list as a bare id fragment. The opening
+          // user message is what the conversation is actually about.
+          title: firstUserLine(lines),
           file,
         }
       }
@@ -175,7 +179,8 @@ export class CodexAdapter implements HarnessAdapter {
       const extra = idx.get(meta.id)
       out.push({
         id: toInternalId(meta.id),
-        title: extra?.title || "",
+        // the index's name wins when it has one — it is what Codex itself shows
+        title: extra?.title || meta.title,
         workspace: meta.cwd,
         createdAt: meta.createdAt,
         updatedAt: extra?.updatedAt || meta.createdAt,
@@ -231,7 +236,6 @@ export class CodexAdapter implements HarnessAdapter {
     if (isPending(native)) return []
     const file = (await this.#rolloutFiles()).find((f) => f.endsWith(`-${native}.jsonl`))
     if (!file) return []
-    const out: Message[] = []
     let raw: string
     try {
       raw = await readFile(file, "utf8")
@@ -239,28 +243,86 @@ export class CodexAdapter implements HarnessAdapter {
       console.error(`[codex] transcript unreadable for ${native}: ${(err as Error)?.message ?? err}`)
       return []
     }
+
+    // A rollout carries the same turn twice: `response_item` lines (the
+    // Responses-API shape, with a role and structured content) and `event_msg`
+    // lines (the UI's own feed). Most files have both, so reading both would
+    // duplicate every message. response_item is preferred — it is the only one
+    // that states the role — and event_msg/item_completed is the fallback for
+    // sessions imported from Codex Desktop, which have no response_items.
+    const rows: Array<{ row: any; payload: any }> = []
     for (const line of raw.split("\n")) {
       if (!line.trim()) continue
-      let row: any
       try {
-        row = JSON.parse(line)
+        const row = JSON.parse(line)
+        if (row?.payload) rows.push({ row, payload: row.payload })
       } catch {
-        continue // half-written trailing line on a live session
+        // half-written trailing line on a session still being appended to
       }
-      if (row?.type !== "event_msg") continue
-      const p = row.payload
-      if (p?.type !== "item_completed" || !p.item) continue
-      const part = mapItem(p.item, this.workspace)
-      if (!part) continue
-      const role = p.item.type === "UserMessage" ? "user" : "assistant"
+    }
+    const hasResponseItems = rows.some((r) => r.row.type === "response_item")
+
+    const out: Message[] = []
+    // custom_tool_call_output arrives as its own line; fold it back into the
+    // call it belongs to rather than emitting a part with no context
+    const toolByCallID = new Map<string, Part & { kind: "tool" }>()
+
+    for (const { row, payload } of rows) {
       const time = Date.parse(row.timestamp ?? "") || Date.now()
-      out.push({
-        id: toInternalId(`${native}:${p.item.id ?? out.length}`),
-        sessionID: toInternalId(native),
-        role,
-        time,
-        parts: [part],
-      })
+      const push = (role: "user" | "assistant", part: Part) => {
+        out.push({
+          id: toInternalId(`${native}:${payload.id ?? out.length}`),
+          sessionID: toInternalId(native),
+          role,
+          time,
+          parts: [part],
+        })
+      }
+
+      if (hasResponseItems && row.type === "response_item") {
+        switch (payload.type) {
+          case "message": {
+            const text = contentText(payload.content)
+            if (text.trim()) push(payload.role === "user" ? "user" : "assistant", { kind: "text", text })
+            break
+          }
+          case "reasoning": {
+            // encrypted_content is opaque; only the summary is ever readable
+            const text = Array.isArray(payload.summary) ? payload.summary.map((x: any) => x?.text ?? "").join("\n") : ""
+            if (text.trim()) push("assistant", { kind: "reasoning", text, id: String(payload.id ?? "") })
+            break
+          }
+          case "custom_tool_call": {
+            const part: Part & { kind: "tool" } = {
+              kind: "tool",
+              id: String(payload.call_id ?? payload.id ?? ""),
+              name: String(payload.name ?? "tool"),
+              input: payload.input ?? {},
+              output: "",
+              status: payload.status === "completed" ? "completed" : "running",
+            }
+            if (payload.call_id) toolByCallID.set(String(payload.call_id), part)
+            push("assistant", part)
+            break
+          }
+          case "custom_tool_call_output": {
+            const part = payload.call_id ? toolByCallID.get(String(payload.call_id)) : undefined
+            if (part) {
+              part.output = contentText(payload.output)
+              part.status = "completed"
+            }
+            break
+          }
+          default:
+            break
+        }
+        continue
+      }
+
+      if (!hasResponseItems && row.type === "event_msg" && payload.type === "item_completed" && payload.item) {
+        const part = mapItem(payload.item, this.workspace)
+        if (part) push(payload.item.type === "UserMessage" ? "user" : "assistant", part)
+      }
     }
     return out
   }
@@ -521,6 +583,42 @@ function mapItem(item: any, workspace: string): Part | null {
     default:
       return { kind: "other", nativeType: type || "unknown" }
   }
+}
+
+// First thing the user actually said, as a title. Only the head of the file is
+// scanned: the opening exchange is always near the top, and a long session can
+// run to thousands of lines.
+function firstUserLine(lines: string[]): string {
+  for (const line of lines.slice(0, 80)) {
+    if (!line.trim()) continue
+    let d: any
+    try {
+      d = JSON.parse(line)
+    } catch {
+      continue
+    }
+    const p = d?.payload
+    if (!p) continue
+    let text = ""
+    if (d.type === "response_item" && p.type === "message" && p.role === "user") text = contentText(p.content)
+    else if (d.type === "event_msg" && p.type === "user_message") text = String(p.message ?? "")
+    text = text.replace(/\s+/g, " ").trim()
+    // the jep context header is prepended to a session's first prompt; titling
+    // a conversation with our own preamble would make every one identical
+    const marker = "Treat the message below as the user's entire, only request."
+    const at = text.indexOf(marker)
+    if (at !== -1) text = text.slice(at + marker.length).replace(/^[\s-]+/, "")
+    if (text) return text.length > 48 ? `${text.slice(0, 48)}…` : text
+  }
+  return ""
+}
+
+// Responses-API content arrays: input_text on the way in, output_text on the
+// way out, and the same shape again for tool output.
+function contentText(content: any): string {
+  if (typeof content === "string") return content
+  if (!Array.isArray(content)) return ""
+  return content.map((c: any) => (typeof c?.text === "string" ? c.text : "")).join("")
 }
 
 function textOf(item: any): string {
