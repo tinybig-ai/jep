@@ -1,5 +1,5 @@
 import { readFileSync, existsSync, mkdirSync, copyFileSync } from "node:fs"
-import { basename, join } from "node:path"
+import { join, sep } from "node:path"
 import { mkdtempSync } from "node:fs"
 import { tmpdir, homedir } from "node:os"
 import { startOpenCodeServer } from "./adapters/opencode.ts"
@@ -34,6 +34,22 @@ interface Ws {
   name: string
   dir: string
   adapter: HarnessAdapter
+}
+
+// Ws.name is a routing key — chats persist it to pick their workspace, and
+// #ws(name) resolves it by first match — so two directories sharing a
+// basename must not share a name, or the second one is unreachable and its
+// chats silently route to the first. Widen the name leftwards along the path
+// until it's unique ("jep", then "code/jep", ...), falling back to the whole
+// directory if even that collides.
+function uniqueWsName(dir: string, taken: Ws[]): string {
+  const segs = dir.split(sep).filter(Boolean)
+  const used = new Set(taken.map((w) => w.name))
+  for (let n = 1; n <= segs.length; n++) {
+    const name = segs.slice(-n).join(sep)
+    if (!used.has(name)) return name
+  }
+  return dir
 }
 
 // opencode serve runs with an isolated XDG_DATA_HOME so the bot's sessions
@@ -159,16 +175,18 @@ async function main() {
   // workspaces stays testable regardless of the caller's own cwd.
   const workspaceDirs = dirs.length ? dirs : mockMode ? DEFAULT_WORKSPACES : [process.cwd()]
 
+  const workspaces: Ws[] = []
+
   // shared by the boot loop below and by TelegramBot#discoverWorkspaces,
   // which calls this later to start serving a project it finds out about
-  // only after boot (e.g. via the adapter's listProjects).
+  // only after boot (e.g. via the adapter's listProjects). The bot holds this
+  // very array, so names stay unique across both paths.
   const spawnWorkspace = async (dir: string): Promise<Ws> => {
     const ad = await startOpenCodeServer(dir, { dataHome: DATA_HOME })
     assertAdapterImplements(ad)
-    return { name: basename(dir), dir, adapter: ad }
+    return { name: uniqueWsName(dir, workspaces), dir, adapter: ad }
   }
 
-  const workspaces: Ws[] = []
   for (const dir of workspaceDirs) workspaces.push(await spawnWorkspace(dir))
   const activeWsName = workspaces[0]!.name
 
