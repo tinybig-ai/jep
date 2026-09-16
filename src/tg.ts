@@ -18,6 +18,11 @@ const UPLOADS_DIR = join(DATA_HOME, "uploads")
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
+// how much of a rich message the mock dump prints. 220 was short enough to cut
+// off the tail of a settings menu, which hides exactly the rows you are
+// usually checking for; JEP_DUMP_CHARS widens it further when needed.
+const RICH_DUMP_CHARS = Number(process.env.JEP_DUMP_CHARS ?? "") || 2000
+
 interface CallRec {
   method: string
   chatID?: number
@@ -161,7 +166,7 @@ async function buildMockApi(): Promise<TelegramApi> {
     },
     dump() {
       for (const c of calls) {
-        console.log(`CALL ${c.method} chat=${c.chatID}${c.messageID ? ` msg=${c.messageID}` : ""}${c.parse_mode ? ` mode=${c.parse_mode}` : ""}${c.silent ? " silent" : ""}${c.ephemeral != null ? ` ephemeral=${c.ephemeral}` : ""}${c.rich ? ` rich=${JSON.stringify(c.rich).slice(0, 220)}` : ""} text=${JSON.stringify(c.text ?? "")}`)
+        console.log(`CALL ${c.method} chat=${c.chatID}${c.messageID ? ` msg=${c.messageID}` : ""}${c.parse_mode ? ` mode=${c.parse_mode}` : ""}${c.silent ? " silent" : ""}${c.ephemeral != null ? ` ephemeral=${c.ephemeral}` : ""}${c.rich ? ` rich=${JSON.stringify(c.rich).slice(0, RICH_DUMP_CHARS)}` : ""} text=${JSON.stringify(c.text ?? "")}`)
         if (c.reply_markup) console.log(`     keyboard: ${JSON.stringify(c.reply_markup.inline_keyboard)}${c.reply_markup.force_reply ? " force_reply" : ""}`)
       }
     },

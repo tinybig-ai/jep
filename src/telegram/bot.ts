@@ -2093,13 +2093,15 @@ export class TelegramBot {
     const lines = [
       "⚙️ Settings",
       "",
-      `engine: ${c.harness ?? ws.adapter.id}`,
       `conversation: "${label}"`,
     ]
     const rows: InlineButton[][] = [
       [btn(`🤖 Model · ${model}`, "set:model")],
       [btn(`🧭 Agent · ${this.#store.agent(chatID) ?? "build"}`, "set:agent")],
-      ...(this.#harnessList.length > 1 ? [[btn(`🔌 Harness · ${this.#activeWs(chatID).adapter.id}`, "set:harness")]] : []),
+      // always shown, like 🗂 Workspace: hiding a row until a second option
+      // exists is how the only route to something ends up undiscoverable, and
+      // with one harness it still answers "what is actually running this?"
+      [btn(`🔌 Harness · ${this.#activeWs(chatID).adapter.id}`, "set:harness")],
       [btn(`🔎 Internals · ${internalsPreset(this.#store.internals(chatID))}`, "set:internals")],
       [btn(`🧩 Context · ${this.#store.injectContext(chatID) ? "on" : "off"}`, "ctx:toggle")],
       [btn("✏️ Rename conversation", "set:rename")],
@@ -2149,7 +2151,11 @@ export class TelegramBot {
       return [b]
     })
     rows.push([btn("‹ Back", "set:root")])
-    const lines = ["🔌 Harness", "", `current: ${current}`, "", "Switching starts a fresh conversation — sessions don't move between harnesses."]
+    const hint =
+      this.#harnessList.length > 1
+        ? "Switching starts a fresh conversation — sessions don't move between harnesses."
+        : "The only harness installed here. Install another (e.g. codex) and it shows up."
+    const lines = ["🔌 Harness", "", `current: ${current}`, "", hint]
     await this.#menu(chatID, lines, rows, { messageID })
   }
 
