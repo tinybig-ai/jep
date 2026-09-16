@@ -1420,7 +1420,7 @@ export class TelegramBot {
         /* best-effort */
       }
     }
-    const text = [`📍 ${ws.name}`, `🤖 ${model} · 🧭 ${agent}`, tokensLine, filesLine].join("\n")
+    const text = [`» ${ws.name}`, `${model} · ${agent}`, tokensLine, filesLine].join("\n")
 
     const existing = this.#store.statusMsg(chatID)
     if (existing) {
