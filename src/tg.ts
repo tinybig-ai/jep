@@ -2,7 +2,7 @@ import { readFileSync, existsSync, mkdirSync, copyFileSync } from "node:fs"
 import { join, sep } from "node:path"
 import { mkdtempSync } from "node:fs"
 import { tmpdir, homedir } from "node:os"
-import { startOpenCodeServer } from "./adapters/opencode.ts"
+import { buildHarnesses, DEFAULT_HARNESS } from "./core/harnesses.ts"
 import { assertAdapterImplements } from "./core/compliance.ts"
 import type { HarnessAdapter } from "./core/ports.ts"
 import { TelegramBot } from "./telegram/bot.ts"
@@ -43,6 +43,10 @@ interface Ws {
 // until it's unique ("jep", then "code/jep", ...), falling back to the whole
 // directory if even that collides.
 function uniqueWsName(dir: string, taken: Ws[]): string {
+  // one directory keeps one name no matter how many harnesses serve it —
+  // the harness is a separate axis, not a different workspace
+  const sameDir = taken.find((w) => w.dir === dir)
+  if (sameDir) return sameDir.name
   const segs = dir.split(sep).filter(Boolean)
   const used = new Set(taken.map((w) => w.name))
   for (let n = 1; n <= segs.length; n++) {
@@ -192,8 +196,12 @@ async function main() {
   // which calls this later to start serving a project it finds out about
   // only after boot (e.g. via the adapter's listProjects). The bot holds this
   // very array, so names stay unique across both paths.
-  const spawnWorkspace = async (dir: string): Promise<Ws> => {
-    const ad = await startOpenCodeServer(dir, { dataHome: DATA_HOME })
+  const harnesses = buildHarnesses({ dataHome: DATA_HOME })
+  const spawnWorkspace = async (dir: string, harnessID?: string): Promise<Ws> => {
+    const want = harnessID ?? DEFAULT_HARNESS
+    const harness = harnesses.find((h) => h.id === want)
+    if (!harness) throw new Error(`unknown harness '${want}' (have: ${harnesses.map((h) => h.id).join(", ")})`)
+    const ad = await harness.start(dir)
     assertAdapterImplements(ad)
     return { name: uniqueWsName(dir, workspaces), dir, adapter: ad }
   }
@@ -227,6 +235,16 @@ async function main() {
   process.once("SIGTERM", () => void shutdown("SIGTERM"))
   process.once("SIGINT", () => void shutdown("SIGINT"))
 
+  // only offer harnesses that are actually installed here — a picker row that
+  // always fails is worse than no row
+  const available: Array<{ id: string; label: string }> = []
+  for (const h of harnesses) {
+    if (mockMode && h.id !== DEFAULT_HARNESS) continue
+    if (await h.available()) available.push({ id: h.id, label: h.label })
+    else console.error(`[harness] ${h.id} unavailable — not offering it`)
+  }
+  console.error(`harnesses: ${available.map((h) => h.id).join(", ") || "(none)"}`)
+
   const tg = mockMode ? await buildMockApi() : createTelegramApi(process.env.JEP_TG_TOKEN ?? "")
 
   const pairFile = join(DATA_HOME, "pairing.json")
@@ -250,7 +268,7 @@ async function main() {
   const bot = new TelegramBot(tg, workspaces, activeWsName, pairing, store, (process.env.JEP_TG_MODELS ?? "")
     .split(",")
     .map((s) => s.trim())
-    .filter(Boolean), UPLOADS_DIR, spawnWorkspace, ReminderStore.load(join(DATA_HOME, "reminders.json")))
+    .filter(Boolean), UPLOADS_DIR, spawnWorkspace, available, ReminderStore.load(join(DATA_HOME, "reminders.json")))
 
   // One-shot at boot, and boot is exactly when the network is least likely to
   // be up: the machine has often just woken, which is what kills the long poll

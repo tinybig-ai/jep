@@ -628,7 +628,9 @@ export class TelegramBot {
   // lazily starts serving a directory this bot didn't boot with — how
   // #wsForDir materializes a project the adapter knows about, or the browser
   // adds a brand new one, without a restart
-  #spawn: (dir: string) => Promise<Ws>
+  #spawn: (dir: string, harness?: string) => Promise<Ws>
+  /** every harness this build can start, for the picker */
+  #harnessList: Array<{ id: string; label: string }>
 
   constructor(
     tg: TelegramApi,
@@ -638,7 +640,8 @@ export class TelegramBot {
     store: ChatStore,
     extraModels: string[],
     uploadsDir: string,
-    spawn: (dir: string) => Promise<Ws>,
+    spawn: (dir: string, harness?: string) => Promise<Ws>,
+    harnessList: Array<{ id: string; label: string }>,
     reminders: ReminderStore,
   ) {
     this.#tg = this.#recording(tg)
@@ -649,6 +652,7 @@ export class TelegramBot {
     this.#extraModels = extraModels
     this.#uploadsDir = uploadsDir
     this.#spawn = spawn
+    this.#harnessList = harnessList
     this.#reminderStore = reminders
     for (const r of reminders.list()) this.#scheduleReminder(r)
   }
@@ -711,13 +715,25 @@ export class TelegramBot {
     return this.#workspaces.find((w) => w.name === name) ?? this.#workspaces[0]!
   }
 
+  // The workspace a chat is actually talking to. A directory can be served by
+  // more than one harness at once, so the name alone is ambiguous — the chat's
+  // harness picks between them. Falls back to whatever is serving that
+  // directory when the chosen harness isn't running for it.
+  #activeWs(chatID: number): Ws {
+    const c = this.#chat(chatID)
+    const sameName = this.#workspaces.filter((w) => w.name === c.workspace)
+    const pool = sameName.length ? sameName : this.#workspaces
+    if (!c.harness) return pool[0]!
+    return pool.find((w) => w.adapter.id === c.harness) ?? pool[0]!
+  }
+
   // Writes where this chat is pointed to disk. ChatState is in-memory, so
   // without this every restart silently relocated you: workspace fell back to
   // the first one and the conversation to whatever happened to be newest
   // there — you'd come back mid-thought and be somewhere else entirely.
   #rememberChat(chatID: number): void {
     const c = this.#chat(chatID)
-    this.#store.setChatContext(chatID, this.#ws(c.workspace).dir, c.sessionID)
+    this.#store.setChatContext(chatID, this.#activeWs(chatID).dir, c.sessionID, c.harness ?? undefined)
   }
 
   // Every project directory the harness knows of, whether or not this bot has
@@ -781,9 +797,11 @@ export class TelegramBot {
       c = {
         workspace: savedWs?.name ?? this.#activeWsName,
         sessionID: savedWs ? saved!.sessionID : null,
+        // restored before anything reads it, so #activeWs resolves to the
+        // harness this chat was last using rather than the default
+        harness: (savedWs && saved?.harness) || null,
         freshOnNext: false,
         sessionFresh: false,
-        harness: null,
         inflight: null,
         pending: new Map(),
         picker: null,
@@ -816,7 +834,7 @@ export class TelegramBot {
     const c = this.#chat(chatID)
     if (c.sessionID) return c.sessionID
     if (c.freshOnNext) return null
-    const ws = this.#ws(c.workspace)
+    const ws = this.#activeWs(chatID)
     const list = await ws.adapter.listSessions()
     const newest = [...list].sort((a, b) => b.updatedAt - a.updatedAt)[0]
     if (newest) c.sessionID = newest.id
@@ -832,7 +850,7 @@ export class TelegramBot {
     const c = this.#chat(chatID)
     const resolved = await this.#resolveSessionID(chatID)
     if (resolved) return resolved
-    const ws = this.#ws(c.workspace)
+    const ws = this.#activeWs(chatID)
     c.freshOnNext = false
     const title = (firstText ?? "").slice(0, 40) || "My chat"
     const s = await ws.adapter.createSession(title)
@@ -905,7 +923,7 @@ export class TelegramBot {
     const sessionID = await this.#resolveSessionID(chatID)
     if (sessionID) {
       try {
-        stopped = (await this.#ws(c.workspace).adapter.abort(sessionID)) || stopped
+        stopped = (await this.#activeWs(chatID).adapter.abort(sessionID)) || stopped
       } catch (err) {
         // usually just "the turn already ended" — but if Stop is reported as
         // not having stopped anything, this line is the reason why
@@ -1139,7 +1157,7 @@ export class TelegramBot {
 
   async #resolveUse(chatID: number, term: string): Promise<void> {
     const c = this.#chat(chatID)
-    const ws = this.#ws(c.workspace)
+    const ws = this.#activeWs(chatID)
     const list = await ws.adapter.listSessions()
     const byTitle = list.find((s) => this.#displayTitle(s.id, s.title).toLowerCase().includes(term.toLowerCase()))
     const exact = byTitle ?? (term.includes("://") ? await ws.adapter.getSession(term) : null)
@@ -1156,7 +1174,7 @@ export class TelegramBot {
   async #command(chatID: number, cmd: string, arg: string, messageID: number): Promise<void> {
     const tg = this.#tg
     const c = this.#chat(chatID)
-    const ws = this.#ws(c.workspace)
+    const ws = this.#activeWs(chatID)
     switch (cmd) {
       case "start":
       case "help":
@@ -1327,7 +1345,7 @@ export class TelegramBot {
   async #newConversation(chatID: number, replyId: number | null, title?: string): Promise<void> {
     const c = this.#chat(chatID)
     const harnesses = this.#harnesses()
-    let ws = this.#ws(c.workspace)
+    let ws = this.#activeWs(chatID)
     if (c.harness && this.#wsFor(c.harness)) {
       ws = this.#wsFor(c.harness)!
     } else if (harnesses.length === 1) {
@@ -1518,7 +1536,7 @@ export class TelegramBot {
     let harnessText: string
     try {
       sessionID = await this.#ensureSession(chatID, promptText)
-      ws = this.#ws(c.workspace)
+      ws = this.#activeWs(chatID)
       const injectContext = c.sessionFresh && this.#store.injectContext(chatID)
       harnessText = injectContext ? `${JEP_CONTEXT}\n${JEP_TELEGRAM_CONTEXT}\n\n${JEP_CONTEXT_FOOTER}\n\n${promptText}` : promptText
       c.sessionFresh = false
@@ -1888,7 +1906,7 @@ export class TelegramBot {
   // the turn that triggered it (see the void .catch() call site).
   async #updateStatus(chatID: number): Promise<void> {
     const c = this.#chat(chatID)
-    const ws = this.#ws(c.workspace)
+    const ws = this.#activeWs(chatID)
     const modelKey = this.#store.model(chatID)
     const model = modelKey ?? "default"
     const agent = this.#store.agent(chatID) ?? "build"
@@ -1979,7 +1997,7 @@ export class TelegramBot {
   // continuation picker: new conversation, 4 most recent, paginated "see more"
   async #wipePick(chatID: number, page: number, messageID: number | null): Promise<void> {
     const c = this.#chat(chatID)
-    const ws = this.#ws(c.workspace)
+    const ws = this.#activeWs(chatID)
     const sorted = [...(await ws.adapter.listSessions())].sort((a, b) => b.updatedAt - a.updatedAt)
     const ids = sorted.map((s) => s.id)
     const lastPage = Math.max(0, Math.ceil(ids.length / WIPE_PAGE) - 1)
@@ -2063,7 +2081,7 @@ export class TelegramBot {
 
   async #settingsRoot(chatID: number, messageID: number | null): Promise<void> {
     const c = this.#chat(chatID)
-    const ws = this.#ws(c.workspace)
+    const ws = this.#activeWs(chatID)
     const sessionID = await this.#resolveSessionID(chatID)
     const active = sessionID ? await ws.adapter.getSession(sessionID) : null
     const label = active ? this.#displayTitle(active.id, active.title) : "(none)"
@@ -2081,6 +2099,7 @@ export class TelegramBot {
     const rows: InlineButton[][] = [
       [btn(`🤖 Model · ${model}`, "set:model")],
       [btn(`🧭 Agent · ${this.#store.agent(chatID) ?? "build"}`, "set:agent")],
+      ...(this.#harnessList.length > 1 ? [[btn(`🔌 Harness · ${this.#activeWs(chatID).adapter.id}`, "set:harness")]] : []),
       [btn(`🔎 Internals · ${internalsPreset(this.#store.internals(chatID))}`, "set:internals")],
       [btn(`🧩 Context · ${this.#store.injectContext(chatID) ? "on" : "off"}`, "ctx:toggle")],
       [btn("✏️ Rename conversation", "set:rename")],
@@ -2116,6 +2135,22 @@ export class TelegramBot {
         : "➕ Add project to browse for another, or clone one."
     const lines = ["🗂 Workspace", "", `current: ${c.workspace}`, "", hint]
     await this.#menu(chatID, lines, rows, messageID === null ? undefined : { messageID })
+  }
+
+  // 🔌 Harness: which agent runtime answers, for this chat. Sessions belong to
+  // the harness that made them — opencode and codex keep separate transcripts
+  // in separate stores — so switching starts a fresh conversation rather than
+  // pretending the old one carries over.
+  async #settingsHarness(chatID: number, messageID: number): Promise<void> {
+    const current = this.#activeWs(chatID).adapter.id
+    const rows: InlineButton[][] = this.#harnessList.map((h) => {
+      const b = btn(h.label, `hns:${h.id}`)
+      if (h.id === current) b.style = "success"
+      return [b]
+    })
+    rows.push([btn("‹ Back", "set:root")])
+    const lines = ["🔌 Harness", "", `current: ${current}`, "", "Switching starts a fresh conversation — sessions don't move between harnesses."]
+    await this.#menu(chatID, lines, rows, { messageID })
   }
 
   // The browser is bounded to one root (JEP_BROWSE_ROOT, default $HOME) so a
@@ -2264,7 +2299,7 @@ export class TelegramBot {
 
   async #settingsModel(chatID: number, messageID: number, requestPage?: number): Promise<void> {
     const c = await this.#chat(chatID)
-    const ws = this.#ws(c.workspace)
+    const ws = this.#activeWs(chatID)
     const current = this.#store.model(chatID)
     const native: ModelRef[] = ws ? (await ws.adapter.models?.().catch(() => [])) ?? [] : []
     const caps = (await ws.adapter.capabilities?.().catch(() => new Map<string, ModelCaps>())) ?? new Map<string, ModelCaps>()
@@ -2327,7 +2362,7 @@ export class TelegramBot {
   // vision-capable ones directly (once per current model, not on every message).
   async #suggestImageModel(chatID: number): Promise<void> {
     const c = this.#chat(chatID)
-    const ws = this.#ws(c.workspace)
+    const ws = this.#activeWs(chatID)
     const current = this.#store.model(chatID) ?? "default"
     if (c.suggestedImage === current) return
     const caps = (await ws.adapter.capabilities?.().catch(() => new Map<string, ModelCaps>())) ?? new Map<string, ModelCaps>()
@@ -2363,7 +2398,7 @@ export class TelegramBot {
       await this.#tg.editMessageText({ chatID, messageID, text: "✏️ Type the new name for this conversation…", replyMarkup: null })
       return
     }
-    const ws = this.#ws(c.workspace)
+    const ws = this.#activeWs(chatID)
     const sorted = [...(await ws.adapter.listSessions())].sort((a, b) => b.updatedAt - a.updatedAt)
     const ids = sorted.map((s) => s.id)
     if (!ids.length) {
@@ -2401,7 +2436,7 @@ export class TelegramBot {
     if (!msg) return tg.answerCallbackQuery({ id: cq.id })
     const chatID = msg.chat.id
     const c = this.#chat(chatID)
-    const ws = this.#ws(c.workspace)
+    const ws = this.#activeWs(chatID)
     const [verb, rest] = data.split(":")
     const i = Number(rest)
 
@@ -2413,6 +2448,7 @@ export class TelegramBot {
         else if (rest === "agent") await this.#settingsAgent(chatID, msg.message_id)
         else if (rest === "rename") await this.#settingsRename(chatID, msg.message_id)
         else if (rest === "ws") await this.#settingsWorkspace(chatID, msg.message_id)
+        else if (rest === "harness") await this.#settingsHarness(chatID, msg.message_id)
         else if (rest === "done") {
           c.settingsMsg = null
           await this.#tg.editMessageText({ chatID, messageID: msg.message_id, text: "⚙️ closed", replyMarkup: null })
@@ -2659,7 +2695,7 @@ export class TelegramBot {
       case "wsadd": {
         // start next to the workspace you're in — that's almost always the
         // same folder your other projects live in
-        const start = dirname(this.#ws(c.workspace).dir)
+        const start = dirname(this.#activeWs(chatID).dir)
         await this.#browsePicker(chatID, start, msg.message_id)
         await tg.answerCallbackQuery({ id: cq.id })
         break
@@ -2725,6 +2761,36 @@ export class TelegramBot {
         }
         await this.#settingsWorkspace(chatID, msg.message_id)
         await tg.answerCallbackQuery({ id: cq.id, text: `removed ${w.name}` })
+        break
+      }
+      case "hns": {
+        if (!this.#harnessList.some((h) => h.id === rest)) return tg.answerCallbackQuery({ id: cq.id, text: "unknown harness" })
+        const dir = this.#activeWs(chatID).dir
+        if (this.#activeWs(chatID).adapter.id === rest) return tg.answerCallbackQuery({ id: cq.id, text: "already on it" })
+        // starting a harness takes a moment (opencode spawns a server); say so
+        await tg.answerCallbackQuery({ id: cq.id, text: "starting…" })
+        if (!this.#workspaces.some((w) => w.dir === dir && w.adapter.id === rest)) {
+          await this.#menu(chatID, ["🔌 Harness", "", `starting ${rest}…`], [], { messageID: msg.message_id })
+          try {
+            this.#workspaces.push(await this.#spawn(dir, rest))
+          } catch (err) {
+            const m = (err as Error)?.message ?? String(err)
+            console.error(`[harness] cannot start ${rest} for ${dir}: ${m}`)
+            await this.#menu(chatID, ["🔌 Harness", "", `⚠️ couldn't start ${rest}:`, m.slice(0, 300)], [[btn("‹ Back", "set:harness")]], { messageID: msg.message_id })
+            break
+          }
+        }
+        c.harness = rest
+        // sessions are per-harness; carrying the old id over would point at a
+        // transcript the new harness has never heard of
+        c.sessionID = null
+        c.freshOnNext = false
+        c.sessionFresh = false
+        c.picker = null
+        c.del = null
+        this.#rememberChat(chatID)
+        void this.#updateStatus(chatID).catch(logFail("status"))
+        await this.#settingsHarness(chatID, msg.message_id)
         break
       }
       case "abt": {

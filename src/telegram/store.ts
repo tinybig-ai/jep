@@ -46,7 +46,7 @@ export interface StoreData {
   // without this a restart silently moved you: workspace fell back to the
   // first one and the conversation to whatever was newest there. Keyed by
   // directory, not workspace name, since names can shift on collision.
-  chatContext?: Record<string, { dir: string; sessionID: string | null }>
+  chatContext?: Record<string, { dir: string; sessionID: string | null; harness?: string }>
   // chat id -> last draft id handed out. Telegram draft ids are consumed once
   // the real message lands, and a reused one is accepted but never rendered.
   // The counter lived only in memory, so every first turn after a restart
@@ -69,7 +69,7 @@ export class ChatStore {
   #injectContext: Record<string, boolean>
   #workspaces: string[]
   #sessionIndex: Record<string, IndexedSession[]>
-  #chatContext: Record<string, { dir: string; sessionID: string | null }>
+  #chatContext: Record<string, { dir: string; sessionID: string | null; harness?: string }>
   #draftSeq: Record<string, number>
   #file: string | null
 
@@ -156,14 +156,14 @@ export class ChatStore {
   }
 
   /** where a chat was last pointed, so a restart doesn't silently move it */
-  chatContext(chatID: number): { dir: string; sessionID: string | null } | null {
+  chatContext(chatID: number): { dir: string; sessionID: string | null; harness?: string } | null {
     return this.#chatContext[String(chatID)] ?? null
   }
 
-  setChatContext(chatID: number, dir: string, sessionID: string | null): void {
+  setChatContext(chatID: number, dir: string, sessionID: string | null, harness?: string): void {
     const prev = this.#chatContext[String(chatID)]
-    if (prev && prev.dir === dir && prev.sessionID === sessionID) return
-    this.#chatContext[String(chatID)] = { dir, sessionID }
+    if (prev && prev.dir === dir && prev.sessionID === sessionID && prev.harness === harness) return
+    this.#chatContext[String(chatID)] = { dir, sessionID, ...(harness ? { harness } : {}) }
     this.#save()
   }
 
