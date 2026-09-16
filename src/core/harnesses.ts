@@ -11,7 +11,14 @@ import type { HarnessAdapter, HarnessSupervisor } from "./ports.ts"
  */
 export interface HarnessInfo extends HarnessSupervisor {
   readonly id: string
-  /** shown in the picker — short enough for a phone button */
+  /**
+   * Shown in the picker, and its leading emoji marks each /ls row.
+   *
+   * Kept to U+1F535–1F53A (Unicode 6.0, 2010): the coloured circles added in
+   * Unicode 12 render as missing-glyph boxes on fonts that never shipped them.
+   * Distinct by *shape* as well as colour, since at list-row size a colour
+   * difference alone is easy to miss.
+   */
   readonly label: string
   /** false when the harness isn't installed/usable on this machine */
   available(): Promise<boolean>
@@ -26,7 +33,7 @@ export function buildHarnesses(opts: HarnessOpts = {}): HarnessInfo[] {
   return [
     {
       id: "opencode",
-      label: "🟣 opencode",
+      label: "🔵 opencode",
       async start(workspace: string): Promise<HarnessAdapter> {
         return startOpenCodeServer(workspace, opts.dataHome ? { dataHome: opts.dataHome } : {})
       },
@@ -38,7 +45,7 @@ export function buildHarnesses(opts: HarnessOpts = {}): HarnessInfo[] {
     },
     {
       id: "codex",
-      label: "🟢 codex",
+      label: "🔺 codex",
       async start(workspace: string): Promise<HarnessAdapter> {
         return startCodexAdapter(workspace)
       },
