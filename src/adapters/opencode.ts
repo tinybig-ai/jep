@@ -4,7 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import type { HarnessAdapter, ApprovalRequest, ModelRef, ModelCaps } from "../core/ports.ts"
-import type { DomainEvent, Message, Part, ProjectSummary, SessionSummary } from "../core/types.ts"
+import type { DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionSummary } from "../core/types.ts"
 
 const OPENCODE_BIN = process.env.OPENCODE_BIN ?? "opencode"
 const MODEL_REF = process.env.JEP_MODEL ?? "localfree-models-proxy/auto"
@@ -114,12 +114,23 @@ function mapPart(part: any, workspace: string): Part {
 
 function mapMessage(info: any, parts: any[] | undefined, workspace: string): Message {
   const time = info.time && typeof info.time === "object" ? info.time.created : info.time
+  const t = info.tokens
   return {
     id: info.id,
     sessionID: toInternalId(info.sessionID ?? ""),
     role: info.role === "user" ? "user" : "assistant",
     time: typeof time === "number" ? time : Date.now(),
     parts: (parts ?? []).map((p) => mapPart(p, workspace)),
+    ...(t
+      ? {
+          tokens: {
+            input: t.input ?? 0,
+            output: t.output ?? 0,
+            reasoning: t.reasoning ?? 0,
+            cache: { read: t.cache?.read ?? 0, write: t.cache?.write ?? 0 },
+          },
+        }
+      : {}),
   }
 }
 
@@ -301,6 +312,16 @@ export class OpenCodeAdapter implements HarnessAdapter {
     return projects.filter((p) => p.worktree && p.worktree !== "/").map((p) => ({ id: p.id, worktree: p.worktree }))
   }
 
+  async agents(): Promise<{ name: string; mode: "primary" | "subagent" | "all" }[]> {
+    const list = await this.#json<any[]>("/agent")
+    return list.map((a) => ({ name: a.name, mode: a.mode }))
+  }
+
+  async diff(sessionID: string): Promise<FileDiff[]> {
+    const rows = await this.#json<any[]>(`/session/${encodeURIComponent(toNativeId(sessionID))}/diff`)
+    return rows.map((r) => ({ file: r.file ?? "", additions: r.additions ?? 0, deletions: r.deletions ?? 0, status: r.status }))
+  }
+
   #toSummary(s: any): SessionSummary {
     const created = s.time && typeof s.time === "object" ? s.time.created : s.time
     return {
@@ -314,7 +335,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
   async prompt(
     sessionID: string,
     text: string,
-    opts?: { timeoutMs?: number; signal?: AbortSignal; model?: ModelRef },
+    opts?: { timeoutMs?: number; signal?: AbortSignal; model?: ModelRef; filePaths?: string[]; agent?: string },
   ): Promise<Message> {
     const timeout = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS
     const controller = new AbortController()
@@ -335,7 +356,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
       const res = await fetch(this.#url(`/session/${encodeURIComponent(toNativeId(sessionID))}/message`), {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ parts, model }),
+        body: JSON.stringify({ parts, model, ...(opts?.agent ? { agent: opts.agent } : {}) }),
         signal: controller.signal,
       })
       if (!res.ok) {

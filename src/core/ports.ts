@@ -1,6 +1,7 @@
 import type {
   ApprovalRequest,
   DomainEvent,
+  FileDiff,
   Message,
   ProjectSummary,
   SessionSummary,
@@ -40,6 +41,9 @@ export interface HarnessAdapter {
       model?: ModelRef
       /** absolute paths to files attached to the prompt (e.g. images) */
       filePaths?: string[]
+      /** primary agent to run this turn under (e.g. "build", "plan"), when
+       * the harness supports switching — omitted means the harness default */
+      agent?: string
     },
   ): Promise<Message>
   messages(sessionID: string): Promise<Message[]>
@@ -54,6 +58,10 @@ export interface HarnessAdapter {
    * adapter itself is rooted in — lets a frontend discover (and lazily start
    * serving) sessions that live outside the currently active workspace */
   listProjects?(): Promise<ProjectSummary[]>
+  /** user-selectable primary agents (e.g. build/plan), if the harness exposes them */
+  agents?(): Promise<{ name: string; mode: "primary" | "subagent" | "all" }[]>
+  /** file changes accumulated in this session so far, if the harness tracks them */
+  diff?(sessionID: string): Promise<FileDiff[]>
   /** Stop the child server. Sessions stay on disk for the next boot. */
   close(): Promise<void>
 }

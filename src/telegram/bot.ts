@@ -9,6 +9,7 @@ import type { TelegramApi, TgMessage, TgUpdate, InlineButton, ReplyMarkup } from
 import { runComplianceSuite } from "../core/compliance.ts"
 import type { Pairing } from "./pair.ts"
 import type { ChatStore, InternalsSettings, DetailMode, InternalsLayout } from "./store.ts"
+import type { ReminderRecord, ReminderStore } from "./reminders.ts"
 
 interface Ws {
   name: string
@@ -63,16 +64,19 @@ const MAX_RICH_FILES = 4
 const kin = (rows: InlineButton[][]): ReplyMarkup => ({ inline_keyboard: rows })
 const btn = (text: string, data: string): InlineButton => ({ text, callback_data: data })
 
-// "/remind 2h build" → { ms: 7_200_000, what: "build" }; null when malformed or
-// outside the 5s–7d window we bother supporting.
-function parseRemind(arg: string): { ms: number; what: string } | null {
-  const m = arg.match(/^\s*(\d+)\s*([smhd])\s+([\s\S]+)$/)
+// "/remind 2h build" → { ms: 7_200_000, what: "build", every: false }
+// "/remind every 1h build" → { ms: 3_600_000, what: "build", every: true }
+// null when malformed or outside the 5s–7d window we bother supporting.
+function parseRemind(arg: string): { ms: number; what: string; every: boolean } | null {
+  const every = /^\s*every\s+/i.test(arg)
+  const rest = every ? arg.replace(/^\s*every\s+/i, "") : arg
+  const m = rest.match(/^\s*(\d+)\s*([smhd])\s+([\s\S]+)$/)
   if (!m) return null
   const per = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2]!] ?? 0
   const ms = Number(m[1]) * per
   const what = m[3]!.trim()
   if (!what || !Number.isFinite(ms) || ms < 5_000 || ms > 7 * 86_400_000) return null
-  return { ms, what }
+  return { ms, what, every }
 }
 
 const fmtDuration = (ms: number): string => {
@@ -476,8 +480,9 @@ export class TelegramBot {
   #extraModels: string[]
   #uploadsDir: string
   #chats = new Map<number, ChatState>()
-  // in-process /remind timers (best-effort: a restart drops pending reminders)
-  #reminders = new Set<ReturnType<typeof setTimeout>>()
+  #reminderStore: ReminderStore
+  // id -> live timer for every reminder currently scheduled from #reminderStore
+  #reminderTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
   // ordered by expected use — most-reached-for first. /ws, /abort, /cancel
   // stay fully functional but out of this menu: /ws moved under
@@ -491,7 +496,7 @@ export class TelegramBot {
     { command: "ls", description: "your conversations" },
     { command: "settings", description: "status · model · rename · workspace" },
     { command: "log", description: "this conversation's history" },
-    { command: "remind", description: "remind me later (e.g. /remind 2h build)" },
+    { command: "remind", description: "remind me later, once or recurring (/remind 2h build · /remind every 1h build)" },
   ]
 
   // lazily starts serving a directory this bot didn't boot with — how
@@ -508,6 +513,7 @@ export class TelegramBot {
     extraModels: string[],
     uploadsDir: string,
     spawn: (dir: string) => Promise<Ws>,
+    reminders: ReminderStore,
   ) {
     this.#tg = this.#recording(tg)
     this.#workspaces = workspaces
@@ -517,6 +523,26 @@ export class TelegramBot {
     this.#extraModels = extraModels
     this.#uploadsDir = uploadsDir
     this.#spawn = spawn
+    this.#reminderStore = reminders
+    for (const r of reminders.list()) this.#scheduleReminder(r)
+  }
+
+  // schedules (or re-schedules, e.g. on boot) one persisted reminder. Firing
+  // late (bot was down) still fires once immediately — delay just clamps to 0.
+  #scheduleReminder(r: ReminderRecord): void {
+    const timer = setTimeout(() => {
+      void this.#tg.sendMessage({ chatID: r.chatID, text: `⏰ ${r.what}`, disableNotification: true }).catch(() => {})
+      if (r.everyMs) {
+        const nextAt = Date.now() + r.everyMs
+        this.#reminderStore.reschedule(r.id, nextAt)
+        this.#scheduleReminder({ ...r, nextAt })
+      } else {
+        this.#reminderTimers.delete(r.id)
+        this.#reminderStore.remove(r.id)
+      }
+    }, Math.max(0, r.nextAt - Date.now()))
+    timer.unref?.() // never keep the process alive just for a reminder
+    this.#reminderTimers.set(r.id, timer)
   }
 
   // renders every outgoing text through markdown → Telegram HTML, and logs
@@ -529,6 +555,8 @@ export class TelegramBot {
       sendChatAction: (p) => tg.sendChatAction(p),
       answerCallbackQuery: (p) => tg.answerCallbackQuery(p),
       deleteMessage: (p) => tg.deleteMessage(p),
+      pinChatMessage: (p) => tg.pinChatMessage(p),
+      unpinChatMessage: (p) => tg.unpinChatMessage(p),
       editRichMessage: (p) => tg.editRichMessage(p),
       deleteEphemeralMessage: (p) => tg.deleteEphemeralMessage(p),
       sendRichMessage: async (p) => {
@@ -806,6 +834,7 @@ export class TelegramBot {
     }
     c.sessionID = exact.id
     await this.#tg.sendMessage({ chatID, text: `▶ "${this.#displayTitle(exact.id, exact.title)}"` })
+    void this.#updateStatus(chatID).catch(() => {})
   }
 
   async #command(chatID: number, cmd: string, arg: string): Promise<void> {
@@ -887,6 +916,7 @@ export class TelegramBot {
           c.del = null
           c.page = 0
           await tg.sendMessage({ chatID, text: `workspace: ${arg}` })
+          void this.#updateStatus(chatID).catch(() => {})
           break
         }
         await this.#settingsWorkspace(chatID, null)
@@ -919,16 +949,20 @@ export class TelegramBot {
       case "remind": {
         const spec = parseRemind(arg)
         if (!spec) {
-          await tg.sendMessage({ chatID, text: "⏰ usage: /remind <5s–7d> <what>\ne.g. /remind 2h check the build" })
+          await tg.sendMessage({
+            chatID,
+            text: "⏰ usage: /remind <5s–7d> <what>\ne.g. /remind 2h check the build\nrecurring: /remind every 1h check the build",
+          })
           break
         }
-        const timer = setTimeout(() => {
-          this.#reminders.delete(timer)
-          void tg.sendMessage({ chatID, text: `⏰ ${spec.what}`, disableNotification: true }).catch(() => {})
-        }, spec.ms)
-        timer.unref?.() // never keep the process alive just for a reminder
-        this.#reminders.add(timer)
-        await tg.sendMessage({ chatID, text: `⏰ ok — reminder in ${fmtDuration(spec.ms)}.` })
+        const r = this.#reminderStore.add(chatID, spec.what, Date.now() + spec.ms, spec.every ? spec.ms : undefined)
+        this.#scheduleReminder(r)
+        await tg.sendMessage({
+          chatID,
+          text: spec.every
+            ? `⏰ ok — every ${fmtDuration(spec.ms)}, starting in ${fmtDuration(spec.ms)}.`
+            : `⏰ ok — reminder in ${fmtDuration(spec.ms)}.`,
+        })
         break
       }
       default:
@@ -955,6 +989,7 @@ export class TelegramBot {
     c.page = 0
     if (replyId === null) await this.#tg.sendMessage({ chatID, text: "💬 new conversation" })
     else await this.#tg.editMessageText({ chatID, messageID: replyId, text: "💬 new conversation", replyMarkup: null })
+    void this.#updateStatus(chatID).catch(() => {})
   }
 
   // list sessions as tappable title buttons; callback snapshots into c.picker
@@ -1072,6 +1107,7 @@ export class TelegramBot {
       const sep = mdl.indexOf("/")
       model = { providerID: mdl.slice(0, sep), modelID: mdl.slice(sep + 1) }
     }
+    const agent = this.#store.agent(chatID)
 
     const sub = new AbortController()
     let lastEdit = 0
@@ -1188,7 +1224,7 @@ export class TelegramBot {
             : { type: "document", document: { type: "document", media: `attach://${name}` } },
         )
       })
-      if (blocks.length) {
+      if (draftMode === "rich" && blocks.length) {
         try {
           await this.#tg.sendRichMessage({
             chatID,
@@ -1233,7 +1269,7 @@ export class TelegramBot {
               : { type: "document", document: { type: "document", media: `attach://${name}` } },
           )
         })
-      if (blocks.length) {
+      if (draftMode === "rich" && blocks.length) {
         try {
           await this.#tg.sendRichMessage({
             chatID,
@@ -1308,6 +1344,7 @@ export class TelegramBot {
         signal: ac.signal,
         ...(model ? { model } : {}),
         ...(opts?.filePaths?.length ? { filePaths: opts.filePaths } : {}),
+        ...(agent ? { agent } : {}),
       })
       // prompt() only returns the LAST step of a turn; pull every assistant part
       // since the user's message so earlier steps' reasoning + tool calls show.
@@ -1325,6 +1362,7 @@ export class TelegramBot {
       const shown = await presentParts(dropFlushed(turn), internals)
       if (!shown && textOf(turn).trim()) await presentBody(textOf(turn), media)
       else if (!shown && placeholder) await this.#tg.deleteMessage({ chatID, messageID: placeholder.message_id })
+      void this.#updateStatus(chatID).catch(() => {})
     } catch (err) {
       if (ac.signal.aborted) {
         // render whatever we streamed so far (partial details included)
@@ -1345,6 +1383,60 @@ export class TelegramBot {
       sub.abort()
       await streamTask.catch(() => {})
       c.inflight = null
+    }
+  }
+
+  // one pinned, edited-in-place message per chat: workspace, model, agent,
+  // context usage, and changed files — a live status line so you don't need
+  // /settings just to see what you're pointed at. Best-effort: a failure here
+  // never breaks the turn that triggered it (see the void .catch() call site).
+  async #updateStatus(chatID: number): Promise<void> {
+    const c = this.#chat(chatID)
+    const ws = this.#ws(c.workspace)
+    const model = this.#store.model(chatID) ?? "default"
+    const agent = this.#store.agent(chatID) ?? "build"
+    let tokensLine = "context: –"
+    let filesLine = "files: –"
+    if (c.sessionID) {
+      try {
+        const msgs = await ws.adapter.messages(c.sessionID)
+        const last = [...msgs].reverse().find((m) => m.tokens)
+        if (last?.tokens) {
+          const t = last.tokens
+          const total = t.input + t.output + t.reasoning + t.cache.read + t.cache.write
+          tokensLine = `context: ${total.toLocaleString()} tokens`
+        }
+      } catch {
+        /* best-effort */
+      }
+      try {
+        const diff = await ws.adapter.diff?.(c.sessionID)
+        if (diff) {
+          const add = diff.reduce((s, f) => s + f.additions, 0)
+          const del = diff.reduce((s, f) => s + f.deletions, 0)
+          filesLine = diff.length ? `files: ${diff.length} changed (+${add}/-${del})` : "files: none changed"
+        }
+      } catch {
+        /* best-effort */
+      }
+    }
+    const text = [`📍 ${ws.name}`, `🤖 ${model} · 🧭 ${agent}`, tokensLine, filesLine].join("\n")
+
+    const existing = this.#store.statusMsg(chatID)
+    if (existing) {
+      try {
+        await this.#tg.editMessageText({ chatID, messageID: existing, text })
+        return
+      } catch {
+        /* pinned message gone/invalid → fall through and send+pin a new one */
+      }
+    }
+    try {
+      const sent = await this.#tg.sendMessage({ chatID, text, disableNotification: true })
+      this.#store.setStatusMsg(chatID, sent.message_id)
+      await this.#tg.pinChatMessage({ chatID, messageID: sent.message_id, disableNotification: true })
+    } catch {
+      /* pinning isn't critical — the turn already succeeded regardless */
     }
   }
 
@@ -1499,6 +1591,7 @@ export class TelegramBot {
     ]
     const rows: InlineButton[][] = [
       [btn(`🤖 Model · ${model}`, "set:model")],
+      [btn(`🧭 Agent · ${this.#store.agent(chatID) ?? "build"}`, "set:agent")],
       [btn(`🔎 Internals · ${internalsPreset(this.#store.internals(chatID))}`, "set:internals")],
       [btn("✏️ Rename conversation", "set:rename")],
       ...(this.#workspaces.length > 1 ? [[btn(`🗂 Workspace · ${c.workspace}`, "set:ws")]] : []),
@@ -1521,6 +1614,23 @@ export class TelegramBot {
     rows.push([btn("‹ Back", "set:root")])
     const lines = ["🗂 Workspace", "", `current: ${c.workspace}`, "", "Tap one to switch — starts a fresh conversation there."]
     await this.#menu(chatID, lines, rows, messageID === null ? undefined : { messageID })
+  }
+
+  // 🧭 Agent: build (executes) vs plan (read-only, no edit tools) — a relay of
+  // opencode's own primary agents, not a mode jep invents.
+  async #settingsAgent(chatID: number, messageID: number): Promise<void> {
+    const current = this.#store.agent(chatID) ?? "build"
+    const opt = (name: string, label: string): InlineButton => {
+      const b = btn(label, `agt:${name}`)
+      if (current === name) b.style = "success"
+      return b
+    }
+    const rows: InlineButton[][] = [
+      [opt("build", "🔨 Build"), opt("plan", "📝 Plan")],
+      [btn("‹ Back", "set:root")],
+    ]
+    const lines = ["🧭 Agent", "", `current: ${current}`, "", "Build executes tools. Plan is read-only — no edits."]
+    await this.#menu(chatID, lines, rows, { messageID })
   }
 
   // 🔎 Internals: how much the agent shows per reply (thinking + tool calls).
@@ -1693,6 +1803,7 @@ export class TelegramBot {
         if (rest === "root") await this.#settingsRoot(chatID, msg.message_id)
         else if (rest === "model") await this.#settingsModel(chatID, msg.message_id)
         else if (rest === "internals") await this.#settingsInternals(chatID, msg.message_id)
+        else if (rest === "agent") await this.#settingsAgent(chatID, msg.message_id)
         else if (rest === "rename") await this.#settingsRename(chatID, msg.message_id)
         else if (rest === "ws") await this.#settingsWorkspace(chatID, msg.message_id)
         else if (rest === "done") {
@@ -1745,6 +1856,14 @@ export class TelegramBot {
         else this.#store.setModel(chatID, rest)
         await this.#settingsModel(chatID, msg.message_id)
         await tg.answerCallbackQuery({ id: cq.id, text: rest === "off" ? "back to default" : `model: ${rest}` })
+        void this.#updateStatus(chatID).catch(() => {})
+        break
+      }
+      case "agt": {
+        this.#store.setAgent(chatID, rest)
+        await this.#settingsAgent(chatID, msg.message_id)
+        await tg.answerCallbackQuery({ id: cq.id, text: `agent: ${rest}` })
+        void this.#updateStatus(chatID).catch(() => {})
         break
       }
       case "ren": {

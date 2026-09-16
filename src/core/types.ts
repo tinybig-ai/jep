@@ -78,6 +78,22 @@ export interface Message {
   role: Role
   time: number
   parts: Part[]
+  // harness-reported token usage for this message, when known (assistant
+  // messages only) — used to surface context usage, not for billing
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: { read: number; write: number }
+  }
+}
+
+// one file's accumulated change within a session, as reported by the harness
+export interface FileDiff {
+  file: string
+  additions: number
+  deletions: number
+  status?: "added" | "deleted" | "modified"
 }
 
 export interface ApprovalRequest {

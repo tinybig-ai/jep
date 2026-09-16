@@ -9,6 +9,7 @@ import { TelegramBot } from "./telegram/bot.ts"
 import { createTelegramApi, type TelegramApi, type TgUpdate } from "./telegram/api.ts"
 import { Pairing, newPairCode } from "./telegram/pair.ts"
 import { ChatStore } from "./telegram/store.ts"
+import { ReminderStore } from "./telegram/reminders.ts"
 
 const FIXTURE = join(import.meta.dirname, "..", "fixture")
 const DEFAULT_WORKSPACES = ["workspace-alpha", "workspace-beta"].map((n) => join(FIXTURE, n))
@@ -83,6 +84,12 @@ async function buildMockApi(): Promise<TelegramApi> {
     },
     async deleteMessage(params) {
       calls.push({ method: "deleteMessage", chatID: params.chatID, messageID: params.messageID })
+    },
+    async pinChatMessage(params) {
+      calls.push({ method: "pinChatMessage", chatID: params.chatID, messageID: params.messageID })
+    },
+    async unpinChatMessage(params) {
+      calls.push({ method: "unpinChatMessage", chatID: params.chatID, messageID: params.messageID })
     },
     async sendRichMessage(params) {
       calls.push({
@@ -188,7 +195,7 @@ async function main() {
   const bot = new TelegramBot(tg, workspaces, activeWsName, pairing, ChatStore.load(join(DATA_HOME, "store.json")), (process.env.JEP_TG_MODELS ?? "")
     .split(",")
     .map((s) => s.trim())
-    .filter(Boolean), UPLOADS_DIR, spawnWorkspace)
+    .filter(Boolean), UPLOADS_DIR, spawnWorkspace, ReminderStore.load(join(DATA_HOME, "reminders.json")))
 
   try {
     await tg.setMyCommands(TelegramBot.commands)

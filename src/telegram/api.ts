@@ -90,6 +90,8 @@ export interface TelegramApi {
     parseMode?: ParseMode
   }): Promise<void>
   deleteMessage(params: { chatID: number; messageID: number }): Promise<void>
+  pinChatMessage(params: { chatID: number; messageID: number; disableNotification?: boolean }): Promise<void>
+  unpinChatMessage(params: { chatID: number; messageID: number }): Promise<void>
   sendRichMessage(params: {
     chatID: number
     rich_message: Record<string, unknown>
@@ -245,6 +247,16 @@ export function createTelegramApi(token: string): TelegramApi {
     },
     deleteMessage(params) {
       return call<void>("deleteMessage", { chat_id: params.chatID, message_id: params.messageID })
+    },
+    pinChatMessage(params) {
+      return call<void>("pinChatMessage", {
+        chat_id: params.chatID,
+        message_id: params.messageID,
+        ...(params.disableNotification ? { disable_notification: true } : {}),
+      })
+    },
+    unpinChatMessage(params) {
+      return call<void>("unpinChatMessage", { chat_id: params.chatID, message_id: params.messageID })
     },
     sendRichMessage(params) {
       const extra: Record<string, unknown> = {}

@@ -25,33 +25,43 @@ export interface StoreData {
   models: Record<string, string>
   // chat id -> how much agent internals (thinking / tool calls) to show
   internals?: Record<string, InternalsSettings>
+  // chat id -> primary agent name (e.g. "build", "plan")
+  agents?: Record<string, string>
+  // chat id -> message id of the pinned live status message
+  statusMsgs?: Record<string, number>
 }
 
 export class ChatStore {
   #titles: Record<string, string>
   #models: Record<string, string>
   #internals: Record<string, InternalsSettings>
+  #agents: Record<string, string>
+  #statusMsgs: Record<string, number>
   #file: string | null
 
   constructor(
     titles: Record<string, string>,
     models: Record<string, string>,
     internals: Record<string, InternalsSettings>,
+    agents: Record<string, string>,
+    statusMsgs: Record<string, number>,
     file: string | null,
   ) {
     this.#titles = titles
     this.#models = models
     this.#internals = internals
+    this.#agents = agents
+    this.#statusMsgs = statusMsgs
     this.#file = file
   }
 
   static load(file: string | null): ChatStore {
-    if (!file) return new ChatStore({}, {}, {}, null)
+    if (!file) return new ChatStore({}, {}, {}, {}, {}, null)
     try {
       const d = JSON.parse(readFileSync(file, "utf8")) as StoreData
-      return new ChatStore(d.titles ?? {}, d.models ?? {}, d.internals ?? {}, file)
+      return new ChatStore(d.titles ?? {}, d.models ?? {}, d.internals ?? {}, d.agents ?? {}, d.statusMsgs ?? {}, file)
     } catch {
-      return new ChatStore({}, {}, {}, file)
+      return new ChatStore({}, {}, {}, {}, {}, file)
     }
   }
 
@@ -65,6 +75,24 @@ export class ChatStore {
 
   internals(chatID: number): InternalsSettings {
     return { ...DEFAULT_INTERNALS, ...(this.#internals[String(chatID)] ?? {}) }
+  }
+
+  agent(chatID: number): string | null {
+    return this.#agents[String(chatID)] ?? null
+  }
+
+  setAgent(chatID: number, name: string): void {
+    this.#agents[String(chatID)] = name
+    this.#save()
+  }
+
+  statusMsg(chatID: number): number | null {
+    return this.#statusMsgs[String(chatID)] ?? null
+  }
+
+  setStatusMsg(chatID: number, messageID: number): void {
+    this.#statusMsgs[String(chatID)] = messageID
+    this.#save()
   }
 
   setTitle(id: string, title: string): void {
@@ -98,7 +126,11 @@ export class ChatStore {
     if (!this.#file) return
     writeFileSync(
       this.#file,
-      JSON.stringify({ titles: this.#titles, models: this.#models, internals: this.#internals }, null, 2),
+      JSON.stringify(
+        { titles: this.#titles, models: this.#models, internals: this.#internals, agents: this.#agents, statusMsgs: this.#statusMsgs },
+        null,
+        2,
+      ),
     )
   }
 }
