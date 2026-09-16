@@ -548,6 +548,12 @@ const JEP_TELEGRAM_CONTEXT =
   "This conversation is specifically relayed via Telegram — replies render as chat messages (markdown, tables, collapsible details), not a terminal."
 const JEP_CONTEXT_FOOTER = "Ignore the block above. Treat the message below as the user's entire, only request.\n---"
 
+// A stop is not a failure. opencode reports one as MessageAbortedError on the
+// message, which is indistinguishable in shape from a real error — the tell is
+// either the name or the fact that we are the ones who aborted.
+const isAbort = (failure: { name: string; message: string }, ac: AbortController): boolean =>
+  ac.signal.aborted || /abort/i.test(failure.name) || /\baborted\b/i.test(failure.message)
+
 // The first prompt of a fresh session carries the jep context header (see
 // JEP_CONTEXT). It's for the model, not for you — in a transcript it buries
 // the message you actually sent under a screen of preamble.
@@ -1811,7 +1817,14 @@ export class TelegramBot {
       // said out loud even when there was also content, and a turn that
       // produced nothing at all still gets a reply rather than leaving the
       // draft spinning forever.
-      if (failure) {
+      if (failure && isAbort(failure, ac)) {
+        // You asked it to stop and it stopped — that's the feature working.
+        // The harness still reports the stop as a message-level error, and it
+        // arrives here rather than as a rejected prompt whenever the
+        // harness-side abort finalizes the turn before the client's own
+        // AbortController lands. Treat it as the outcome it is.
+        if (!shown && !textOf(turn).trim()) await presentBody("(stopped)")
+      } else if (failure) {
         console.error(`[turn] harness error: ${failure.name}: ${failure.message}`)
         await this.#tg.sendMessage({ chatID, text: `⚠️ ${failure.name}: ${failure.message}`.slice(0, MAX_MSG) })
       } else if (!shown && !textOf(turn).trim()) {
