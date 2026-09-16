@@ -252,11 +252,22 @@ async function main() {
     .map((s) => s.trim())
     .filter(Boolean), UPLOADS_DIR, spawnWorkspace, ReminderStore.load(join(DATA_HOME, "reminders.json")))
 
-  try {
-    await tg.setMyCommands(TelegramBot.commands)
-  } catch (err) {
-    console.error("setMyCommands failed:", (err as Error).message)
-  }
+  // One-shot at boot, and boot is exactly when the network is least likely to
+  // be up: the machine has often just woken, which is what kills the long poll
+  // an hour at a time. A blip here used to leave the slash-command menu stale
+  // until the next restart, so retry a few times before giving up.
+  void (async () => {
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      try {
+        await tg.setMyCommands(TelegramBot.commands)
+        if (attempt > 1) console.error(`setMyCommands succeeded on attempt ${attempt}`)
+        return
+      } catch (err) {
+        console.error(`setMyCommands failed (attempt ${attempt}/5):`, (err as Error).message)
+        await sleep(Math.min(1_000 * 2 ** (attempt - 1), 30_000))
+      }
+    }
+  })()
 
   let offset = 0
   let backoff = 1_000
