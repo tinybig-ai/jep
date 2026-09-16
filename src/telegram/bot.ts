@@ -2133,7 +2133,14 @@ export class TelegramBot {
       labels.push(label)
     }
     const pages = Math.max(1, Math.ceil(labels.length / MAX_LIST))
-    const page = Math.max(0, Math.min(requestPage ?? c.settingsPage ?? 0, pages - 1))
+    // Opening the picker jumps to whichever page holds the current model, so
+    // the green row is in front of you. It used to resume c.settingsPage — the
+    // last page you happened to stop on — which made every model on the pages
+    // you hadn't scrolled to look like it didn't exist. Only ‹ Prev / Next ›
+    // (which pass requestPage) move off that page.
+    const currentIdx = labels.indexOf(current ?? "default")
+    const defaultPage = currentIdx >= 0 ? Math.floor(currentIdx / MAX_LIST) : 0
+    const page = Math.max(0, Math.min(requestPage ?? defaultPage, pages - 1))
     c.settingsPage = page
     const rows: InlineButton[][] = []
     const from = page * MAX_LIST

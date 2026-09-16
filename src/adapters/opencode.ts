@@ -217,8 +217,11 @@ export class OpenCodeAdapter implements HarnessAdapter {
           refs.push({ providerID, modelID: p.models })
         }
       }
-    } catch {
-      // missing/unparseable config is fine — the default MODEL_REF is still returned
+    } catch (err) {
+      // missing config is normal; an unparseable one silently costs you every
+      // model it defines, so say which it was
+      const e = err as NodeJS.ErrnoException
+      if (e?.code !== "ENOENT") console.error(`[models] config unreadable: ${e?.message ?? err}`)
     }
 
     // The config only knows custom/local providers. The models the user can
@@ -242,8 +245,10 @@ export class OpenCodeAdapter implements HarnessAdapter {
           refs.push({ providerID, modelID })
         }
       }
-    } catch {
-      // CLI unavailable — config models are still returned
+    } catch (err) {
+      // without the CLI the picker silently loses every opencode/opencode-go
+      // model and shows only what the config declares — never quietly
+      console.error(`[models] \`opencode models\` failed, picker limited to config models: ${(err as Error)?.message ?? err}`)
     }
 
     const out: ModelRef[] = []
@@ -288,8 +293,8 @@ export class OpenCodeAdapter implements HarnessAdapter {
           })
         }
       }
-    } catch {
-      /* capabilities are best-effort; the picker simply leaves unknown models unmarked */
+    } catch (err) {
+      console.error(`[caps] /provider read failed, models left unmarked: ${(err as Error)?.message ?? err}`)
     }
     this.#capsCache = out
     this.#capsAt = Date.now()
@@ -426,7 +431,9 @@ export class OpenCodeAdapter implements HarnessAdapter {
     let res: Response
     try {
       res = await fetch(this.#url("/event"), { signal: controller.signal })
-    } catch {
+    } catch (err) {
+      // losing this subscription means no live streaming for the whole turn
+      if (!controller.signal.aborted) console.error(`[events] subscribe failed: ${(err as Error)?.message ?? err}`)
       return
     }
     if (!res.body) return
