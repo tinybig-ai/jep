@@ -1,3 +1,6 @@
 node_modules/
 *.log
 .DS_Store
+# scratch: exported session transcripts and local scratch notes
+session-*.md
+todo.md
