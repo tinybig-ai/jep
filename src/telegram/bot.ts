@@ -24,7 +24,10 @@ interface Ws {
 type Awaiting =
   | { kind: "pair" }
   | { kind: "use" }
-  | { kind: "rename"; sessionID: string }
+  // backTo is the message the conversation list was drawn on, when the rename
+  // was started from there — so finishing one returns to the list instead of
+  // dead-ending on a confirmation
+  | { kind: "rename"; sessionID: string; backTo?: number }
   | { kind: "newfolder"; dir: string }
   | { kind: "clone"; dir: string }
 
@@ -964,6 +967,12 @@ export class TelegramBot {
     if (a.kind === "clone") return this.#resolveClone(chatID, a.dir, text)
     const t = text.trim()
     this.#store.setTitle(a.sessionID, t)
+    // started from the conversation list — put the (now relabelled) list back
+    // rather than leaving a bare confirmation and no way onward
+    if (a.backTo !== undefined) {
+      await this.#listPicker(chatID, "Conversations:", false, { messageID: a.backTo })
+      return
+    }
     await this.#tg.sendMessage({ chatID, text: `✏️ renamed to "${this.#store.title(a.sessionID) ?? t}"` })
   }
 
@@ -1281,14 +1290,14 @@ export class TelegramBot {
     // a row from a workspace other than the active one gets tagged with its
     // origin, since the list can now span several projects at once.
     const label = ({ s, ws }: (typeof shown)[number]) => `${this.#displayTitle(s.id, s.title)}${ws !== c.workspace ? ` · ${ws}` : ""}`
-    // 🗑 first (left of the title, not right) reads as "here's the destructive
-    // action, then the thing it acts on" and lines up under itself row to row.
-    // The active conversation is green (same style Settings uses), not a
+    // 🗑 and ✏️ first (left of the title, not right) read as "here's the
+    // action, then the thing it acts on" and line up under themselves row to
+    // row. The active conversation is green (same style Settings uses), not a
     // marker glued onto the label.
     const rows: InlineButton[][] = shown.map((entry, i) => {
       const openBtn = btn(`${i + 1}. ${label(entry)}`, `open:${i}`)
       if (entry.s.id === currentSessionID && entry.ws === c.workspace) openBtn.style = "success"
-      return [{ ...btn("🗑", `deld:${i}`), style: "danger" as const }, openBtn]
+      return [{ ...btn("🗑", `deld:${i}`), style: "danger" as const }, btn("✏️", `ren:${i}`), openBtn]
     })
     // dismisses the picker entirely (deletes the message, not just its
     // keyboard) — the way back out without typing /cancel.
@@ -1865,13 +1874,14 @@ export class TelegramBot {
     const model = this.#store.model(chatID) ?? "default"
     const total = (await ws.adapter.listSessions()).length
 
+    // Only fields with no button of their own belong here. Anything a button
+    // already carries (model, agent, internals, context, workspace) would
+    // otherwise be stated twice, one line apart.
     const lines = [
       "⚙️ Settings",
       "",
       `engine: ${c.harness ?? ws.adapter.id}`,
-      `model: ${model}`,
       `conversation: "${label}"`,
-      `workspace: ${c.workspace}`,
       `total conversations: ${total}`,
     ]
     const rows: InlineButton[][] = [
@@ -1880,7 +1890,10 @@ export class TelegramBot {
       [btn(`🔎 Internals · ${internalsPreset(this.#store.internals(chatID))}`, "set:internals")],
       [btn(`🧩 Context · ${this.#store.injectContext(chatID) ? "on" : "off"}`, "ctx:toggle")],
       [btn("✏️ Rename conversation", "set:rename")],
-      ...(this.#workspaces.length > 1 ? [[btn(`🗂 Workspace · ${c.workspace}`, "set:ws")]] : []),
+      // always shown, even with a single workspace: this is now the only way
+      // to *add* a project, so hiding it until you have two made it
+      // unreachable exactly when you needed it
+      [btn(`🗂 Workspace · ${c.workspace}`, "set:ws")],
       [btn("‹ Done", "set:done")],
     ]
 
@@ -1903,7 +1916,11 @@ export class TelegramBot {
     })
     rows.push([btn("➕ Add project", "wsadd")])
     rows.push([btn("‹ Back", "set:root")])
-    const lines = ["🗂 Workspace", "", `current: ${c.workspace}`, "", "Tap one to switch — starts a fresh conversation there."]
+    const hint =
+      this.#workspaces.length > 1
+        ? "Tap one to switch — starts a fresh conversation there."
+        : "➕ Add project to browse for another, or clone one."
+    const lines = ["🗂 Workspace", "", `current: ${c.workspace}`, "", hint]
     await this.#menu(chatID, lines, rows, messageID === null ? undefined : { messageID })
   }
 
@@ -2263,11 +2280,19 @@ export class TelegramBot {
       }
       case "ren": {
         const p = c.picker
-        if (!p) return tg.answerCallbackQuery({ id: cq.id, text: "menu expired - run /settings" })
+        if (!p) return tg.answerCallbackQuery({ id: cq.id, text: "menu expired — reopen the list" })
         const row = p.sessions[i]
         if (!row) return tg.answerCallbackQuery({ id: cq.id, text: "no such conversation" })
-        c.awaiting = { kind: "rename", sessionID: row.id }
-        await this.#tg.editMessageText({ chatID, messageID: msg.message_id, text: "✏️ Type the new name for this conversation…", replyMarkup: null })
+        // renaming is client-side only (ChatStore titles), so a row from a
+        // project with no server running needs nothing started for it
+        const current = this.#displayTitle(row.id, await this.#rowTitle(row))
+        c.awaiting = { kind: "rename", sessionID: row.id, backTo: msg.message_id }
+        await this.#tg.editMessageText({
+          chatID,
+          messageID: msg.message_id,
+          text: `✏️ Renaming "${current}"\n\nType the new name (/cancel to stop).`,
+          replyMarkup: null,
+        })
         await tg.answerCallbackQuery({ id: cq.id, text: "type the name" })
         break
       }
