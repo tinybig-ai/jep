@@ -1483,9 +1483,18 @@ export class TelegramBot {
     const shown = sorted.slice(page * MAX_LIST, page * MAX_LIST + MAX_LIST)
     // a row from a workspace other than the active one gets tagged with its
     // origin, since the list can now span several projects at once.
+    // The harness is part of a row's identity, not decoration: the same
+    // directory can hold an opencode and a codex conversation with similar
+    // titles, and opening the wrong one starts a thread the other can't read.
+    // Icon only — the names are in Settings, and a row has no width to spare.
+    const icon = (sessionID: string): string => {
+      const id = this.#harnessOf(sessionID)
+      const known = id ? this.#harnessList.find((h) => h.id === id) : undefined
+      return known ? `${known.label.split(" ")[0]} ` : ""
+    }
     const label = ({ s, ws }: (typeof shown)[number]) => {
       const age = timeAgo(s.updatedAt)
-      return `${this.#displayTitle(s.id, s.title)}${ws !== c.workspace ? ` · ${ws}` : ""}${age ? ` (${age})` : ""}`
+      return `${icon(s.id)}${this.#displayTitle(s.id, s.title)}${ws !== c.workspace ? ` · ${ws}` : ""}${age ? ` (${age})` : ""}`
     }
     // 🗑 first (left of the title, not right) reads as "here's the destructive
     // action, then the thing it acts on" and lines up under itself row to row.
