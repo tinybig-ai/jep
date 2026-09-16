@@ -888,21 +888,29 @@ export class TelegramBot {
   async #stopTurn(chatID: number): Promise<boolean> {
     const c = this.#chat(chatID)
     const inflight = c.inflight
-    const sessionID = await this.#resolveSessionID(chatID)
+    // Local abort FIRST. It is synchronous, so the turn's prompt() rejects
+    // immediately and its "(stopped)" message starts rendering right away.
+    // This used to run last, behind resolveSessionID and the harness abort —
+    // two round trips — so the draft vanished the instant you tapped stop and
+    // the reply only landed seconds later, leaving a gap with nothing in it.
     let stopped = false
+    if (inflight) {
+      inflight.abort()
+      c.inflight = null
+      stopped = true
+    }
+    // The harness-side abort still matters and still has to happen: a restart
+    // loses c.inflight entirely, and the server keeps generating regardless of
+    // what the client thinks. It just no longer gates the user-visible part.
+    const sessionID = await this.#resolveSessionID(chatID)
     if (sessionID) {
       try {
-        stopped = await this.#ws(c.workspace).adapter.abort(sessionID)
+        stopped = (await this.#ws(c.workspace).adapter.abort(sessionID)) || stopped
       } catch (err) {
         // usually just "the turn already ended" — but if Stop is reported as
         // not having stopped anything, this line is the reason why
         console.error(`[stop] harness abort failed (session ${sessionID}): ${(err as Error)?.message ?? err}`)
       }
-    }
-    if (inflight) {
-      inflight.abort()
-      c.inflight = null
-      stopped = true
     }
     return stopped
   }
