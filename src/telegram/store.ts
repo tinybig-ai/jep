@@ -42,6 +42,11 @@ export interface StoreData {
   // otherwise means having a server running for it. Remembering what we saw
   // last time lets /ls show every project without starting anything.
   sessionIndex?: Record<string, IndexedSession[]>
+  // chat id -> where that chat was last pointed. ChatState is in-memory, so
+  // without this a restart silently moved you: workspace fell back to the
+  // first one and the conversation to whatever was newest there. Keyed by
+  // directory, not workspace name, since names can shift on collision.
+  chatContext?: Record<string, { dir: string; sessionID: string | null }>
 }
 
 export interface IndexedSession {
@@ -59,6 +64,7 @@ export class ChatStore {
   #injectContext: Record<string, boolean>
   #workspaces: string[]
   #sessionIndex: Record<string, IndexedSession[]>
+  #chatContext: Record<string, { dir: string; sessionID: string | null }>
   #file: string | null
 
   // takes the persisted shape as-is: this grew to seven positional args and
@@ -72,6 +78,7 @@ export class ChatStore {
     this.#injectContext = d.injectContext ?? {}
     this.#workspaces = d.workspaces ?? []
     this.#sessionIndex = d.sessionIndex ?? {}
+    this.#chatContext = d.chatContext ?? {}
     this.#file = file
   }
 
@@ -141,6 +148,18 @@ export class ChatStore {
     this.#save()
   }
 
+  /** where a chat was last pointed, so a restart doesn't silently move it */
+  chatContext(chatID: number): { dir: string; sessionID: string | null } | null {
+    return this.#chatContext[String(chatID)] ?? null
+  }
+
+  setChatContext(chatID: number, dir: string, sessionID: string | null): void {
+    const prev = this.#chatContext[String(chatID)]
+    if (prev && prev.dir === dir && prev.sessionID === sessionID) return
+    this.#chatContext[String(chatID)] = { dir, sessionID }
+    this.#save()
+  }
+
   /** last known sessions for a workspace dir, newest first */
   indexedSessions(dir: string): IndexedSession[] {
     return this.#sessionIndex[dir] ?? []
@@ -196,6 +215,7 @@ export class ChatStore {
           injectContext: this.#injectContext,
           workspaces: this.#workspaces,
           sessionIndex: this.#sessionIndex,
+          chatContext: this.#chatContext,
         },
         null,
         2,

@@ -426,11 +426,17 @@ function buildRich(parts: Part[], s: InternalsSettings): RichBlock[] {
 // to reset). Finished reasoning/tool parts are flushed as their own
 // permanent messages (see #freeText) and excluded here via `flushedIdx`; a
 // tool still running shows as a plain, non-expandable status line.
+// `live` marks a draft still being generated: a trailing RichBlockThinking is
+// appended so the client's animated glimmer says "still working" even once
+// real text is on screen. It is a progress signal, not a rendering of the
+// model's reasoning — it appears whatever `thinking` is set to, and never on
+// the final message.
 function buildLiveBlocks(
   parts: Part[],
   s: InternalsSettings,
   flushedToolIDs: Set<string>,
   reasoningStarted: Map<string, number>,
+  live = false,
 ): RichBlock[] {
   if (s.layout === "minimal") {
     // nothing ever gets flushed to its own message in minimal mode (there's
@@ -449,7 +455,7 @@ function buildLiveBlocks(
     const out: RichBlock[] = []
     if (bits.length) out.push({ type: "paragraph", text: bits.join("  ") })
     for (const p of parts) if (p.kind === "text" && p.text.trim()) out.push(...mdToRich(closeStreamingTable(p.text)))
-    return out
+    return withLiveMarker(out, live)
   }
   const out: RichBlock[] = []
   for (const p of parts) {
@@ -459,7 +465,15 @@ function buildLiveBlocks(
       if (p.text.trim()) out.push(...mdToRich(closeStreamingTable(p.text)))
     }
   }
-  return out
+  return withLiveMarker(out, live)
+}
+
+// Only appended when there is already something on screen: with nothing else
+// in the draft the initial thinking-only block is already doing this job, and
+// a lone marker would just duplicate it.
+function withLiveMarker(out: RichBlock[], live: boolean): RichBlock[] {
+  if (!live || out.length === 0) return out
+  return [...out, { type: "thinking", text: "…" }]
 }
 
 const quoteLines = (title: string, body: string): string => `> **${title}**\n> ${body.split("\n").join("\n> ")}`
@@ -683,6 +697,15 @@ export class TelegramBot {
     return this.#workspaces.find((w) => w.name === name) ?? this.#workspaces[0]!
   }
 
+  // Writes where this chat is pointed to disk. ChatState is in-memory, so
+  // without this every restart silently relocated you: workspace fell back to
+  // the first one and the conversation to whatever happened to be newest
+  // there — you'd come back mid-thought and be somewhere else entirely.
+  #rememberChat(chatID: number): void {
+    const c = this.#chat(chatID)
+    this.#store.setChatContext(chatID, this.#ws(c.workspace).dir, c.sessionID)
+  }
+
   // Every project directory the harness knows of, whether or not this bot has
   // a server running for it. Reading this costs nothing: /project is not
   // scoped to the calling instance, unlike /session.
@@ -737,9 +760,13 @@ export class TelegramBot {
   #chat(id: number): ChatState {
     let c = this.#chats.get(id)
     if (!c) {
+      // pick up where this chat left off before the last restart, if that
+      // workspace is still around (it may have been removed since)
+      const saved = this.#store.chatContext(id)
+      const savedWs = saved ? this.#workspaces.find((w) => w.dir === saved.dir) : undefined
       c = {
-        workspace: this.#activeWsName,
-        sessionID: null,
+        workspace: savedWs?.name ?? this.#activeWsName,
+        sessionID: savedWs ? saved!.sessionID : null,
         freshOnNext: false,
         sessionFresh: false,
         harness: null,
@@ -779,6 +806,7 @@ export class TelegramBot {
     const list = await ws.adapter.listSessions()
     const newest = [...list].sort((a, b) => b.updatedAt - a.updatedAt)[0]
     if (newest) c.sessionID = newest.id
+    if (newest) this.#rememberChat(chatID)
     return newest?.id ?? null
   }
 
@@ -796,6 +824,7 @@ export class TelegramBot {
     const s = await ws.adapter.createSession(title)
     c.sessionID = s.id
     c.sessionFresh = true
+    this.#rememberChat(chatID)
     return s.id
   }
 
@@ -1097,6 +1126,7 @@ export class TelegramBot {
       return
     }
     c.sessionID = exact.id
+    this.#rememberChat(chatID)
     await this.#tg.sendMessage({ chatID, text: `▶ "${this.#displayTitle(exact.id, exact.title)}"` })
     void this.#updateStatus(chatID).catch(logFail("status"))
   }
@@ -1196,6 +1226,7 @@ export class TelegramBot {
           c.workspace = arg
           c.sessionID = null
           c.freshOnNext = false
+          this.#rememberChat(chatID)
           c.picker = null
           c.del = null
           c.page = 0
@@ -1272,6 +1303,7 @@ export class TelegramBot {
     c.picker = null
     c.del = null
     c.page = 0
+    this.#rememberChat(chatID)
     const text = title ? `💬 new conversation: ${title}` : "💬 new conversation"
     if (replyId === null) await this.#tg.sendMessage({ chatID, text })
     else await this.#tg.editMessageText({ chatID, messageID: replyId, text, replyMarkup: null })
@@ -1388,16 +1420,16 @@ export class TelegramBot {
   async #freeText(chatID: number, text: string, opts?: { filePaths?: string[] }): Promise<void> {
     const c = this.#chat(chatID)
     const promptText = text || (opts?.filePaths?.length ? "see the attached file" : "")
-    const sessionID = await this.#ensureSession(chatID, promptText)
-    const ws = this.#ws(c.workspace)
     const internals = this.#store.internals(chatID)
-    const injectContext = c.sessionFresh && this.#store.injectContext(chatID)
-    const harnessText = injectContext ? `${JEP_CONTEXT}\n${JEP_TELEGRAM_CONTEXT}\n\n${JEP_CONTEXT_FOOTER}\n\n${promptText}` : promptText
-    c.sessionFresh = false
 
     const ac = new AbortController()
     c.inflight = ac
 
+    // The spinner goes out BEFORE any harness work. #ensureSession below can
+    // list sessions and create one — two round trips to opencode — and while
+    // that ran there was nothing on screen at all: no draft, not even the
+    // typing dots. With thinking and tools set to "off" nothing else fills
+    // that gap either, so a message just sat there looking ignored.
     // Streaming draft: prefer a RICH draft (Bot API 10.1+ — tables, code and the
     // collapsible thinking/tool details render live) with a native stop button;
     // fall back to a plain-text draft, then the legacy placeholder.
@@ -1440,6 +1472,26 @@ export class TelegramBot {
       // purely the typing animation — nothing depends on it
       this.#tg.sendChatAction({ chatID, action: "typing" }).catch(() => {})
     }, 4000)
+
+    // now that something is on screen, do the work that needs the harness
+    let sessionID: string
+    let ws: Ws
+    let harnessText: string
+    try {
+      sessionID = await this.#ensureSession(chatID, promptText)
+      ws = this.#ws(c.workspace)
+      const injectContext = c.sessionFresh && this.#store.injectContext(chatID)
+      harnessText = injectContext ? `${JEP_CONTEXT}\n${JEP_TELEGRAM_CONTEXT}\n\n${JEP_CONTEXT_FOOTER}\n\n${promptText}` : promptText
+      c.sessionFresh = false
+    } catch (err) {
+      clearInterval(typingTimer)
+      c.inflight = null
+      const msg = `⚠️ couldn't start the conversation: ${(err as Error)?.message ?? err}`
+      console.error(`[turn] ensureSession failed: ${(err as Error)?.stack ?? err}`)
+      if (placeholder) await this.#tg.editMessageText({ chatID, messageID: placeholder.message_id, text: msg, replyMarkup: null })
+      else await this.#tg.sendMessage({ chatID, text: msg })
+      return
+    }
 
     const mdl = this.#store.model(chatID)
     let model
@@ -1529,19 +1581,23 @@ export class TelegramBot {
     // re-render the live draft from the parts collected so far (throttled by the
     // caller). Rich draft → blocks; text/placeholder → plain tail.
     const renderLive = async () => {
-      const blocks = buildLiveBlocks(liveParts, internals, flushedToolIDs, reasoningStarted)
-      const json = JSON.stringify(blocks)
-      if (json === lastRich) return
-      lastRich = json
-      if (blocks.length === 0) return // nothing to show yet — keep the "…" frame
-      const tail = textOf(liveParts).slice(-(MAX_MSG - 80))
-      const hint = closeStreamingTable(tail)
+      // Building the blocks sits INSIDE the try. It used to run outside it, so
+      // a fault here escaped renderLive, killed the stream event loop, and took
+      // the rest of the turn's live output with it — invisibly. Rendering is
+      // decoration: a failure must cost the animation, never the answer.
       try {
+        const blocks = buildLiveBlocks(liveParts, internals, flushedToolIDs, reasoningStarted, true)
+        const json = JSON.stringify(blocks)
+        if (json === lastRich) return
+        lastRich = json
+        if (blocks.length === 0) return // nothing to show yet — keep the "…" frame
+        const tail = textOf(liveParts).slice(-(MAX_MSG - 80))
+        const hint = closeStreamingTable(tail)
         if (draftMode === "rich") await this.#tg.sendRichMessageDraft({ chatID, draftID, rich_message: { blocks } })
         else if (draftMode === "text") await this.#tg.sendMessageDraft({ chatID, draftID, text: hint })
         else if (placeholder) await this.#tg.editMessageText({ chatID, messageID: placeholder.message_id, text: hint || "…" })
       } catch (err) {
-        console.error(`[draft] renderLive send failed (mode=${draftMode}): ${(err as Error)?.message ?? err}`)
+        console.error(`[draft] renderLive failed (mode=${draftMode}): ${(err as Error)?.stack ?? err}`)
       }
       lastEdit = Date.now()
     }
@@ -2083,6 +2139,7 @@ export class TelegramBot {
     const w = this.#workspaces.find((x) => x.dir === dir)!
     c.workspace = w.name
     c.sessionID = null
+    this.#rememberChat(chatID)
     c.freshOnNext = false
     c.sessionFresh = false
     c.picker = null
@@ -2447,6 +2504,7 @@ export class TelegramBot {
         const movedFrom = c.workspace !== target.name ? c.workspace : null
         c.workspace = target.name
         c.sessionID = row.id
+        this.#rememberChat(chatID)
         c.del = null
         c.awaiting = null
         const s = await target.adapter.getSession(row.id)
@@ -2492,6 +2550,7 @@ export class TelegramBot {
             const latest = [...remaining].sort((a, b) => b.updatedAt - a.updatedAt)[0]
             c.sessionID = latest?.id ?? null
             c.freshOnNext = !latest
+            this.#rememberChat(chatID)
           }
         }
         c.del = null
@@ -2527,6 +2586,7 @@ export class TelegramBot {
         if (!this.#workspaces.some((w) => w.name === rest)) return tg.answerCallbackQuery({ id: cq.id, text: "no such workspace" })
         c.workspace = rest
         c.sessionID = null
+        this.#rememberChat(chatID)
         c.freshOnNext = false
         c.picker = null
         c.del = null
@@ -2597,6 +2657,7 @@ export class TelegramBot {
         if (c.workspace === w.name) {
           c.workspace = this.#workspaces[0]!.name
           c.sessionID = null
+          this.#rememberChat(chatID)
           c.freshOnNext = false
           c.picker = null
           c.del = null
