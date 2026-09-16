@@ -37,6 +37,17 @@ export interface StoreData {
   // ones picked through the browser, and they have to outlive a restart or
   // adding a project on mobile would be a per-session ritual.
   workspaces?: string[]
+  // workspace dir -> last known sessions there. opencode scopes /session to
+  // the calling instance's own project, so listing a project's conversations
+  // otherwise means having a server running for it. Remembering what we saw
+  // last time lets /ls show every project without starting anything.
+  sessionIndex?: Record<string, IndexedSession[]>
+}
+
+export interface IndexedSession {
+  id: string
+  title: string
+  updatedAt: number
 }
 
 export class ChatStore {
@@ -47,6 +58,7 @@ export class ChatStore {
   #statusMsgs: Record<string, number>
   #injectContext: Record<string, boolean>
   #workspaces: string[]
+  #sessionIndex: Record<string, IndexedSession[]>
   #file: string | null
 
   // takes the persisted shape as-is: this grew to seven positional args and
@@ -59,6 +71,7 @@ export class ChatStore {
     this.#statusMsgs = d.statusMsgs ?? {}
     this.#injectContext = d.injectContext ?? {}
     this.#workspaces = d.workspaces ?? []
+    this.#sessionIndex = d.sessionIndex ?? {}
     this.#file = file
   }
 
@@ -128,6 +141,20 @@ export class ChatStore {
     this.#save()
   }
 
+  /** last known sessions for a workspace dir, newest first */
+  indexedSessions(dir: string): IndexedSession[] {
+    return this.#sessionIndex[dir] ?? []
+  }
+
+  /** remember what a live workspace is holding, so /ls can show it cold later */
+  setIndexedSessions(dir: string, rows: IndexedSession[]): void {
+    const prev = this.#sessionIndex[dir]
+    // listing runs on every /ls; skip the write when nothing actually moved
+    if (prev && prev.length === rows.length && prev.every((p, k) => p.id === rows[k]!.id && p.title === rows[k]!.title && p.updatedAt === rows[k]!.updatedAt)) return
+    this.#sessionIndex[dir] = rows
+    this.#save()
+  }
+
   setTitle(id: string, title: string): void {
     if (title.trim()) this.#titles[id] = title.trim()
     else delete this.#titles[id]
@@ -168,6 +195,7 @@ export class ChatStore {
           statusMsgs: this.#statusMsgs,
           injectContext: this.#injectContext,
           workspaces: this.#workspaces,
+          sessionIndex: this.#sessionIndex,
         },
         null,
         2,

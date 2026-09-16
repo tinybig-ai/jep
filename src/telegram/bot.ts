@@ -47,8 +47,9 @@ interface ChatState {
   // is set when the prompt was sent as a group ephemeral message
   pending: Map<string, { sessionID: string; messageID: number; ephemeralID?: number }>
   // snapshot behind the /ls and settings pickers — each entry keeps its own
-  // origin workspace, since /ls can span several (see #discoverWorkspaces)
-  picker: { messageID: number; sessions: { id: string; ws: string }[]; cmdMessageID?: number } | null
+  // origin workspace, since /ls spans every project; `dir` is set when that
+  // project has no server running yet (see #listPicker)
+  picker: { messageID: number; sessions: { id: string; ws: string; dir?: string }[]; cmdMessageID?: number } | null
   del: { messageID: number; i: number } | null
   // an arg-taking command was sent bare; next plain text is the answer
   awaiting: Awaiting | null
@@ -563,8 +564,8 @@ export class TelegramBot {
   ]
 
   // lazily starts serving a directory this bot didn't boot with — how
-  // #discoverWorkspaces materializes a project the adapter knows about but
-  // that has no running Ws yet
+  // #wsForDir materializes a project the adapter knows about, or the browser
+  // adds a brand new one, without a restart
   #spawn: (dir: string) => Promise<Ws>
 
   constructor(
@@ -648,29 +649,45 @@ export class TelegramBot {
     return this.#workspaces.find((w) => w.name === name) ?? this.#workspaces[0]!
   }
 
-  // every project the harness knows of, regardless of whether this bot
-  // booted with a running Ws for it — lazily spawns one on the spot for any
-  // it hasn't seen yet (matched by directory), so an old conversation from a
-  // project nobody pre-configured stays reachable instead of orphaned.
-  // Best-effort: a harness without listProjects just returns what it has.
-  async #discoverWorkspaces(): Promise<Ws[]> {
+  // Every project directory the harness knows of, whether or not this bot has
+  // a server running for it. Reading this costs nothing: /project is not
+  // scoped to the calling instance, unlike /session.
+  async #knownProjectDirs(): Promise<string[]> {
     const probe = this.#workspaces[0]
-    if (!probe) return this.#workspaces
-    let projects: ProjectSummary[]
+    if (!probe) return []
     try {
-      projects = (await probe.adapter.listProjects?.()) ?? []
+      const projects: ProjectSummary[] = (await probe.adapter.listProjects?.()) ?? []
+      return projects.map((p) => p.worktree)
     } catch {
-      return this.#workspaces
+      return []
     }
-    for (const p of projects) {
-      if (this.#workspaces.some((w) => w.dir === p.worktree)) continue
-      try {
-        this.#workspaces.push(await this.#spawn(p.worktree))
-      } catch (err) {
-        console.error(`[ws] failed to start serving ${p.worktree}: ${(err as Error)?.message ?? err}`)
-      }
+  }
+
+  // Returns a running Ws for a directory, starting one only if there isn't
+  // already one. This is the "spawn to act" half: browsing and listing stay
+  // free, and a server appears at the moment you actually open something.
+  async #wsForDir(dir: string): Promise<Ws> {
+    const existing = this.#workspaces.find((w) => w.dir === dir)
+    if (existing) return existing
+    const w = await this.#spawn(dir)
+    this.#workspaces.push(w)
+    return w
+  }
+
+  // A /ls row can point at a project with nothing running for it. Acting on
+  // one starts its server; #ws(name) alone would silently fall back to the
+  // first workspace and act on the wrong project entirely.
+  async #wsForRow(row: { ws: string; dir?: string }): Promise<Ws> {
+    return row.dir ? this.#wsForDir(row.dir) : this.#ws(row.ws)
+  }
+
+  // ...but a read doesn't justify starting anything: a cold row's title comes
+  // from the same cache /ls listed it from.
+  async #rowTitle(row: { id: string; ws: string; dir?: string }): Promise<string> {
+    if (row.dir && !this.#workspaces.some((w) => w.dir === row.dir)) {
+      return this.#store.indexedSessions(row.dir).find((s) => s.id === row.id)?.title ?? ""
     }
-    return this.#workspaces
+    return (await this.#ws(row.ws).adapter.getSession(row.id))?.title ?? ""
   }
 
   #wsFor(harness: string): Ws | null {
@@ -1220,14 +1237,38 @@ export class TelegramBot {
     // resolved (not raw c.sessionID) so the active row still highlights right
     // after a bot restart, before the in-memory pointer is re-derived
     const currentSessionID = await this.#resolveSessionID(chatID)
-    // spans every workspace the harness knows about, not just the active
-    // one — #discoverWorkspaces lazily starts serving any project it hasn't
-    // seen yet, so an old conversation from an unconfigured project shows up
-    // here too instead of being unreachable.
-    const workspaces = await this.#discoverWorkspaces()
-    const entries = (
-      await Promise.all(workspaces.map(async (w) => (await w.adapter.listSessions()).map((s) => ({ s, ws: w.name }))))
-    ).flat()
+    // Spans every project the harness knows about, not just the active one,
+    // but without starting a server for each just to read a list — that used
+    // to leave one idle `opencode serve` per project behind every /ls.
+    // Workspaces already running are listed live (and their listing cached);
+    // the rest come from that cache, and only materialize a server when a row
+    // is actually opened.
+    const live = await Promise.all(
+      this.#workspaces.map(async (w) => {
+        try {
+          const list = await w.adapter.listSessions()
+          this.#store.setIndexedSessions(
+            w.dir,
+            list.map((s) => ({ id: s.id, title: s.title, updatedAt: s.updatedAt })),
+          )
+          return list.map((s) => ({ s, ws: w.name, dir: w.dir }))
+        } catch (err) {
+          console.error(`[ls] ${w.name} unreadable: ${(err as Error)?.message ?? err}`)
+          return []
+        }
+      }),
+    )
+    const liveDirs = new Set(this.#workspaces.map((w) => w.dir))
+    const cold = (await this.#knownProjectDirs())
+      .filter((dir) => !liveDirs.has(dir))
+      .flatMap((dir) =>
+        this.#store.indexedSessions(dir).map((s) => ({
+          s: { id: s.id, title: s.title, updatedAt: s.updatedAt, createdAt: s.updatedAt, workspace: dir },
+          ws: fmtWsPath(dir).slice(1),
+          dir,
+        })),
+      )
+    const entries = [...live.flat(), ...cold]
     if (!entries.length) {
       const text = "(no conversations yet — just send a message)"
       if (edit) await this.#tg.editMessageText({ chatID, messageID: edit.messageID, text, replyMarkup: null })
@@ -1275,7 +1316,9 @@ export class TelegramBot {
       messageID = edit ? edit.messageID : result.messageID
     }
     if (messageID === undefined) return
-    c.picker = { messageID, sessions: shown.map(({ s, ws }) => ({ id: s.id, ws })), ...(cmdID !== undefined ? { cmdMessageID: cmdID } : {}) }
+    // dir travels with each row so a cold project's conversation can still be
+    // opened — its workspace is started on demand at that point, not now
+    c.picker = { messageID, sessions: shown.map(({ s, ws, dir }) => ({ id: s.id, ws, dir })), ...(cmdID !== undefined ? { cmdMessageID: cmdID } : {}) }
     c.del = null
     c.page = 0
   }
@@ -2263,11 +2306,20 @@ export class TelegramBot {
         if (!row) return tg.answerCallbackQuery({ id: cq.id, text: "no such conversation" })
         // opening a conversation from another project switches the chat into
         // that project too, so the next message routes to the right place.
-        c.workspace = row.ws
+        // A row from the cached index has no server yet — this is where one
+        // gets started, since the user has now actually committed to it.
+        let target: Ws
+        try {
+          target = await this.#wsForRow(row)
+        } catch (err) {
+          console.error(`[open] cannot serve ${row.dir}: ${(err as Error)?.message ?? err}`)
+          return tg.answerCallbackQuery({ id: cq.id, text: "couldn't open that project" })
+        }
+        c.workspace = target.name
         c.sessionID = row.id
         c.del = null
         c.awaiting = null
-        const s = await this.#ws(row.ws).adapter.getSession(row.id)
+        const s = await target.adapter.getSession(row.id)
         await this.#tg.editMessageText({ chatID, messageID: p.messageID, text: `▶ "${this.#displayTitle(row.id, s?.title ?? "")}"`, replyMarkup: null })
         await tg.answerCallbackQuery({ id: cq.id, text: "opened" })
         break
@@ -2278,11 +2330,10 @@ export class TelegramBot {
         const row = p.sessions[i]
         if (!row) return tg.answerCallbackQuery({ id: cq.id, text: "no such conversation" })
         c.del = { messageID: p.messageID, i }
-        const s = await this.#ws(row.ws).adapter.getSession(row.id)
         await this.#tg.editMessageText({
           chatID,
           messageID: p.messageID,
-          text: `Delete "${this.#displayTitle(row.id, s?.title ?? "")}"?`,
+          text: `Delete "${this.#displayTitle(row.id, await this.#rowTitle(row))}"?`,
           replyMarkup: kin([[btn("🗑 Delete", "dely")], [btn("Cancel", "deln")]]),
         })
         await tg.answerCallbackQuery({ id: cq.id })
@@ -2294,12 +2345,13 @@ export class TelegramBot {
         if (!d || !p) return tg.answerCallbackQuery({ id: cq.id, text: "nothing to delete" })
         const row = p.sessions[d.i]
         if (row) {
-          await this.#ws(row.ws).adapter.deleteSession(row.id)
-          if (c.sessionID === row.id && c.workspace === row.ws) {
+          const target = await this.#wsForRow(row)
+          await target.adapter.deleteSession(row.id)
+          if (c.sessionID === row.id && c.workspace === target.name) {
             // fall back to whatever's now the most recently active
             // conversation, so the refreshed list still has one highlighted
             // instead of nothing selected
-            const remaining = await this.#ws(row.ws).adapter.listSessions()
+            const remaining = await target.adapter.listSessions()
             const latest = [...remaining].sort((a, b) => b.updatedAt - a.updatedAt)[0]
             c.sessionID = latest?.id ?? null
             c.freshOnNext = !latest
