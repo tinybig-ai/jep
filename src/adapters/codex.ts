@@ -1,0 +1,540 @@
+import { spawn, execFile, type ChildProcess } from "node:child_process"
+import { readFile, readdir } from "node:fs/promises"
+import { existsSync } from "node:fs"
+import os from "node:os"
+import path from "node:path"
+import type { HarnessAdapter, ApprovalRequest, ModelRef, ModelCaps } from "../core/ports.ts"
+import type { DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionSummary } from "../core/types.ts"
+
+/**
+ * Codex CLI as a harness.
+ *
+ * Unlike opencode there is no server to talk to: `codex exec --json` runs one
+ * turn per invocation and streams JSONL events on stdout. That difference is
+ * the whole design here — see #bus for how a per-turn stdout stream is turned
+ * into the long-lived event subscription the port expects.
+ *
+ * Auth comes from whatever `codex login` stored in $CODEX_HOME. Driving the
+ * official CLI is what keeps subscription and proprietary model access intact:
+ * nothing here reads or forwards a token.
+ */
+const CODEX_BIN = process.env.CODEX_BIN ?? "codex"
+const CODEX_HOME = process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex")
+const DEFAULT_SANDBOX = process.env.JEP_CODEX_SANDBOX ?? "workspace-write"
+
+const HARNESS_NS = "codex"
+const toInternalId = (native: string) => `${HARNESS_NS}://${native}`
+const toNativeId = (id: string) => (id.startsWith(`${HARNESS_NS}://`) ? id.slice(HARNESS_NS.length + 3) : id)
+
+// A session only gets a real id once Codex has actually run a turn
+// (thread.started carries it), but the port hands out an id at createSession
+// time. Sessions therefore start as a placeholder that the first prompt swaps
+// for the real thread id.
+const PENDING = "pending-"
+const isPending = (nativeID: string) => nativeID.startsWith(PENDING)
+
+interface SessionMeta {
+  id: string
+  cwd: string
+  createdAt: number
+  title: string
+  updatedAt: number
+  file: string
+}
+
+export class CodexAdapter implements HarnessAdapter {
+  readonly id = "codex"
+  readonly workspace: string
+  readonly endpoint: string
+
+  // pending id -> real thread id, once the first turn names it
+  #alias = new Map<string, string>()
+  // titles for sessions we created but Codex hasn't recorded yet
+  #pendingTitles = new Map<string, { title: string; createdAt: number }>()
+  // live `codex exec` children, by session, so abort() has something to kill
+  #running = new Map<string, ChildProcess>()
+  // every open events() subscriber; a turn's stdout is fanned out to all of them
+  #bus = new Set<(evt: DomainEvent) => void>()
+  #closed = false
+  // rollout file metadata, keyed by file path — parsing 300 files' first line
+  // on every listSessions would make /ls crawl
+  #metaCache = new Map<string, SessionMeta | null>()
+
+  constructor(workspace: string) {
+    this.workspace = workspace
+    this.endpoint = `codex-cli:${workspace}`
+  }
+
+  #emit(evt: DomainEvent): void {
+    for (const fn of this.#bus) {
+      try {
+        fn(evt)
+      } catch (err) {
+        console.error(`[codex] subscriber threw: ${(err as Error)?.message ?? err}`)
+      }
+    }
+  }
+
+  #real(sessionID: string): string {
+    const native = toNativeId(sessionID)
+    return this.#alias.get(native) ?? native
+  }
+
+  async health(): Promise<{ healthy: boolean; version: string }> {
+    try {
+      const out = await new Promise<string>((resolve, reject) => {
+        execFile(CODEX_BIN, ["--version"], { timeout: 15_000 }, (err, stdout) =>
+          err ? reject(err) : resolve(stdout),
+        )
+      })
+      return { healthy: true, version: out.trim() }
+    } catch (err) {
+      return { healthy: false, version: (err as Error)?.message ?? "codex not runnable" }
+    }
+  }
+
+  // ─── sessions ───────────────────────────────────────────────────────────
+  // Codex keeps a flat index of every session plus one "rollout" JSONL per
+  // session holding the transcript. The index has no cwd, so a session's
+  // workspace comes from the rollout's opening session_meta line.
+
+  async #rolloutFiles(): Promise<string[]> {
+    const root = path.join(CODEX_HOME, "sessions")
+    if (!existsSync(root)) return []
+    const out: string[] = []
+    const walk = async (dir: string): Promise<void> => {
+      let entries
+      try {
+        entries = await readdir(dir, { withFileTypes: true })
+      } catch (err) {
+        console.error(`[codex] cannot read ${dir}: ${(err as Error)?.message ?? err}`)
+        return
+      }
+      for (const e of entries) {
+        const full = path.join(dir, e.name)
+        if (e.isDirectory()) await walk(full)
+        else if (e.name.endsWith(".jsonl")) out.push(full)
+      }
+    }
+    await walk(root)
+    return out
+  }
+
+  // the opening session_meta line, which is all listSessions needs
+  async #meta(file: string): Promise<SessionMeta | null> {
+    if (this.#metaCache.has(file)) return this.#metaCache.get(file)!
+    let meta: SessionMeta | null = null
+    try {
+      const head = (await readFile(file, "utf8")).split("\n", 1)[0] ?? ""
+      const row = JSON.parse(head)
+      const p = row?.payload
+      if (row?.type === "session_meta" && p?.cwd) {
+        const created = Date.parse(p.timestamp ?? row.timestamp ?? "") || Date.now()
+        meta = {
+          id: p.session_id ?? p.id ?? "",
+          cwd: p.cwd,
+          createdAt: created,
+          updatedAt: created,
+          title: "",
+          file,
+        }
+      }
+    } catch {
+      // a rollout still being written, or from a version we don't understand
+    }
+    this.#metaCache.set(file, meta)
+    return meta
+  }
+
+  // id -> { thread_name, updated_at } from the flat index
+  async #index(): Promise<Map<string, { title: string; updatedAt: number }>> {
+    const out = new Map<string, { title: string; updatedAt: number }>()
+    const file = path.join(CODEX_HOME, "session_index.jsonl")
+    if (!existsSync(file)) return out
+    try {
+      for (const line of (await readFile(file, "utf8")).split("\n")) {
+        if (!line.trim()) continue
+        const d = JSON.parse(line)
+        if (!d?.id) continue
+        out.set(d.id, { title: d.thread_name ?? "", updatedAt: Date.parse(d.updated_at ?? "") || 0 })
+      }
+    } catch (err) {
+      console.error(`[codex] session index unreadable: ${(err as Error)?.message ?? err}`)
+    }
+    return out
+  }
+
+  async listSessions(): Promise<SessionSummary[]> {
+    const idx = await this.#index()
+    const out: SessionSummary[] = []
+    for (const file of await this.#rolloutFiles()) {
+      const meta = await this.#meta(file)
+      // scoped to this adapter's own directory, mirroring how opencode scopes
+      // /session to the instance's project
+      if (!meta || meta.cwd !== this.workspace) continue
+      const extra = idx.get(meta.id)
+      out.push({
+        id: toInternalId(meta.id),
+        title: extra?.title || "",
+        workspace: meta.cwd,
+        createdAt: meta.createdAt,
+        updatedAt: extra?.updatedAt || meta.createdAt,
+      })
+    }
+    // sessions created but not yet given a turn have no rollout on disk yet
+    for (const [pending, { title, createdAt }] of this.#pendingTitles) {
+      if (this.#alias.has(pending)) continue
+      out.push({ id: toInternalId(pending), title, workspace: this.workspace, createdAt, updatedAt: createdAt })
+    }
+    return out.sort((a, b) => b.updatedAt - a.updatedAt)
+  }
+
+  async createSession(title?: string): Promise<SessionSummary> {
+    // Codex names a session only when it runs one (thread.started), so hand
+    // back a placeholder and let the first prompt bind it to the real id.
+    const native = `${PENDING}${Math.random().toString(36).slice(2, 10)}`
+    const now = Date.now()
+    this.#pendingTitles.set(native, { title: title ?? "", createdAt: now })
+    return { id: toInternalId(native), title: title ?? "", workspace: this.workspace, createdAt: now, updatedAt: now }
+  }
+
+  async getSession(id: string): Promise<SessionSummary | null> {
+    const real = this.#real(id)
+    return (await this.listSessions()).find((s) => toNativeId(s.id) === real || toNativeId(s.id) === toNativeId(id)) ?? null
+  }
+
+  async deleteSession(id: string): Promise<boolean> {
+    const native = this.#real(id)
+    if (isPending(native)) {
+      // never reached disk; forgetting it locally is the whole delete
+      this.#pendingTitles.delete(native)
+      return true
+    }
+    try {
+      await new Promise<void>((resolve, reject) => {
+        // --force because there is no terminal here to confirm at: codex
+        // refuses an interactive prompt it cannot show
+        execFile(CODEX_BIN, ["delete", "--force", native], { timeout: 30_000 }, (err) => (err ? reject(err) : resolve()))
+      })
+      this.#metaCache.clear()
+      return true
+    } catch (err) {
+      console.error(`[codex] delete failed for ${native}: ${(err as Error)?.message ?? err}`)
+      return false
+    }
+  }
+
+  // ─── transcript ─────────────────────────────────────────────────────────
+
+  async messages(sessionID: string): Promise<Message[]> {
+    const native = this.#real(sessionID)
+    if (isPending(native)) return []
+    const file = (await this.#rolloutFiles()).find((f) => f.endsWith(`-${native}.jsonl`))
+    if (!file) return []
+    const out: Message[] = []
+    let raw: string
+    try {
+      raw = await readFile(file, "utf8")
+    } catch (err) {
+      console.error(`[codex] transcript unreadable for ${native}: ${(err as Error)?.message ?? err}`)
+      return []
+    }
+    for (const line of raw.split("\n")) {
+      if (!line.trim()) continue
+      let row: any
+      try {
+        row = JSON.parse(line)
+      } catch {
+        continue // half-written trailing line on a live session
+      }
+      if (row?.type !== "event_msg") continue
+      const p = row.payload
+      if (p?.type !== "item_completed" || !p.item) continue
+      const part = mapItem(p.item, this.workspace)
+      if (!part) continue
+      const role = p.item.type === "UserMessage" ? "user" : "assistant"
+      const time = Date.parse(row.timestamp ?? "") || Date.now()
+      out.push({
+        id: toInternalId(`${native}:${p.item.id ?? out.length}`),
+        sessionID: toInternalId(native),
+        role,
+        time,
+        parts: [part],
+      })
+    }
+    return out
+  }
+
+  // ─── running a turn ─────────────────────────────────────────────────────
+
+  async prompt(
+    sessionID: string,
+    text: string,
+    opts?: {
+      timeoutMs?: number
+      signal?: AbortSignal
+      model?: ModelRef
+      filePaths?: string[]
+      agent?: string
+    },
+  ): Promise<Message> {
+    const native = this.#real(sessionID)
+    const pending = isPending(native)
+
+    const args = ["exec", "--json", "--skip-git-repo-check", "-C", this.workspace, "-s", DEFAULT_SANDBOX]
+    if (opts?.model?.modelID) args.push("-m", opts.model.modelID)
+    for (const f of opts?.filePaths ?? []) args.push("-i", f)
+    // resume keeps the thread; a pending session starts a fresh one
+    if (!pending) args.push("resume", native)
+    args.push(text)
+
+    const child = spawn(CODEX_BIN, args, { cwd: this.workspace, stdio: ["ignore", "pipe", "pipe"] })
+    this.#running.set(native, child)
+
+    let threadID = pending ? "" : native
+    const parts: Part[] = []
+    let tokens: Message["tokens"]
+    let failure: { name: string; message: string } | undefined
+    let stderr = ""
+
+    const onAbort = () => child.kill("SIGTERM")
+    opts?.signal?.addEventListener("abort", onAbort, { once: true })
+    const timer = opts?.timeoutMs && opts.timeoutMs > 0 ? setTimeout(onAbort, opts.timeoutMs) : null
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        let buf = ""
+        child.stdout?.on("data", (chunk: Buffer) => {
+          buf += chunk.toString()
+          const lines = buf.split("\n")
+          buf = lines.pop() ?? ""
+          for (const line of lines) {
+            const t = line.trim()
+            if (!t.startsWith("{")) continue
+            let evt: any
+            try {
+              evt = JSON.parse(t)
+            } catch {
+              continue
+            }
+            // thread.started is where a pending session learns its real id
+            if (evt.type === "thread.started" && evt.thread_id) {
+              threadID = evt.thread_id
+              if (pending) {
+                this.#alias.set(native, threadID)
+                this.#running.set(threadID, child)
+              }
+              this.#emit({ type: "message.created", sessionID: toInternalId(threadID), messageID: "", role: "assistant" })
+              continue
+            }
+            if (evt.type === "item.completed" && evt.item) {
+              const part = mapItem(evt.item, this.workspace)
+              if (!part) continue
+              parts.push(part)
+              this.#emit({
+                type: "part.updated",
+                sessionID: toInternalId(threadID),
+                messageID: toInternalId(threadID),
+                partID: String(evt.item.id ?? parts.length),
+                partType: part.kind,
+                part,
+              })
+              continue
+            }
+            if (evt.type === "turn.completed") {
+              const u = evt.usage ?? {}
+              tokens = {
+                input: u.input_tokens ?? 0,
+                output: u.output_tokens ?? 0,
+                reasoning: u.reasoning_output_tokens ?? 0,
+                cache: { read: u.cached_input_tokens ?? 0, write: u.cache_write_input_tokens ?? 0 },
+              }
+              this.#emit({ type: "session.idle", sessionID: toInternalId(threadID) })
+              continue
+            }
+            if (evt.type === "turn.failed" || evt.type === "error") {
+              const msg = evt.error?.message ?? evt.message ?? "codex reported a failure"
+              failure = { name: "CodexError", message: String(msg) }
+              this.#emit({ type: "session.error", sessionID: toInternalId(threadID), message: String(msg) })
+            }
+          }
+        })
+        child.stderr?.on("data", (c: Buffer) => {
+          stderr += c.toString()
+        })
+        child.on("error", reject)
+        child.on("close", (code) => {
+          // a SIGTERM from abort() is a stop, not a crash — let the caller see
+          // it as an aborted turn rather than a spurious failure
+          if (opts?.signal?.aborted) return reject(new Error("prompt aborted"))
+          if (code !== 0 && !failure) {
+            failure = { name: "CodexError", message: stderr.trim().slice(0, 400) || `codex exec exited ${code}` }
+          }
+          resolve()
+        })
+      })
+    } finally {
+      if (timer) clearTimeout(timer)
+      opts?.signal?.removeEventListener("abort", onAbort)
+      this.#running.delete(native)
+      if (threadID) this.#running.delete(threadID)
+      this.#metaCache.clear() // the rollout just changed
+    }
+
+    return {
+      id: toInternalId(`${threadID}:turn-${Date.now()}`),
+      sessionID: toInternalId(threadID || native),
+      role: "assistant",
+      time: Date.now(),
+      parts,
+      ...(tokens ? { tokens } : {}),
+      ...(failure ? { error: failure } : {}),
+    }
+  }
+
+  async abort(sessionID: string): Promise<boolean> {
+    const native = this.#real(sessionID)
+    const child = this.#running.get(native)
+    if (!child) return false
+    child.kill("SIGTERM")
+    return true
+  }
+
+  // Codex exec runs under a sandbox policy rather than asking per tool call,
+  // so there is nothing to answer. Declared because the port requires it.
+  async respondApproval(_sessionID: string, _approval: ApprovalRequest, _allow: boolean): Promise<boolean> {
+    return false
+  }
+
+  // The port wants one long-lived stream; Codex only streams inside a turn.
+  // Subscribers therefore attach to an in-process bus that prompt() feeds as
+  // it parses each turn's stdout.
+  async *events(signal?: AbortSignal): AsyncIterable<DomainEvent> {
+    const queue: DomainEvent[] = [{ type: "server.connected" }]
+    let wake: (() => void) | null = null
+    const push = (evt: DomainEvent) => {
+      queue.push(evt)
+      wake?.()
+    }
+    this.#bus.add(push)
+    try {
+      while (!this.#closed && !signal?.aborted) {
+        while (queue.length) {
+          const evt = queue.shift()!
+          yield evt
+          if (signal?.aborted) return
+        }
+        await new Promise<void>((resolve) => {
+          wake = resolve
+          if (signal) signal.addEventListener("abort", () => resolve(), { once: true })
+        })
+        wake = null
+      }
+    } finally {
+      this.#bus.delete(push)
+    }
+  }
+
+  async models(): Promise<ModelRef[]> {
+    // `codex exec -m` takes any model the account can reach; there is no list
+    // command, so offer the ones the CLI documents as selectable.
+    return (process.env.JEP_CODEX_MODELS ?? "gpt-5.5-codex,gpt-5.5,gpt-5.1-codex")
+      .split(",")
+      .map((m) => m.trim())
+      .filter(Boolean)
+      .map((modelID) => ({ providerID: "codex", modelID }))
+  }
+
+  async capabilities(): Promise<Map<string, ModelCaps>> {
+    const out = new Map<string, ModelCaps>()
+    for (const m of await this.models()) {
+      // -i takes images on every current codex model; context limit is not
+      // reported by the CLI, and 0 is the port's "unknown"
+      out.set(`${m.providerID}/${m.modelID}`, { image: true, attachment: true, contextLimit: 0 })
+    }
+    return out
+  }
+
+  async listProjects(): Promise<ProjectSummary[]> {
+    const dirs = new Set<string>()
+    for (const file of await this.#rolloutFiles()) {
+      const meta = await this.#meta(file)
+      if (meta?.cwd) dirs.add(meta.cwd)
+    }
+    return [...dirs].map((worktree) => ({ id: worktree, worktree }))
+  }
+
+  async diff(_sessionID: string): Promise<FileDiff[]> {
+    return [] // codex exec reports file changes as items, not as a session diff
+  }
+
+  async close(): Promise<void> {
+    this.#closed = true
+    for (const child of this.#running.values()) child.kill("SIGTERM")
+    this.#running.clear()
+    // wake any parked events() iterators so they observe #closed and finish
+    this.#emit({ type: "other", eventType: "adapter.closed", raw: null })
+  }
+}
+
+// Codex item types -> jep parts. Unknown kinds become "other" rather than
+// being dropped, so a new item type shows up as something rather than nothing.
+function mapItem(item: any, workspace: string): Part | null {
+  const type = String(item?.type ?? "")
+  switch (type) {
+    case "agent_message":
+    case "AgentMessage":
+      return { kind: "text", text: textOf(item) }
+    case "UserMessage":
+      return { kind: "text", text: textOf(item) }
+    case "reasoning":
+    case "Reasoning":
+      return { kind: "reasoning", text: textOf(item), id: String(item.id ?? "") }
+    case "command_execution":
+      return {
+        kind: "tool",
+        id: String(item.id ?? ""),
+        name: "shell",
+        input: item.command ?? {},
+        output: item.aggregated_output ?? item.output ?? "",
+        status: item.exit_code === 0 ? "completed" : item.exit_code == null ? "running" : "error",
+        title: typeof item.command === "string" ? item.command : undefined,
+      }
+    case "file_change":
+      return {
+        kind: "tool",
+        id: String(item.id ?? ""),
+        name: "edit",
+        input: item.changes ?? {},
+        output: "",
+        status: "completed",
+        title: Array.isArray(item.changes)
+          ? item.changes.map((c: any) => path.relative(workspace, c?.path ?? "")).join(", ")
+          : undefined,
+      }
+    case "mcp_tool_call":
+      return { kind: "tool", id: String(item.id ?? ""), name: item.tool ?? "mcp", input: item.arguments ?? {}, output: item.result ?? "", status: "completed" }
+    case "web_search":
+      return { kind: "tool", id: String(item.id ?? ""), name: "web_search", input: item.query ?? "", output: "", status: "completed" }
+    case "error":
+      return { kind: "text", text: `⚠️ ${textOf(item) || "codex error"}` }
+    default:
+      return { kind: "other", nativeType: type || "unknown" }
+  }
+}
+
+function textOf(item: any): string {
+  if (typeof item?.text === "string") return item.text
+  if (Array.isArray(item?.content)) {
+    return item.content.map((c: any) => (typeof c?.text === "string" ? c.text : "")).join("")
+  }
+  return ""
+}
+
+/** Matches startOpenCodeServer's shape so a supervisor can treat them alike. */
+export async function startCodexAdapter(workspace: string): Promise<CodexAdapter> {
+  const adapter = new CodexAdapter(workspace)
+  const h = await adapter.health()
+  if (!h.healthy) throw new Error(`codex not runnable: ${h.version}`)
+  return adapter
+}
