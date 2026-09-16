@@ -89,6 +89,10 @@ export interface Message {
     reasoning: number
     cache: { read: number; write: number }
   }
+  // the turn failed harness-side (bad credentials, provider refusal, quota).
+  // The harness reports these on the message rather than as a failed request,
+  // so without this a failed turn is indistinguishable from an empty one.
+  error?: { name: string; message: string }
 }
 
 // one file's accumulated change within a session, as reported by the harness

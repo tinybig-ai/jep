@@ -95,6 +95,13 @@ const MAX_RICH_FILES = 4
 const kin = (rows: InlineButton[][]): ReplyMarkup => ({ inline_keyboard: rows })
 const btn = (text: string, data: string): InlineButton => ({ text, callback_data: data })
 
+// Handler for fire-and-forget calls whose failure must not break the caller.
+// "Best-effort" is a reason not to await something, never a reason to discard
+// why it failed — a silent catch is how a real fault hides for weeks.
+const logFail = (tag: string) => (err: unknown) => {
+  console.error(`[${tag}] ${(err as Error)?.message ?? err}`)
+}
+
 // "/remind 2h build" → { ms: 7_200_000, what: "build", every: false }
 // "/remind every 1h build" → { ms: 3_600_000, what: "build", every: true }
 // null when malformed or outside the 5s–7d window we bother supporting.
@@ -598,7 +605,7 @@ export class TelegramBot {
   // late (bot was down) still fires once immediately — delay just clamps to 0.
   #scheduleReminder(r: ReminderRecord): void {
     const timer = setTimeout(() => {
-      void this.#tg.sendMessage({ chatID: r.chatID, text: `⏰ ${r.what}`, disableNotification: true }).catch(() => {})
+      void this.#tg.sendMessage({ chatID: r.chatID, text: `⏰ ${r.what}`, disableNotification: true }).catch(logFail("reminder"))
       if (r.everyMs) {
         const nextAt = Date.now() + r.everyMs
         this.#reminderStore.reschedule(r.id, nextAt)
@@ -661,7 +668,9 @@ export class TelegramBot {
     try {
       const projects: ProjectSummary[] = (await probe.adapter.listProjects?.()) ?? []
       return projects.map((p) => p.worktree)
-    } catch {
+    } catch (err) {
+      // /ls silently narrows to live workspaces when this fails — say why
+      console.error(`[projects] listProjects failed: ${(err as Error)?.message ?? err}`)
       return []
     }
   }
@@ -817,8 +826,10 @@ export class TelegramBot {
     if (sessionID) {
       try {
         stopped = await this.#ws(c.workspace).adapter.abort(sessionID)
-      } catch {
-        /* the turn may have ended on its own already */
+      } catch (err) {
+        // usually just "the turn already ended" — but if Stop is reported as
+        // not having stopped anything, this line is the reason why
+        console.error(`[stop] harness abort failed (session ${sessionID}): ${(err as Error)?.message ?? err}`)
       }
     }
     if (inflight) {
@@ -1048,7 +1059,7 @@ export class TelegramBot {
     }
     c.sessionID = exact.id
     await this.#tg.sendMessage({ chatID, text: `▶ "${this.#displayTitle(exact.id, exact.title)}"` })
-    void this.#updateStatus(chatID).catch(() => {})
+    void this.#updateStatus(chatID).catch(logFail("status"))
   }
 
   async #command(chatID: number, cmd: string, arg: string, messageID: number): Promise<void> {
@@ -1096,8 +1107,8 @@ export class TelegramBot {
             },
           })
           break
-        } catch {
-          // no rich support → plain text
+        } catch (err) {
+          console.error(`[history] rich send failed, falling back to text: ${(err as Error)?.message ?? err}`)
         }
         await tg.sendMessage({ chatID, text: body })
         break
@@ -1118,8 +1129,8 @@ export class TelegramBot {
           try {
             await tg.sendRichMessage({ chatID, rich_message: { blocks } })
             break
-          } catch {
-            // no rich support → plain text
+          } catch (err) {
+            console.error(`[history] rich send failed, falling back to text: ${(err as Error)?.message ?? err}`)
           }
         }
         await tg.sendMessage({ chatID, text: body })
@@ -1150,7 +1161,7 @@ export class TelegramBot {
           c.del = null
           c.page = 0
           await tg.sendMessage({ chatID, text: `workspace: ${arg}` })
-          void this.#updateStatus(chatID).catch(() => {})
+          void this.#updateStatus(chatID).catch(logFail("status"))
           break
         }
         await this.#settingsWorkspace(chatID, null)
@@ -1225,7 +1236,7 @@ export class TelegramBot {
     const text = title ? `💬 new conversation: ${title}` : "💬 new conversation"
     if (replyId === null) await this.#tg.sendMessage({ chatID, text })
     else await this.#tg.editMessageText({ chatID, messageID: replyId, text, replyMarkup: null })
-    void this.#updateStatus(chatID).catch(() => {})
+    void this.#updateStatus(chatID).catch(logFail("status"))
   }
 
   // list sessions as tappable title buttons; callback snapshots into c.picker
@@ -1290,18 +1301,21 @@ export class TelegramBot {
     // a row from a workspace other than the active one gets tagged with its
     // origin, since the list can now span several projects at once.
     const label = ({ s, ws }: (typeof shown)[number]) => `${this.#displayTitle(s.id, s.title)}${ws !== c.workspace ? ` · ${ws}` : ""}`
-    // 🗑 and ✏️ first (left of the title, not right) read as "here's the
-    // action, then the thing it acts on" and line up under themselves row to
-    // row. The active conversation is green (same style Settings uses), not a
+    // 🗑 first (left of the title, not right) reads as "here's the destructive
+    // action, then the thing it acts on" and lines up under itself row to row.
+    // The active conversation is green (same style Settings uses), not a
     // marker glued onto the label.
     const rows: InlineButton[][] = shown.map((entry, i) => {
       const openBtn = btn(`${i + 1}. ${label(entry)}`, `open:${i}`)
       if (entry.s.id === currentSessionID && entry.ws === c.workspace) openBtn.style = "success"
-      return [{ ...btn("🗑", `deld:${i}`), style: "danger" as const }, btn("✏️", `ren:${i}`), openBtn]
+      return [{ ...btn("🗑", `deld:${i}`), style: "danger" as const }, openBtn]
     })
-    // dismisses the picker entirely (deletes the message, not just its
-    // keyboard) — the way back out without typing /cancel.
-    rows.push([btn("‹ Back", "lsb")])
+    // One rename button for the conversation you're in, rather than one per
+    // row: renaming is something you do to where you already are, and a third
+    // button on every row crowded the list for an action used far less than
+    // opening or deleting. "‹ Back" dismisses the picker entirely (deletes the
+    // message, not just its keyboard) — the way out without typing /cancel.
+    rows.push([...(currentSessionID ? [btn("✏️ Rename current", "renc")] : []), btn("‹ Back", "lsb")])
     const more = sorted.length > MAX_LIST ? [`… and ${sorted.length - MAX_LIST} more`] : []
 
     let messageID: number | undefined
@@ -1382,6 +1396,9 @@ export class TelegramBot {
     // in between (worse, dead still before the first part arrives).
     await this.#tg.sendChatAction({ chatID, action: "typing" })
     const typingTimer = setInterval(() => {
+      // the one deliberate exception to logFail: this re-fires every 4s for
+      // the whole turn, so a logged failure here would be a flood, and it is
+      // purely the typing animation — nothing depends on it
       this.#tg.sendChatAction({ chatID, action: "typing" }).catch(() => {})
     }, 4000)
 
@@ -1528,8 +1545,8 @@ export class TelegramBot {
           lastText = body.slice(-MAX_MSG)
           lastHadMarkup = false
           return
-        } catch {
-          // rich (or file embedding) unsupported → classic text + separate files
+        } catch (err) {
+          console.error(`[reply] rich+files send failed, falling back to text: ${(err as Error)?.message ?? err}`)
         }
       }
       if (body.trim()) {
@@ -1573,8 +1590,8 @@ export class TelegramBot {
           lastText = textOf(parts).slice(-MAX_MSG)
           lastHadMarkup = false
           return true
-        } catch {
-          /* rich unsupported → markdown fallback below */
+        } catch (err) {
+          console.error(`[reply] rich send failed, falling back to markdown: ${(err as Error)?.message ?? err}`)
         }
       }
       const md = partsToMarkdown(parts, s)
@@ -1628,8 +1645,13 @@ export class TelegramBot {
             await this.#permissionPrompt(chatID, sessionID, evt.permissionID)
           }
         }
-      } catch {
-        /* subscription closed */
+      } catch (err) {
+        // Expected on abort (sub.abort() in the finally below). Anything else
+        // is a real fault in the streaming path — a bug here used to vanish
+        // without trace and take the whole turn's live output with it.
+        if (!sub.signal.aborted) {
+          console.error(`[stream] event loop died (session ${sessionID}): ${(err as Error)?.stack ?? err}`)
+        }
       }
     })()
 
@@ -1645,12 +1667,19 @@ export class TelegramBot {
       // prompt() only returns the LAST step of a turn; pull every assistant part
       // since the user's message so earlier steps' reasoning + tool calls show.
       let turn = reply.parts
+      // the harness reports a failed turn on the message, not as a failed
+      // request, so this is the only place a refusal ever surfaces
+      let failure = reply.error ?? null
       try {
         const all = await ws.adapter.messages(sessionID)
         const lastUser = all.reduce((idx, m, i) => (m.role === "user" ? i : idx), -1)
-        if (lastUser >= 0 && lastUser < all.length - 1) turn = all.slice(lastUser + 1).flatMap((m) => m.parts)
-      } catch {
-        /* fall back to the single returned message */
+        if (lastUser >= 0 && lastUser < all.length - 1) {
+          const after = all.slice(lastUser + 1)
+          turn = after.flatMap((m) => m.parts)
+          failure = after.find((m) => m.error)?.error ?? failure
+        }
+      } catch (err) {
+        console.error(`[turn] couldn't re-read messages, using the returned one: ${(err as Error)?.message ?? err}`)
       }
       const media = turn.filter((p): p is FilePart => p.kind === "file")
       // tool/reasoning parts already posted as their own message during
@@ -1658,7 +1687,18 @@ export class TelegramBot {
       const shown = await presentParts(dropFlushed(turn), internals)
       if (!shown && textOf(turn).trim()) await presentBody(textOf(turn), media)
       else if (!shown && placeholder) await this.#tg.deleteMessage({ chatID, messageID: placeholder.message_id })
-      void this.#updateStatus(chatID).catch(() => {})
+      // A turn must never end silently. An error the harness reported gets
+      // said out loud even when there was also content, and a turn that
+      // produced nothing at all still gets a reply rather than leaving the
+      // draft spinning forever.
+      if (failure) {
+        console.error(`[turn] harness error: ${failure.name}: ${failure.message}`)
+        await this.#tg.sendMessage({ chatID, text: `⚠️ ${failure.name}: ${failure.message}`.slice(0, MAX_MSG) })
+      } else if (!shown && !textOf(turn).trim()) {
+        console.error(`[turn] empty reply with no error (session ${sessionID})`)
+        await this.#tg.sendMessage({ chatID, text: "⚠️ the model returned nothing (no text, no error)" })
+      }
+      void this.#updateStatus(chatID).catch(logFail("status"))
     } catch (err) {
       if (ac.signal.aborted) {
         // render whatever we streamed so far (partial details included)
@@ -1682,7 +1722,7 @@ export class TelegramBot {
       clearInterval(typingTimer)
       clearInterval(idleTimer)
       sub.abort()
-      await streamTask.catch(() => {})
+      await streamTask.catch(logFail("stream"))
       c.inflight = null
     }
   }
@@ -1709,8 +1749,8 @@ export class TelegramBot {
           const limit = modelKey ? (await ws.adapter.capabilities?.().catch(() => undefined))?.get(modelKey)?.contextLimit : undefined
           tokensLine = limit ? `${fmtCount(total)}/${fmtCount(limit)}` : fmtCount(total)
         }
-      } catch {
-        /* best-effort */
+      } catch (err) {
+        console.error(`[status] diff read failed: ${(err as Error)?.message ?? err}`)
       }
     }
     const text = [`» ${model} · ${agent} · ${fmtWsPath(ws.dir)}`, tokensLine].join("\n")
@@ -1720,16 +1760,16 @@ export class TelegramBot {
       try {
         await this.#tg.editMessageText({ chatID, messageID: existing, text })
         return
-      } catch {
-        /* pinned message gone/invalid → fall through and send+pin a new one */
+      } catch (err) {
+        console.error(`[status] edit of pinned msg failed, re-pinning: ${(err as Error)?.message ?? err}`)
       }
     }
     try {
       const sent = await this.#tg.sendMessage({ chatID, text, disableNotification: true })
       this.#store.setStatusMsg(chatID, sent.message_id)
       await this.#tg.pinChatMessage({ chatID, messageID: sent.message_id, disableNotification: true })
-    } catch {
-      /* pinning isn't critical — the turn already succeeded regardless */
+    } catch (err) {
+      console.error(`[status] pin failed: ${(err as Error)?.message ?? err}`)
     }
   }
 
@@ -1758,8 +1798,8 @@ export class TelegramBot {
             ...(r.ephemeral_message_id !== undefined ? { ephemeralID: r.ephemeral_message_id } : {}),
           })
           return
-        } catch {
-          /* not an admin / ephemeral unsupported → plain prompt below */
+        } catch (err) {
+          console.error(`[permission] ephemeral prompt failed, using a plain one: ${(err as Error)?.message ?? err}`)
         }
       }
       const msg = await this.#tg.sendMessage({ chatID, text: `🔐 ${permissionID}`, replyMarkup: markup })
@@ -1853,8 +1893,8 @@ export class TelegramBot {
       }
       const sent = await this.#tg.sendRichMessage({ chatID, rich_message: { blocks } })
       return { messageID: sent.message_id }
-    } catch {
-      /* rich messages unavailable → classic text + inline keyboard */
+    } catch (err) {
+      console.error(`[menu] rich menu failed, falling back to classic: ${(err as Error)?.message ?? err}`)
     }
     const body = lines.join("\n")
     if (edit) {
@@ -2011,7 +2051,7 @@ export class TelegramBot {
     c.del = null
     c.page = 0
     c.browse = null
-    void this.#updateStatus(chatID).catch(() => {})
+    void this.#updateStatus(chatID).catch(logFail("status"))
     await this.#settingsWorkspace(chatID, messageID)
   }
 
@@ -2268,14 +2308,30 @@ export class TelegramBot {
         else this.#store.setModel(chatID, rest)
         await this.#settingsModel(chatID, msg.message_id)
         await tg.answerCallbackQuery({ id: cq.id, text: rest === "off" ? "back to default" : `model: ${rest}` })
-        void this.#updateStatus(chatID).catch(() => {})
+        void this.#updateStatus(chatID).catch(logFail("status"))
         break
       }
       case "agt": {
         this.#store.setAgent(chatID, rest)
         await this.#settingsAgent(chatID, msg.message_id)
         await tg.answerCallbackQuery({ id: cq.id, text: `agent: ${rest}` })
-        void this.#updateStatus(chatID).catch(() => {})
+        void this.#updateStatus(chatID).catch(logFail("status"))
+        break
+      }
+      // rename the conversation this chat is currently in, from the list
+      case "renc": {
+        const activeID = await this.#resolveSessionID(chatID)
+        if (!activeID) return tg.answerCallbackQuery({ id: cq.id, text: "no active conversation" })
+        const row = { id: activeID, ws: c.workspace }
+        const current = this.#displayTitle(activeID, await this.#rowTitle(row))
+        c.awaiting = { kind: "rename", sessionID: activeID, backTo: msg.message_id }
+        await this.#tg.editMessageText({
+          chatID,
+          messageID: msg.message_id,
+          text: `✏️ Renaming "${current}"\n\nType the new name (/cancel to stop).`,
+          replyMarkup: null,
+        })
+        await tg.answerCallbackQuery({ id: cq.id, text: "type the name" })
         break
       }
       case "ren": {
@@ -2403,10 +2459,10 @@ export class TelegramBot {
         // both deletes are independent round-trips — run them together instead
         // of back-to-back, or the /ls message lingers for an extra ~500ms
         await Promise.all([
-          this.#tg.deleteMessage({ chatID, messageID: msg.message_id }).catch(() => {}),
+          this.#tg.deleteMessage({ chatID, messageID: msg.message_id }).catch(logFail("cleanup")),
           // also clean up the /ls or /use message that opened this picker —
           // bots can delete incoming messages in private chats
-          cmdMessageID !== undefined ? this.#tg.deleteMessage({ chatID, messageID: cmdMessageID }).catch(() => {}) : Promise.resolve(),
+          cmdMessageID !== undefined ? this.#tg.deleteMessage({ chatID, messageID: cmdMessageID }).catch(logFail("cleanup")) : Promise.resolve(),
         ])
         await tg.answerCallbackQuery({ id: cq.id })
         break
@@ -2479,8 +2535,8 @@ export class TelegramBot {
         // the files stay put — this only stops serving them
         try {
           await w.adapter.close()
-        } catch {
-          /* already gone */
+        } catch (err) {
+          console.error(`[ws] close failed for ${w.name}: ${(err as Error)?.message ?? err}`)
         }
         if (c.workspace === w.name) {
           c.workspace = this.#workspaces[0]!.name
@@ -2488,7 +2544,7 @@ export class TelegramBot {
           c.freshOnNext = false
           c.picker = null
           c.del = null
-          void this.#updateStatus(chatID).catch(() => {})
+          void this.#updateStatus(chatID).catch(logFail("status"))
         }
         await this.#settingsWorkspace(chatID, msg.message_id)
         await tg.answerCallbackQuery({ id: cq.id, text: `removed ${w.name}` })
@@ -2507,7 +2563,7 @@ export class TelegramBot {
         c.pending.delete(rest)
         if (pending.ephemeralID !== undefined) {
           // ephemeral messages have no editable message_id — just drop the prompt
-          await this.#tg.deleteEphemeralMessage({ chatID, ephemeralMessageID: pending.ephemeralID }).catch(() => {})
+          await this.#tg.deleteEphemeralMessage({ chatID, ephemeralMessageID: pending.ephemeralID }).catch(logFail("cleanup"))
         } else {
           await this.#tg.editMessageText({ chatID, messageID: msg.message_id, text: verb === "allow" ? "✅ allowed" : "⛔ denied", replyMarkup: null })
         }

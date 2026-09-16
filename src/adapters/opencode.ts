@@ -132,7 +132,21 @@ function mapMessage(info: any, parts: any[] | undefined, workspace: string): Mes
           },
         }
       : {}),
+    ...(info.error ? { error: mapError(info.error) } : {}),
   }
+}
+
+// opencode reports a failed turn *on the message* (info.error) and still
+// answers the prompt POST with 200, so a refusal looks exactly like an empty
+// reply unless this is carried through. The useful text is nested under
+// data.message; name alone ("APIError") says nothing.
+function mapError(e: any): { name: string; message: string } {
+  const name = typeof e?.name === "string" ? e.name : "error"
+  const message =
+    (typeof e?.data?.message === "string" && e.data.message) ||
+    (typeof e?.message === "string" && e.message) ||
+    name
+  return { name, message }
 }
 
 export class OpenCodeAdapter implements HarnessAdapter {
