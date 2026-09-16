@@ -117,18 +117,36 @@ export interface TelegramApi {
   sendRichMessageDraft(params: { chatID: number; draftID: number; rich_message: Record<string, unknown>; canStop?: boolean }): Promise<void>
 }
 
+// A bare fetch() never times out. A request Telegram accepts but then never
+// answers would hang its caller forever — no error, no log, and the turn's
+// inflight state never cleared. Every call gets an abort deadline instead; the
+// signal stays armed through the body read, so a stalled response trips it too.
+const CALL_TIMEOUT_MS = 20_000
+// uploads and downloads move real bytes over a phone-grade link
+const FILE_TIMEOUT_MS = 60_000
+
 export function createTelegramApi(token: string): TelegramApi {
   const url = (method: string) => `${TG_API}${token}/${method}`
 
-  async function call<T>(method: string, body: Record<string, unknown>): Promise<T> {
-    const res = await fetch(url(method), {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    })
-    const json = (await res.json()) as { ok: boolean; result: T; description?: string }
-    if (!json.ok) throw new Error(`telegram ${method}: ${json.description ?? "unknown error"}`)
-    return json.result
+  async function tgJson<T>(target: string, init: RequestInit, label: string, timeoutMs: number): Promise<T> {
+    try {
+      const res = await fetch(target, { ...init, signal: AbortSignal.timeout(timeoutMs) })
+      const json = (await res.json()) as { ok: boolean; result: T; description?: string }
+      if (!json.ok) throw new Error(`telegram ${label}: ${json.description ?? "unknown error"}`)
+      return json.result
+    } catch (err) {
+      if ((err as Error)?.name === "TimeoutError") throw new Error(`telegram ${label}: timed out after ${timeoutMs}ms`)
+      throw err
+    }
+  }
+
+  function call<T>(method: string, body: Record<string, unknown>, timeoutMs = CALL_TIMEOUT_MS): Promise<T> {
+    return tgJson<T>(
+      url(method),
+      { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) },
+      method,
+      timeoutMs,
+    )
   }
 
   // Invalid formatting should degrade to plain text, never to a user-facing error.
@@ -193,10 +211,12 @@ export function createTelegramApi(token: string): TelegramApi {
       const ext = name.slice(name.lastIndexOf(".")).toLowerCase()
       form.append(f.name, new Blob([new Uint8Array(bytes)], { type: MIME_BY_EXT[ext] ?? "application/octet-stream" }), name)
     }
-    const res = await fetch(url("sendRichMessage"), { method: "POST", body: form })
-    const json = (await res.json()) as { ok: boolean; result: { message_id: number; ephemeral_message_id?: number }; description?: string }
-    if (!json.ok) throw new Error(`telegram sendRichMessage: ${json.description ?? "unknown error"}`)
-    return json.result
+    return tgJson<{ message_id: number; ephemeral_message_id?: number }>(
+      url("sendRichMessage"),
+      { method: "POST", body: form },
+      "sendRichMessage",
+      FILE_TIMEOUT_MS,
+    )
   }
 
   async function sendMultipart(method: "sendPhoto" | "sendDocument", chatID: number, filePath: string, caption?: string) {
@@ -208,19 +228,23 @@ export function createTelegramApi(token: string): TelegramApi {
     form.append("chat_id", String(chatID))
     form.append(method === "sendPhoto" ? "photo" : "document", new Blob([new Uint8Array(bytes)], { type: mime }), name)
     if (caption) form.append("caption", caption)
-    const res = await fetch(url(method), { method: "POST", body: form })
-    const json = (await res.json()) as { ok: boolean; result: { message_id: number }; description?: string }
-    if (!json.ok) throw new Error(`telegram ${method}: ${json.description ?? "unknown error"}`)
-    return json.result
+    return tgJson<{ message_id: number }>(url(method), { method: "POST", body: form }, method, FILE_TIMEOUT_MS)
   }
 
   return {
     async getUpdates(props) {
-      return call<TgUpdate[]>("getUpdates", {
-        offset: props.offset,
-        timeout: props.timeout ?? 30,
-        allowed_updates: ["message", "callback_query", "stopped_message_generation"],
-      })
+      // long poll: Telegram holds the request open for `timeout` seconds by
+      // design, so the abort deadline is that plus room for the round trip
+      const poll = props.timeout ?? 30
+      return call<TgUpdate[]>(
+        "getUpdates",
+        {
+          offset: props.offset,
+          timeout: poll,
+          allowed_updates: ["message", "callback_query", "stopped_message_generation"],
+        },
+        poll * 1_000 + CALL_TIMEOUT_MS,
+      )
     },
     sendMessage(params) {
       return callWithFallback<{ message_id: number; ephemeral_message_id?: number }>("sendMessage", {
@@ -294,9 +318,16 @@ export function createTelegramApi(token: string): TelegramApi {
     async getFileContent(fileID) {
       const { file_path } = await call<{ file_path: string }>("getFile", { file_id: fileID })
       // file downloads live under `/file/bot<token>/<file_path>`, not the methods base
-      const res = await fetch(`${TG_FILE}${token}/${file_path}`)
-      if (!res.ok) throw new Error(`telegram getFile download: ${res.status}`)
-      return Buffer.from(await res.arrayBuffer())
+      try {
+        const res = await fetch(`${TG_FILE}${token}/${file_path}`, { signal: AbortSignal.timeout(FILE_TIMEOUT_MS) })
+        if (!res.ok) throw new Error(`telegram getFile download: ${res.status}`)
+        return Buffer.from(await res.arrayBuffer())
+      } catch (err) {
+        if ((err as Error)?.name === "TimeoutError") {
+          throw new Error(`telegram getFile download: timed out after ${FILE_TIMEOUT_MS}ms`)
+        }
+        throw err
+      }
     },
     async sendPhoto(params) {
       return sendMultipart("sendPhoto", params.chatID, params.filePath, params.caption)
