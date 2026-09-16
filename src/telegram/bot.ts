@@ -548,6 +548,14 @@ const JEP_TELEGRAM_CONTEXT =
   "This conversation is specifically relayed via Telegram — replies render as chat messages (markdown, tables, collapsible details), not a terminal."
 const JEP_CONTEXT_FOOTER = "Ignore the block above. Treat the message below as the user's entire, only request.\n---"
 
+// The first prompt of a fresh session carries the jep context header (see
+// JEP_CONTEXT). It's for the model, not for you — in a transcript it buries
+// the message you actually sent under a screen of preamble.
+const stripInjectedContext = (text: string): string => {
+  const i = text.indexOf(JEP_CONTEXT_FOOTER)
+  return i === -1 ? text : text.slice(i + JEP_CONTEXT_FOOTER.length)
+}
+
 const IMAGE_RE = /\.(png|jpe?g|webp|gif|svg)$/i
 const imageExt = (mime?: string): string | null => {
   const m = (mime ?? "").split(";")[0]?.trim()
@@ -1157,12 +1165,26 @@ export class TelegramBot {
           await tg.sendMessage({ chatID, text: "(empty — send a message to start)" })
           return
         }
+        // Just the conversation: who said what. Reasoning, tool calls and
+        // snapshots are working notes, and reading them back is not what a
+        // transcript is for — they turned /log into a wall you had to scan
+        // past to find the actual exchange.
         const text = msgs
           .map((m) => {
-            const t = m.parts.map((p) => (p.kind === "text" || p.kind === "reasoning" ? p.text : `[${p.kind}]`)).join(" ")
-            return `${m.role === "user" ? "👤" : "🤖"} ${t}`
+            const said = m.parts
+              .filter((p): p is TextPart => p.kind === "text")
+              .map((p) => stripInjectedContext(p.text).trim())
+              .filter(Boolean)
+              .join("\n")
+            // an assistant turn that was only tool calls has nothing to show
+            return said ? `${m.role === "user" ? "👤" : "🤖"} ${said}` : ""
           })
-          .join("\n")
+          .filter(Boolean)
+          .join("\n\n")
+        if (!text) {
+          await tg.sendMessage({ chatID, text: "(nothing said yet — only tool activity so far)" })
+          return
+        }
         const body = text.length > MAX_MSG ? text.slice(-MAX_MSG) : text
         // 10.3 expandable blockquote: the history folds away until tapped
         try {
