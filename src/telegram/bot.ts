@@ -35,7 +35,7 @@ interface ChatState {
   pending: Map<string, { sessionID: string; messageID: number; ephemeralID?: number }>
   // snapshot behind the /ls and settings pickers — each entry keeps its own
   // origin workspace, since /ls can span several (see #discoverWorkspaces)
-  picker: { messageID: number; sessions: { id: string; ws: string }[] } | null
+  picker: { messageID: number; sessions: { id: string; ws: string }[]; cmdMessageID?: number } | null
   del: { messageID: number; i: number } | null
   // an arg-taking command was sent bare; next plain text is the answer
   awaiting: Awaiting | null
@@ -748,7 +748,7 @@ export class TelegramBot {
         return this.#tg.sendMessage({ chatID, text: "(nothing to cancel)" })
       }
       if (c.awaiting) c.awaiting = null
-      await this.#command(chatID, cmd.slice(1), rest.join(" "))
+      await this.#command(chatID, cmd.slice(1), rest.join(" "), m.message_id)
     } else if (c.awaiting) {
       await this.#resolveAwaiting(chatID, text)
     } else {
@@ -842,7 +842,7 @@ export class TelegramBot {
     void this.#updateStatus(chatID).catch(() => {})
   }
 
-  async #command(chatID: number, cmd: string, arg: string): Promise<void> {
+  async #command(chatID: number, cmd: string, arg: string, messageID: number): Promise<void> {
     const tg = this.#tg
     const c = this.#chat(chatID)
     const ws = this.#ws(c.workspace)
@@ -858,7 +858,7 @@ export class TelegramBot {
         await this.#settingsRoot(chatID, null)
         break
       case "ls": {
-        await this.#listPicker(chatID, "Conversations:")
+        await this.#listPicker(chatID, "Conversations:", false, undefined, messageID)
         break
       }
       case "log": {
@@ -919,7 +919,7 @@ export class TelegramBot {
       case "use": {
         if (!arg) {
           c.awaiting = { kind: "use" }
-          await this.#listPicker(chatID, "Which conversation? (tap one, or type a title / paste an ID · /cancel to stop)", true)
+          await this.#listPicker(chatID, "Which conversation? (tap one, or type a title / paste an ID · /cancel to stop)", true, undefined, messageID)
           break
         }
         await this.#resolveUse(chatID, arg)
@@ -1025,8 +1025,17 @@ export class TelegramBot {
   // each row: the conversation (tap to switch) + a small 🗑 next to it (tap
   // for a delete confirmation, via the existing deld/dely/deln flow) — one
   // view does both jobs, so there's no separate delete-only picker anymore.
-  async #listPicker(chatID: number, caption: string, forceReply = false, edit?: { messageID: number }): Promise<void> {
+  async #listPicker(
+    chatID: number,
+    caption: string,
+    forceReply = false,
+    edit?: { messageID: number },
+    cmdMessageID?: number,
+  ): Promise<void> {
     const c = this.#chat(chatID)
+    // preserve the originating /ls or /use command message across a refresh
+    // (e.g. after a delete) so "‹ Back" can still clean it up later
+    const cmdID = cmdMessageID ?? (edit ? c.picker?.cmdMessageID : undefined)
     // spans every workspace the harness knows about, not just the active
     // one — #discoverWorkspaces lazily starts serving any project it hasn't
     // seen yet, so an old conversation from an unconfigured project shows up
@@ -1082,7 +1091,7 @@ export class TelegramBot {
       messageID = edit ? edit.messageID : result.messageID
     }
     if (messageID === undefined) return
-    c.picker = { messageID, sessions: shown.map(({ s, ws }) => ({ id: s.id, ws })) }
+    c.picker = { messageID, sessions: shown.map(({ s, ws }) => ({ id: s.id, ws })), ...(cmdID !== undefined ? { cmdMessageID: cmdID } : {}) }
     c.del = null
     c.page = 0
   }
@@ -1993,8 +2002,12 @@ export class TelegramBot {
         break
       }
       case "lsb": {
+        const cmdMessageID = c.picker?.cmdMessageID
         c.picker = null
         await this.#tg.deleteMessage({ chatID, messageID: msg.message_id }).catch(() => {})
+        // also clean up the /ls or /use message that opened this picker —
+        // bots can delete incoming messages in private chats
+        if (cmdMessageID !== undefined) await this.#tg.deleteMessage({ chatID, messageID: cmdMessageID }).catch(() => {})
         await tg.answerCallbackQuery({ id: cq.id })
         break
       }
