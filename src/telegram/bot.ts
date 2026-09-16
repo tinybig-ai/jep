@@ -779,14 +779,6 @@ export class TelegramBot {
     return (await this.#ws(row.ws).adapter.getSession(row.id))?.title ?? ""
   }
 
-  #wsFor(harness: string): Ws | null {
-    return this.#workspaces.find((w) => w.adapter.id === harness) ?? null
-  }
-
-  #harnesses(): string[] {
-    return [...new Set(this.#workspaces.map((w) => w.adapter.id))]
-  }
-
   #chat(id: number): ChatState {
     let c = this.#chats.get(id)
     if (!c) {
@@ -1339,18 +1331,15 @@ export class TelegramBot {
     }
   }
 
-  // create a fresh conversation; when exactly one harness exists it is chosen
-  // automatically (TODO(harness-picker): surface multi-harness choice as
-  // buttons instead of silently preferring the active workspace's engine)
+  // create a fresh conversation in whatever this chat is pointed at. The
+  // harness is chosen in Settings › 🔌 Harness and resolved together with the
+  // directory — picking it by harness id alone used to be enough, but a
+  // harness can now serve several workspaces, so that would have landed the
+  // new conversation in whichever directory happened to match first.
   async #newConversation(chatID: number, replyId: number | null, title?: string): Promise<void> {
     const c = this.#chat(chatID)
-    const harnesses = this.#harnesses()
-    let ws = this.#activeWs(chatID)
-    if (c.harness && this.#wsFor(c.harness)) {
-      ws = this.#wsFor(c.harness)!
-    } else if (harnesses.length === 1) {
-      c.harness = harnesses[0]!
-    }
+    const ws = this.#activeWs(chatID)
+    c.harness = ws.adapter.id
     const s = await ws.adapter.createSession(title || "New conversation")
     c.sessionID = s.id
     c.sessionFresh = true
@@ -2569,19 +2558,6 @@ export class TelegramBot {
       case "backp": {
         await this.#wipePick(chatID, Math.max(0, c.page - 1), msg.message_id)
         await tg.answerCallbackQuery({ id: cq.id })
-        break
-      }
-      case "hns": {
-        const h = this.#wsFor(rest)
-        if (!h) return tg.answerCallbackQuery({ id: cq.id, text: "no such engine" })
-        c.harness = rest
-        const s = await h.adapter.createSession("New conversation")
-        c.sessionID = s.id
-        c.picker = null
-        c.del = null
-        c.page = 0
-        await this.#tg.editMessageText({ chatID, messageID: msg.message_id, text: `💬 new conversation · engine: ${rest}`, replyMarkup: null })
-        await tg.answerCallbackQuery({ id: cq.id, text: `engine: ${rest}` })
         break
       }
       case "open": {
