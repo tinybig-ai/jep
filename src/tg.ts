@@ -220,6 +220,22 @@ async function main() {
       console.error(`[ws] skipping ${dir}: ${(err as Error)?.message ?? err}`)
     }
   }
+  // A chat can be pointed at a non-default harness, and that harness is
+  // normally started on demand by the picker — which does not survive a
+  // restart. Without this the chat silently fell back to opencode while still
+  // holding a codex session id, and every read 500'd.
+  for (const ctx of store.allChatContexts()) {
+    if (!ctx.harness || ctx.harness === DEFAULT_HARNESS) continue
+    if (!existsSync(ctx.dir)) continue
+    if (workspaces.some((w) => w.dir === ctx.dir && w.adapter.id === ctx.harness)) continue
+    try {
+      workspaces.push(await spawnWorkspace(ctx.dir, ctx.harness))
+      console.error(`[ws] restored ${ctx.harness} for ${ctx.dir}`)
+    } catch (err) {
+      console.error(`[ws] couldn't restore ${ctx.harness} for ${ctx.dir}: ${(err as Error)?.message ?? err}`)
+    }
+  }
+
   if (!workspaces.length) throw new Error(`no workspace could be started (tried: ${workspaceDirs.join(", ")})`)
   const activeWsName = workspaces[0]!.name
 

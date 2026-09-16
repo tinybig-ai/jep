@@ -745,6 +745,17 @@ export class TelegramBot {
     return pool.find((w) => w.adapter.id === c.harness) ?? pool[0]!
   }
 
+  // Session ids are namespaced by harness ("opencode://…", "codex://…"), so an
+  // id from one harness is meaningless to another. That mismatch is reachable
+  // whenever the harness a chat was using isn't the one now serving its
+  // directory — after a restart, say, or a failed switch — and handing the id
+  // over anyway makes the other harness 500 on every read.
+  #sessionMatches(ws: Ws, sessionID: string | null): boolean {
+    if (!sessionID) return false
+    const i = sessionID.indexOf("://")
+    return i === -1 || sessionID.slice(0, i) === ws.adapter.id
+  }
+
   // Writes where this chat is pointed to disk. ChatState is in-memory, so
   // without this every restart silently relocated you: workspace fell back to
   // the first one and the conversation to whatever happened to be newest
@@ -803,13 +814,20 @@ export class TelegramBot {
       // pick up where this chat left off before the last restart, if that
       // workspace is still around (it may have been removed since)
       const saved = this.#store.chatContext(id)
-      const savedWs = saved ? this.#workspaces.find((w) => w.dir === saved.dir) : undefined
+      // match the harness too: the session id belongs to it, and restoring the
+      // id while falling back to a different harness is what made every read
+      // fail with a 500
+      const savedWs = saved
+        ? (this.#workspaces.find((w) => w.dir === saved.dir && w.adapter.id === (saved.harness ?? w.adapter.id)) ??
+           this.#workspaces.find((w) => w.dir === saved.dir))
+        : undefined
+      const harnessBack = !!savedWs && (!saved?.harness || savedWs.adapter.id === saved.harness)
       c = {
         workspace: savedWs?.name ?? this.#activeWsName,
-        sessionID: savedWs ? saved!.sessionID : null,
+        sessionID: harnessBack ? saved!.sessionID : null,
         // restored before anything reads it, so #activeWs resolves to the
         // harness this chat was last using rather than the default
-        harness: (savedWs && saved?.harness) || null,
+        harness: (harnessBack && saved?.harness) || null,
         freshOnNext: false,
         sessionFresh: false,
         inflight: null,
@@ -842,9 +860,14 @@ export class TelegramBot {
   // like #ensureSession would, so that call doesn't redo the lookup.
   async #resolveSessionID(chatID: number): Promise<string | null> {
     const c = this.#chat(chatID)
+    const active = this.#activeWs(chatID)
+    if (c.sessionID && !this.#sessionMatches(active, c.sessionID)) {
+      console.error(`[session] dropping ${c.sessionID} — ${active.adapter.id} can't read it`)
+      c.sessionID = null
+    }
     if (c.sessionID) return c.sessionID
     if (c.freshOnNext) return null
-    const ws = this.#activeWs(chatID)
+    const ws = active
     const list = await ws.adapter.listSessions()
     const newest = [...list].sort((a, b) => b.updatedAt - a.updatedAt)[0]
     if (newest) c.sessionID = newest.id

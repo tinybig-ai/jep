@@ -175,6 +175,11 @@ export class ChatStore {
     return this.#chatContext[String(chatID)] ?? null
   }
 
+  /** every chat's saved context, for restoring harnesses at boot */
+  allChatContexts(): Array<{ dir: string; sessionID: string | null; harness?: string }> {
+    return Object.values(this.#chatContext)
+  }
+
   setChatContext(chatID: number, dir: string, sessionID: string | null, harness?: string): void {
     const prev = this.#chatContext[String(chatID)]
     if (prev && prev.dir === dir && prev.sessionID === sessionID && prev.harness === harness) return
