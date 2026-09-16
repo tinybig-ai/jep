@@ -7,6 +7,14 @@ export interface SessionSummary {
   createdAt: number
 }
 
+// a harness-level grouping sessions belong to (opencode: the enclosing git
+// repo root, or a fallback bucket for directories outside any repo) —
+// coarser than `workspace`/directory: several directories can share one
+export interface ProjectSummary {
+  id: string
+  worktree: string
+}
+
 export interface TextPart {
   kind: "text"
   text: string

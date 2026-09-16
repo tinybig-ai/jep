@@ -2,6 +2,7 @@ import type {
   ApprovalRequest,
   DomainEvent,
   Message,
+  ProjectSummary,
   SessionSummary,
 } from "./types.ts"
 
@@ -49,6 +50,10 @@ export interface HarnessAdapter {
   models?(): Promise<ModelRef[]>
   /** `provider/model` -> input capabilities (image/attachment), if known */
   capabilities?(): Promise<Map<string, ModelCaps>>
+  /** every project this harness knows of, regardless of which directory this
+   * adapter itself is rooted in — lets a frontend discover (and lazily start
+   * serving) sessions that live outside the currently active workspace */
+  listProjects?(): Promise<ProjectSummary[]>
   /** Stop the child server. Sessions stay on disk for the next boot. */
   close(): Promise<void>
 }

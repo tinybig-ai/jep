@@ -151,13 +151,18 @@ async function main() {
   // Mock mode keeps the bundled two-workspace fixtures so switching between
   // workspaces stays testable regardless of the caller's own cwd.
   const workspaceDirs = dirs.length ? dirs : mockMode ? DEFAULT_WORKSPACES : [process.cwd()]
-  const workspaces: Ws[] = []
 
-  for (const dir of workspaceDirs) {
+  // shared by the boot loop below and by TelegramBot#discoverWorkspaces,
+  // which calls this later to start serving a project it finds out about
+  // only after boot (e.g. via the adapter's listProjects).
+  const spawnWorkspace = async (dir: string): Promise<Ws> => {
     const ad = await startOpenCodeServer(dir, { dataHome: DATA_HOME })
     assertAdapterImplements(ad)
-    workspaces.push({ name: basename(dir), dir, adapter: ad })
+    return { name: basename(dir), dir, adapter: ad }
   }
+
+  const workspaces: Ws[] = []
+  for (const dir of workspaceDirs) workspaces.push(await spawnWorkspace(dir))
   const activeWsName = workspaces[0]!.name
 
   const tg = mockMode ? await buildMockApi() : createTelegramApi(process.env.JEP_TG_TOKEN ?? "")
@@ -183,7 +188,7 @@ async function main() {
   const bot = new TelegramBot(tg, workspaces, activeWsName, pairing, ChatStore.load(join(DATA_HOME, "store.json")), (process.env.JEP_TG_MODELS ?? "")
     .split(",")
     .map((s) => s.trim())
-    .filter(Boolean), UPLOADS_DIR)
+    .filter(Boolean), UPLOADS_DIR, spawnWorkspace)
 
   try {
     await tg.setMyCommands(TelegramBot.commands)

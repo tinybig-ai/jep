@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { HarnessAdapter, ModelCaps, ModelRef } from "../core/ports.ts"
-import type { FilePart, Part, TextPart, ReasoningPart, ToolCallPart } from "../core/types.ts"
+import type { FilePart, Part, ProjectSummary, TextPart, ReasoningPart, ToolCallPart } from "../core/types.ts"
 import { mdToHtml } from "./html.ts"
 import { closeStreamingTable, mdToRich } from "./rich.ts"
 import type { RichBlock } from "./rich.ts"
@@ -32,8 +32,9 @@ interface ChatState {
   // permissionID -> prompt message for in-flight keyboard prompts; ephemeralID
   // is set when the prompt was sent as a group ephemeral message
   pending: Map<string, { sessionID: string; messageID: number; ephemeralID?: number }>
-  // snapshot behind the /ls and settings pickers
-  picker: { messageID: number; ws: string; sessions: string[] } | null
+  // snapshot behind the /ls and settings pickers — each entry keeps its own
+  // origin workspace, since /ls can span several (see #discoverWorkspaces)
+  picker: { messageID: number; sessions: { id: string; ws: string }[] } | null
   del: { messageID: number; i: number } | null
   // an arg-taking command was sent bare; next plain text is the answer
   awaiting: Awaiting | null
@@ -493,7 +494,21 @@ export class TelegramBot {
     { command: "remind", description: "remind me later (e.g. /remind 2h build)" },
   ]
 
-  constructor(tg: TelegramApi, workspaces: Ws[], activeWsName: string, pairing: Pairing, store: ChatStore, extraModels: string[], uploadsDir: string) {
+  // lazily starts serving a directory this bot didn't boot with — how
+  // #discoverWorkspaces materializes a project the adapter knows about but
+  // that has no running Ws yet
+  #spawn: (dir: string) => Promise<Ws>
+
+  constructor(
+    tg: TelegramApi,
+    workspaces: Ws[],
+    activeWsName: string,
+    pairing: Pairing,
+    store: ChatStore,
+    extraModels: string[],
+    uploadsDir: string,
+    spawn: (dir: string) => Promise<Ws>,
+  ) {
     this.#tg = this.#recording(tg)
     this.#workspaces = workspaces
     this.#activeWsName = activeWsName
@@ -501,6 +516,7 @@ export class TelegramBot {
     this.#store = store
     this.#extraModels = extraModels
     this.#uploadsDir = uploadsDir
+    this.#spawn = spawn
   }
 
   // renders every outgoing text through markdown → Telegram HTML, and logs
@@ -539,6 +555,31 @@ export class TelegramBot {
 
   #ws(name: string): Ws {
     return this.#workspaces.find((w) => w.name === name) ?? this.#workspaces[0]!
+  }
+
+  // every project the harness knows of, regardless of whether this bot
+  // booted with a running Ws for it — lazily spawns one on the spot for any
+  // it hasn't seen yet (matched by directory), so an old conversation from a
+  // project nobody pre-configured stays reachable instead of orphaned.
+  // Best-effort: a harness without listProjects just returns what it has.
+  async #discoverWorkspaces(): Promise<Ws[]> {
+    const probe = this.#workspaces[0]
+    if (!probe) return this.#workspaces
+    let projects: ProjectSummary[]
+    try {
+      projects = (await probe.adapter.listProjects?.()) ?? []
+    } catch {
+      return this.#workspaces
+    }
+    for (const p of projects) {
+      if (this.#workspaces.some((w) => w.dir === p.worktree)) continue
+      try {
+        this.#workspaces.push(await this.#spawn(p.worktree))
+      } catch (err) {
+        console.error(`[ws] failed to start serving ${p.worktree}: ${(err as Error)?.message ?? err}`)
+      }
+    }
+    return this.#workspaces
   }
 
   #wsFor(harness: string): Ws | null {
@@ -922,21 +963,30 @@ export class TelegramBot {
   // view does both jobs, so there's no separate delete-only picker anymore.
   async #listPicker(chatID: number, caption: string, forceReply = false): Promise<void> {
     const c = this.#chat(chatID)
-    const ws = this.#ws(c.workspace)
-    const sessions = await ws.adapter.listSessions()
-    if (!sessions.length) {
+    // spans every workspace the harness knows about, not just the active
+    // one — #discoverWorkspaces lazily starts serving any project it hasn't
+    // seen yet, so an old conversation from an unconfigured project shows up
+    // here too instead of being unreachable.
+    const workspaces = await this.#discoverWorkspaces()
+    const entries = (
+      await Promise.all(workspaces.map(async (w) => (await w.adapter.listSessions()).map((s) => ({ s, ws: w.name }))))
+    ).flat()
+    if (!entries.length) {
       await this.#tg.sendMessage({ chatID, text: "(no conversations yet — just send a message)" })
       return
     }
-    const sorted = [...sessions].sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))
+    const sorted = entries.sort((a, b) => (b.s.time?.updated ?? 0) - (a.s.time?.updated ?? 0))
     const shown = sorted.slice(0, MAX_LIST)
+    // a row from a workspace other than the active one gets tagged with its
+    // origin, since the list can now span several projects at once.
+    const label = ({ s, ws }: (typeof shown)[number]) => `${this.#displayTitle(s.id, s.title)}${ws !== c.workspace ? ` · ${ws}` : ""}`
     // 🗑 first (left of the title, not right) reads as "here's the destructive
     // action, then the thing it acts on" and lines up under itself row to row.
     // The active conversation is green (same style Settings uses), not a
     // marker glued onto the label.
-    const rows: InlineButton[][] = shown.map((s, i) => {
-      const openBtn = btn(`${i + 1}. ${this.#displayTitle(s.id, s.title)}`, `open:${i}`)
-      if (s.id === c.sessionID) openBtn.style = "success"
+    const rows: InlineButton[][] = shown.map((entry, i) => {
+      const openBtn = btn(`${i + 1}. ${label(entry)}`, `open:${i}`)
+      if (entry.s.id === c.sessionID && entry.ws === c.workspace) openBtn.style = "success"
       return [{ ...btn("🗑", `deld:${i}`), style: "danger" as const }, openBtn]
     })
     const more = sorted.length > MAX_LIST ? [`… and ${sorted.length - MAX_LIST} more`] : []
@@ -948,7 +998,7 @@ export class TelegramBot {
       // the classic, evenly-split row. It also needs the text list (unlike
       // the button-only paths below): forceReply means typing is expected,
       // and there's nothing to read a title off of while composing a reply.
-      const list = shown.map((s, i) => `${i + 1}. "${this.#displayTitle(s.id, s.title)}"${s.id === c.sessionID ? "  ◀" : ""}`)
+      const list = shown.map((entry, i) => `${i + 1}. "${label(entry)}"${entry.s.id === c.sessionID && entry.ws === c.workspace ? "  ◀" : ""}`)
       const markup = kin(rows)
       markup.force_reply = true
       const msg = await this.#tg.sendMessage({ chatID, text: [caption, "", ...list, ...more].join("\n"), replyMarkup: markup })
@@ -961,7 +1011,7 @@ export class TelegramBot {
       messageID = (await this.#menu(chatID, [caption, ...more], rows)).messageID
     }
     if (messageID === undefined) return
-    c.picker = { messageID, ws: c.workspace, sessions: shown.map((s) => s.id) }
+    c.picker = { messageID, sessions: shown.map(({ s, ws }) => ({ id: s.id, ws })) }
     c.del = null
     c.page = 0
   }
@@ -1380,7 +1430,7 @@ export class TelegramBot {
     if (messageID !== null) {
       await this.#tg.editMessageText({ chatID, messageID, text: body, replyMarkup: kin(rows) })
     }
-    c.picker = { messageID: reply.message_id, ws: c.workspace, sessions: ids }
+    c.picker = { messageID: reply.message_id, sessions: ids.map((id) => ({ id, ws: c.workspace })) }
     c.page = p
     c.del = null
   }
@@ -1622,7 +1672,7 @@ export class TelegramBot {
       rows.push([prev, btn(`page ${page + 1} / ${pages}`, "renp:page"), next])
     }
     rows.push([btn("‹ Back", "set:root")])
-    c.picker = { messageID, ws: c.workspace, sessions: ids }
+    c.picker = { messageID, sessions: ids.map((id) => ({ id, ws: c.workspace })) }
     c.del = null
     await this.#menu(chatID, ["✏️ Rename", "", "Which conversation? (no active conversation yet)"], rows, { messageID })
   }
@@ -1699,10 +1749,10 @@ export class TelegramBot {
       }
       case "ren": {
         const p = c.picker
-        if (!p || p.ws !== c.workspace) return tg.answerCallbackQuery({ id: cq.id, text: "menu expired - run /settings" })
-        const id = p.sessions[i]
-        if (!id) return tg.answerCallbackQuery({ id: cq.id, text: "no such conversation" })
-        c.awaiting = { kind: "rename", sessionID: id }
+        if (!p) return tg.answerCallbackQuery({ id: cq.id, text: "menu expired - run /settings" })
+        const row = p.sessions[i]
+        if (!row) return tg.answerCallbackQuery({ id: cq.id, text: "no such conversation" })
+        c.awaiting = { kind: "rename", sessionID: row.id }
         await this.#tg.editMessageText({ chatID, messageID: msg.message_id, text: "✏️ Type the new name for this conversation…", replyMarkup: null })
         await tg.answerCallbackQuery({ id: cq.id, text: "type the name" })
         break
@@ -1737,28 +1787,31 @@ export class TelegramBot {
       }
       case "open": {
         const p = c.picker
-        if (!p || p.ws !== c.workspace) return tg.answerCallbackQuery({ id: cq.id, text: "menu expired - run /ls again" })
-        const id = p.sessions[i]
-        if (!id) return tg.answerCallbackQuery({ id: cq.id, text: "no such conversation" })
-        c.sessionID = id
+        if (!p) return tg.answerCallbackQuery({ id: cq.id, text: "menu expired - run /ls again" })
+        const row = p.sessions[i]
+        if (!row) return tg.answerCallbackQuery({ id: cq.id, text: "no such conversation" })
+        // opening a conversation from another project switches the chat into
+        // that project too, so the next message routes to the right place.
+        c.workspace = row.ws
+        c.sessionID = row.id
         c.del = null
         c.awaiting = null
-        const s = await ws.adapter.getSession(id)
-        await this.#tg.editMessageText({ chatID, messageID: p.messageID, text: `▶ "${this.#displayTitle(id, s?.title ?? "")}"`, replyMarkup: null })
+        const s = await this.#ws(row.ws).adapter.getSession(row.id)
+        await this.#tg.editMessageText({ chatID, messageID: p.messageID, text: `▶ "${this.#displayTitle(row.id, s?.title ?? "")}"`, replyMarkup: null })
         await tg.answerCallbackQuery({ id: cq.id, text: "opened" })
         break
       }
       case "deld": {
         const p = c.picker
-        if (!p || p.ws !== c.workspace) return tg.answerCallbackQuery({ id: cq.id, text: "menu expired - run /ls again" })
-        const id = p.sessions[i]
-        if (!id) return tg.answerCallbackQuery({ id: cq.id, text: "no such conversation" })
+        if (!p) return tg.answerCallbackQuery({ id: cq.id, text: "menu expired - run /ls again" })
+        const row = p.sessions[i]
+        if (!row) return tg.answerCallbackQuery({ id: cq.id, text: "no such conversation" })
         c.del = { messageID: p.messageID, i }
-        const s = await ws.adapter.getSession(id)
+        const s = await this.#ws(row.ws).adapter.getSession(row.id)
         await this.#tg.editMessageText({
           chatID,
           messageID: p.messageID,
-          text: `Delete "${this.#displayTitle(id, s?.title ?? "")}"?`,
+          text: `Delete "${this.#displayTitle(row.id, s?.title ?? "")}"?`,
           replyMarkup: kin([[btn("🗑 Delete", "dely")], [btn("Cancel", "deln")]]),
         })
         await tg.answerCallbackQuery({ id: cq.id })
@@ -1768,10 +1821,10 @@ export class TelegramBot {
         const d = c.del
         const p = c.picker
         if (!d || !p) return tg.answerCallbackQuery({ id: cq.id, text: "nothing to delete" })
-        const id = p.sessions[d.i]
-        if (id) {
-          await ws.adapter.deleteSession(id)
-          if (c.sessionID === id) {
+        const row = p.sessions[d.i]
+        if (row) {
+          await this.#ws(row.ws).adapter.deleteSession(row.id)
+          if (c.sessionID === row.id && c.workspace === row.ws) {
             c.sessionID = null
             c.freshOnNext = true
           }

@@ -4,7 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import type { HarnessAdapter, ApprovalRequest, ModelRef, ModelCaps } from "../core/ports.ts"
-import type { DomainEvent, Message, Part, SessionSummary } from "../core/types.ts"
+import type { DomainEvent, Message, Part, ProjectSummary, SessionSummary } from "../core/types.ts"
 
 const OPENCODE_BIN = process.env.OPENCODE_BIN ?? "opencode"
 const MODEL_REF = process.env.JEP_MODEL ?? "localfree-models-proxy/auto"
@@ -290,6 +290,15 @@ export class OpenCodeAdapter implements HarnessAdapter {
   async listSessions(): Promise<SessionSummary[]> {
     const sessions = await this.#json<any[]>("/session")
     return sessions.map((s) => this.#toSummary(s))
+  }
+
+  // GET /project: every project this data home knows of, regardless of
+  // which one this adapter's own instance is rooted in (verified: an
+  // instance rooted in one project still lists every other project here —
+  // only /session is scoped to the calling instance's own project).
+  async listProjects(): Promise<ProjectSummary[]> {
+    const projects = await this.#json<any[]>("/project")
+    return projects.filter((p) => p.worktree && p.worktree !== "/").map((p) => ({ id: p.id, worktree: p.worktree }))
   }
 
   #toSummary(s: any): SessionSummary {
