@@ -29,6 +29,9 @@ export interface StoreData {
   agents?: Record<string, string>
   // chat id -> message id of the pinned live status message
   statusMsgs?: Record<string, number>
+  // chat id -> whether a fresh session's first prompt gets the jep context
+  // header prepended (default: on — see StoreData.injectContext)
+  injectContext?: Record<string, boolean>
 }
 
 export class ChatStore {
@@ -37,6 +40,7 @@ export class ChatStore {
   #internals: Record<string, InternalsSettings>
   #agents: Record<string, string>
   #statusMsgs: Record<string, number>
+  #injectContext: Record<string, boolean>
   #file: string | null
 
   constructor(
@@ -45,6 +49,7 @@ export class ChatStore {
     internals: Record<string, InternalsSettings>,
     agents: Record<string, string>,
     statusMsgs: Record<string, number>,
+    injectContext: Record<string, boolean>,
     file: string | null,
   ) {
     this.#titles = titles
@@ -52,16 +57,25 @@ export class ChatStore {
     this.#internals = internals
     this.#agents = agents
     this.#statusMsgs = statusMsgs
+    this.#injectContext = injectContext
     this.#file = file
   }
 
   static load(file: string | null): ChatStore {
-    if (!file) return new ChatStore({}, {}, {}, {}, {}, null)
+    if (!file) return new ChatStore({}, {}, {}, {}, {}, {}, null)
     try {
       const d = JSON.parse(readFileSync(file, "utf8")) as StoreData
-      return new ChatStore(d.titles ?? {}, d.models ?? {}, d.internals ?? {}, d.agents ?? {}, d.statusMsgs ?? {}, file)
+      return new ChatStore(
+        d.titles ?? {},
+        d.models ?? {},
+        d.internals ?? {},
+        d.agents ?? {},
+        d.statusMsgs ?? {},
+        d.injectContext ?? {},
+        file,
+      )
     } catch {
-      return new ChatStore({}, {}, {}, {}, {}, file)
+      return new ChatStore({}, {}, {}, {}, {}, {}, file)
     }
   }
 
@@ -92,6 +106,15 @@ export class ChatStore {
 
   setStatusMsg(chatID: number, messageID: number): void {
     this.#statusMsgs[String(chatID)] = messageID
+    this.#save()
+  }
+
+  injectContext(chatID: number): boolean {
+    return this.#injectContext[String(chatID)] ?? true
+  }
+
+  setInjectContext(chatID: number, on: boolean): void {
+    this.#injectContext[String(chatID)] = on
     this.#save()
   }
 
@@ -127,7 +150,14 @@ export class ChatStore {
     writeFileSync(
       this.#file,
       JSON.stringify(
-        { titles: this.#titles, models: this.#models, internals: this.#internals, agents: this.#agents, statusMsgs: this.#statusMsgs },
+        {
+          titles: this.#titles,
+          models: this.#models,
+          internals: this.#internals,
+          agents: this.#agents,
+          statusMsgs: this.#statusMsgs,
+          injectContext: this.#injectContext,
+        },
         null,
         2,
       ),

@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
+import { homedir } from "node:os"
 import type { HarnessAdapter, ModelCaps, ModelRef } from "../core/ports.ts"
 import type { FilePart, Part, ProjectSummary, TextPart, ReasoningPart, ToolCallPart } from "../core/types.ts"
 import { mdToHtml } from "./html.ts"
@@ -28,6 +29,10 @@ interface ChatState {
   // after a restart). Explicitly reset to false anywhere else sessionID is
   // cleared (workspace switches), so it never outlives the delete it's for.
   freshOnNext: boolean
+  // sessionID points at a session that hasn't taken its first real prompt
+  // yet — the next #freeText turn gets the jep context header prepended,
+  // then this clears so later turns in the same session don't repeat it.
+  sessionFresh: boolean
   harness: string | null
   inflight: AbortController | null
   // permissionID -> prompt message for in-flight keyboard prompts; ephemeralID
@@ -92,6 +97,16 @@ const fmtCount = (n: number): string => {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}K`
   return String(n)
+}
+
+// display form of a workspace directory: last two path segments (e.g.
+// "code/jep") — enough to disambiguate same-named folders in different
+// parents (a bare basename collapses those to one misleading label) without
+// the full path's length in a status line.
+const fmtWsPath = (dir: string): string => {
+  if (dir === homedir()) return "~"
+  const parts = dir.split("/").filter(Boolean)
+  return parts.slice(-2).join("/") || dir
 }
 
 // ─── agent-internals rendering (thinking + tool calls as collapsible details) ───
@@ -465,6 +480,20 @@ const HELP = [
   "Everything else lives in the ☰ menu.",
 ].join("\n")
 
+// prepended once to a session's first real prompt (see ChatState.sessionFresh),
+// gated by the user's 🧩 Context setting — orients the harness to the fact
+// it's being driven through jep rather than a terminal, and where to look if
+// that ever matters, then hands off cleanly so it responds to the actual
+// request below, not this framing. jep itself isn't Telegram-specific — that
+// addendum only applies because bot.ts is currently jep's one front end.
+const JEP_CONTEXT = [
+  "[jep context — background only, not a request]",
+  "This conversation is relayed through jep, a phone-first control plane for coding agents (headless, no terminal on the other end). jep's own code and docs: /Users/user/Documents/code/jep — see docs/PROCESSES.md and docs/PHILOSOPHY.md.",
+].join("\n")
+const JEP_TELEGRAM_CONTEXT =
+  "This conversation is specifically relayed via Telegram — replies render as chat messages (markdown, tables, collapsible details), not a terminal."
+const JEP_CONTEXT_FOOTER = "Ignore the block above. Treat the message below as the user's entire, only request.\n---"
+
 const IMAGE_RE = /\.(png|jpe?g|webp|gif|svg)$/i
 const imageExt = (mime?: string): string | null => {
   const m = (mime ?? "").split(";")[0]?.trim()
@@ -632,6 +661,7 @@ export class TelegramBot {
         workspace: this.#activeWsName,
         sessionID: null,
         freshOnNext: false,
+        sessionFresh: false,
         harness: null,
         inflight: null,
         pending: new Map(),
@@ -655,27 +685,36 @@ export class TelegramBot {
     return this.#store.title(id) ?? (fallback || id.slice(-8))
   }
 
+  // resolves to the session #ensureSession would resume, without creating one
+  // if there's none — so a display-only read (see #updateStatus) survives a
+  // bot restart (c.sessionID lives only in memory) instead of showing blank
+  // until the next real prompt re-derives it. Caches onto c.sessionID exactly
+  // like #ensureSession would, so that call doesn't redo the lookup.
+  async #resolveSessionID(chatID: number): Promise<string | null> {
+    const c = this.#chat(chatID)
+    if (c.sessionID) return c.sessionID
+    if (c.freshOnNext) return null
+    const ws = this.#ws(c.workspace)
+    const list = await ws.adapter.listSessions()
+    const newest = [...list].sort((a, b) => b.updatedAt - a.updatedAt)[0]
+    if (newest) c.sessionID = newest.id
+    return newest?.id ?? null
+  }
+
   // one persistent conversation per chat: resume the newest session if any,
   // otherwise create one (title = first message snippet) — unless
   // freshOnNext says the last one was just deleted out from under us, in
   // which case skip straight to creating a new one.
   async #ensureSession(chatID: number, firstText?: string): Promise<string> {
     const c = this.#chat(chatID)
-    if (c.sessionID) return c.sessionID
+    const resolved = await this.#resolveSessionID(chatID)
+    if (resolved) return resolved
     const ws = this.#ws(c.workspace)
-    if (c.freshOnNext) {
-      c.freshOnNext = false
-    } else {
-      const list = await ws.adapter.listSessions()
-      const newest = [...list].sort((a, b) => b.updatedAt - a.updatedAt)[0]
-      if (newest) {
-        c.sessionID = newest.id
-        return newest.id
-      }
-    }
+    c.freshOnNext = false
     const title = (firstText ?? "").slice(0, 40) || "My chat"
     const s = await ws.adapter.createSession(title)
     c.sessionID = s.id
+    c.sessionFresh = true
     return s.id
   }
 
@@ -685,18 +724,38 @@ export class TelegramBot {
     else if (update.stopped_message_generation) await this.#onStopGeneration(update.stopped_message_generation)
   }
 
+  // best-effort turn cancellation, shared by the native stop button, /abort,
+  // and the "⏹ Stop" callback. Always tries the harness-side abort by a
+  // freshly-resolved session id — c.inflight (and c.sessionID) live only in
+  // memory, so a bot restart mid-turn loses both, but the harness keeps
+  // running server-side; gating on c.inflight alone would make Stop a no-op
+  // exactly then, i.e. it'd look stopped client-side while still running.
+  // Returns whether there was anything to stop.
+  async #stopTurn(chatID: number): Promise<boolean> {
+    const c = this.#chat(chatID)
+    const inflight = c.inflight
+    const sessionID = await this.#resolveSessionID(chatID)
+    let stopped = false
+    if (sessionID) {
+      try {
+        stopped = await this.#ws(c.workspace).adapter.abort(sessionID)
+      } catch {
+        /* the turn may have ended on its own already */
+      }
+    }
+    if (inflight) {
+      inflight.abort()
+      c.inflight = null
+      stopped = true
+    }
+    return stopped
+  }
+
   // the user tapped the native "stop" button on a streaming draft — stop the turn
   async #onStopGeneration(stop: NonNullable<TgUpdate["stopped_message_generation"]>): Promise<void> {
     const chatID = stop?.chat?.id
     if (chatID == null) return
-    const c = this.#chat(chatID)
-    if (!c.inflight) return
-    try {
-      await this.#ws(c.workspace).adapter.abort(c.sessionID ?? "")
-    } catch {
-      /* the turn may have ended on its own already */
-    }
-    c.inflight.abort()
+    await this.#stopTurn(chatID)
   }
 
   async #gatedMessage(m: TgMessage): Promise<void> {
@@ -926,11 +985,8 @@ export class TelegramBot {
         break
       }
       case "abort": {
-        if (!c.inflight) return tg.sendMessage({ chatID, text: "(no turn in flight)" })
-        await ws.adapter.abort(c.sessionID ?? "")
-        c.inflight.abort()
-        c.inflight = null
-        await tg.sendMessage({ chatID, text: "⏹ stopped" })
+        const stopped = await this.#stopTurn(chatID)
+        await tg.sendMessage({ chatID, text: stopped ? "⏹ stopped" : "(no turn in flight)" })
         break
       }
       case "ws": {
@@ -1012,6 +1068,7 @@ export class TelegramBot {
     }
     const s = await ws.adapter.createSession(title || "New conversation")
     c.sessionID = s.id
+    c.sessionFresh = true
     c.picker = null
     c.del = null
     c.page = 0
@@ -1102,6 +1159,9 @@ export class TelegramBot {
     const sessionID = await this.#ensureSession(chatID, promptText)
     const ws = this.#ws(c.workspace)
     const internals = this.#store.internals(chatID)
+    const injectContext = c.sessionFresh && this.#store.injectContext(chatID)
+    const harnessText = injectContext ? `${JEP_CONTEXT}\n${JEP_TELEGRAM_CONTEXT}\n\n${JEP_CONTEXT_FOOTER}\n\n${promptText}` : promptText
+    c.sessionFresh = false
 
     const ac = new AbortController()
     c.inflight = ac
@@ -1385,7 +1445,7 @@ export class TelegramBot {
     })()
 
     try {
-      const reply = await ws.adapter.prompt(sessionID, promptText, {
+      const reply = await ws.adapter.prompt(sessionID, harnessText, {
         signal: ac.signal,
         ...(model ? { model } : {}),
         ...(opts?.filePaths?.length ? { filePaths: opts.filePaths } : {}),
@@ -1438,23 +1498,26 @@ export class TelegramBot {
   async #updateStatus(chatID: number): Promise<void> {
     const c = this.#chat(chatID)
     const ws = this.#ws(c.workspace)
-    const model = this.#store.model(chatID) ?? "default"
+    const modelKey = this.#store.model(chatID)
+    const model = modelKey ?? "default"
     const agent = this.#store.agent(chatID) ?? "build"
-    let tokensLine = "context: –"
-    if (c.sessionID) {
+    let tokensLine = "–"
+    const sessionID = await this.#resolveSessionID(chatID)
+    if (sessionID) {
       try {
-        const msgs = await ws.adapter.messages(c.sessionID)
+        const msgs = await ws.adapter.messages(sessionID)
         const last = [...msgs].reverse().find((m) => m.tokens)
         if (last?.tokens) {
           const t = last.tokens
           const total = t.input + t.output + t.reasoning + t.cache.read + t.cache.write
-          tokensLine = `context: ${fmtCount(total)} tokens`
+          const limit = modelKey ? (await ws.adapter.capabilities?.().catch(() => undefined))?.get(modelKey)?.contextLimit : undefined
+          tokensLine = limit ? `${fmtCount(total)}/${fmtCount(limit)}` : fmtCount(total)
         }
       } catch {
         /* best-effort */
       }
     }
-    const text = [`» ${ws.name}`, `${model} · ${agent}`, tokensLine].join("\n")
+    const text = [`» ${fmtWsPath(ws.dir)} · ${model} · ${agent}`, tokensLine].join("\n")
 
     const existing = this.#store.statusMsg(chatID)
     if (existing) {
@@ -1627,6 +1690,7 @@ export class TelegramBot {
       [btn(`🤖 Model · ${model}`, "set:model")],
       [btn(`🧭 Agent · ${this.#store.agent(chatID) ?? "build"}`, "set:agent")],
       [btn(`🔎 Internals · ${internalsPreset(this.#store.internals(chatID))}`, "set:internals")],
+      [btn(`🧩 Context · ${this.#store.injectContext(chatID) ? "on" : "off"}`, "ctx:toggle")],
       [btn("✏️ Rename conversation", "set:rename")],
       ...(this.#workspaces.length > 1 ? [[btn(`🗂 Workspace · ${c.workspace}`, "set:ws")]] : []),
       [btn("‹ Done", "set:done")],
@@ -1849,6 +1913,13 @@ export class TelegramBot {
         }
         await tg.answerCallbackQuery({ id: cq.id })
         break
+      case "ctx": {
+        const on = !this.#store.injectContext(chatID)
+        this.#store.setInjectContext(chatID, on)
+        await this.#settingsRoot(chatID, msg.message_id)
+        await tg.answerCallbackQuery({ id: cq.id, text: `context: ${on ? "on" : "off"}` })
+        break
+      }
       case "int": {
         const s = this.#store.internals(chatID)
         if (rest === "think") s.thinking = cycleMode(s.thinking)
@@ -1997,17 +2068,22 @@ export class TelegramBot {
       case "deln": {
         const d = c.del
         c.del = null
-        if (d) await this.#tg.editMessageText({ chatID, messageID: d.messageID, text: "canceled", replyMarkup: null })
+        // back to the list in place, instead of a dead-end "canceled" string
+        if (d) await this.#listPicker(chatID, "Conversations:", false, { messageID: d.messageID })
         await tg.answerCallbackQuery({ id: cq.id, text: "canceled" })
         break
       }
       case "lsb": {
         const cmdMessageID = c.picker?.cmdMessageID
         c.picker = null
-        await this.#tg.deleteMessage({ chatID, messageID: msg.message_id }).catch(() => {})
-        // also clean up the /ls or /use message that opened this picker —
-        // bots can delete incoming messages in private chats
-        if (cmdMessageID !== undefined) await this.#tg.deleteMessage({ chatID, messageID: cmdMessageID }).catch(() => {})
+        // both deletes are independent round-trips — run them together instead
+        // of back-to-back, or the /ls message lingers for an extra ~500ms
+        await Promise.all([
+          this.#tg.deleteMessage({ chatID, messageID: msg.message_id }).catch(() => {}),
+          // also clean up the /ls or /use message that opened this picker —
+          // bots can delete incoming messages in private chats
+          cmdMessageID !== undefined ? this.#tg.deleteMessage({ chatID, messageID: cmdMessageID }).catch(() => {}) : Promise.resolve(),
+        ])
         await tg.answerCallbackQuery({ id: cq.id })
         break
       }
@@ -2024,10 +2100,8 @@ export class TelegramBot {
         break
       }
       case "abt": {
-        if (!c.inflight) return tg.answerCallbackQuery({ id: cq.id, text: "nothing running" })
-        await ws.adapter.abort(c.sessionID ?? "")
-        c.inflight.abort()
-        await tg.answerCallbackQuery({ id: cq.id, text: "stopping…" })
+        const stopped = await this.#stopTurn(chatID)
+        await tg.answerCallbackQuery({ id: cq.id, text: stopped ? "stopping…" : "nothing running" })
         break
       }
       case "allow":

@@ -46,6 +46,7 @@ interface SseFrame {
 // inside a generic call argument.
 interface ProviderModelMeta {
   capabilities?: { attachment?: boolean; input?: { image?: boolean } }
+  limit?: { context?: number }
 }
 interface ProviderRoot {
   all?: Array<{ models?: Record<string, ProviderModelMeta> }>
@@ -269,6 +270,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
           out.set(normalized, {
             image: caps.input?.image === true,
             attachment: caps.attachment === true,
+            contextLimit: typeof m.limit?.context === "number" ? m.limit.context : 0,
           })
         }
       }

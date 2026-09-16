@@ -16,6 +16,8 @@ export interface ModelRef {
 export interface ModelCaps {
   image: boolean
   attachment: boolean
+  // max input tokens the model accepts (harness-reported), 0 when unknown
+  contextLimit: number
 }
 
 /**
