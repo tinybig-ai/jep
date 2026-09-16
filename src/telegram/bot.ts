@@ -61,6 +61,12 @@ interface ChatState {
 
 const MAX_MSG = 4000
 const MAX_LIST = 10
+// How long a turn may go without producing *anything* before we call it wedged.
+// This replaces an absolute ceiling: a long agent turn is normal — a refactor
+// can stream tool calls for half an hour and every one of those resets the
+// clock — but total silence is not. Only a turn that has emitted no events at
+// all for this long gets abandoned.
+const TURN_IDLE_MS = Number(process.env.JEP_TURN_IDLE_MS ?? "") || 5 * 60_000
 const WIPE_PAGE = 4
 // files embedded into one rich message via attach:// (keep multipart modest)
 const MAX_RICH_FILES = 4
@@ -1247,6 +1253,15 @@ export class TelegramBot {
     const agent = this.#store.agent(chatID)
 
     const sub = new AbortController()
+    // activity watchdog: every event on this session pushes the deadline out,
+    // so a turn only dies if it has genuinely stalled (see TURN_IDLE_MS)
+    let lastActivity = Date.now()
+    let idleAbort = false
+    const idleTimer = setInterval(() => {
+      if (Date.now() - lastActivity < TURN_IDLE_MS) return
+      idleAbort = true
+      ac.abort()
+    }, 15_000)
     let lastEdit = 0
     let lastText: string | null = null
     let lastHadMarkup = true
@@ -1441,6 +1456,7 @@ export class TelegramBot {
             continue
           }
           if (evt.sessionID !== sessionID) continue
+          lastActivity = Date.now() // this turn is alive — push the watchdog out
           if (userMessages.has(evt.messageID)) continue
           if (evt.type === "part.delta" && evt.text) {
             // reasoning deltas build the collapsible 💭 block but never the answer text
@@ -1479,6 +1495,8 @@ export class TelegramBot {
     try {
       const reply = await ws.adapter.prompt(sessionID, harnessText, {
         signal: ac.signal,
+        // no absolute deadline — the idle watchdog above owns liveness now
+        timeoutMs: 0,
         ...(model ? { model } : {}),
         ...(opts?.filePaths?.length ? { filePaths: opts.filePaths } : {}),
         ...(agent ? { agent } : {}),
@@ -1504,7 +1522,11 @@ export class TelegramBot {
       if (ac.signal.aborted) {
         // render whatever we streamed so far (partial details included)
         const shown = await presentParts(dropFlushed(liveParts), internals)
-        if (!shown) await presentBody("(stopped)")
+        // a stall is not a stop: say so, or it looks like the turn was
+        // cancelled deliberately and the silence goes unexplained
+        const stalled = `⚠️ no activity for ${Math.round(TURN_IDLE_MS / 60_000)}m — turn abandoned`
+        if (!shown) await presentBody(idleAbort ? stalled : "(stopped)")
+        else if (idleAbort) await this.#tg.sendMessage({ chatID, text: stalled })
       } else {
         const text = `⚠️ ${(err as Error).message}`.slice(-MAX_MSG)
         if (placeholder) {
@@ -1517,6 +1539,7 @@ export class TelegramBot {
       }
     } finally {
       clearInterval(typingTimer)
+      clearInterval(idleTimer)
       sub.abort()
       await streamTask.catch(() => {})
       c.inflight = null

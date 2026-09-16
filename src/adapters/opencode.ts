@@ -344,7 +344,11 @@ export class OpenCodeAdapter implements HarnessAdapter {
       void this.abort(sessionID)
     }
     opts?.signal?.addEventListener("abort", onAbort, { once: true })
-    const timer = setTimeout(onAbort, timeout)
+    // timeoutMs: 0 disables the absolute deadline. A real agent turn can run
+    // for half an hour and any fixed ceiling eventually cuts one off mid-work,
+    // so callers that watch the event stream (see the bot's idle watchdog)
+    // opt out of this one and kill the turn on *inactivity* instead.
+    const timer = timeout > 0 ? setTimeout(onAbort, timeout) : null
 
     try {
       const [defaultProvider, defaultModel] = MODEL_REF.split("/")
@@ -371,7 +375,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
       }
       throw err
     } finally {
-      clearTimeout(timer)
+      if (timer) clearTimeout(timer)
       opts?.signal?.removeEventListener("abort", onAbort)
     }
   }
