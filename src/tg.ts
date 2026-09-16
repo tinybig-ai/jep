@@ -248,6 +248,9 @@ async function main() {
     if (mockMode && updates.length === 0) break
   }
 
+  // turns run off the update loop now, so the fixture's last prompts may still
+  // be in flight when the mock input runs dry — let them finish before dumping
+  await bot.drain()
   const dump = (tg as { dump?: () => void }).dump
   if (dump) dump()
   for (const ws of workspaces) await ws.adapter.close()

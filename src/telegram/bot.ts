@@ -509,6 +509,8 @@ export class TelegramBot {
   #extraModels: string[]
   #uploadsDir: string
   #chats = new Map<number, ChatState>()
+  // tail of each chat's turn queue — see #runTurn
+  #turns = new Map<number, Promise<void>>()
   #reminderStore: ReminderStore
   // id -> live timer for every reminder currently scheduled from #reminderStore
   #reminderTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -717,6 +719,36 @@ export class TelegramBot {
     else if (update.stopped_message_generation) await this.#onStopGeneration(update.stopped_message_generation)
   }
 
+  // Runs a turn *off* the update loop. tg.ts awaits handleUpdate for every
+  // update in strict sequence, so awaiting a turn there froze the whole bot
+  // for its entire duration: the "⏹ Stop" callback and Telegram's native stop
+  // both arrive as ordinary updates, and neither could be delivered until the
+  // turn they were meant to cancel had already finished. (The native button
+  // animates client-side on tap, which is why stopping *looked* instant while
+  // the harness kept running.) Other chats were blocked for just as long.
+  //
+  // Turns within one chat still run strictly in order — they share ChatState
+  // and a harness session, so overlapping them would interleave two prompts
+  // in one conversation. Queueing rather than rejecting means firing off
+  // several thoughts in a row just works, which is the whole point on a phone.
+  #runTurn(chatID: number, fn: () => Promise<void>): void {
+    const prev = this.#turns.get(chatID) ?? Promise.resolve()
+    // `.then(fn, fn)` so one failed turn never strands the rest of the queue
+    const next = prev.then(fn, fn).catch((err) => {
+      console.error(`turn failed (chat ${chatID}): ${(err as Error)?.message ?? err}`)
+    })
+    this.#turns.set(chatID, next)
+    // drop the entry once it's the last one, so idle chats don't accumulate
+    void next.then(() => {
+      if (this.#turns.get(chatID) === next) this.#turns.delete(chatID)
+    })
+  }
+
+  /** wait for every queued turn to finish — used by mock mode before exit */
+  async drain(): Promise<void> {
+    while (this.#turns.size) await Promise.all([...this.#turns.values()])
+  }
+
   // best-effort turn cancellation, shared by the native stop button, /abort,
   // and the "⏹ Stop" callback. Always tries the harness-side abort by a
   // freshly-resolved session id — c.inflight (and c.sessionID) live only in
@@ -812,8 +844,10 @@ export class TelegramBot {
           await this.#tg.sendMessage({ chatID, text: `⚠️ couldn't read the image: ${(err as Error).message}` })
         }
       }
-      await this.#freeText(chatID, text, { filePaths })
-      if (mediaFileID) await this.#suggestImageModel(chatID)
+      this.#runTurn(chatID, async () => {
+        await this.#freeText(chatID, text, { filePaths })
+        if (mediaFileID) await this.#suggestImageModel(chatID)
+      })
     }
   }
 
@@ -870,7 +904,9 @@ export class TelegramBot {
 
   async #resolveAwaiting(chatID: number, text: string): Promise<void> {
     const a = this.#chat(chatID).awaiting
-    if (!a) return this.#freeText(chatID, text)
+    // nothing was actually awaited — treat it as an ordinary prompt, queued
+    // like any other so it can't block the update loop either
+    if (!a) return this.#runTurn(chatID, () => this.#freeText(chatID, text))
     this.#chat(chatID).awaiting = null
     if (a.kind === "pair") return this.#attemptPair(chatID, text)
     if (a.kind === "use") return this.#resolveUse(chatID, text)
