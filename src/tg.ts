@@ -210,6 +210,23 @@ async function main() {
   if (!workspaces.length) throw new Error(`no workspace could be started (tried: ${workspaceDirs.join(", ")})`)
   const activeWsName = workspaces[0]!.name
 
+  // The update loop never returns in live mode, so the close() sweep at the
+  // end of main() only ever ran under the mock. Every real restart therefore
+  // orphaned one `opencode serve` per workspace to init, and they accumulated
+  // silently across restarts. launchd stops us with SIGTERM, so take the hint
+  // and shut the children down first. `workspaces` is the live array the bot
+  // itself appends to, so lazily-started servers get cleaned up too.
+  let stopping = false
+  const shutdown = async (sig: string) => {
+    if (stopping) return
+    stopping = true
+    console.error(`${sig} — stopping ${workspaces.length} workspace server(s)`)
+    await Promise.all(workspaces.map((w) => w.adapter.close().catch(() => {})))
+    process.exit(0)
+  }
+  process.once("SIGTERM", () => void shutdown("SIGTERM"))
+  process.once("SIGINT", () => void shutdown("SIGINT"))
+
   const tg = mockMode ? await buildMockApi() : createTelegramApi(process.env.JEP_TG_TOKEN ?? "")
 
   const pairFile = join(DATA_HOME, "pairing.json")
