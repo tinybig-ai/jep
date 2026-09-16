@@ -1,6 +1,5 @@
 import { mkdir, writeFile } from "node:fs/promises"
-import { join } from "node:path"
-import { homedir } from "node:os"
+import { basename, join } from "node:path"
 import type { HarnessAdapter, ModelCaps, ModelRef } from "../core/ports.ts"
 import type { FilePart, Part, ProjectSummary, TextPart, ReasoningPart, ToolCallPart } from "../core/types.ts"
 import { mdToHtml } from "./html.ts"
@@ -99,15 +98,9 @@ const fmtCount = (n: number): string => {
   return String(n)
 }
 
-// display form of a workspace directory: last two path segments (e.g.
-// "code/jep") — enough to disambiguate same-named folders in different
-// parents (a bare basename collapses those to one misleading label) without
-// the full path's length in a status line.
-const fmtWsPath = (dir: string): string => {
-  if (dir === homedir()) return "~"
-  const parts = dir.split("/").filter(Boolean)
-  return parts.slice(-2).join("/") || dir
-}
+// display form of a workspace directory: "/<folder>" — just the basename
+// with a leading slash so it still reads as a path, not a made-up label.
+const fmtWsPath = (dir: string): string => `/${basename(dir)}`
 
 // ─── agent-internals rendering (thinking + tool calls as collapsible details) ───
 
@@ -1520,7 +1513,7 @@ export class TelegramBot {
         /* best-effort */
       }
     }
-    const text = [`» ${fmtWsPath(ws.dir)} · ${model} · ${agent}`, tokensLine].join("\n")
+    const text = [`» ${model} · ${agent} · ${fmtWsPath(ws.dir)}`, tokensLine].join("\n")
 
     const existing = this.#store.statusMsg(chatID)
     if (existing) {
