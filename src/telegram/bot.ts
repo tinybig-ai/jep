@@ -784,28 +784,44 @@ export class TelegramBot {
   // Returns a running Ws for a directory, starting one only if there isn't
   // already one. This is the "spawn to act" half: browsing and listing stay
   // free, and a server appears at the moment you actually open something.
-  async #wsForDir(dir: string): Promise<Ws> {
-    const existing = this.#workspaces.find((w) => w.dir === dir)
+  async #wsForDir(dir: string, harness?: string | null): Promise<Ws> {
+    const existing = this.#workspaces.find((w) => w.dir === dir && (!harness || w.adapter.id === harness))
     if (existing) return existing
-    const w = await this.#spawn(dir)
+    const w = await this.#spawn(dir, harness ?? undefined)
     this.#workspaces.push(w)
     return w
+  }
+
+  // Which harness owns an id, read off the id itself ("codex://…"). Rows in a
+  // picker can outlive the listing that produced them, and a directory can be
+  // served by two harnesses at once, so the id is the only trustworthy source.
+  #harnessOf(sessionID: string): string | null {
+    const i = sessionID.indexOf("://")
+    return i === -1 ? null : sessionID.slice(0, i)
   }
 
   // A /ls row can point at a project with nothing running for it. Acting on
   // one starts its server; #ws(name) alone would silently fall back to the
   // first workspace and act on the wrong project entirely.
-  async #wsForRow(row: { ws: string; dir?: string }): Promise<Ws> {
-    return row.dir ? this.#wsForDir(row.dir) : this.#ws(row.ws)
+  async #wsForRow(row: { id?: string; ws: string; dir?: string }): Promise<Ws> {
+    const harness = row.id ? this.#harnessOf(row.id) : null
+    if (row.dir) return this.#wsForDir(row.dir, harness)
+    // no directory on the row: fall back to the named workspace, but still
+    // prefer the harness the id belongs to when several serve that name
+    const byName = this.#workspaces.filter((w) => w.name === row.ws)
+    const pool = byName.length ? byName : this.#workspaces
+    return pool.find((w) => !harness || w.adapter.id === harness) ?? pool[0]!
   }
 
   // ...but a read doesn't justify starting anything: a cold row's title comes
   // from the same cache /ls listed it from.
   async #rowTitle(row: { id: string; ws: string; dir?: string }): Promise<string> {
-    if (row.dir && !this.#workspaces.some((w) => w.dir === row.dir)) {
-      return this.#store.indexedSessions(row.dir).find((s) => s.id === row.id)?.title ?? ""
+    const harness = this.#harnessOf(row.id)
+    const live = this.#workspaces.find((w) => (row.dir ? w.dir === row.dir : w.name === row.ws) && (!harness || w.adapter.id === harness))
+    if (!live) {
+      return this.#store.indexedSessions(row.dir ?? "", harness).find((s) => s.id === row.id)?.title ?? ""
     }
-    return (await this.#ws(row.ws).adapter.getSession(row.id))?.title ?? ""
+    return (await live.adapter.getSession(row.id))?.title ?? ""
   }
 
   #chat(id: number): ChatState {
@@ -1427,6 +1443,7 @@ export class TelegramBot {
           const list = await w.adapter.listSessions()
           this.#store.setIndexedSessions(
             w.dir,
+            w.adapter.id,
             list.map((s) => ({ id: s.id, title: s.title, updatedAt: s.updatedAt })),
           )
           return list.map((s) => ({ s, ws: w.name, dir: w.dir }))
@@ -1437,14 +1454,17 @@ export class TelegramBot {
       }),
     )
     const liveDirs = new Set(this.#workspaces.map((w) => w.dir))
+    const harnessIDs = [...new Set(this.#workspaces.map((w) => w.adapter.id))]
     const cold = (await this.#knownProjectDirs())
       .filter((dir) => !liveDirs.has(dir))
       .flatMap((dir) =>
-        this.#store.indexedSessions(dir).map((s) => ({
-          s: { id: s.id, title: s.title, updatedAt: s.updatedAt, createdAt: s.updatedAt, workspace: dir },
-          ws: fmtWsPath(dir),
-          dir,
-        })),
+        harnessIDs.flatMap((h) =>
+          this.#store.indexedSessions(dir, h).map((s) => ({
+            s: { id: s.id, title: s.title, updatedAt: s.updatedAt, createdAt: s.updatedAt, workspace: dir },
+            ws: fmtWsPath(dir),
+            dir,
+          })),
+        ),
       )
     const entries = [...live.flat(), ...cold]
     if (!entries.length) {

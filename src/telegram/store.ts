@@ -75,6 +75,12 @@ function migrateModelKeys(models: Record<string, string>): Record<string, string
   return out
 }
 
+// One directory can be served by two harnesses at once, and their session
+// lists are entirely separate — keyed by directory alone they would overwrite
+// each other on every /ls, and the survivor's ids would be offered to the
+// wrong harness.
+const indexKey = (dir: string, harness?: string | null): string => (harness ? `${harness}\u0000${dir}` : dir)
+
 export class ChatStore {
   #titles: Record<string, string>
   #models: Record<string, string>
@@ -196,16 +202,17 @@ export class ChatStore {
   }
 
   /** last known sessions for a workspace dir, newest first */
-  indexedSessions(dir: string): IndexedSession[] {
-    return this.#sessionIndex[dir] ?? []
+  indexedSessions(dir: string, harness?: string | null): IndexedSession[] {
+    return this.#sessionIndex[indexKey(dir, harness)] ?? []
   }
 
   /** remember what a live workspace is holding, so /ls can show it cold later */
-  setIndexedSessions(dir: string, rows: IndexedSession[]): void {
-    const prev = this.#sessionIndex[dir]
+  setIndexedSessions(dir: string, harness: string, rows: IndexedSession[]): void {
+    const key = indexKey(dir, harness)
+    const prev = this.#sessionIndex[key]
     // listing runs on every /ls; skip the write when nothing actually moved
     if (prev && prev.length === rows.length && prev.every((p, k) => p.id === rows[k]!.id && p.title === rows[k]!.title && p.updatedAt === rows[k]!.updatedAt)) return
-    this.#sessionIndex[dir] = rows
+    this.#sessionIndex[key] = rows
     this.#save()
   }
 
