@@ -1539,7 +1539,7 @@ export class TelegramBot {
       return
     }
 
-    const mdl = this.#store.model(chatID)
+    const mdl = this.#store.model(chatID, ws.adapter.id)
     let model
     if (mdl) {
       const sep = mdl.indexOf("/")
@@ -1896,7 +1896,7 @@ export class TelegramBot {
   async #updateStatus(chatID: number): Promise<void> {
     const c = this.#chat(chatID)
     const ws = this.#activeWs(chatID)
-    const modelKey = this.#store.model(chatID)
+    const modelKey = this.#store.model(chatID, ws.adapter.id)
     const model = modelKey ?? "default"
     const agent = this.#store.agent(chatID) ?? "build"
     let tokensLine = "–"
@@ -2074,7 +2074,7 @@ export class TelegramBot {
     const sessionID = await this.#resolveSessionID(chatID)
     const active = sessionID ? await ws.adapter.getSession(sessionID) : null
     const label = active ? this.#displayTitle(active.id, active.title) : "(none)"
-    const model = this.#store.model(chatID) ?? "default"
+    const model = this.#store.model(chatID, ws.adapter.id) ?? "default"
 
     // Only fields with no button of their own belong here. Anything a button
     // already carries (model, agent, internals, context, workspace) would
@@ -2295,7 +2295,7 @@ export class TelegramBot {
   async #settingsModel(chatID: number, messageID: number, requestPage?: number): Promise<void> {
     const c = await this.#chat(chatID)
     const ws = this.#activeWs(chatID)
-    const current = this.#store.model(chatID)
+    const current = this.#store.model(chatID, ws.adapter.id)
     const native: ModelRef[] = ws ? (await ws.adapter.models?.().catch(() => [])) ?? [] : []
     const caps = (await ws.adapter.capabilities?.().catch(() => new Map<string, ModelCaps>())) ?? new Map<string, ModelCaps>()
     const labels: string[] = ["default"]
@@ -2358,7 +2358,7 @@ export class TelegramBot {
   async #suggestImageModel(chatID: number): Promise<void> {
     const c = this.#chat(chatID)
     const ws = this.#activeWs(chatID)
-    const current = this.#store.model(chatID) ?? "default"
+    const current = this.#store.model(chatID, ws.adapter.id) ?? "default"
     if (c.suggestedImage === current) return
     const caps = (await ws.adapter.capabilities?.().catch(() => new Map<string, ModelCaps>())) ?? new Map<string, ModelCaps>()
     if (caps.size === 0) return
@@ -2497,8 +2497,9 @@ export class TelegramBot {
         break
       }
       case "mdl": {
-        if (rest === "off") this.#store.clearModel(chatID)
-        else this.#store.setModel(chatID, rest)
+        const harnessID = this.#activeWs(chatID).adapter.id
+        if (rest === "off") this.#store.clearModel(chatID, harnessID)
+        else this.#store.setModel(chatID, harnessID, rest)
         await this.#settingsModel(chatID, msg.message_id)
         await tg.answerCallbackQuery({ id: cq.id, text: rest === "off" ? "back to default" : `model: ${rest}` })
         void this.#updateStatus(chatID).catch(logFail("status"))

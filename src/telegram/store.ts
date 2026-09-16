@@ -21,7 +21,10 @@ export const DEFAULT_INTERNALS: InternalsSettings = {
 export interface StoreData {
   // session id -> display-name override (client-side; never touches the harness)
   titles: Record<string, string>
-  // chat id -> "provider/model"
+  // "<chat id>:<harness>" -> "provider/model". Scoped per harness because a
+  // model is only meaningful to the harness that offers it: carrying an
+  // opencode-go model into Codex asks it to run something it has never heard
+  // of, and it fails the turn rather than ignoring it.
   models: Record<string, string>
   // chat id -> how much agent internals (thinking / tool calls) to show
   internals?: Record<string, InternalsSettings>
@@ -60,6 +63,18 @@ export interface IndexedSession {
   updatedAt: number
 }
 
+// Model keys used to be the bare chat id, from when opencode was the only
+// harness. Fold those into the harness-scoped form once, on load, so an
+// existing chat keeps the model it was already using.
+const LEGACY_MODEL_HARNESS = "opencode"
+function migrateModelKeys(models: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(models)) {
+    out[k.includes(":") ? k : `${k}:${LEGACY_MODEL_HARNESS}`] = v
+  }
+  return out
+}
+
 export class ChatStore {
   #titles: Record<string, string>
   #models: Record<string, string>
@@ -77,7 +92,7 @@ export class ChatStore {
   // every new field was another chance to line them up wrong
   constructor(d: StoreData, file: string | null) {
     this.#titles = d.titles ?? {}
-    this.#models = d.models ?? {}
+    this.#models = migrateModelKeys(d.models ?? {})
     this.#internals = d.internals ?? {}
     this.#agents = d.agents ?? {}
     this.#statusMsgs = d.statusMsgs ?? {}
@@ -102,8 +117,8 @@ export class ChatStore {
     return this.#titles[id] ?? null
   }
 
-  model(chatID: number): string | null {
-    return this.#models[String(chatID)] ?? null
+  model(chatID: number, harness: string): string | null {
+    return this.#models[`${chatID}:${harness}`] ?? null
   }
 
   internals(chatID: number): InternalsSettings {
@@ -195,13 +210,13 @@ export class ChatStore {
     this.#save()
   }
 
-  setModel(chatID: number, model: string): void {
-    this.#models[String(chatID)] = model
+  setModel(chatID: number, harness: string, model: string): void {
+    this.#models[`${chatID}:${harness}`] = model
     this.#save()
   }
 
-  clearModel(chatID: number): void {
-    delete this.#models[String(chatID)]
+  clearModel(chatID: number, harness: string): void {
+    delete this.#models[`${chatID}:${harness}`]
     this.#save()
   }
 
@@ -211,7 +226,7 @@ export class ChatStore {
   }
 
   clearAll(chatID: number): void {
-    delete this.#models[String(chatID)]
+    for (const k of Object.keys(this.#models)) if (k.startsWith(`${chatID}:`)) delete this.#models[k]
     this.#titles = {}
     this.#save()
   }
