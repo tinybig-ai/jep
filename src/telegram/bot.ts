@@ -132,6 +132,24 @@ const fmtCount = (n: number): string => {
   return String(n)
 }
 
+// "how long since this conversation last moved", for list rows. Coarse on
+// purpose: the point is to tell yesterday's thread from the one you were in
+// ten minutes ago, not to report a duration.
+const timeAgo = (ts: number): string => {
+  const ms = Date.now() - ts
+  if (!ts || ms < 0) return ""
+  const min = Math.round(ms / 60_000)
+  if (min < 1) return "just now"
+  if (min < 60) return `${min}m ago`
+  const hr = Math.round(min / 60)
+  if (hr < 24) return `${hr}h ago`
+  const day = Math.round(hr / 24)
+  if (day < 7) return `${day}d ago`
+  const wk = Math.round(day / 7)
+  if (wk < 5) return `${wk}w ago`
+  return `${Math.round(day / 30)}mo ago`
+}
+
 // display form of a workspace directory: just the folder name
 const fmtWsPath = (dir: string): string => basename(dir)
 
@@ -1414,7 +1432,10 @@ export class TelegramBot {
     const shown = sorted.slice(0, MAX_LIST)
     // a row from a workspace other than the active one gets tagged with its
     // origin, since the list can now span several projects at once.
-    const label = ({ s, ws }: (typeof shown)[number]) => `${this.#displayTitle(s.id, s.title)}${ws !== c.workspace ? ` · ${ws}` : ""}`
+    const label = ({ s, ws }: (typeof shown)[number]) => {
+      const age = timeAgo(s.updatedAt)
+      return `${this.#displayTitle(s.id, s.title)}${ws !== c.workspace ? ` · ${ws}` : ""}${age ? ` (${age})` : ""}`
+    }
     // 🗑 first (left of the title, not right) reads as "here's the destructive
     // action, then the thing it acts on" and lines up under itself row to row.
     // The active conversation is green (same style Settings uses), not a
@@ -2410,7 +2431,10 @@ export class TelegramBot {
     c.page = page
     const rows: InlineButton[][] = ids
       .slice(page * MAX_LIST, (page + 1) * MAX_LIST)
-      .map((id) => [btn(this.#displayTitle(id, ""), `ren:${ids.indexOf(id)}`)])
+      .map((id) => {
+        const age = timeAgo(sorted.find((x) => x.id === id)?.updatedAt ?? 0)
+        return [btn(`${this.#displayTitle(id, "")}${age ? ` (${age})` : ""}`, `ren:${ids.indexOf(id)}`)]
+      })
     if (pages > 1) {
       const prev = btn("‹ Prev", "renp:prev")
       const next = btn("Next ›", "renp:next")
