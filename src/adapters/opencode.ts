@@ -319,11 +319,14 @@ export class OpenCodeAdapter implements HarnessAdapter {
 
   #toSummary(s: any): SessionSummary {
     const created = s.time && typeof s.time === "object" ? s.time.created : s.time
+    const createdAt = typeof created === "number" ? created : Date.now()
+    const updated = s.time && typeof s.time === "object" ? s.time.updated : undefined
     return {
       id: toInternalId(s.id),
       title: s.title ?? "",
       workspace: s.directory ?? this.workspace,
-      createdAt: typeof created === "number" ? created : Date.now(),
+      createdAt,
+      updatedAt: typeof updated === "number" ? updated : createdAt,
     }
   }
 

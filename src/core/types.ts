@@ -5,6 +5,9 @@ export interface SessionSummary {
   title: string
   workspace: string
   createdAt: number
+  // last activity, for "most recently active" ordering — falls back to
+  // createdAt when the harness doesn't report it separately
+  updatedAt: number
 }
 
 // a harness-level grouping sessions belong to (opencode: the enclosing git

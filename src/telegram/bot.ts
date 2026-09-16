@@ -667,12 +667,10 @@ export class TelegramBot {
       c.freshOnNext = false
     } else {
       const list = await ws.adapter.listSessions()
-      const newest = list
-        .map((s) => ({ s, t: s.time?.updated ?? 0 }))
-        .sort((a, b) => b.t - a.t)[0]
+      const newest = [...list].sort((a, b) => b.updatedAt - a.updatedAt)[0]
       if (newest) {
-        c.sessionID = newest.s.id
-        return newest.s.id
+        c.sessionID = newest.id
+        return newest.id
       }
     }
     const title = (firstText ?? "").slice(0, 40) || "My chat"
@@ -1017,8 +1015,9 @@ export class TelegramBot {
     c.picker = null
     c.del = null
     c.page = 0
-    if (replyId === null) await this.#tg.sendMessage({ chatID, text: "💬 new conversation" })
-    else await this.#tg.editMessageText({ chatID, messageID: replyId, text: "💬 new conversation", replyMarkup: null })
+    const text = title ? `💬 new conversation: ${title}` : "💬 new conversation"
+    if (replyId === null) await this.#tg.sendMessage({ chatID, text })
+    else await this.#tg.editMessageText({ chatID, messageID: replyId, text, replyMarkup: null })
     void this.#updateStatus(chatID).catch(() => {})
   }
 
@@ -1026,7 +1025,7 @@ export class TelegramBot {
   // each row: the conversation (tap to switch) + a small 🗑 next to it (tap
   // for a delete confirmation, via the existing deld/dely/deln flow) — one
   // view does both jobs, so there's no separate delete-only picker anymore.
-  async #listPicker(chatID: number, caption: string, forceReply = false): Promise<void> {
+  async #listPicker(chatID: number, caption: string, forceReply = false, edit?: { messageID: number }): Promise<void> {
     const c = this.#chat(chatID)
     // spans every workspace the harness knows about, not just the active
     // one — #discoverWorkspaces lazily starts serving any project it hasn't
@@ -1037,10 +1036,13 @@ export class TelegramBot {
       await Promise.all(workspaces.map(async (w) => (await w.adapter.listSessions()).map((s) => ({ s, ws: w.name }))))
     ).flat()
     if (!entries.length) {
-      await this.#tg.sendMessage({ chatID, text: "(no conversations yet — just send a message)" })
+      const text = "(no conversations yet — just send a message)"
+      if (edit) await this.#tg.editMessageText({ chatID, messageID: edit.messageID, text, replyMarkup: null })
+      else await this.#tg.sendMessage({ chatID, text })
+      c.picker = null
       return
     }
-    const sorted = entries.sort((a, b) => (b.s.time?.updated ?? 0) - (a.s.time?.updated ?? 0))
+    const sorted = entries.sort((a, b) => b.s.updatedAt - a.s.updatedAt)
     const shown = sorted.slice(0, MAX_LIST)
     // a row from a workspace other than the active one gets tagged with its
     // origin, since the list can now span several projects at once.
@@ -1054,6 +1056,9 @@ export class TelegramBot {
       if (entry.s.id === c.sessionID && entry.ws === c.workspace) openBtn.style = "success"
       return [{ ...btn("🗑", `deld:${i}`), style: "danger" as const }, openBtn]
     })
+    // dismisses the picker entirely (deletes the message, not just its
+    // keyboard) — the way back out without typing /cancel.
+    rows.push([btn("‹ Back", "lsb")])
     const more = sorted.length > MAX_LIST ? [`… and ${sorted.length - MAX_LIST} more`] : []
 
     let messageID: number | undefined
@@ -1073,7 +1078,8 @@ export class TelegramBot {
       // button to its own label instead of splitting the row evenly, so the
       // 🗑 actually reads as smaller than the conversation button next to it.
       // No separate text list — the buttons already say what they need to.
-      messageID = (await this.#menu(chatID, [caption, ...more], rows)).messageID
+      const result = await this.#menu(chatID, [caption, ...more], rows, edit)
+      messageID = edit ? edit.messageID : result.messageID
     }
     if (messageID === undefined) return
     c.picker = { messageID, sessions: shown.map(({ s, ws }) => ({ id: s.id, ws })) }
@@ -1510,7 +1516,7 @@ export class TelegramBot {
   async #wipePick(chatID: number, page: number, messageID: number | null): Promise<void> {
     const c = this.#chat(chatID)
     const ws = this.#ws(c.workspace)
-    const sorted = [...(await ws.adapter.listSessions())].sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))
+    const sorted = [...(await ws.adapter.listSessions())].sort((a, b) => b.updatedAt - a.updatedAt)
     const ids = sorted.map((s) => s.id)
     const lastPage = Math.max(0, Math.ceil(ids.length / WIPE_PAGE) - 1)
     const p = Math.max(0, Math.min(page, lastPage))
@@ -1781,7 +1787,7 @@ export class TelegramBot {
       return
     }
     const ws = this.#ws(c.workspace)
-    const sorted = [...(await ws.adapter.listSessions())].sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))
+    const sorted = [...(await ws.adapter.listSessions())].sort((a, b) => b.updatedAt - a.updatedAt)
     const ids = sorted.map((s) => s.id)
     if (!ids.length) {
       await this.#tg.editMessageText({ chatID, messageID, text: "(no conversations to rename — just send a message first)", replyMarkup: null })
@@ -1963,13 +1969,19 @@ export class TelegramBot {
         if (row) {
           await this.#ws(row.ws).adapter.deleteSession(row.id)
           if (c.sessionID === row.id && c.workspace === row.ws) {
-            c.sessionID = null
-            c.freshOnNext = true
+            // fall back to whatever's now the most recently active
+            // conversation, so the refreshed list still has one highlighted
+            // instead of nothing selected
+            const remaining = await this.#ws(row.ws).adapter.listSessions()
+            const latest = [...remaining].sort((a, b) => b.updatedAt - a.updatedAt)[0]
+            c.sessionID = latest?.id ?? null
+            c.freshOnNext = !latest
           }
         }
-        c.picker = null
         c.del = null
-        await this.#tg.editMessageText({ chatID, messageID: d.messageID, text: "🗑 deleted", replyMarkup: null })
+        // back to the (now shorter) list in place, instead of a dead-end
+        // "deleted" string — #listPicker refreshes c.picker itself
+        await this.#listPicker(chatID, "Conversations:", false, { messageID: d.messageID })
         await tg.answerCallbackQuery({ id: cq.id, text: "deleted" })
         break
       }
@@ -1978,6 +1990,12 @@ export class TelegramBot {
         c.del = null
         if (d) await this.#tg.editMessageText({ chatID, messageID: d.messageID, text: "canceled", replyMarkup: null })
         await tg.answerCallbackQuery({ id: cq.id, text: "canceled" })
+        break
+      }
+      case "lsb": {
+        c.picker = null
+        await this.#tg.deleteMessage({ chatID, messageID: msg.message_id }).catch(() => {})
+        await tg.answerCallbackQuery({ id: cq.id })
         break
       }
       case "wsw": {
