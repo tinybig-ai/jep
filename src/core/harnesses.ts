@@ -1,5 +1,6 @@
 import { startOpenCodeServer } from "../adapters/opencode.ts"
 import { startCodexAdapter } from "../adapters/codex.ts"
+import { startClaudeAdapter } from "../adapters/claude.ts"
 import type { HarnessAdapter, HarnessSupervisor } from "./ports.ts"
 
 /**
@@ -45,6 +46,23 @@ export function buildHarnesses(opts: HarnessOpts = {}): HarnessInfo[] {
         try {
           // cheap: no server, just `codex --version`
           const probe = await startCodexAdapter(process.cwd())
+          const h = await probe.health()
+          await probe.close()
+          return h.healthy
+        } catch {
+          return false
+        }
+      },
+    },
+    {
+      id: "claude",
+      label: "🔶 claude",
+      async start(workspace: string): Promise<HarnessAdapter> {
+        return startClaudeAdapter(workspace)
+      },
+      async available(): Promise<boolean> {
+        try {
+          const probe = await startClaudeAdapter(process.cwd())
           const h = await probe.health()
           await probe.close()
           return h.healthy
