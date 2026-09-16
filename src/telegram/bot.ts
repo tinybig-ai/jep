@@ -1491,18 +1491,18 @@ export class TelegramBot {
     const shown = sorted.slice(page * MAX_LIST, page * MAX_LIST + MAX_LIST)
     // a row from a workspace other than the active one gets tagged with its
     // origin, since the list can now span several projects at once.
-    // The harness is part of a row's identity, not decoration: the same
-    // directory can hold an opencode and a codex conversation with similar
-    // titles, and opening the wrong one starts a thread the other can't read.
-    // Icon only — the names are in Settings, and a row has no width to spare.
-    const icon = (sessionID: string): string => {
-      const id = this.#harnessOf(sessionID)
-      const known = id ? this.#harnessList.find((h) => h.id === id) : undefined
-      return known ? `${known.icon} ` : ""
-    }
+    // The harness is part of a row's identity — the same directory can hold an
+    // opencode and a codex conversation with similar titles, and opening the
+    // wrong one resumes a thread the other cannot read. It is only worth
+    // *saying* when it differs from the harness this chat is on, which is the
+    // same rule the workspace tag already follows: silent when it matches,
+    // named when it doesn't.
+    const activeHarness = this.#activeWs(chatID).adapter.id
     const label = ({ s, ws }: (typeof shown)[number]) => {
       const age = timeAgo(s.updatedAt)
-      return `${icon(s.id)}${clipTitle(this.#displayTitle(s.id, s.title))}${ws !== c.workspace ? ` · ${ws}` : ""}${age ? ` (${age})` : ""}`
+      const harness = this.#harnessOf(s.id)
+      const tags = [ws !== c.workspace ? ws : "", harness && harness !== activeHarness ? harness : ""].filter(Boolean)
+      return `${clipTitle(this.#displayTitle(s.id, s.title))}${tags.map((t) => ` · ${t}`).join("")}${age ? ` (${age})` : ""}`
     }
     // 🗑 first (left of the title, not right) reads as "here's the destructive
     // action, then the thing it acts on" and lines up under itself row to row.
