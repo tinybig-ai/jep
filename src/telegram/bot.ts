@@ -1757,9 +1757,8 @@ export class TelegramBot {
         console.error(`[status] diff read failed: ${(err as Error)?.message ?? err}`)
       }
     }
-    // one line, one separator, widest-scope first: where you are, what's
-    // answering, how full it is, what it's allowed to do
-    const text = [fmtWsPath(ws.dir), model, tokensLine, agentIcon(agent)].join(" · ")
+    // one line, one separator: what it's allowed to do, where, how full, on what
+    const text = [agentIcon(agent), fmtWsPath(ws.dir), tokensLine, model].join(" · ")
 
     const existing = this.#store.statusMsg(chatID)
     if (existing) {
