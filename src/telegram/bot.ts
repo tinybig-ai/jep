@@ -1433,7 +1433,10 @@ export class TelegramBot {
     // Streaming draft: prefer a RICH draft (Bot API 10.1+ — tables, code and the
     // collapsible thinking/tool details render live) with a native stop button;
     // fall back to a plain-text draft, then the legacy placeholder.
-    const draftID = c.draft + 1
+    // persisted, so it keeps climbing across restarts — a draft id is consumed
+    // once the real message lands, and reusing one is accepted by Telegram but
+    // renders nothing at all
+    const draftID = this.#store.nextDraftID(chatID)
     c.draft = draftID
     let draftMode: "rich" | "text" | "none" = "none"
     try {

@@ -47,6 +47,11 @@ export interface StoreData {
   // first one and the conversation to whatever was newest there. Keyed by
   // directory, not workspace name, since names can shift on collision.
   chatContext?: Record<string, { dir: string; sessionID: string | null }>
+  // chat id -> last draft id handed out. Telegram draft ids are consumed once
+  // the real message lands, and a reused one is accepted but never rendered.
+  // The counter lived only in memory, so every first turn after a restart
+  // asked for draft 1 again and silently got no preview at all.
+  draftSeq?: Record<string, number>
 }
 
 export interface IndexedSession {
@@ -65,6 +70,7 @@ export class ChatStore {
   #workspaces: string[]
   #sessionIndex: Record<string, IndexedSession[]>
   #chatContext: Record<string, { dir: string; sessionID: string | null }>
+  #draftSeq: Record<string, number>
   #file: string | null
 
   // takes the persisted shape as-is: this grew to seven positional args and
@@ -79,6 +85,7 @@ export class ChatStore {
     this.#workspaces = d.workspaces ?? []
     this.#sessionIndex = d.sessionIndex ?? {}
     this.#chatContext = d.chatContext ?? {}
+    this.#draftSeq = d.draftSeq ?? {}
     this.#file = file
   }
 
@@ -160,6 +167,14 @@ export class ChatStore {
     this.#save()
   }
 
+  /** next draft id for a chat — monotonic across restarts, never reused */
+  nextDraftID(chatID: number): number {
+    const next = (this.#draftSeq[String(chatID)] ?? 0) + 1
+    this.#draftSeq[String(chatID)] = next
+    this.#save()
+    return next
+  }
+
   /** last known sessions for a workspace dir, newest first */
   indexedSessions(dir: string): IndexedSession[] {
     return this.#sessionIndex[dir] ?? []
@@ -216,6 +231,7 @@ export class ChatStore {
           workspaces: this.#workspaces,
           sessionIndex: this.#sessionIndex,
           chatContext: this.#chatContext,
+          draftSeq: this.#draftSeq,
         },
         null,
         2,
