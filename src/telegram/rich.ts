@@ -7,6 +7,18 @@
 export {}
 import { isRow, isSep, parseRow, parseTable } from "./html.ts"
 
+// builds a GFM table from headers + rows — the inverse of parseTable/
+// mdToRich, for callers that have structured data and want it rendered as a
+// native table (falls back to plain text same as any other markdown, since
+// it's just markdown source). A stray "|" in a cell is swapped for a
+// lookalike character: the parser below has no escape syntax, so a literal
+// pipe would otherwise corrupt the column count.
+export function mdTable(headers: string[], rows: string[][]): string {
+  const cell = (s: string) => s.replace(/\|/g, "¦")
+  const line = (cells: string[]) => `| ${cells.map(cell).join(" | ")} |`
+  return [line(headers), line(headers.map(() => "---")), ...rows.map(line)].join("\n")
+}
+
 // While a table is still streaming, the header row alone renders as raw
 // "| a | b |" text until the GFM separator row ("|---|---|") lands. Once the
 // header is followed by the *start* of a second line — not just the header

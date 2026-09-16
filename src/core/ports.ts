@@ -58,8 +58,6 @@ export interface HarnessAdapter {
    * adapter itself is rooted in — lets a frontend discover (and lazily start
    * serving) sessions that live outside the currently active workspace */
   listProjects?(): Promise<ProjectSummary[]>
-  /** user-selectable primary agents (e.g. build/plan), if the harness exposes them */
-  agents?(): Promise<{ name: string; mode: "primary" | "subagent" | "all" }[]>
   /** file changes accumulated in this session so far, if the harness tracks them */
   diff?(sessionID: string): Promise<FileDiff[]>
   /** Stop the child server. Sessions stay on disk for the next boot. */

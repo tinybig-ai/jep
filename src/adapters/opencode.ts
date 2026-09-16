@@ -312,11 +312,6 @@ export class OpenCodeAdapter implements HarnessAdapter {
     return projects.filter((p) => p.worktree && p.worktree !== "/").map((p) => ({ id: p.id, worktree: p.worktree }))
   }
 
-  async agents(): Promise<{ name: string; mode: "primary" | "subagent" | "all" }[]> {
-    const list = await this.#json<any[]>("/agent")
-    return list.map((a) => ({ name: a.name, mode: a.mode }))
-  }
-
   async diff(sessionID: string): Promise<FileDiff[]> {
     const rows = await this.#json<any[]>(`/session/${encodeURIComponent(toNativeId(sessionID))}/diff`)
     return rows.map((r) => ({ file: r.file ?? "", additions: r.additions ?? 0, deletions: r.deletions ?? 0, status: r.status }))

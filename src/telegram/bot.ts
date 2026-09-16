@@ -3,7 +3,7 @@ import { join } from "node:path"
 import type { HarnessAdapter, ModelCaps, ModelRef } from "../core/ports.ts"
 import type { FilePart, Part, ProjectSummary, TextPart, ReasoningPart, ToolCallPart } from "../core/types.ts"
 import { mdToHtml } from "./html.ts"
-import { closeStreamingTable, mdToRich } from "./rich.ts"
+import { closeStreamingTable, mdTable, mdToRich } from "./rich.ts"
 import type { RichBlock } from "./rich.ts"
 import type { TelegramApi, TgMessage, TgUpdate, InlineButton, ReplyMarkup } from "./api.ts"
 import { runComplianceSuite } from "../core/compliance.ts"
@@ -85,6 +85,13 @@ const fmtDuration = (ms: number): string => {
   if (s < 3600) return `${Math.round(s / 60)}m`
   if (s < 86_400) return `${Math.round(s / 3600)}h`
   return `${Math.round(s / 86_400)}d`
+}
+
+// 12_430 -> "12.4K", 1_834_219 -> "1.8M" — compact like a status bar, not a spreadsheet
+const fmtCount = (n: number): string => {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}K`
+  return String(n)
 }
 
 // ─── agent-internals rendering (thinking + tool calls as collapsible details) ───
@@ -888,6 +895,29 @@ export class TelegramBot {
         await tg.sendMessage({ chatID, text: body })
         break
       }
+      case "diff": {
+        const sessionID = await this.#ensureSession(chatID)
+        const diff = (await ws.adapter.diff?.(sessionID)) ?? []
+        if (!diff.length) {
+          await tg.sendMessage({ chatID, text: "(no file changes yet)" })
+          break
+        }
+        const body = mdTable(
+          ["File", "+", "-"],
+          diff.map((f) => [f.file, `+${f.additions}`, `-${f.deletions}`]),
+        )
+        const blocks = mdToRich(body)
+        if (blocks.length) {
+          try {
+            await tg.sendRichMessage({ chatID, rich_message: { blocks } })
+            break
+          } catch {
+            // no rich support → plain text
+          }
+        }
+        await tg.sendMessage({ chatID, text: body })
+        break
+      }
       case "use": {
         if (!arg) {
           c.awaiting = { kind: "use" }
@@ -1387,16 +1417,15 @@ export class TelegramBot {
   }
 
   // one pinned, edited-in-place message per chat: workspace, model, agent,
-  // context usage, and changed files — a live status line so you don't need
-  // /settings just to see what you're pointed at. Best-effort: a failure here
-  // never breaks the turn that triggered it (see the void .catch() call site).
+  // and context usage — a live status line so you don't need /settings just
+  // to see what you're pointed at. Best-effort: a failure here never breaks
+  // the turn that triggered it (see the void .catch() call site).
   async #updateStatus(chatID: number): Promise<void> {
     const c = this.#chat(chatID)
     const ws = this.#ws(c.workspace)
     const model = this.#store.model(chatID) ?? "default"
     const agent = this.#store.agent(chatID) ?? "build"
     let tokensLine = "context: –"
-    let filesLine = "files: –"
     if (c.sessionID) {
       try {
         const msgs = await ws.adapter.messages(c.sessionID)
@@ -1404,23 +1433,13 @@ export class TelegramBot {
         if (last?.tokens) {
           const t = last.tokens
           const total = t.input + t.output + t.reasoning + t.cache.read + t.cache.write
-          tokensLine = `context: ${total.toLocaleString()} tokens`
-        }
-      } catch {
-        /* best-effort */
-      }
-      try {
-        const diff = await ws.adapter.diff?.(c.sessionID)
-        if (diff) {
-          const add = diff.reduce((s, f) => s + f.additions, 0)
-          const del = diff.reduce((s, f) => s + f.deletions, 0)
-          filesLine = diff.length ? `files: ${diff.length} changed (+${add}/-${del})` : "files: none changed"
+          tokensLine = `context: ${fmtCount(total)} tokens`
         }
       } catch {
         /* best-effort */
       }
     }
-    const text = [`» ${ws.name}`, `${model} · ${agent}`, tokensLine, filesLine].join("\n")
+    const text = [`» ${ws.name}`, `${model} · ${agent}`, tokensLine].join("\n")
 
     const existing = this.#store.statusMsg(chatID)
     if (existing) {
