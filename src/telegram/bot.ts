@@ -1093,6 +1093,9 @@ export class TelegramBot {
     // preserve the originating /ls or /use command message across a refresh
     // (e.g. after a delete) so "‹ Back" can still clean it up later
     const cmdID = cmdMessageID ?? (edit ? c.picker?.cmdMessageID : undefined)
+    // resolved (not raw c.sessionID) so the active row still highlights right
+    // after a bot restart, before the in-memory pointer is re-derived
+    const currentSessionID = await this.#resolveSessionID(chatID)
     // spans every workspace the harness knows about, not just the active
     // one — #discoverWorkspaces lazily starts serving any project it hasn't
     // seen yet, so an old conversation from an unconfigured project shows up
@@ -1119,7 +1122,7 @@ export class TelegramBot {
     // marker glued onto the label.
     const rows: InlineButton[][] = shown.map((entry, i) => {
       const openBtn = btn(`${i + 1}. ${label(entry)}`, `open:${i}`)
-      if (entry.s.id === c.sessionID && entry.ws === c.workspace) openBtn.style = "success"
+      if (entry.s.id === currentSessionID && entry.ws === c.workspace) openBtn.style = "success"
       return [{ ...btn("🗑", `deld:${i}`), style: "danger" as const }, openBtn]
     })
     // dismisses the picker entirely (deletes the message, not just its
@@ -1134,7 +1137,7 @@ export class TelegramBot {
       // the classic, evenly-split row. It also needs the text list (unlike
       // the button-only paths below): forceReply means typing is expected,
       // and there's nothing to read a title off of while composing a reply.
-      const list = shown.map((entry, i) => `${i + 1}. "${label(entry)}"${entry.s.id === c.sessionID && entry.ws === c.workspace ? "  ◀" : ""}`)
+      const list = shown.map((entry, i) => `${i + 1}. "${label(entry)}"${entry.s.id === currentSessionID && entry.ws === c.workspace ? "  ◀" : ""}`)
       const markup = kin(rows)
       markup.force_reply = true
       const msg = await this.#tg.sendMessage({ chatID, text: [caption, "", ...list, ...more].join("\n"), replyMarkup: markup })
@@ -1672,7 +1675,8 @@ export class TelegramBot {
   async #settingsRoot(chatID: number, messageID: number | null): Promise<void> {
     const c = this.#chat(chatID)
     const ws = this.#ws(c.workspace)
-    const active = c.sessionID ? await ws.adapter.getSession(c.sessionID) : null
+    const sessionID = await this.#resolveSessionID(chatID)
+    const active = sessionID ? await ws.adapter.getSession(sessionID) : null
     const label = active ? this.#displayTitle(active.id, active.title) : "(none)"
     const model = this.#store.model(chatID) ?? "default"
     const total = (await ws.adapter.listSessions()).length
@@ -1854,8 +1858,9 @@ export class TelegramBot {
   async #settingsRename(chatID: number, messageID: number, requestPage?: number): Promise<void> {
     const c = this.#chat(chatID)
     // renaming is about the conversation you're already in — no picker needed
-    if (c.sessionID) {
-      c.awaiting = { kind: "rename", sessionID: c.sessionID }
+    const activeSessionID = await this.#resolveSessionID(chatID)
+    if (activeSessionID) {
+      c.awaiting = { kind: "rename", sessionID: activeSessionID }
       await this.#tg.editMessageText({ chatID, messageID, text: "✏️ Type the new name for this conversation…", replyMarkup: null })
       return
     }
@@ -1863,7 +1868,12 @@ export class TelegramBot {
     const sorted = [...(await ws.adapter.listSessions())].sort((a, b) => b.updatedAt - a.updatedAt)
     const ids = sorted.map((s) => s.id)
     if (!ids.length) {
-      await this.#tg.editMessageText({ chatID, messageID, text: "(no conversations to rename — just send a message first)", replyMarkup: null })
+      await this.#menu(
+        chatID,
+        ["✏️ Rename", "", "(no conversations to rename — just send a message first)"],
+        [[btn("‹ Back", "set:root")]],
+        { messageID },
+      )
       return
     }
     const pages = Math.max(1, Math.ceil(ids.length / MAX_LIST))
