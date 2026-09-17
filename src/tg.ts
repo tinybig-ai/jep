@@ -1,4 +1,5 @@
 import { readFileSync, existsSync, mkdirSync, copyFileSync } from "node:fs"
+import { readdir } from "node:fs/promises"
 import { join, sep } from "node:path"
 import { mkdtempSync } from "node:fs"
 import { tmpdir, homedir } from "node:os"
@@ -176,6 +177,32 @@ async function buildMockApi(): Promise<TelegramApi> {
   }
 }
 
+// macOS gates ~/Documents, ~/Desktop, ~/Downloads and iCloud Drive behind TCC,
+// and a launchd job holds none of those grants. A read there does not fail — it
+// blocks, with no prompt — so a single workspace in one of them would hang the
+// boot, or a turn, with nothing to show for it. Every directory is opened with
+// a deadline before anything else touches it. "blocked" covers the mount that
+// went away too: from here they are the same problem, a directory that will not
+// answer.
+//
+// The stuck read keeps one libuv threadpool thread (four by default) for the
+// life of the process, so a directory is probed once, never in a loop.
+const DIR_PROBE_MS = Number(process.env.JEP_DIR_PROBE_MS ?? 4000)
+type DirState = "ok" | "missing" | "blocked"
+async function probeDir(dir: string): Promise<DirState> {
+  const read: Promise<DirState> = readdir(dir).then(
+    () => "ok",
+    (err) => ((err as NodeJS.ErrnoException)?.code === "ENOENT" ? "missing" : "blocked"),
+  )
+  const deadline = new Promise<DirState>((resolve) => {
+    setTimeout(() => resolve("blocked"), DIR_PROBE_MS).unref()
+  })
+  return Promise.race([read, deadline])
+}
+
+const unreadable = (dir: string): string =>
+  `${dir} can't be read — macOS file protection (Full Disk Access), or the volume is gone. See docs/PROCESSES.md`
+
 async function main() {
   syncOpenCodeAuth()
   const mockMode = process.env.JEP_TG_MOCK === "1"
@@ -190,12 +217,19 @@ async function main() {
   // ...plus anything added from the phone. Env dirs stay first, so the active
   // workspace is still whatever the machine was configured with. A saved dir
   // that has since been deleted is dropped rather than failing the boot.
-  const saved = store.workspaces().filter((d) => {
-    if (existsSync(d)) return true
-    console.error(`[ws] forgetting ${d} — no longer on disk`)
-    store.removeWorkspace(d)
-    return false
-  })
+  const saved: string[] = []
+  for (const d of store.workspaces()) {
+    const state = await probeDir(d)
+    if (state === "ok") saved.push(d)
+    else if (state === "missing") {
+      console.error(`[ws] forgetting ${d} — no longer on disk`)
+      store.removeWorkspace(d)
+    } else {
+      // kept in the store: a grant can come back, and forgetting the user's
+      // project because macOS said no today would be the wrong repair
+      console.error(`[ws] skipping ${unreadable(d)}`)
+    }
+  }
   const workspaceDirs = [...new Set([...bootDirs, ...saved])]
 
   const workspaces: Ws[] = []
@@ -209,6 +243,12 @@ async function main() {
     const want = harnessID ?? DEFAULT_HARNESS
     const harness = harnesses.find((h) => h.id === want)
     if (!harness) throw new Error(`unknown harness '${want}' (have: ${harnesses.map((h) => h.id).join(", ")})`)
+    // before the harness is handed a directory it will read from a dozen
+    // places: one bounded read here turns a hang into a sentence, on the boot
+    // path and on the one where a project is added from the phone
+    const state = await probeDir(dir)
+    if (state === "missing") throw new Error(`${dir} is not on disk`)
+    if (state === "blocked") throw new Error(unreadable(dir))
     const ad = await harness.start(dir)
     assertAdapterImplements(ad)
     return { name: uniqueWsName(dir, workspaces), dir, adapter: ad }
@@ -229,7 +269,7 @@ async function main() {
   // holding a codex session id, and every read 500'd.
   for (const ctx of store.allChatContexts()) {
     if (!ctx.harness || ctx.harness === DEFAULT_HARNESS) continue
-    if (!existsSync(ctx.dir)) continue
+    if ((await probeDir(ctx.dir)) !== "ok") continue
     if (workspaces.some((w) => w.dir === ctx.dir && w.adapter.id === ctx.harness)) continue
     try {
       workspaces.push(await spawnWorkspace(ctx.dir, ctx.harness))

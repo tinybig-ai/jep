@@ -2324,6 +2324,10 @@ export class TelegramBot {
       `conversation: "${label}"`,
     ]
     const rows: InlineButton[][] = [
+      // /ls by another route: Settings is where people look for "where am I,
+      // and how do I get somewhere else", and switching conversations was the
+      // one answer that lived only behind a typed command
+      [btn("💬 Conversations", "set:ls")],
       [btn(`🤖 Model · ${model}`, "set:model")],
       [btn(`🧭 Agent · ${this.#store.agent(chatID) ?? "build"}`, "set:agent")],
       // always shown, like 🗂 Workspace: hiding a row until a second option
@@ -2713,6 +2717,9 @@ export class TelegramBot {
         else if (rest === "rename") await this.#settingsRename(chatID, msg.message_id)
         else if (rest === "ws") await this.#settingsWorkspace(chatID, msg.message_id)
         else if (rest === "harness") await this.#settingsHarness(chatID, msg.message_id)
+        // a new message rather than an edit of this one: the picker's own
+        // "‹ Back" cleans itself up, and Settings is still there behind it
+        else if (rest === "ls") await this.#listPicker(chatID, "Conversations:", false)
         else if (rest === "done") {
           c.settingsMsg = null
           await this.#tg.editMessageText({ chatID, messageID: msg.message_id, text: "⚙️ closed", replyMarkup: null })
