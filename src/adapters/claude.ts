@@ -455,6 +455,28 @@ export class ClaudeAdapter implements HarnessAdapter {
     }
   }
 
+  // jep passes --model only when the chat has picked one; otherwise the CLI
+  // falls back to its configured model, which is the one thing a user staring
+  // at the word "default" cannot see. Same file order the CLI resolves in,
+  // most specific first. The value may be an alias ("opus") rather than a full
+  // id — that is what is configured, so that is what we report.
+  async defaultModel(): Promise<string | null> {
+    const candidates = [
+      path.join(this.workspace, ".claude", "settings.local.json"),
+      path.join(this.workspace, ".claude", "settings.json"),
+      path.join(CLAUDE_HOME, "settings.json"),
+    ]
+    for (const file of candidates) {
+      try {
+        const model = JSON.parse(await readFile(file, "utf8"))?.model
+        if (typeof model === "string" && model.trim()) return `claude/${model.trim()}`
+      } catch {
+        // missing or malformed: try the next one, then give up to "default"
+      }
+    }
+    return null
+  }
+
   async models(): Promise<ModelRef[]> {
     return (process.env.JEP_CLAUDE_MODELS ?? "claude-opus-5,claude-sonnet-5,claude-haiku-4-5")
       .split(",")

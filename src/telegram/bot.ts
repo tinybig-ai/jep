@@ -2064,6 +2064,18 @@ export class TelegramBot {
     }
   }
 
+  // "default" on its own answers the wrong question. It is exactly the case
+  // where the user never named a model, so it is the one time they cannot work
+  // out what they are running — ask the harness what it would actually send.
+  // Still says "default" too: which model it is and whether this chat pinned it
+  // are different facts, and the picker only marks a pin.
+  async #modelLabel(chatID: number, ws: Ws): Promise<string> {
+    const pinned = this.#store.model(chatID, ws.adapter.id)
+    if (pinned) return pinned
+    const resolved = await ws.adapter.defaultModel?.().catch(() => null)
+    return resolved ? `default (${resolved})` : "default"
+  }
+
   // one pinned, edited-in-place message per chat: workspace, model, agent,
   // and context usage — a live status line so you don't need /settings just
   // to see what you're pointed at. Best-effort: a failure here never breaks
@@ -2072,7 +2084,7 @@ export class TelegramBot {
     const c = this.#chat(chatID)
     const ws = this.#activeWs(chatID)
     const modelKey = this.#store.model(chatID, ws.adapter.id)
-    const model = modelKey ?? "default"
+    const model = await this.#modelLabel(chatID, ws)
     const agent = this.#store.agent(chatID) ?? "build"
     let tokensLine = "–"
     const sessionID = await this.#resolveSessionID(chatID)
@@ -2249,7 +2261,7 @@ export class TelegramBot {
     const sessionID = await this.#resolveSessionID(chatID)
     const active = sessionID ? await ws.adapter.getSession(sessionID) : null
     const label = active ? this.#displayTitle(active.id, active.title) : "(none)"
-    const model = this.#store.model(chatID, ws.adapter.id) ?? "default"
+    const model = await this.#modelLabel(chatID, ws)
 
     // Only fields with no button of their own belong here. Anything a button
     // already carries (model, agent, internals, context, workspace) would
@@ -2471,6 +2483,9 @@ export class TelegramBot {
     const c = await this.#chat(chatID)
     const ws = this.#activeWs(chatID)
     const current = this.#store.model(chatID, ws.adapter.id)
+    // the "default" row names the model it defers to, so choosing it is not a
+    // blind pick — it is the one row whose meaning isn't written on it
+    const defaultRef = (await ws.adapter.defaultModel?.().catch(() => null)) ?? null
     const native: ModelRef[] = ws ? (await ws.adapter.models?.().catch(() => [])) ?? [] : []
     const caps = (await ws.adapter.capabilities?.().catch(() => new Map<string, ModelCaps>())) ?? new Map<string, ModelCaps>()
     const labels: string[] = ["default"]
@@ -2504,7 +2519,8 @@ export class TelegramBot {
       const mark = label === "default" ? current === null : label === current
       const image = caps.get(label)?.image === true
       if (image) anyImage = true
-      const b: InlineButton = btn(`${label}${image ? " 🖼" : ""}`, label === "default" ? "mdl:off" : `mdl:${label}`)
+      const shown = label === "default" && defaultRef ? `default (${defaultRef})` : label
+      const b: InlineButton = btn(`${shown}${image ? " 🖼" : ""}`, label === "default" ? "mdl:off" : `mdl:${label}`)
       if (mark) b.style = "success" // green = the model this chat runs on
       rows.push([b])
     }
@@ -2519,7 +2535,7 @@ export class TelegramBot {
     const lines = [
       "🤖 Model",
       "",
-      `current: ${current ?? "default (engine picks)"}`,
+      `current: ${await this.#modelLabel(chatID, ws)}`,
       "",
       "Tap one — the next message in this chat runs on it.",
       ...(anyImage ? ["🖼 = accepts images"] : []),

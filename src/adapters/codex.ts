@@ -553,6 +553,26 @@ export class CodexAdapter implements HarnessAdapter {
     }
   }
 
+  // Without -m, `codex exec` runs whatever config.toml names — the thing the
+  // word "default" hides. Only the top-level key counts: jep never passes
+  // --profile, so a [profiles.*] override is not the one in play. Hand-read
+  // rather than parsed as TOML: one key, no dependency.
+  async defaultModel(): Promise<string | null> {
+    let toml: string
+    try {
+      toml = await readFile(path.join(CODEX_HOME, "config.toml"), "utf8")
+    } catch {
+      return null
+    }
+    for (const line of toml.split("\n")) {
+      const trimmed = line.trim()
+      if (trimmed.startsWith("[")) break // into a section: past the top level
+      const m = trimmed.match(/^model\s*=\s*["']([^"']+)["']/)
+      if (m) return `codex/${m[1]}`
+    }
+    return null
+  }
+
   async models(): Promise<ModelRef[]> {
     // `codex exec -m` takes any model the account can reach; there is no list
     // command, so offer the ones the CLI documents as selectable.

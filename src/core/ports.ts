@@ -54,6 +54,11 @@ export interface HarnessAdapter {
   respondApproval(sessionID: string, approval: ApprovalRequest, allow: boolean): Promise<boolean>
   events(signal?: AbortSignal): AsyncIterable<DomainEvent>
   models?(): Promise<ModelRef[]>
+  /** the `provider/model` a prompt runs on when `opts.model` is omitted — what
+   * "default" actually resolves to, so a frontend can name it instead of
+   * saying "default" and leaving the user to guess. null when the harness
+   * decides at run time and won't say in advance. */
+  defaultModel?(): Promise<string | null>
   /** `provider/model` -> input capabilities (image/attachment), if known */
   capabilities?(): Promise<Map<string, ModelCaps>>
   /** every project this harness knows of, regardless of which directory this

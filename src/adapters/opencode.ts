@@ -196,6 +196,12 @@ export class OpenCodeAdapter implements HarnessAdapter {
     return this.#json("/global/health")
   }
 
+  // Unlike the CLI harnesses, nothing is left to the engine here: a prompt
+  // with no model picked is sent as MODEL_REF, so that is the answer.
+  async defaultModel(): Promise<string | null> {
+    return MODEL_REF
+  }
+
   async models(): Promise<ModelRef[]> {
     if (this.#modelsCache.length > 0 && Date.now() - this.#modelsAt < 60_000) return this.#modelsCache
     const refs: ModelRef[] = []
