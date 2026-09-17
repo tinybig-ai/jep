@@ -11,6 +11,8 @@ import { closeStreamingTable, mdTable, mdToRich } from "./rich.ts"
 import type { RichBlock } from "./rich.ts"
 import type { TelegramApi, TgMessage, TgUpdate, InlineButton, ReplyMarkup } from "./api.ts"
 import { runComplianceSuite } from "../core/compliance.ts"
+import { commits as gitCommits, fileDiff, fullDiff, isRepo, repoStatus } from "../core/git.ts"
+import type { GitCommit, GitFile, GitStatus } from "../core/git.ts"
 import type { Pairing } from "./pair.ts"
 import type { ChatStore, InternalsSettings, DetailMode, InternalsLayout } from "./store.ts"
 import type { ReminderRecord, ReminderStore } from "./reminders.ts"
@@ -81,6 +83,27 @@ interface ChatState {
   // human sender — needed to scope ephemeral group prompts to that person
   chatType: string | null
   lastUserID: number | null
+  // the /git screen: the message it's drawn on, the tree it read, and enough
+  // to redraw any of its three views. Files are addressed by index, same as
+  // the conversation pickers, because callback_data caps at 64 bytes and a
+  // real path blows straight through that.
+  git: GitView | null
+}
+
+interface GitView {
+  messageID: number
+  dir: string
+  /** HEAD resolves — a diff before the first commit reads the index instead */
+  born: boolean
+  files: GitFile[]
+  view: "status" | "log" | "diff"
+  /** index into files for a single file's patch; null means the whole tree */
+  file: number | null
+  /** first commit the log view is showing — it pages, so one message stays one message */
+  logOff: number
+  /** where in the patch the diff view starts, and where "⋯ More" jumps to */
+  off: number
+  next: number | null
 }
 
 const MAX_MSG = 4000
@@ -554,6 +577,100 @@ const cycleMode = (m: DetailMode): DetailMode => (m === "off" ? "collapsed" : m 
 const cycleLayout = (l: InternalsLayout): InternalsLayout =>
   l === "per-step" ? "per-section" : l === "per-section" ? "combined" : l === "combined" ? "minimal" : "per-step"
 
+// ─── git view rendering ───
+
+// What /git shows at once, and what a "see more" tap adds. Small on purpose:
+// this is a phone screen, and the view's job is to answer "what is in this
+// tree" at a glance, with the long form one tap away.
+const GIT_ROWS = 12 // file rows in the changes table
+const GIT_FILE_BTNS = 6 // per-file diff buttons under it
+const GIT_COMMITS = 5 // commits in the status view
+const GIT_LOG = 15 // commits per page of the log view
+// One screenful of patch. Kept well inside MAX_MSG because the diff shares a
+// message with its heading and buttons, and a rejected message shows nothing
+// at all — the pager, not the cap, is what makes a big diff readable here.
+const GIT_DIFF_CHARS = 2400
+
+// The path is the widest cell in the changes table and the least readable when
+// it wraps. The tail is the part that identifies the file, so keep that end.
+const clipPath = (p: string, max = 30): string => (p.length <= max ? p : `…${p.slice(-(max - 1))}`)
+
+// git's own letter for the change, plus a dot when it is already in the index:
+// the two facts a status row has to carry, in the width of a table cell.
+const gitMark = (f: GitFile): string => `${f.staged ? "●" : ""}${f.code}`
+
+// Branch, where it stands against its upstream, and the size of the change —
+// the three things you want before deciding whether to look closer.
+function gitStatusText(st: GitStatus): string {
+  const track = !st.born
+    ? "no commits yet"
+    : !st.upstream
+      ? "no upstream"
+      : st.ahead || st.behind
+        ? [st.ahead ? `↑${st.ahead}` : "", st.behind ? `↓${st.behind}` : "", `vs ${st.upstream}`].filter(Boolean).join(" ")
+        : `in sync with ${st.upstream}`
+  const out = [
+    `## ⎇ ${st.detached ? "detached HEAD" : st.branch}`,
+    `${fmtWsPath(st.dir)} · ${track}`,
+    st.files.length ? `**${st.files.length} changed** · +${st.additions} −${st.deletions}` : "✓ clean — nothing to commit",
+  ]
+  const shown = st.files.slice(0, GIT_ROWS)
+  if (shown.length) {
+    out.push(
+      "",
+      mdTable(
+        ["File", "+", "−"],
+        shown.map((f) => [
+          `${gitMark(f)} ${clipPath(f.from ? `${f.path} ⟵ ${basename(f.from)}` : f.path)}`,
+          f.binary ? "bin" : f.additions ? String(f.additions) : "",
+          f.binary ? "" : f.deletions ? String(f.deletions) : "",
+        ]),
+      ),
+    )
+    if (st.files.length > shown.length) out.push(`… and ${st.files.length - shown.length} more`)
+    // only worth explaining when a row actually carries the dot
+    if (st.files.some((f) => f.staged)) out.push("● staged")
+  }
+  return out.join("\n")
+}
+
+// Monospace, because a log is a column of hashes and ages that only reads as a
+// log when they line up. Ages are the same coarse form the pin and /ls use.
+function gitLogText(cs: GitCommit[], width = 40): string {
+  if (!cs.length) return "(no commits yet)"
+  const manyAuthors = new Set(cs.map((c) => c.author)).size > 1
+  return cs
+    .map((c) => {
+      const age = c.at ? fmtDuration(Math.max(Date.now() - c.at, 1000)).padStart(3) : "  ?"
+      const who = manyAuthors && c.author ? ` · ${clipTitle(c.author, 14)}` : ""
+      return `${c.hash}  ${age}  ${clipTitle(c.subject, width)}${who}`
+    })
+    .join("\n")
+}
+
+// A patch is the one thing here with no natural size, so it is paged rather
+// than truncated. Cuts land on a line boundary — half a hunk header is worse
+// than one line fewer.
+function diffWindow(patch: string, off: number, max: number): { body: string; next: number | null } {
+  const rest = patch.slice(Math.max(0, off))
+  if (rest.length <= max) return { body: rest, next: null }
+  const nl = rest.lastIndexOf("\n", max)
+  const end = nl > max / 2 ? nl : max
+  return { body: rest.slice(0, end), next: off + end + (rest[end] === "\n" ? 1 : 0) }
+}
+
+// a row of buttons as a rich block (RichBlockButtons, 10.3)
+const buttonsBlock = (row: InlineButton[]): RichBlock => ({
+  type: "buttons",
+  align: "left",
+  buttons: row.map((b) => ({
+    text: b.text,
+    callback_data: b.callback_data,
+    ...(b.style ? { style: b.style } : {}),
+    ...(b.disabled ? { disabled: {} } : {}),
+  })),
+})
+
 const HELP = [
   "jep — your coding agent, on the go.",
   "",
@@ -561,6 +678,7 @@ const HELP = [
   "",
   "/new · start fresh",
   "/ls · switch chats",
+  "/git · branch, changes & diffs",
   "/settings · model, workspace & more",
   "/remind · schedule a nudge (e.g. /remind 2h build)",
   "",
@@ -739,6 +857,7 @@ export class TelegramBot {
   static commands = [
     { command: "new", description: "start a fresh conversation" },
     { command: "ls", description: "your conversations" },
+    { command: "git", description: "branch · changes · commits · diffs" },
     { command: "settings", description: "status · model · rename · workspace" },
     { command: "log", description: "this conversation's history" },
     { command: "remind", description: "remind me later, once or recurring (/remind 2h build · /remind every 1h build)" },
@@ -962,6 +1081,7 @@ export class TelegramBot {
         draft: 0,
         chatType: null,
         lastUserID: null,
+        git: null,
       }
       this.#chats.set(id, c)
     }
@@ -1425,6 +1545,10 @@ export class TelegramBot {
           }
         }
         await tg.sendMessage({ chatID, text: body })
+        break
+      }
+      case "git": {
+        await this.#gitView(chatID, null)
         break
       }
       case "use": {
@@ -2183,6 +2307,179 @@ export class TelegramBot {
     }
   }
 
+  // ─── git view ───
+
+  // /git: the working tree as a screen you can tap through — branch and
+  // upstream, what changed, the latest commits, a patch per file or for the
+  // whole tree. Workspace-scoped, not session-scoped: it reads the repo, so it
+  // sees your own edits too, which is what /diff (the harness's own view of
+  // what *it* touched this session) can't do.
+  //
+  // Read-only, deliberately (see core/git.ts). Committing and pushing from the
+  // phone is the next thing to build, and it should be an explicit action —
+  // not a side effect of looking.
+  async #gitView(chatID: number, messageID: number | null): Promise<void> {
+    const c = this.#chat(chatID)
+    const dir = this.#activeWs(chatID).dir
+    const fail = async (text: string) => {
+      c.git = null
+      if (messageID === null) await this.#tg.sendMessage({ chatID, text })
+      else await this.#tg.editMessageText({ chatID, messageID, text, replyMarkup: null })
+    }
+    if (!(await isRepo(dir))) return fail(`⚠️ ${fmtHome(dir)} isn't a git repo — nothing to show.`)
+    let st: GitStatus
+    try {
+      st = await repoStatus(dir, GIT_COMMITS)
+    } catch (err) {
+      return fail(`⚠️ git couldn't read ${fmtWsPath(dir)}: ${((err as Error)?.message ?? String(err)).slice(0, 200)}`)
+    }
+    const rows: InlineButton[][] = []
+    // one button per changed file: the shortest path from "something moved" to
+    // "show me exactly what", which on a phone beats any amount of scrolling
+    const files = st.files.slice(0, GIT_FILE_BTNS).map((f, i) => btn(`📄 ${clipTitle(basename(f.path), 16)}`, `gitf:${i}`))
+    for (let i = 0; i < files.length; i += 2) rows.push(files.slice(i, i + 2))
+    rows.push([
+      ...(st.files.length ? [styled(btn("⌗ Full diff", "git:df"), "primary")] : []),
+      btn("📜 Log", "git:log"),
+      btn("⟳", "git:st"),
+    ])
+    const body = gitStatusText(st)
+    const log = gitLogText(st.commits)
+    const blocks = mdToRich(body)
+    blocks.push(detailsBlock(`📜 Latest commits`, [{ type: "pre", text: log }], true))
+    const id = await this.#gitDraw(chatID, blocks, rows, `${body}\n\n📜 Latest commits\n\`\`\`\n${log}\n\`\`\``, messageID)
+    // st.dir, not the workspace: a workspace can sit inside a repo, and every
+    // path in the snapshot is relative to the root that repoStatus resolved
+    if (id !== null)
+      c.git = { messageID: id, dir: st.dir, born: st.born, files: st.files, view: "status", file: null, logOff: 0, off: 0, next: null }
+  }
+
+  // The log pages rather than grows. A "see more" that appends would walk one
+  // message straight into the wire limit, and a message Telegram rejects shows
+  // nothing at all — so each tap is a page, and it says which one you are on.
+  async #gitLog(chatID: number, off: number, messageID: number): Promise<void> {
+    const g = this.#chat(chatID).git
+    if (!g) return
+    const from = Math.max(0, off)
+    // one past the page, purely to learn whether "older" has anything to show —
+    // offering it on an empty rest is the worst kind of dead button
+    const cs = await gitCommits(g.dir, GIT_LOG + 1, from)
+    const older = cs.length > GIT_LOG
+    const shown = cs.slice(0, GIT_LOG)
+    const log = gitLogText(shown, 46)
+    const range = shown.length ? `commits ${from + 1}–${from + shown.length}` : "no commits here"
+    const rows: InlineButton[][] = [
+      [
+        ...(from > 0 ? [btn("‹ Newer", "git:logn")] : []),
+        ...(older ? [btn("Older ›", "git:logm")] : []),
+        btn("‹ Status", "git:st"),
+      ],
+    ]
+    g.view = "log"
+    g.logOff = from
+    await this.#gitDraw(
+      chatID,
+      [
+        { type: "heading", size: 2, text: `📜 ${fmtWsPath(g.dir)}` },
+        { type: "pre", text: log },
+        { type: "paragraph", text: range },
+      ],
+      rows,
+      `## 📜 ${fmtWsPath(g.dir)}\n\`\`\`\n${log}\n\`\`\`\n${range}`,
+      messageID,
+    )
+  }
+
+  // a patch, a screenful at a time. `file` indexes the snapshot the status
+  // view took; null is the whole tree. `off` is where in the patch to start,
+  // so "⋯ More" pages forward instead of growing one message past the wire
+  // limit — and the diff is re-read on every tap, so what you page through is
+  // the tree as it is now, not as it was when you opened the view.
+  async #gitDiff(chatID: number, file: number | null, off: number, messageID: number): Promise<void> {
+    const g = this.#chat(chatID).git
+    if (!g) return
+    const f = file === null ? null : g.files[file]
+    if (file !== null && !f) return
+    let patch: string
+    try {
+      patch = f ? await fileDiff(g.dir, f, g.born) : await fullDiff(g.dir, g.files, g.born)
+    } catch (err) {
+      patch = ""
+      console.error(`[git] diff failed: ${(err as Error)?.message ?? err}`)
+    }
+    const { body, next } = diffWindow(patch, off, GIT_DIFF_CHARS)
+    const title = f ? clipPath(f.path, 40) : `${g.files.length} file${g.files.length === 1 ? "" : "s"}`
+    const shown = body.trim()
+      ? [{ type: "pre", text: body, language: "diff" } as RichBlock]
+      : [{ type: "paragraph", text: off ? "(end of diff)" : "(nothing to show — binary, or no textual change)" } as RichBlock]
+    const paged = off || next !== null ? `${fmtCount(off)}–${fmtCount(off + body.length)} of ${fmtCount(patch.length)} chars` : ""
+    const blocks: RichBlock[] = [{ type: "heading", size: 2, text: `⌗ ${title}` }, ...shown]
+    if (paged) blocks.push({ type: "paragraph", text: paged })
+    const rows: InlineButton[][] = [
+      [
+        ...(next !== null ? [styled(btn("⋯ More", "git:dfm"), "primary")] : []),
+        ...(patch.trim() ? [btn("📎 As file", "git:dl")] : []),
+        btn("‹ Status", "git:st"),
+      ],
+    ]
+    g.view = "diff"
+    g.file = file
+    g.off = off
+    g.next = next
+    const text = [`## ⌗ ${title}`, "```diff", body, "```", paged].filter(Boolean).join("\n")
+    await this.#gitDraw(chatID, blocks, rows, text, messageID)
+  }
+
+  // the whole patch as a .diff attachment — the honest answer to a diff too
+  // big to page through on a phone, and the one you can hand to something else
+  async #gitDiffFile(chatID: number): Promise<string> {
+    const g = this.#chat(chatID).git
+    if (!g) return "view expired"
+    const f = g.file === null ? null : g.files[g.file]
+    const patch = f ? await fileDiff(g.dir, f, g.born) : await fullDiff(g.dir, g.files, g.born)
+    if (!patch.trim()) return "nothing to send"
+    const stem = `${fmtWsPath(g.dir)}-${f ? basename(f.path) : "tree"}`.replace(/[^A-Za-z0-9._-]+/g, "-")
+    await mkdir(this.#uploadsDir, { recursive: true })
+    const filePath = join(this.#uploadsDir, `${stem}-${Date.now()}.diff`)
+    await writeFile(filePath, patch)
+    await this.#tg.sendDocument({ chatID, filePath, caption: `⌗ ${f ? f.path : "working tree"} · ${fmtCount(patch.length)} chars` })
+    return "sent"
+  }
+
+  // One renderer for all three git screens: rich blocks where the client takes
+  // them, the same content as markdown text plus an inline keyboard where it
+  // doesn't — the same degradation as #menu. Returns the message it drew on.
+  async #gitDraw(
+    chatID: number,
+    blocks: RichBlock[],
+    rows: InlineButton[][],
+    text: string,
+    messageID: number | null,
+  ): Promise<number | null> {
+    const rich = [...blocks, ...rows.filter((r) => r.length).map(buttonsBlock)]
+    try {
+      if (messageID !== null) {
+        await this.#tg.editRichMessage({ chatID, messageID, rich_message: { blocks: rich } })
+        return messageID
+      }
+      const sent = await this.#tg.sendRichMessage({ chatID, rich_message: { blocks: rich } })
+      return sent.message_id
+    } catch (err) {
+      console.error(`[git] rich draw failed, falling back to classic: ${(err as Error)?.message ?? err}`)
+    }
+    try {
+      if (messageID !== null) {
+        await this.#tg.editMessageText({ chatID, messageID, text, replyMarkup: kin(rows) })
+        return messageID
+      }
+      const sent = await this.#tg.sendMessage({ chatID, text, replyMarkup: kin(rows) })
+      return sent.message_id
+    } catch (err) {
+      console.error(`[git] draw failed: ${(err as Error)?.message ?? err}`)
+      return null
+    }
+  }
+
   // ask the user to allow/deny a tool call. In groups the prompt is sent as an
   // ephemeral message (visible to the requester + bot only, Bot API 10.2+);
   // anywhere it doesn't apply it degrades to a normal message.
@@ -2306,18 +2603,7 @@ export class TelegramBot {
   ): Promise<{ messageID?: number }> {
     const blocks: RichBlock[] = []
     for (const line of lines) if (line.trim()) blocks.push({ type: "paragraph", text: line })
-    for (const row of rows) {
-      blocks.push({
-        type: "buttons",
-        align: "left",
-        buttons: row.map((b) => ({
-          text: b.text,
-          callback_data: b.callback_data,
-          ...(b.style ? { style: b.style } : {}),
-          ...(b.disabled ? { disabled: {} } : {}),
-        })),
-      })
-    }
+    for (const row of rows) blocks.push(buttonsBlock(row))
     try {
       if (edit) {
         await this.#tg.editRichMessage({ chatID, messageID: edit.messageID, rich_message: { blocks } })
@@ -2855,6 +3141,48 @@ export class TelegramBot {
       case "neww": {
         await this.#newConversation(chatID, msg.message_id)
         await tg.answerCallbackQuery({ id: cq.id, text: "new" })
+        break
+      }
+      // the /git screen. Every view redraws the message whose button was
+      // tapped, not c.git.messageID — an older /git left further up the chat
+      // still behaves like a screen rather than silently editing the newest one.
+      case "git": {
+        const g = c.git
+        if (rest === "st") {
+          await this.#gitView(chatID, msg.message_id)
+          await tg.answerCallbackQuery({ id: cq.id })
+          break
+        }
+        if (!g) {
+          await tg.answerCallbackQuery({ id: cq.id, text: "view expired — run /git again" })
+          break
+        }
+        if (rest === "log") await this.#gitLog(chatID, 0, msg.message_id)
+        else if (rest === "logm") await this.#gitLog(chatID, g.logOff + GIT_LOG, msg.message_id)
+        else if (rest === "logn") await this.#gitLog(chatID, g.logOff - GIT_LOG, msg.message_id)
+        else if (rest === "df") await this.#gitDiff(chatID, null, 0, msg.message_id)
+        else if (rest === "dfm") await this.#gitDiff(chatID, g.file, g.next ?? 0, msg.message_id)
+        else if (rest === "dl") {
+          const said = await this.#gitDiffFile(chatID).catch((err) => {
+            console.error(`[git] diff file failed: ${(err as Error)?.message ?? err}`)
+            return "couldn't send it"
+          })
+          await tg.answerCallbackQuery({ id: cq.id, text: said })
+          break
+        } else {
+          await tg.answerCallbackQuery({ id: cq.id, text: "stale button" })
+          break
+        }
+        await tg.answerCallbackQuery({ id: cq.id })
+        break
+      }
+      case "gitf": {
+        if (!c.git || !Number.isInteger(i)) {
+          await tg.answerCallbackQuery({ id: cq.id, text: "view expired — run /git again" })
+          break
+        }
+        await this.#gitDiff(chatID, i, 0, msg.message_id)
+        await tg.answerCallbackQuery({ id: cq.id })
         break
       }
       case "morep": {

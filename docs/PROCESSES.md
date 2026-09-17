@@ -23,6 +23,8 @@ src/
     ports.ts              // hexagonal seam: HarnessAdapter + ModelRef surface
     types.ts              // Message, DomainEvent, SessionSummary, ApprovalRequest
     compliance.ts         // assertAdapterImplements + compliance suites
+    git.ts                // READ-ONLY GIT — porcelain v2 status, numstat, log,
+                          // per-file + whole-tree patches (backs /git)
   adapters/
     claude-ask-mcp.mjs    // MCP server Claude Code calls instead of a permission
                           // prompt; relays to jep over a unix socket
@@ -44,7 +46,8 @@ scripts/
 fixture/
   workspace-alpha/        // test working directories for the two harness workspaces
   workspace-beta/
-  telegram-mock*.jsonl    // mock update fixtures (pair, settings, callbacks, internals)
+  telegram-mock*.jsonl    // mock update fixtures (pair, settings, callbacks,
+                          // internals, git)
 ```
 
 ## 3. Runtime model
@@ -395,10 +398,55 @@ before it starts. The prompt goes first; the ask flags go last.
 The flag is checked once against `claude --help`: a build without it would
 reject the whole command line and take every turn with it.
 
+## 10b. The git view (`/git`)
+
+Workspace-scoped, read-only, and **not** the same thing as `/diff`: `/diff`
+asks the harness what *it* touched this session, `/git` reads the repo, so it
+also sees your own edits, what is already staged, and where the branch stands
+against its upstream. `src/core/git.ts` holds every git call (porcelain v2,
+`--numstat -z`, `log`, `diff`); `bot.ts` only renders.
+
+Three screens, one message, redrawn in place (`#gitDraw` — rich blocks, classic
+text + inline keyboard as the fallback, same degradation as `#menu`):
+
+| Screen | Shows | Buttons |
+|--------|-------|---------|
+| status | branch · upstream ±, N changed +/−, a table of up to 12 files, latest 5 commits in a `details` block | one per changed file (up to 6), ⌗ Full diff, 📜 Log, ⟳ |
+| log | 15 commits per page, `hash · age · subject` in a `pre` block | ‹ Newer, Older ›, ‹ Status |
+| diff | one file's patch or the whole tree, 2400 chars per page, `pre` with `language: "diff"` | ⋯ More, 📎 As file, ‹ Status |
+
+Load-bearing details, each one a bug that was there first:
+
+- **Everything pages, nothing grows.** A "see more" that appends walks one
+  message into the wire limit, and a message Telegram rejects shows *nothing*.
+  Log pages via `git log --skip`, diffs via a character offset cut on a line
+  boundary. Every screen measured under 3 KB.
+- **The repo root, not the workspace.** Porcelain paths are relative to the
+  root, so `repoStatus` resolves it first and the snapshot is anchored there —
+  a workspace one level down would otherwise name files it can't find.
+- **Files are addressed by index** into the snapshot behind `c.git`, because
+  `callback_data` caps at 64 bytes (same reason as the conversation pickers).
+  Every view redraws the message whose button was tapped, not `c.git.messageID`,
+  so an older `/git` further up the chat still behaves like a screen.
+- **Untracked files are counted, not staged.** `git add -N` would make them
+  diffable and is exactly the quiet mutation a status command must not do, so
+  new files get their line count read off disk (2 MB cap, NUL sniff for binary)
+  and their patch from `diff --no-index` — which exits 1 precisely when it has
+  output, so `ok` is not the test there.
+- **`--numstat -z`**, because a rename otherwise prints as `old => new`, matches
+  no status path, and silently drops the edit that came with the rename.
+- **No commits yet is not an error**: an unborn HEAD compares against the index
+  instead, and `log` returning nothing is a normal answer.
+
+Writing (commit / branch / push) is deliberately absent: it should be an
+explicit action, not a side effect of looking. That is the next thing to build.
+
 ## 11. Verification ritual
 
 1. `node --experimental-strip-types --check <file>` on every edited file.
 2. Mock end-to-end through a fixture (pair → act → assert the `CALL ...` dump).
+   `JEP_DUMP_CHARS=20000` when a rich payload is longer than the 2000-char
+   dump cap — the git views are, and their buttons sit at the end.
    The mock reads JSON-lines updates from stdin and prints
    `CALL <method> chat=<id> msg=<id> mode=<HTML> [rich=<json>] text="..."`
    plus one indented `keyboard: ...` line per callback reply.
@@ -426,6 +474,7 @@ is not.
 | `expandable_blockquote` | `/log` | history folded until tapped; plain-text fallback |
 | `RichBlockDocument`/`photo` + `attach://` | `present()` | agent files embedded in the reply (multipart) |
 | `is_compact` tables | `rich.ts` | compact rich tables |
+| `details` + `pre language="diff"` | `/git` | commits fold away; patches syntax-highlight |
 | Ephemeral messages | `#permissionPrompt` | group permission prompts scoped to the sender (`ephemeral_message_parameters.receiver_user_id`); cleaned up with `deleteEphemeralMessage`; plain fallback |
 | `force_reply` | pair-code + bare `/use` prompts | reply bar forced on the user |
 | `can_stop` + `stopped_message_generation` | `#freeText` | native stop button on streaming drafts |
@@ -434,8 +483,10 @@ is not.
 
 `/remind <5s–7d> <what>` schedules a silent (`disable_notification`) nudge via
 an **in-process** `setTimeout` (`timer.unref()` so it never keeps the process
-alive). Reminders are not persisted: a daemon restart drops them. Bot API
-`schedule_date` is not used (unsupported in private chats).
+alive). They do survive a restart: `ReminderStore` persists them to
+`reminders.json` and the constructor re-schedules every one at boot, so one
+that came due while the bot was down fires immediately (the delay clamps to
+0). Bot API `schedule_date` is not used (unsupported in private chats).
 
 **Deploy:** after these changes, reload the daemon (section 5) — `pkill -9 -f
 'src/tg.ts'` — and confirm from the log that it returns in live mode.
