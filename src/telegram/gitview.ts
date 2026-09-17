@@ -30,6 +30,13 @@ export const clipPath = (p: string, max = 30): string => (p.length <= max ? p : 
 // the two facts a status row has to carry, in the width of a table cell.
 export const gitMark = (f: GitFile): string => `${f.staged ? "●" : ""}${f.code}`
 
+/**
+ * How many commits a push would send. With an upstream that is `ahead`; a
+ * branch that has none reports ahead as 0 — git has nothing to compare it to —
+ * and `unpushed` is the real count. Zero when there is nowhere to push.
+ */
+export const pushCount = (st: GitStatus): number => (!st.remote ? 0 : st.upstream ? st.ahead : st.unpushed)
+
 // Branch, where it stands against its upstream, and the size of the change —
 // the three things you want before deciding whether to look closer.
 export function gitStatusText(st: GitStatus): string {

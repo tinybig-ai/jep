@@ -7,9 +7,12 @@
 // against its upstream — the things you need before you can decide whether to
 // land any of it.
 //
-// Every call is read-only. Nothing here writes the index, the tree or a ref:
-// `git add -N` would make untracked files easier to diff and is exactly the
-// kind of quiet mutation a "status" command must not do.
+// Every call is read-only except `push`, which is the one write and is the
+// last function in the file. Nothing else touches the index, the tree or a
+// ref: `git add -N` would make untracked files easier to diff and is exactly
+// the kind of quiet mutation a "status" command must not do. Committing is
+// not here either — it needs judgment about what and why, which the agent has
+// and a button doesn't. Pushing needs none: the commits already exist.
 
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
@@ -50,12 +53,20 @@ export interface GitCommit {
 
 export interface GitStatus {
   dir: string
+  /** the remote a push would go to: the upstream's, else the first configured one */
+  remote: string | null
   /** branch name, or "(detached)" */
   branch: string
   detached: boolean
   upstream: string | null
   ahead: number
   behind: number
+  /**
+   * Commits on HEAD that no remote has, for a branch with no upstream yet —
+   * where git reports ahead/behind as 0 because it has nothing to compare
+   * against. Which is exactly the branch you most want to push.
+   */
+  unpushed: number
   files: GitFile[]
   additions: number
   deletions: number
@@ -75,6 +86,12 @@ async function git(dir: string, args: string[]): Promise<{ ok: boolean; out: str
     const e = err as { stdout?: string; stderr?: string; message?: string }
     return { ok: false, out: e.stdout ?? "", err: (e.stderr || e.message || "").trim() }
   }
+}
+
+/** configured remotes, in git's own order */
+export async function remotes(dir: string): Promise<string[]> {
+  const r = await git(dir, ["remote"])
+  return r.ok ? r.out.split("\n").map((l) => l.trim()).filter(Boolean) : []
 }
 
 export async function isRepo(dir: string): Promise<boolean> {
@@ -246,6 +263,14 @@ export async function repoStatus(workspace: string, commitLimit = 5): Promise<Gi
   // vs HEAD, so staged and unstaged edits to one file land in a single row —
   // which is what "what have I changed here" means. Before the first commit
   // there is no HEAD to compare against, so the index is the whole story.
+  const remoteList = await remotes(dir)
+  // only asked when it is the number that matters: with an upstream, `ahead`
+  // is already the answer, and on a repo with no remotes this would count the
+  // entire history as "unpushed"
+  const unpushed =
+    born && remoteList.length && !upstream
+      ? Number((await git(dir, ["rev-list", "--count", "HEAD", "--not", "--remotes"])).out.trim()) || 0
+      : 0
   const numstat = await git(dir, born ? ["diff", "--numstat", "-z", "HEAD"] : ["diff", "--numstat", "-z", "--cached"])
   const counts = parseNumstat(numstat.out)
   for (const f of files) {
@@ -265,11 +290,15 @@ export async function repoStatus(workspace: string, commitLimit = 5): Promise<Gi
   files.sort((a, b) => Number(b.staged) - Number(a.staged) || a.path.localeCompare(b.path))
   return {
     dir,
+    // the upstream names its own remote ("origin/main" -> "origin"); with no
+    // upstream yet, the first configured remote is where a push would go
+    remote: upstream?.includes("/") ? upstream.split("/")[0]! : (remoteList[0] ?? null),
     branch,
     detached,
     upstream,
     ahead,
     behind,
+    unpushed,
     files,
     additions: files.reduce((s, f) => s + f.additions, 0),
     deletions: files.reduce((s, f) => s + f.deletions, 0),
@@ -300,4 +329,34 @@ export async function fullDiff(dir: string, files: GitFile[], born: boolean): Pr
     if (d.trim()) untracked.push(d)
   }
   return [tracked, ...untracked].filter((s) => s.trim()).join("\n")
+}
+
+/**
+ * The write. Pushes the current branch to its upstream, or sets one up when
+ * it has none — which is the common case for a branch made on this machine,
+ * and the only part of pushing that is a decision, so the caller has to ask
+ * for it explicitly.
+ *
+ * Never force, never `--all`, never a refspec the caller didn't name: the
+ * point is to send commits that already exist, and nothing else.
+ *
+ * git reports progress and rejections on stderr, so both streams come back —
+ * "Updates were rejected because the remote contains work that you do not
+ * have locally" is the useful half of a failure.
+ */
+export async function push(
+  dir: string,
+  opts: { branch?: string; setUpstream?: boolean; remote?: string } = {},
+): Promise<{ ok: boolean; message: string }> {
+  const args = ["push"]
+  if (opts.setUpstream) {
+    if (!opts.remote || !opts.branch) return { ok: false, message: "no remote to push to" }
+    args.push("--set-upstream", opts.remote, opts.branch)
+  }
+  const r = await git(dir, args)
+  const message = [r.err, r.out]
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .join("\n")
+  return { ok: r.ok, message }
 }

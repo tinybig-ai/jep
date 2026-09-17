@@ -9,7 +9,7 @@ import { execFileSync } from "node:child_process"
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { fileDiff, fullDiff, isRepo, parseNumstat, parsePorcelain, repoStatus } from "../src/core/git.ts"
+import { fileDiff, fullDiff, isRepo, parseNumstat, parsePorcelain, push, repoStatus } from "../src/core/git.ts"
 
 test("porcelain: branch, upstream and ahead/behind", () => {
   const out = [
@@ -256,4 +256,102 @@ test("a clean tree reports nothing changed", async (t) => {
   assert.equal(st.additions, 0)
   assert.equal(st.deletions, 0)
   assert.equal(st.born, true)
+})
+
+// ─── the one write ───
+
+test("a branch with no upstream still knows what it would push", async (t) => {
+  const bare = mkdtempSync(join(tmpdir(), "jep-remote-"))
+  const dir = tempRepo()
+  t.after(() => {
+    rmSync(bare, { recursive: true, force: true })
+    rmSync(dir, { recursive: true, force: true })
+  })
+  execFileSync("git", ["init", "-q", "--bare", "."], { cwd: bare })
+  writeFileSync(join(dir, "a.txt"), "one\n")
+  git(dir, "add", ".")
+  git(dir, "commit", "-qm", "first")
+  git(dir, "remote", "add", "origin", bare)
+
+  const st = await repoStatus(dir)
+  assert.equal(st.upstream, null, "nothing has been pushed yet")
+  assert.equal(st.ahead, 0, "git reports ahead 0 without an upstream to compare against")
+  assert.equal(st.unpushed, 1, "which is why unpushed exists")
+  assert.equal(st.remote, "origin", "and it knows where it would go")
+})
+
+test("pushing sends the commits and leaves the branch in sync", async (t) => {
+  const bare = mkdtempSync(join(tmpdir(), "jep-remote-"))
+  const dir = tempRepo()
+  t.after(() => {
+    rmSync(bare, { recursive: true, force: true })
+    rmSync(dir, { recursive: true, force: true })
+  })
+  execFileSync("git", ["init", "-q", "--bare", "."], { cwd: bare })
+  writeFileSync(join(dir, "a.txt"), "one\n")
+  git(dir, "add", ".")
+  git(dir, "commit", "-qm", "first")
+  git(dir, "remote", "add", "origin", bare)
+
+  const first = await push(dir, { setUpstream: true, remote: "origin", branch: "main" })
+  assert.equal(first.ok, true, first.message)
+  assert.match(
+    execFileSync("git", ["log", "--format=%s", "-1", "main"], { cwd: bare, encoding: "utf8" }),
+    /first/,
+    "the remote really has it",
+  )
+
+  const after = await repoStatus(dir)
+  assert.equal(after.upstream, "origin/main", "the upstream is set now")
+  assert.equal(after.ahead, 0)
+  assert.equal(after.unpushed, 0)
+
+  // a second commit needs no --set-upstream, and the plain form finds its way
+  writeFileSync(join(dir, "b.txt"), "two\n")
+  git(dir, "add", ".")
+  git(dir, "commit", "-qm", "second")
+  assert.equal((await repoStatus(dir)).ahead, 1)
+  const again = await push(dir)
+  assert.equal(again.ok, true, again.message)
+  assert.equal((await repoStatus(dir)).ahead, 0)
+})
+
+test("a rejected push comes back with git's own explanation", async (t) => {
+  const bare = mkdtempSync(join(tmpdir(), "jep-remote-"))
+  const dir = tempRepo()
+  const other = mkdtempSync(join(tmpdir(), "jep-other-"))
+  t.after(() => {
+    for (const d of [bare, dir, other]) rmSync(d, { recursive: true, force: true })
+  })
+  execFileSync("git", ["init", "-q", "--bare", "."], { cwd: bare })
+  writeFileSync(join(dir, "a.txt"), "one\n")
+  git(dir, "add", ".")
+  git(dir, "commit", "-qm", "first")
+  git(dir, "remote", "add", "origin", bare)
+  await push(dir, { setUpstream: true, remote: "origin", branch: "main" })
+
+  // somebody else pushes on top. -b main because the bare repo's own HEAD
+  // still points at master: a plain clone checks out nothing and then commits
+  // to the wrong branch, which is not a conflict at all.
+  execFileSync("git", ["clone", "-q", "-b", "main", bare, "."], { cwd: other })
+  writeFileSync(join(other, "theirs.txt"), "theirs\n")
+  git(other, "add", ".")
+  git(other, "commit", "-qm", "theirs")
+  git(other, "push", "-q")
+
+  // and now ours diverges
+  writeFileSync(join(dir, "mine.txt"), "mine\n")
+  git(dir, "add", ".")
+  git(dir, "commit", "-qm", "mine")
+  const r = await push(dir)
+  assert.equal(r.ok, false)
+  assert.match(r.message, /reject|fetch first|non-fast-forward/i, `unhelpful failure: ${r.message}`)
+})
+
+test("push refuses to guess when there is no upstream and no remote named", async (t) => {
+  const dir = tempRepo()
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const r = await push(dir, { setUpstream: true })
+  assert.equal(r.ok, false)
+  assert.match(r.message, /no remote/)
 })

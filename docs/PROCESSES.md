@@ -639,8 +639,37 @@ Load-bearing details, each one a bug that was there first:
 - **No commits yet is not an error**: an unborn HEAD compares against the index
   instead, and `log` returning nothing is a normal answer.
 
-Writing (commit / branch / push) is deliberately absent: it should be an
-explicit action, not a side effect of looking. That is the next thing to build.
+### Pushing is the one write
+
+Commit and branch stay the agent's job — "commit this" already works, and it
+writes a better message than a button flow could because it has the diff *and*
+the conversation. A fixed commit UI would be a narrower, worse version of
+something jep already has for free.
+
+Push is different, and is the only git write here:
+
+- **No judgment is left in it.** The commits already exist; you are sending
+  them.
+- **It is the one you want when a turn is in flight**, because the session is
+  held and the agent cannot be asked.
+- **It asks first.** A push is outward-facing and the only action in jep other
+  people can see, so the button opens a confirmation naming exactly what will
+  happen — including the `-u` case, which *is* a decision (it creates the
+  branch on the remote).
+- **It never forces, never `--all`, never a refspec the caller didn't name.**
+- **Failure comes back in git's own words.** "Updates were rejected because
+  the remote contains work that you do not have locally" carries the
+  instruction inside it; paraphrasing would lose that.
+
+`GitStatus.unpushed` exists because a branch with no upstream reports
+ahead/behind as 0 — git has nothing to compare it against — which is exactly
+the branch you most want to push. `pushCount()` picks the right number, and
+the button only appears when there is something to send and somewhere to send
+it.
+
+`git.test.ts` pushes for real, to a bare repo in a temp dir: the commits
+arrive, the upstream gets set, a second push needs no flags, and a diverged
+push is rejected with an explanation.
 
 ## 11. Verification ritual
 

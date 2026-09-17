@@ -19,7 +19,7 @@ import { matches, rankHits, snippet } from "./search.ts"
 import type { Hit } from "./search.ts"
 import { IMAGE_RE, VOICE_MAX_SEC, audioOf, imageExt, sniffAudioExt, sniffImageExt, stickerPrompt } from "./media.ts"
 import type { AudioIn } from "./media.ts"
-import { commits as gitCommits, fileDiff, fullDiff, isRepo, repoStatus } from "../core/git.ts"
+import { commits as gitCommits, fileDiff, fullDiff, isRepo, push as gitPush, repoStatus } from "../core/git.ts"
 import type { GitFile, GitStatus } from "../core/git.ts"
 import { clipTitle, fmtCount, fmtDuration, fmtHome, fmtWsPath, timeAgo } from "./fmt.ts"
 import {
@@ -31,6 +31,7 @@ import {
   diffWindow,
   gitLogText,
   gitStatusText,
+  pushCount,
 } from "./gitview.ts"
 import type { Pairing } from "./pair.ts"
 import type { ChatStore, HeldPrompt, InternalsSettings, DetailMode, InternalsLayout, PendingPrompt } from "./store.ts"
@@ -2561,6 +2562,15 @@ export class TelegramBot {
       btn("📜 Log", "git:log"),
       btn("⟳", "git:st"),
     ])
+    // The one git write worth a button: the commits already exist, so there is
+    // no judgment left in sending them — and it is the thing you want when a
+    // turn is in flight and the agent can't be asked. Committing stays the
+    // agent's job. Only offered when there is something to send and somewhere
+    // to send it.
+    const toPush = pushCount(st)
+    if (toPush > 0) {
+      rows.push([styled(btn(`⬆ Push ${toPush}${st.upstream ? "" : " (new branch)"}`, st.upstream ? "git:psh" : "git:pshu"), "success")])
+    }
     const body = gitStatusText(st)
     const log = gitLogText(st.commits)
     const blocks = mdToRich(body)
@@ -2575,6 +2585,64 @@ export class TelegramBot {
   // The log pages rather than grows. A "see more" that appends would walk one
   // message straight into the wire limit, and a message Telegram rejects shows
   // nothing at all — so each tap is a page, and it says which one you are on.
+  // Pushing leaves this machine, so it asks first — a mis-tap on a phone is
+  // one pixel away from any other button, and this is the only action in jep
+  // that other people can see. The question names exactly what will happen,
+  // including the -u case, which is the only part of pushing that is a real
+  // decision (it creates the remote branch).
+  async #gitPushConfirm(chatID: number, setUpstream: boolean, messageID: number): Promise<void> {
+    const g = this.#chat(chatID).git
+    if (!g) return
+    let st: GitStatus
+    try {
+      st = await repoStatus(g.dir, GIT_COMMITS)
+    } catch {
+      await this.#gitView(chatID, messageID)
+      return
+    }
+    const n = pushCount(st)
+    if (!n) {
+      // it went out from somewhere else while you were looking at this screen
+      await this.#gitView(chatID, messageID)
+      return
+    }
+    const what = setUpstream
+      ? `Push ${n} commit${n === 1 ? "" : "s"} and set **${st.remote}/${st.branch}** as the upstream?\n\nThis creates the branch on ${st.remote}.`
+      : `Push ${n} commit${n === 1 ? "" : "s"} to **${st.upstream}**?`
+    const lines = [`## ⬆ ${st.branch}`, "", what, "", gitLogText(st.commits.slice(0, Math.min(n, GIT_COMMITS)))]
+    const rows: InlineButton[][] = [
+      [styled(btn("⬆ Push", setUpstream ? "git:pshuy" : "git:pshy"), "success"), btn("‹ Back", "git:st")],
+    ]
+    const text = lines.join("\n")
+    await this.#screen(chatID, mdToRich(text), rows, text, messageID)
+  }
+
+  // The push itself. Detached, because the network is not ours to hurry, and
+  // the screen says what is happening while it runs.
+  async #gitPush(chatID: number, setUpstream: boolean, messageID: number): Promise<void> {
+    const g = this.#chat(chatID).git
+    if (!g) return
+    const st = await repoStatus(g.dir, 1).catch(() => null)
+    if (!st) return
+    await this.#tg
+      .editMessageText({ chatID, messageID, text: `⬆ pushing ${pushCount(st)} to ${st.remote ?? "the remote"}…`, replyMarkup: null })
+      .catch(logFail("push"))
+    const r = await gitPush(g.dir, setUpstream ? { setUpstream: true, remote: st.remote ?? "origin", branch: st.branch } : {})
+    if (!r.ok) {
+      // git's own words: "Updates were rejected because the remote contains
+      // work that you do not have locally" is the useful half of a failure,
+      // and paraphrasing it would lose the instruction inside it
+      const why = r.message.split("\n").filter(Boolean).slice(-4).join("\n")
+      const text = `⚠️ push failed\n\n\`\`\`\n${why.slice(0, 900)}\n\`\`\``
+      await this.#screen(chatID, mdToRich(text), [[btn("‹ Status", "git:st")]], text, messageID)
+      return
+    }
+    console.error(`[git] pushed ${pushCount(st)} to ${st.remote}/${st.branch}`)
+    // straight back to the status screen, which now reads "in sync" — the
+    // receipt is the state, not a sentence about it
+    await this.#gitView(chatID, messageID)
+  }
+
   async #gitLog(chatID: number, off: number, messageID: number): Promise<void> {
     const g = this.#chat(chatID).git
     if (!g) return
@@ -3501,7 +3569,13 @@ export class TelegramBot {
           await tg.answerCallbackQuery({ id: cq.id, text: "view expired — run /git again" })
           break
         }
-        if (rest === "log") await this.#gitLog(chatID, 0, msg.message_id)
+        if (rest === "psh" || rest === "pshu") await this.#gitPushConfirm(chatID, rest === "pshu", msg.message_id)
+        else if (rest === "pshy" || rest === "pshuy") {
+          // the network is not ours to hurry: answer the tap now, push after
+          await tg.answerCallbackQuery({ id: cq.id, text: "pushing…" })
+          this.#detach("push", this.#gitPush(chatID, rest === "pshuy", msg.message_id))
+          break
+        } else if (rest === "log") await this.#gitLog(chatID, 0, msg.message_id)
         else if (rest === "logm") await this.#gitLog(chatID, g.logOff + GIT_LOG, msg.message_id)
         else if (rest === "logn") await this.#gitLog(chatID, g.logOff - GIT_LOG, msg.message_id)
         else if (rest === "df") await this.#gitDiff(chatID, null, 0, msg.message_id)

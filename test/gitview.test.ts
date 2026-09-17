@@ -3,7 +3,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { GIT_ROWS, clipPath, diffWindow, gitLogText, gitMark, gitStatusText } from "../src/telegram/gitview.ts"
+import { GIT_ROWS, clipPath, diffWindow, gitLogText, gitMark, gitStatusText, pushCount } from "../src/telegram/gitview.ts"
 import type { GitCommit, GitFile, GitStatus } from "../src/core/git.ts"
 
 const file = (over: Partial<GitFile> = {}): GitFile => ({
@@ -18,11 +18,13 @@ const file = (over: Partial<GitFile> = {}): GitFile => ({
 
 const status = (over: Partial<GitStatus> = {}): GitStatus => ({
   dir: "/home/me/code/jep",
+  remote: "origin",
   branch: "main",
   detached: false,
   upstream: "origin/main",
   ahead: 0,
   behind: 0,
+  unpushed: 0,
   files: [],
   additions: 0,
   deletions: 0,
@@ -186,4 +188,15 @@ test("a page with no line break in it still advances", () => {
 test("a negative offset is read as the start", () => {
   const { body } = diffWindow("abc", -50, 10)
   assert.equal(body, "abc")
+})
+
+test("what a push would send", () => {
+  assert.equal(pushCount(status({ ahead: 3 })), 3, "with an upstream, ahead is the answer")
+  assert.equal(pushCount(status({ ahead: 0 })), 0, "in sync sends nothing")
+  assert.equal(
+    pushCount(status({ upstream: null, ahead: 0, unpushed: 5 })),
+    5,
+    "a branch with no upstream reports ahead 0 — git has nothing to compare it to",
+  )
+  assert.equal(pushCount(status({ remote: null, upstream: null, unpushed: 9 })), 0, "nowhere to push, nothing to offer")
 })
