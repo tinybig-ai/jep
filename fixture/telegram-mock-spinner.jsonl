@@ -1,0 +1,2 @@
+{"update_id":1,"message":{"message_id":1,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"/pair TESTCODE"}}
+{"update_id":2,"message":{"message_id":2,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"photo":[{"file_id":"ph1","width":8,"height":8}],"caption":"Reply with the single word: ok"}}

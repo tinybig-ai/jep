@@ -1212,14 +1212,21 @@ export class TelegramBot {
     } else if (c.awaiting) {
       await this.#resolveAwaiting(chatID, text, m.message_id)
     } else {
-      let filePaths: string[] | undefined
-      if (mediaFileID) {
-        try {
-          filePaths = [await this.#ingestMedia(chatID, m)]
-        } catch (err) {
-          await this.#tg.sendMessage({ chatID, text: `⚠️ couldn't read the attachment: ${(err as Error).message}` })
-        }
-      }
+      // Downloading an attachment is two round trips to Telegram (getFile,
+      // then the bytes). Awaiting it *here* put that wait in front of the
+      // spinner, so a photo sat there with nothing on screen — the one thing
+      // the draft exists to prevent. The turn gets a thunk instead and calls
+      // it once the spinner is up.
+      const ingest = mediaFileID
+        ? async (): Promise<string[]> => {
+            try {
+              return [await this.#ingestMedia(chatID, m)]
+            } catch (err) {
+              await this.#tg.sendMessage({ chatID, text: `⚠️ couldn't read the attachment: ${(err as Error).message}` })
+              return []
+            }
+          }
+        : undefined
       // a sticker on its own carries no text, so say what it was — the image
       // alone doesn't tell the model it's a sticker or which emoji it stands for
       const prompt = text || (m.sticker ? stickerPrompt(m.sticker) : text)
@@ -1233,10 +1240,16 @@ export class TelegramBot {
       this.#runTurn(
         chatID,
         async () => {
-          await this.#freeText(chatID, prompt, { filePaths })
+          await this.#freeText(chatID, prompt, { ...(ingest ? { ingest } : {}) })
           if (mediaFileID) await this.#suggestImageModel(chatID)
         },
-        { prompt: { text: prompt, ...(filePaths?.length ? { filePaths } : {}), queuedAt: Date.now() } },
+        // A message carrying an attachment is not replayable across a restart:
+        // the file is still on Telegram's servers at this point, because the
+        // download now happens inside the turn so the spinner can go first. A
+        // recovered copy would replay the words without the photo, which is
+        // worse than saying it was lost. It still shows in /queue — `label`
+        // without `prompt` means "visible, not replayable", same as a clone.
+        mediaFileID ? { label: prompt } : { prompt: { text: prompt, queuedAt: Date.now() } },
       )
       if (queued) {
         void this.#tg.setMessageReaction({ chatID, messageID: m.message_id, emoji: "👀" }).catch(logFail("reaction"))
@@ -1880,9 +1893,17 @@ export class TelegramBot {
     c.del = null
   }
 
-  async #freeText(chatID: number, text: string, opts?: { filePaths?: string[] }): Promise<void> {
+  async #freeText(
+    chatID: number,
+    text: string,
+    opts?: {
+      filePaths?: string[]
+      /** files to fetch *after* the spinner is up — see the call site in #gatedMessage */
+      ingest?: () => Promise<string[]>
+    },
+  ): Promise<void> {
     const c = this.#chat(chatID)
-    const promptText = text || (opts?.filePaths?.length ? "see the attached file" : "")
+    let filePaths = opts?.filePaths
     const internals = this.#store.internals(chatID)
 
     const ac = new AbortController()
@@ -1935,6 +1956,12 @@ export class TelegramBot {
       }
     }
     console.error(`[draft] mode=${draftMode} chat=${chatID}`)
+    // Now that there is something on screen, fetch anything that came with the
+    // message. Before the draft this was dead air; after it, it is the spinner
+    // doing its job.
+    if (opts?.ingest) filePaths = await opts.ingest()
+    // an attachment with no words still has to say something to the model
+    const promptText = text || (filePaths?.length ? "see the attached file" : "")
     let placeholder: { message_id: number } | null = null
     if (draftMode === "none") {
       placeholder = await this.#tg.sendMessage({ chatID, text: "…", replyMarkup: kin([[btn("⏹ Stop", "abt")]]) })
@@ -2255,7 +2282,7 @@ export class TelegramBot {
         // no absolute deadline — the idle watchdog above owns liveness now
         timeoutMs: 0,
         ...(model ? { model } : {}),
-        ...(opts?.filePaths?.length ? { filePaths: opts.filePaths } : {}),
+        ...(filePaths?.length ? { filePaths } : {}),
         ...(agent ? { agent } : {}),
       })
       // the turn is over: no more live previews, and stop pulling events
@@ -2299,7 +2326,7 @@ export class TelegramBot {
         console.error(`[turn] harness error: ${failure.name}: ${failure.message}`)
         // a session somebody else is already running in is not a fault the
         // user can read their way out of — it's a decision (see #reportHold)
-        if (!(await this.#reportHold(chatID, ws, sessionID, promptText, opts?.filePaths))) {
+        if (!(await this.#reportHold(chatID, ws, sessionID, promptText, filePaths))) {
           await this.#tg.sendMessage({ chatID, text: `⚠️ ${failure.name}: ${failure.message}`.slice(0, MAX_MSG) })
         }
       } else if (!shown && !textOf(turn).trim()) {

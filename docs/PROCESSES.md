@@ -213,7 +213,28 @@ Two routes, one choke point.
 2. **Streaming + finalize** (`#freeText`, `bot.ts`) — on Bot API 9.4+ clients the
    turn opens an animated draft (`sendMessageDraft` with `can_stop: true` and an
    empty text, which renders a native "Thinking…" placeholder plus a stop
-   button). Every ~700 ms the latest answer tail is pushed to the same draft.
+   button).
+
+   **The spinner is the first thing that happens, and nothing may be awaited in
+   front of it.** It goes out before `#ensureSession` (which can list and create
+   sessions — two round trips) and before an attachment is downloaded (`getFile`
+   plus the bytes — two more). The download used to be awaited in
+   `#gatedMessage` before the turn was even queued, so sending a photo left the
+   screen empty for exactly as long as the upload took to come back — the one
+   thing the draft exists to prevent. The turn now receives an `ingest` thunk
+   and calls it once the draft is up. The e2e test asserts the ordering, because
+   this is precisely the sort of thing that regresses silently.
+
+   The consequence: a queued message carrying an attachment is **not**
+   replayable after a restart, since the file is still on Telegram's servers
+   when it is queued. It shows in `/queue` with a label and no payload, the
+   same way a clone turn does.
+
+   Two cases deliberately get no spinner. A message that arrives while a turn
+   is already running gets a 👀 on the message itself — the draft belongs to
+   the turn in flight and cannot say "you are second". And a slash command does
+   no harness work, so there is nothing to spin for (`/find` and `/git` post
+   their own "searching…" line instead). Every ~700 ms the latest answer tail is pushed to the same draft.
    Reasoning deltas are **not** appended to the answer: `message.part.delta`
    carries only a `partID` (no type), so the adapter learns each part's type from
    its `message.part.updated` event (the `#partTypes` map in `opencode.ts`) and

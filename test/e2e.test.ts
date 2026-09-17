@@ -352,4 +352,32 @@ describe("mock replay", { skip: enabled ? false : "set JEP_E2E=1 (boots a real h
       rmSync(home, { recursive: true, force: true })
     }
   })
+
+  test("the spinner goes out before anything is fetched or asked", () => {
+    // A photo is the case that used to break this: the download (getFile, then
+    // the bytes — two round trips to Telegram) was awaited before the turn was
+    // even queued, so the screen stayed empty for exactly as long as the
+    // attachment took to arrive.
+    const calls = replay("telegram-mock-spinner.jsonl")
+
+    const spinner = calls.findIndex((c) => c.method === "sendMessageDraft" && /text=""/.test(c.text))
+    assert.ok(spinner !== -1, "the turn opens with an empty draft, which is the native shimmer")
+    assert.match(calls[spinner]!.text, /can_stop=true/, "and it carries the stop button")
+
+    // nothing about the turn may precede it: not the typing action, not a
+    // content frame, not the reply
+    const firstTurnWork = calls.findIndex(
+      (c) => c.method === "sendChatAction" || c.method === "sendRichMessageDraft" || c.method === "sendRichMessage",
+    )
+    assert.ok(
+      firstTurnWork === -1 || spinner < firstTurnWork,
+      `something reached the chat before the spinner: ${calls[firstTurnWork]?.method}`,
+    )
+
+    // and the photo still got through to the model afterwards
+    assert.ok(
+      calls.some((c) => c.method === "sendRichMessage" || c.method === "sendRichMessageDraft"),
+      "the turn still ran",
+    )
+  })
 })
