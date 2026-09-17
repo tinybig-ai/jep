@@ -31,7 +31,7 @@ import {
   gitStatusText,
 } from "./gitview.ts"
 import type { Pairing } from "./pair.ts"
-import type { ChatStore, InternalsSettings, DetailMode, InternalsLayout } from "./store.ts"
+import type { ChatStore, HeldPrompt, InternalsSettings, DetailMode, InternalsLayout, PendingPrompt } from "./store.ts"
 import type { ReminderRecord, ReminderStore } from "./reminders.ts"
 
 interface Ws {
@@ -93,7 +93,7 @@ interface ChatState {
   // (see #reportHold), kept so the ⏹ button can send it once that run ends.
   // One slot: a second blocked message replaces the first, which is what the
   // button offering to send "your message" has to mean.
-  held: { sessionID: string; text: string; filePaths?: string[] } | null
+  held: HeldPrompt | null
   // last draft_id used for streaming previews (Bot API 9.4+), per chat
   draft: number
   // the chat's type ("private", "group", "supergroup", …) and the last
@@ -116,6 +116,13 @@ interface QueuedTurn {
   id: number
   /** what it is, in a list row — the prompt, clipped */
   label: string
+  /**
+   * What to say, for a turn that is a prompt. Present means replayable: this
+   * is what survives a restart. A turn that is *work* rather than words (a
+   * clone) has no payload and is simply lost, which is the honest outcome —
+   * re-running it would be a guess.
+   */
+  prompt?: PendingPrompt
   queuedAt: number
   startedAt?: number
   /** dropped while it waited: the runner checks this instead of running it */
@@ -155,6 +162,9 @@ const WIPE_PAGE = 4
 // the list is sorted newest-first, so this is "the recent past" — the footer
 // says so rather than implying the whole history was searched.
 const SEARCH_DEPTH = Number(process.env.JEP_SEARCH_DEPTH ?? "") || 40
+// How old a queued-but-unsent message may be and still be worth sending after
+// a restart. Past it, an answer would arrive with no question in sight.
+const PENDING_MAX_AGE = (Number(process.env.JEP_PENDING_MAX_AGE ?? "") || 3600) * 1000
 // files embedded into one rich message via attach:// (keep multipart modest)
 const MAX_RICH_FILES = 4
 
@@ -774,6 +784,7 @@ export class TelegramBot {
     this.#harnessList = harnessList
     this.#reminderStore = reminders
     for (const r of reminders.list()) this.#scheduleReminder(r)
+    this.#detach("recover", this.#recoverPending())
   }
 
   // schedules (or re-schedules, e.g. on boot) one persisted reminder. Firing
@@ -958,7 +969,8 @@ export class TelegramBot {
         settingsMsg: null,
         settingsPage: 0,
         suggestedImage: null,
-        held: null,
+        // the one copy of a message that was never delivered — see #reportHold
+        held: this.#store.held(id),
         draft: 0,
         chatType: null,
         lastUserID: null,
@@ -1038,10 +1050,17 @@ export class TelegramBot {
   // than something only the promise chain knows. A turn dropped while it waits
   // is skipped rather than unqueued: unpicking a promise chain mid-flight is
   // how you lose the turns behind it.
-  #runTurn(chatID: number, fn: () => Promise<void>, label = ""): QueuedTurn {
+  #runTurn(chatID: number, fn: () => Promise<void>, what: { label?: string; prompt?: PendingPrompt } = {}): QueuedTurn {
     const c = this.#chat(chatID)
-    const item: QueuedTurn = { id: ++this.#turnSeq, label, queuedAt: Date.now(), cancelled: false }
+    const item: QueuedTurn = {
+      id: ++this.#turnSeq,
+      label: what.label ?? what.prompt?.text ?? "",
+      ...(what.prompt ? { prompt: what.prompt } : {}),
+      queuedAt: Date.now(),
+      cancelled: false,
+    }
     c.queue.push(item)
+    this.#savePending(chatID)
     const guarded = async () => {
       try {
         if (item.cancelled) return
@@ -1050,6 +1069,7 @@ export class TelegramBot {
       } finally {
         const i = c.queue.indexOf(item)
         if (i !== -1) c.queue.splice(i, 1)
+        this.#savePending(chatID)
       }
     }
     const prev = this.#turns.get(chatID) ?? Promise.resolve()
@@ -1063,6 +1083,18 @@ export class TelegramBot {
       if (this.#turns.get(chatID) === next) this.#turns.delete(chatID)
     })
     return item
+  }
+
+  // Mirrors the *waiting* part of the queue to disk. queue[0] is excluded on
+  // purpose: the harness goes on running it server-side after we die, so
+  // replaying it would ask for the same work twice. Turns with no payload
+  // (a clone) aren't replayable and aren't kept.
+  #savePending(chatID: number): void {
+    const waiting = this.#chat(chatID)
+      .queue.slice(1)
+      .filter((q) => q.prompt && !q.cancelled)
+      .map((q) => q.prompt!)
+    this.#store.setPending(chatID, waiting)
   }
 
   /** wait for every queued turn to finish — used by mock mode before exit */
@@ -1199,7 +1231,7 @@ export class TelegramBot {
           await this.#freeText(chatID, prompt, { filePaths })
           if (mediaFileID) await this.#suggestImageModel(chatID)
         },
-        prompt,
+        { prompt: { text: prompt, ...(filePaths?.length ? { filePaths } : {}), queuedAt: Date.now() } },
       )
       if (queued) {
         void this.#tg.setMessageReaction({ chatID, messageID: m.message_id, emoji: "👀" }).catch(logFail("reaction"))
@@ -1287,7 +1319,7 @@ export class TelegramBot {
     // nothing was actually awaited — treat it as an ordinary prompt, queued
     // like any other so it can't block the update loop either
     if (!a) {
-      this.#runTurn(chatID, () => this.#freeText(chatID, text), text)
+      this.#runTurn(chatID, () => this.#freeText(chatID, text), { prompt: { text, queuedAt: Date.now() } })
       return
     }
     this.#chat(chatID).awaiting = null
@@ -1370,7 +1402,7 @@ export class TelegramBot {
         return
       }
       await this.#addWorkspace(chatID, dir, sent.message_id)
-    }, `clone ${name}`)
+    }, { label: `clone ${name}` })
   }
 
   async #resolveUse(chatID: number, term: string): Promise<void> {
@@ -2411,12 +2443,13 @@ export class TelegramBot {
     const stopped = await this.#stopTurn(chatID)
     // Ahead of the queue, not at the back of it: the point of steering is that
     // the correction lands before the three things you said after it.
-    const item = this.#runTurn(chatID, () => this.#freeText(chatID, text), text)
+    const item = this.#runTurn(chatID, () => this.#freeText(chatID, text), { prompt: { text, queuedAt: Date.now() } })
     const i = c.queue.indexOf(item)
     if (i > 1) {
       c.queue.splice(i, 1)
       c.queue.splice(1, 0, item)
     }
+    this.#savePending(chatID)
     await this.#say(
       chatID,
       stopped ? "⏹ stopped — saying this next." : wasRunning ? "(nothing was running) — saying this next." : "↪ sending this next.",
@@ -2655,6 +2688,48 @@ export class TelegramBot {
     }
   }
 
+  // Messages that were queued behind a running turn when the process died.
+  // They were accepted — the 👀 went on them — so dropping them silently is
+  // the same bug /queue was built to fix, one restart later.
+  //
+  // Only what was *waiting* is here (see #savePending), and only if it is
+  // still recent: replaying an hour-old thought at you is worse than saying it
+  // was lost, because by then the answer would arrive with no question in
+  // sight. Either way the chat is told which it was.
+  async #recoverPending(): Promise<void> {
+    for (const { chatID, items } of this.#store.allPending()) {
+      if (!items.length) continue
+      // taken as claimed straight away: a crash between here and the first
+      // turn must not replay them a second time
+      this.#store.setPending(chatID, [])
+      // partitioned, not counted: age doesn't follow queue order (a held
+      // message can be re-queued long after the ones behind it), and taking
+      // "the first n" named the wrong messages as dropped
+      const recent = (p: PendingPrompt) => Date.now() - p.queuedAt < PENDING_MAX_AGE
+      const fresh = items.filter(recent)
+      const stale = items.filter((p) => !recent(p))
+      const lines: string[] = []
+      if (fresh.length)
+        lines.push(
+          `↩ picking up ${fresh.length} message${fresh.length === 1 ? "" : "s"} that ${fresh.length === 1 ? "was" : "were"} still queued when I restarted.`,
+        )
+      if (stale.length)
+        lines.push(
+          `🗑 dropped ${stale.length} older one${stale.length === 1 ? "" : "s"} (over ${fmtDuration(PENDING_MAX_AGE)} old):`,
+          ...stale.map((p) => `   • ${clipTitle(p.text, 60)}`),
+        )
+      try {
+        await this.#say(chatID, lines.join("\n"))
+      } catch (err) {
+        console.error(`[recover] couldn't tell chat ${chatID}: ${(err as Error)?.message ?? err}`)
+      }
+      for (const p of fresh) {
+        this.#runTurn(chatID, () => this.#freeText(chatID, p.text, { filePaths: p.filePaths }), { prompt: p })
+      }
+      console.error(`[recover] chat ${chatID}: ${fresh.length} resumed, ${stale.length} dropped`)
+    }
+  }
+
   // fire-and-forget, but tracked: the failure is logged and drain() can wait
   #detach(tag: string, work: Promise<void>): void {
     const p: Promise<void> = work.catch(logFail(tag)).finally(() => this.#background.delete(p))
@@ -2727,7 +2802,7 @@ export class TelegramBot {
       return
     }
     const queued = this.#turns.has(chatID)
-    this.#runTurn(chatID, () => this.#freeText(chatID, prompt), prompt)
+    this.#runTurn(chatID, () => this.#freeText(chatID, prompt), { prompt: { text: prompt, queuedAt: Date.now() } })
     if (queued) {
       void this.#tg.setMessageReaction({ chatID, messageID: m.message_id, emoji: "👀" }).catch(logFail("reaction"))
     }
@@ -3124,6 +3199,9 @@ export class TelegramBot {
     if (!hold) return false
     const c = this.#chat(chatID)
     c.held = { sessionID, text, ...(filePaths?.length ? { filePaths } : {}) }
+    // the "⏹ Stop it & send" button has to still mean something after a
+    // restart — it is the only copy of a message that was never delivered
+    this.#store.setHeld(chatID, c.held)
     const since = timeAgo(hold.startedAt)
     const lines = [
       `⏸ "${hold.label}" is already running${since ? ` — started ${since}` : ""}.`,
@@ -3389,6 +3467,7 @@ export class TelegramBot {
           // its own the flag left the dropped turns sitting in the list.
           for (const q of dropped) q.cancelled = true
           c.queue.length = 1
+          this.#savePending(chatID)
           await this.#queueView(chatID, msg.message_id)
           await tg.answerCallbackQuery({ id: cq.id, text: dropped.length ? `dropped ${dropped.length}` : "nothing waiting" })
           break
@@ -3403,6 +3482,7 @@ export class TelegramBot {
           }
           q.cancelled = true
           c.queue.splice(c.queue.indexOf(q), 1)
+          this.#savePending(chatID)
           await this.#queueView(chatID, msg.message_id)
           await tg.answerCallbackQuery({ id: cq.id, text: "dropped" })
           break
@@ -3666,10 +3746,12 @@ export class TelegramBot {
         // the button said it would do
         if (c.sessionID && c.sessionID !== held.sessionID) {
           c.held = null
+          this.#store.setHeld(chatID, null)
           await tg.editMessageText({ chatID, messageID: msg.message_id, text: "(you've switched conversations since — send it again here)", replyMarkup: null })
           return tg.answerCallbackQuery({ id: cq.id, text: "stale" })
         }
         c.held = null
+        this.#store.setHeld(chatID, null)
         await tg.editMessageText({ chatID, messageID: msg.message_id, text: "⏹ stopping that run…", replyMarkup: null })
         const released = (await ws.adapter.releaseHold?.(held.sessionID).catch(logHold)) ?? false
         if (!released) {
@@ -3681,7 +3763,9 @@ export class TelegramBot {
         }
         await tg.editMessageText({ chatID, messageID: msg.message_id, text: "⏹ stopped — sending your message", replyMarkup: null })
         await tg.answerCallbackQuery({ id: cq.id, text: "stopped" })
-        this.#runTurn(chatID, () => this.#freeText(chatID, held.text, { filePaths: held.filePaths }), held.text)
+        this.#runTurn(chatID, () => this.#freeText(chatID, held.text, { filePaths: held.filePaths }), {
+          prompt: { text: held.text, ...(held.filePaths?.length ? { filePaths: held.filePaths } : {}), queuedAt: Date.now() },
+        })
         break
       }
       case "abt": {

@@ -50,11 +50,34 @@ export interface StoreData {
   // first one and the conversation to whatever was newest there. Keyed by
   // directory, not workspace name, since names can shift on collision.
   chatContext?: Record<string, { dir: string; sessionID: string | null; harness?: string }>
+  // chat id -> prompts that were queued behind a running turn but had not
+  // started yet. The queue lived only in memory, so a restart silently ate
+  // every message you had fired off while the agent worked. The turn *in
+  // flight* is deliberately not here: the harness keeps running it
+  // server-side, so replaying it would ask for the same work twice.
+  pending?: Record<string, PendingPrompt[]>
+  // chat id -> a prompt that couldn't be delivered because the session was
+  // held by another run, kept so the "⏹ Stop it & send" button still means
+  // something after a restart.
+  held?: Record<string, HeldPrompt>
   // chat id -> last draft id handed out. Telegram draft ids are consumed once
   // the real message lands, and a reused one is accepted but never rendered.
   // The counter lived only in memory, so every first turn after a restart
   // asked for draft 1 again and silently got no preview at all.
   draftSeq?: Record<string, number>
+}
+
+/** a queued prompt, in the only form worth replaying: what to say, and when it was said */
+export interface PendingPrompt {
+  text: string
+  filePaths?: string[]
+  queuedAt: number
+}
+
+export interface HeldPrompt {
+  sessionID: string
+  text: string
+  filePaths?: string[]
 }
 
 export interface IndexedSession {
@@ -92,6 +115,8 @@ export class ChatStore {
   #sessionIndex: Record<string, IndexedSession[]>
   #chatContext: Record<string, { dir: string; sessionID: string | null; harness?: string }>
   #draftSeq: Record<string, number>
+  #pending: Record<string, PendingPrompt[]>
+  #held: Record<string, HeldPrompt>
   #file: string | null
 
   // takes the persisted shape as-is: this grew to seven positional args and
@@ -107,6 +132,8 @@ export class ChatStore {
     this.#sessionIndex = d.sessionIndex ?? {}
     this.#chatContext = d.chatContext ?? {}
     this.#draftSeq = d.draftSeq ?? {}
+    this.#pending = d.pending ?? {}
+    this.#held = d.held ?? {}
     this.#file = file
   }
 
@@ -201,6 +228,39 @@ export class ChatStore {
     return next
   }
 
+  /** prompts queued but not yet started, oldest first */
+  pending(chatID: number): PendingPrompt[] {
+    return this.#pending[String(chatID)] ?? []
+  }
+
+  setPending(chatID: number, items: PendingPrompt[]): void {
+    const key = String(chatID)
+    // this is written on every queue change, which is every message — don't
+    // rewrite the file to say the same thing
+    const prev = this.#pending[key] ?? []
+    if (prev.length === items.length && prev.every((p, i) => p.text === items[i]!.text && p.queuedAt === items[i]!.queuedAt)) return
+    if (items.length) this.#pending[key] = items
+    else delete this.#pending[key]
+    this.#save()
+  }
+
+  /** every chat with something waiting, for the boot-time recovery */
+  allPending(): Array<{ chatID: number; items: PendingPrompt[] }> {
+    return Object.entries(this.#pending).map(([k, items]) => ({ chatID: Number(k), items }))
+  }
+
+  held(chatID: number): HeldPrompt | null {
+    return this.#held[String(chatID)] ?? null
+  }
+
+  setHeld(chatID: number, h: HeldPrompt | null): void {
+    const key = String(chatID)
+    if (h) this.#held[key] = h
+    else if (!(key in this.#held)) return
+    else delete this.#held[key]
+    this.#save()
+  }
+
   /** last known sessions for a workspace dir, newest first */
   indexedSessions(dir: string, harness?: string | null): IndexedSession[] {
     return this.#sessionIndex[indexKey(dir, harness)] ?? []
@@ -259,6 +319,8 @@ export class ChatStore {
           sessionIndex: this.#sessionIndex,
           chatContext: this.#chatContext,
           draftSeq: this.#draftSeq,
+          pending: this.#pending,
+          held: this.#held,
         },
         null,
         2,

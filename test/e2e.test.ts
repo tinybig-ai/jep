@@ -8,7 +8,7 @@
 import { test, describe } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -245,6 +245,46 @@ describe("mock replay", { skip: enabled ? false : "set JEP_E2E=1 (boots a real h
         JSON.stringify(results.rich).includes("open:"),
         "and every hit is tappable through the same callback /ls uses",
       )
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  test("messages still queued when the process died are picked up", () => {
+    const home = mkdtempSync(join(tmpdir(), "jep-e2e-recover-"))
+    try {
+      // A store as a crash would leave it: two prompts accepted, never run.
+      // One is recent enough to be worth sending, one is from last week.
+      writeFileSync(
+        join(home, "store.json"),
+        JSON.stringify({
+          titles: {},
+          models: {},
+          pending: {
+            "123": [
+              { text: "Reply with the single word: resumed", queuedAt: Date.now() - 60_000 },
+              { text: "Reply with the single word: ancient", queuedAt: Date.now() - 7 * 86_400_000 },
+            ],
+          },
+        }),
+      )
+      // JEP_TG_OWNER stands in for the pairing that would have survived too
+      const calls = replay("telegram-mock-recover.jsonl", { JEP_TG_OWNER: "123" }, home)
+
+      const notice = calls.find((c) => c.text.includes("picking up"))
+      assert.ok(notice, "the chat is told what was recovered")
+      assert.match(notice.text, /1 message/, "only the recent one is resumed")
+      assert.match(notice.text, /dropped 1 older one/, "and the stale one is named, not silently lost")
+      assert.match(notice.text, /ancient/, "by what it said")
+
+      assert.ok(
+        calls.some((c) => c.method === "sendMessageDraft"),
+        "the recovered prompt actually runs",
+      )
+
+      // and it is claimed immediately, so a crash loop cannot replay it
+      const after = JSON.parse(readFileSync(join(home, "store.json"), "utf8")) as { pending?: Record<string, unknown[]> }
+      assert.ok(!after.pending?.["123"]?.length, "the queue is not left to be replayed twice")
     } finally {
       rmSync(home, { recursive: true, force: true })
     }

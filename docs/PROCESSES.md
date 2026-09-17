@@ -92,6 +92,7 @@ fixture/
 | `JEP_TRANSCRIBE_TIMEOUT` | seconds before a transcription is given up on (default: 300) |
 | `JEP_VOICE_MAX_SEC` | longest voice note accepted (default: 600) |
 | `JEP_SEARCH_DEPTH` | transcripts `/find` will read, newest first (default: 40) |
+| `JEP_PENDING_MAX_AGE` | seconds a queued-but-unsent message stays worth sending after a restart (default: 3600) |
 
 ## 5. Commands
 
@@ -416,6 +417,39 @@ before it starts. The prompt goes first; the ask flags go last.
 The flag is checked once against `claude --help`: a build without it would
 reject the whole command line and take every turn with it.
 
+## 9a. What survives a restart
+
+Sessions, titles, model picks, workspaces, the chat's workspace/conversation
+pointer, draft ids and reminders already did. Two things that had not:
+
+- **Queued prompts.** A message fired off while the agent worked got a 👀 and
+  a place in the queue, and a restart silently ate it — the same bug `/queue`
+  exists to fix, one restart later. `store.pending` mirrors the *waiting* part
+  of each chat's queue on every change, and `#recoverPending` re-queues it at
+  boot.
+- **A held message** (`#reportHold`) — the one copy of a prompt that was never
+  delivered because another run held the session. Without persistence, the
+  "⏹ Stop it & send" button pointed at nothing after a restart.
+
+Three decisions worth keeping:
+
+- **The turn in flight is not saved.** The harness goes on running it
+  server-side after we die, so replaying it would ask for the same work twice.
+  Only `queue[1..]` is persisted, and only items with a payload — a clone turn
+  is work rather than words and isn't replayable.
+- **Pending is claimed before it is run** (`setPending(chatID, [])` first), so
+  a crash loop cannot replay the same prompts on every boot.
+- **Age decides, and it is said out loud.** Anything younger than
+  `JEP_PENDING_MAX_AGE` (an hour) is sent; anything older is dropped *and
+  named*, because an answer arriving an hour later with no question in sight is
+  worse than being told it was lost. The partition is by age, not by position:
+  a held message can be re-queued long after the ones behind it, and taking
+  "the first n" named the wrong messages as dropped.
+
+`store.test.ts` covers the round trips; the e2e test writes a `store.json` as
+a crash would leave it (one recent prompt, one from last week) and asserts the
+notice, the resumed turn, and that the queue is not left to be replayed twice.
+
 ## 9b. Search (`/find`)
 
 "The thread where I fixed the draft ids" was a question with no answer: `/ls`
@@ -617,6 +651,7 @@ determinism is (PHILOSOPHY §7), plus the git grammars:
 | `fmt.test.ts` | durations, counts, ages, `~` folding |
 | `media.test.ts` | every audio shape Telegram sends, and the container/image signatures |
 | `search.test.ts` | snippets centred on the hit, and title-before-body ranking |
+| `store.test.ts` | every persisted field, by writing a file and loading it again |
 
 `e2e.test.ts` covers the four screens end to end: /git's three views, a voice
 note, the queue, and a plain paired conversation.
