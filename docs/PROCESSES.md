@@ -68,6 +68,17 @@ fixture/
 
 ## 5. Commands
 
+Install (or reinstall) it with:
+
+```sh
+sh scripts/install.sh          # JEP_TG_TOKEN=… on a first run; re-runs reuse it
+```
+
+It writes the plist, loads the job and waits for the boot banner — but only
+after proving a launchd job can read this checkout (see the failure mode
+below), because that is the one thing that cannot be checked from your own
+shell.
+
 The live bot runs under **launchd** (`~/Library/LaunchAgents/com.jep.tg.plist`),
 so it survives crashes and the "silent daemon death" failure mode (a transient
 Telegram `getUpdates` 502 used to `process.exit(1)` — now the poll loop retries
@@ -108,9 +119,23 @@ sample $(pgrep -f 'src/tg.ts') 3 -mayDie | grep -m1 -B2 'open '   # hung in __op
 log show --last 5m --predicate 'process == "tccd"' | grep DocumentsFolder
 ```
 
-Recovery — run it from a shell that *does* have the grant (a terminal the user
-has already allowed), detached so it outlives the session, and unload the
-launchd job first so it stops respawning hung copies:
+**A grant belongs to one binary.** `/bin/sh` and `/bin/cat` reading the tree
+prove nothing about `node`, and on this machine they now disagree: node has
+the grant, the shell does not (a `/bin/sh` wrapper with `WorkingDirectory`
+inside the tree logs `getcwd: cannot access parent directories`). So both the
+installer's preflight and the daemon wrapper probe with the *same node binary*
+that will run the bot, and the plist's working directory is the data home, not
+the checkout.
+
+The plist runs `scripts/jep-daemon.sh` (copied into the data home, so it stays
+readable when the tree is not) rather than node directly. It does that probe
+with a watchdog, and on a hang writes the diagnosis to the log and holds for
+five minutes so `KeepAlive` cannot spin on it. An install-time failure refuses
+to write the plist at all.
+
+Recovery for a bot already stuck — run it from a shell that *does* have the
+grant (a terminal the user has already allowed), detached so it outlives the
+session, and unload the launchd job first so it stops respawning hung copies:
 
 ```sh
 launchctl bootout gui/$(id -u)/com.jep.tg; pkill -9 -f 'src/tg.ts'
