@@ -1150,10 +1150,20 @@ export class TelegramBot {
       // a sticker on its own carries no text, so say what it was — the image
       // alone doesn't tell the model it's a sticker or which emoji it stands for
       const prompt = text || (m.sticker ? stickerPrompt(m.sticker) : text)
+      // A turn opens with a spinner, but a turn that has to wait its place in
+      // the queue opens with nothing — and the screen is already busy with the
+      // one in front of it, so a message sent into a working agent looked
+      // dropped. The draft belongs to the running turn and cannot say this, so
+      // the acknowledgement goes where it is unambiguous: on the message
+      // itself. It clears nothing and needs no cleanup.
+      const queued = this.#turns.has(chatID)
       this.#runTurn(chatID, async () => {
         await this.#freeText(chatID, prompt, { filePaths })
         if (mediaFileID) await this.#suggestImageModel(chatID)
       })
+      if (queued) {
+        void this.#tg.setMessageReaction({ chatID, messageID: m.message_id, emoji: "👀" }).catch(logFail("reaction"))
+      }
     }
   }
 
@@ -1670,23 +1680,35 @@ export class TelegramBot {
     const draftID = this.#store.nextDraftID(chatID)
     c.draft = draftID
     let draftMode: "rich" | "text" | "none" = "none"
+    // Whether this client takes rich messages. Unknown until something is
+    // actually sent as one — and the opening draft deliberately isn't, so the
+    // final render asks rather than assumes (it falls back on its own).
+    let richOK: boolean | null = null
     try {
-      // RichBlockThinking (Bot API 10.2, <tg-thinking> in HTML): a native,
-      // client-animated "Thinking…" placeholder valid only in draft messages.
-      await this.#tg.sendRichMessageDraft({
-        chatID,
-        draftID,
-        rich_message: { blocks: [{ type: "thinking", text: "Thinking…" }] },
-        canStop: true,
-      })
-      draftMode = "rich"
+      // An empty text draft is the native shimmer (Bot API 9.4+): it says
+      // "received, working" with nothing in it, which is the whole job of the
+      // first frame. A rich draft carrying a thinking block says that too, but
+      // it lands as a block of content — so the very first thing the user got
+      // back was a thinking block, and the acknowledgement was indistinguishable
+      // from the answer starting. Content waits for renderLive; this frame is
+      // only the spinner.
+      await this.#tg.sendMessageDraft({ chatID, draftID, text: "", canStop: true })
+      draftMode = "text"
     } catch (err) {
-      console.error(`[draft] rich failed: ${(err as Error)?.message ?? err}`)
+      console.error(`[draft] text failed: ${(err as Error)?.message ?? err}`)
       try {
-        await this.#tg.sendMessageDraft({ chatID, draftID, text: "", canStop: true })
-        draftMode = "text"
+        // RichBlockThinking (Bot API 10.2, <tg-thinking> in HTML): a native,
+        // client-animated "Thinking…" placeholder valid only in draft messages.
+        await this.#tg.sendRichMessageDraft({
+          chatID,
+          draftID,
+          rich_message: { blocks: [{ type: "thinking", text: "Thinking…" }] },
+          canStop: true,
+        })
+        draftMode = "rich"
+        richOK = true
       } catch (err2) {
-        console.error(`[draft] text failed too: ${(err2 as Error)?.message ?? err2}`)
+        console.error(`[draft] rich failed too: ${(err2 as Error)?.message ?? err2}`)
         /* draft streaming unsupported → legacy edit-in-place below */
       }
     }
@@ -1834,8 +1856,21 @@ export class TelegramBot {
         if (blocks.length === 0) return // nothing to show yet — keep the "…" frame
         const tail = textOf(liveParts).slice(-(MAX_MSG - 80))
         const hint = closeStreamingTable(tail)
-        if (draftMode === "rich") await this.#tg.sendRichMessageDraft({ chatID, draftID, rich_message: { blocks } })
-        else if (draftMode === "text") await this.#tg.sendMessageDraft({ chatID, draftID, text: hint })
+        // first content is also where the draft stops being a spinner: try the
+        // rich form once, and keep the plain tail for clients that refuse it
+        if (draftMode !== "none" && richOK !== false) {
+          try {
+            await this.#tg.sendRichMessageDraft({ chatID, draftID, rich_message: { blocks } })
+            richOK = true
+            draftMode = "rich"
+            lastEdit = Date.now()
+            return
+          } catch (err) {
+            richOK = false
+            console.error(`[draft] rich draft refused, falling back to text: ${(err as Error)?.message ?? err}`)
+          }
+        }
+        if (draftMode !== "none") await this.#tg.sendMessageDraft({ chatID, draftID, text: hint })
         else if (placeholder) await this.#tg.editMessageText({ chatID, messageID: placeholder.message_id, text: hint || "…" })
       } catch (err) {
         console.error(`[draft] renderLive failed (mode=${draftMode}): ${(err as Error)?.stack ?? err}`)
@@ -1870,7 +1905,7 @@ export class TelegramBot {
             : { type: "document", document: { type: "document", media: `attach://${name}` } },
         )
       })
-      if (draftMode === "rich" && blocks.length) {
+      if (richOK !== false && blocks.length) {
         try {
           await this.#tg.sendRichMessage({
             chatID,
@@ -1915,7 +1950,7 @@ export class TelegramBot {
               : { type: "document", document: { type: "document", media: `attach://${name}` } },
           )
         })
-      if (draftMode === "rich" && blocks.length) {
+      if (richOK !== false && blocks.length) {
         try {
           await this.#tg.sendRichMessage({
             chatID,
