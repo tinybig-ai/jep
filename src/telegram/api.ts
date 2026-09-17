@@ -105,6 +105,8 @@ export interface TelegramApi {
     parseMode?: ParseMode
   }): Promise<void>
   deleteMessage(params: { chatID: number; messageID: number }): Promise<void>
+  /** react to a message with a single emoji (Bot API 7.0+) */
+  setMessageReaction(params: { chatID: number; messageID: number; emoji: string }): Promise<void>
   pinChatMessage(params: { chatID: number; messageID: number; disableNotification?: boolean }): Promise<void>
   unpinChatMessage(params: { chatID: number; messageID: number }): Promise<void>
   sendRichMessage(params: {
@@ -286,6 +288,13 @@ export function createTelegramApi(token: string): TelegramApi {
     },
     deleteMessage(params) {
       return call<void>("deleteMessage", { chat_id: params.chatID, message_id: params.messageID })
+    },
+    setMessageReaction(params) {
+      return call<void>("setMessageReaction", {
+        chat_id: params.chatID,
+        message_id: params.messageID,
+        reaction: [{ type: "emoji", emoji: params.emoji }],
+      })
     },
     pinChatMessage(params) {
       return call<void>("pinChatMessage", {

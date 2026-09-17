@@ -784,6 +784,7 @@ export class TelegramBot {
       sendChatAction: (p) => tg.sendChatAction(p),
       answerCallbackQuery: (p) => tg.answerCallbackQuery(p),
       deleteMessage: (p) => tg.deleteMessage(p),
+      setMessageReaction: (p) => tg.setMessageReaction(p),
       pinChatMessage: (p) => tg.pinChatMessage(p),
       unpinChatMessage: (p) => tg.unpinChatMessage(p),
       editRichMessage: (p) => tg.editRichMessage(p),
@@ -1123,7 +1124,7 @@ export class TelegramBot {
       if (c.awaiting) c.awaiting = null
       await this.#command(chatID, cmd.slice(1), rest.join(" "), m.message_id)
     } else if (c.awaiting) {
-      await this.#resolveAwaiting(chatID, text)
+      await this.#resolveAwaiting(chatID, text, m.message_id)
     } else {
       let filePaths: string[] | undefined
       if (mediaFileID) {
@@ -1204,7 +1205,7 @@ export class TelegramBot {
     return this.#tg.sendMessage({ chatID, text: "🔐 Paired. Welcome — you can use the agent now." })
   }
 
-  async #resolveAwaiting(chatID: number, text: string): Promise<void> {
+  async #resolveAwaiting(chatID: number, text: string, messageID?: number): Promise<void> {
     const a = this.#chat(chatID).awaiting
     // nothing was actually awaited — treat it as an ordinary prompt, queued
     // like any other so it can't block the update loop either
@@ -1216,13 +1217,20 @@ export class TelegramBot {
     if (a.kind === "clone") return this.#resolveClone(chatID, a.dir, text)
     const t = text.trim()
     this.#store.setTitle(a.sessionID, t)
+    // confirm without a chatty receipt: a 👍 on the name they just sent
+    if (messageID !== undefined) {
+      await this.#tg.setMessageReaction({ chatID, messageID, emoji: "👍" }).catch(logFail("reaction"))
+    }
     // started from the conversation list — put the (now relabelled) list back
     // rather than leaving a bare confirmation and no way onward
     if (a.backTo !== undefined) {
       await this.#listPicker(chatID, "Conversations:", false, { messageID: a.backTo })
       return
     }
-    await this.#tg.sendMessage({ chatID, text: `✏️ renamed to "${this.#store.title(a.sessionID) ?? t}"` })
+    // started from ⚙️ Settings, whose message is still sitting there asking for
+    // a name — put the menu back, now carrying the title that was just typed
+    const settingsMsg = this.#chat(chatID).settingsMsg
+    if (settingsMsg !== null) await this.#settingsRoot(chatID, settingsMsg)
   }
 
   // Creates <parent>/<name>, gives it a git repo (opencode's project unit is

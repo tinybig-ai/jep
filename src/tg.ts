@@ -110,6 +110,9 @@ async function buildMockApi(): Promise<TelegramApi> {
     async deleteMessage(params) {
       calls.push({ method: "deleteMessage", chatID: params.chatID, messageID: params.messageID })
     },
+    async setMessageReaction(params) {
+      calls.push({ method: "setMessageReaction", chatID: params.chatID, messageID: params.messageID, text: params.emoji })
+    },
     async pinChatMessage(params) {
       calls.push({ method: "pinChatMessage", chatID: params.chatID, messageID: params.messageID })
     },
