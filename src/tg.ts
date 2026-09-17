@@ -7,7 +7,7 @@ import { buildHarnesses, DEFAULT_HARNESS } from "./core/harnesses.ts"
 import { assertAdapterImplements } from "./core/compliance.ts"
 import type { HarnessAdapter } from "./core/ports.ts"
 import { TelegramBot } from "./telegram/bot.ts"
-import { createTelegramApi, type TelegramApi, type TgUpdate } from "./telegram/api.ts"
+import { createTelegramApi, type ReplyMarkup, type TelegramApi, type TgUpdate } from "./telegram/api.ts"
 import { Pairing, newPairCode } from "./telegram/pair.ts"
 import { ChatStore } from "./telegram/store.ts"
 import { ReminderStore } from "./telegram/reminders.ts"
@@ -30,7 +30,7 @@ interface CallRec {
   messageID?: number
   text?: string
   parse_mode?: string
-  reply_markup?: { inline_keyboard: Array<Array<Record<string, unknown>>>; force_reply?: boolean }
+  reply_markup?: ReplyMarkup
   rich?: unknown
   silent?: boolean
   ephemeral?: number
@@ -79,7 +79,12 @@ function syncOpenCodeAuth(): void {
   }
 }
 
-async function buildMockApi(): Promise<TelegramApi> {
+/** the mock is a TelegramApi plus the one thing only it can do: print what was sent */
+interface MockApi extends TelegramApi {
+  dump(): void
+}
+
+async function buildMockApi(): Promise<MockApi> {
   const updates = readFileSync(0, "utf8")
     .split("\n")
     .filter(Boolean)

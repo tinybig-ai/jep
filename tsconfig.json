@@ -1,0 +1,22 @@
+{
+  // Type-checking only: nothing here emits. Node 26 runs the .ts sources
+  // directly (type stripping), so the compiler's job is to say what stripping
+  // silently ignores — `--experimental-strip-types` removes annotations
+  // without ever checking them, and `node --check` sees syntax alone.
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["es2023"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    // the sources import each other with explicit .ts extensions, which is
+    // what the runtime resolves; the compiler has to be told that is fine
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}

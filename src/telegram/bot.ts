@@ -11,8 +11,20 @@ import { closeStreamingTable, mdTable, mdToRich } from "./rich.ts"
 import type { RichBlock } from "./rich.ts"
 import type { TelegramApi, TgMessage, TgUpdate, InlineButton, ReplyMarkup } from "./api.ts"
 import { runComplianceSuite } from "../core/compliance.ts"
+import { eventMessage, eventSession } from "../core/types.ts"
 import { commits as gitCommits, fileDiff, fullDiff, isRepo, repoStatus } from "../core/git.ts"
-import type { GitCommit, GitFile, GitStatus } from "../core/git.ts"
+import type { GitFile, GitStatus } from "../core/git.ts"
+import { clipTitle, fmtCount, fmtDuration, fmtHome, fmtWsPath, timeAgo } from "./fmt.ts"
+import {
+  GIT_COMMITS,
+  GIT_DIFF_CHARS,
+  GIT_FILE_BTNS,
+  GIT_LOG,
+  clipPath,
+  diffWindow,
+  gitLogText,
+  gitStatusText,
+} from "./gitview.ts"
 import type { Pairing } from "./pair.ts"
 import type { ChatStore, InternalsSettings, DetailMode, InternalsLayout } from "./store.ts"
 import type { ReminderRecord, ReminderStore } from "./reminders.ts"
@@ -147,61 +159,10 @@ function parseRemind(arg: string): { ms: number; what: string; every: boolean } 
   return { ms, what, every }
 }
 
-const fmtDuration = (ms: number): string => {
-  const s = Math.round(ms / 1000)
-  if (s < 60) return `${s}s`
-  if (s < 3600) return `${Math.round(s / 60)}m`
-  if (s < 86_400) return `${Math.round(s / 3600)}h`
-  return `${Math.round(s / 86_400)}d`
-}
-
-// 12_430 -> "12.4K", 1_834_219 -> "1.8M" — compact like a status bar, not a spreadsheet
-const fmtCount = (n: number): string => {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}K`
-  return String(n)
-}
-
-// A list row is one line on a phone, shared with the harness icon, the age
-// and sometimes a workspace tag. Codex titles in particular are whole opening
-// prompts, and an untrimmed one pushes everything after it off the end.
-const clipTitle = (t: string, max = 30): string => {
-  const flat = t.replace(/\s+/g, " ").trim()
-  return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat
-}
-
-// "how long since this conversation last moved", for list rows. Coarse on
-// purpose: the point is to tell yesterday's thread from the one you were in
-// ten minutes ago, not to report a duration.
-const timeAgo = (ts: number): string => {
-  const ms = Date.now() - ts
-  if (!ts || ms < 0) return ""
-  const min = Math.round(ms / 60_000)
-  if (min < 1) return "just now"
-  if (min < 60) return `${min}m ago`
-  const hr = Math.round(min / 60)
-  if (hr < 24) return `${hr}h ago`
-  const day = Math.round(hr / 24)
-  if (day < 7) return `${day}d ago`
-  const wk = Math.round(day / 7)
-  if (wk < 5) return `${wk}w ago`
-  return `${Math.round(day / 30)}mo ago`
-}
-
-// display form of a workspace directory: just the folder name
-const fmtWsPath = (dir: string): string => basename(dir)
-
 // the agent shown as its Settings icon rather than spelled out — 🔨 executes
 // tools, 📝 is read-only. Same two icons the agent menu uses, so the pin and
 // the menu teach each other.
 const agentIcon = (agent: string): string => (agent === "plan" ? "📝" : "🔨")
-
-// full path, but with $HOME folded back to "~" — the browser shows whole
-// paths (you need to know where you are) and a phone screen is narrow.
-const fmtHome = (dir: string): string => {
-  const h = homedir()
-  return dir === h ? "~" : dir.startsWith(h + "/") ? `~${dir.slice(h.length)}` : dir
-}
 
 const styled = (b: InlineButton, style: InlineButton["style"]): InlineButton => (style ? { ...b, style } : b)
 
@@ -576,88 +537,6 @@ function internalsPreset(s: InternalsSettings): "simple" | "minimal" | "detailed
 const cycleMode = (m: DetailMode): DetailMode => (m === "off" ? "collapsed" : m === "collapsed" ? "expanded" : "off")
 const cycleLayout = (l: InternalsLayout): InternalsLayout =>
   l === "per-step" ? "per-section" : l === "per-section" ? "combined" : l === "combined" ? "minimal" : "per-step"
-
-// ─── git view rendering ───
-
-// What /git shows at once, and what a "see more" tap adds. Small on purpose:
-// this is a phone screen, and the view's job is to answer "what is in this
-// tree" at a glance, with the long form one tap away.
-const GIT_ROWS = 12 // file rows in the changes table
-const GIT_FILE_BTNS = 6 // per-file diff buttons under it
-const GIT_COMMITS = 5 // commits in the status view
-const GIT_LOG = 15 // commits per page of the log view
-// One screenful of patch. Kept well inside MAX_MSG because the diff shares a
-// message with its heading and buttons, and a rejected message shows nothing
-// at all — the pager, not the cap, is what makes a big diff readable here.
-const GIT_DIFF_CHARS = 2400
-
-// The path is the widest cell in the changes table and the least readable when
-// it wraps. The tail is the part that identifies the file, so keep that end.
-const clipPath = (p: string, max = 30): string => (p.length <= max ? p : `…${p.slice(-(max - 1))}`)
-
-// git's own letter for the change, plus a dot when it is already in the index:
-// the two facts a status row has to carry, in the width of a table cell.
-const gitMark = (f: GitFile): string => `${f.staged ? "●" : ""}${f.code}`
-
-// Branch, where it stands against its upstream, and the size of the change —
-// the three things you want before deciding whether to look closer.
-function gitStatusText(st: GitStatus): string {
-  const track = !st.born
-    ? "no commits yet"
-    : !st.upstream
-      ? "no upstream"
-      : st.ahead || st.behind
-        ? [st.ahead ? `↑${st.ahead}` : "", st.behind ? `↓${st.behind}` : "", `vs ${st.upstream}`].filter(Boolean).join(" ")
-        : `in sync with ${st.upstream}`
-  const out = [
-    `## ⎇ ${st.detached ? "detached HEAD" : st.branch}`,
-    `${fmtWsPath(st.dir)} · ${track}`,
-    st.files.length ? `**${st.files.length} changed** · +${st.additions} −${st.deletions}` : "✓ clean — nothing to commit",
-  ]
-  const shown = st.files.slice(0, GIT_ROWS)
-  if (shown.length) {
-    out.push(
-      "",
-      mdTable(
-        ["File", "+", "−"],
-        shown.map((f) => [
-          `${gitMark(f)} ${clipPath(f.from ? `${f.path} ⟵ ${basename(f.from)}` : f.path)}`,
-          f.binary ? "bin" : f.additions ? String(f.additions) : "",
-          f.binary ? "" : f.deletions ? String(f.deletions) : "",
-        ]),
-      ),
-    )
-    if (st.files.length > shown.length) out.push(`… and ${st.files.length - shown.length} more`)
-    // only worth explaining when a row actually carries the dot
-    if (st.files.some((f) => f.staged)) out.push("● staged")
-  }
-  return out.join("\n")
-}
-
-// Monospace, because a log is a column of hashes and ages that only reads as a
-// log when they line up. Ages are the same coarse form the pin and /ls use.
-function gitLogText(cs: GitCommit[], width = 40): string {
-  if (!cs.length) return "(no commits yet)"
-  const manyAuthors = new Set(cs.map((c) => c.author)).size > 1
-  return cs
-    .map((c) => {
-      const age = c.at ? fmtDuration(Math.max(Date.now() - c.at, 1000)).padStart(3) : "  ?"
-      const who = manyAuthors && c.author ? ` · ${clipTitle(c.author, 14)}` : ""
-      return `${c.hash}  ${age}  ${clipTitle(c.subject, width)}${who}`
-    })
-    .join("\n")
-}
-
-// A patch is the one thing here with no natural size, so it is paged rather
-// than truncated. Cuts land on a line boundary — half a hunk header is worse
-// than one line fewer.
-function diffWindow(patch: string, off: number, max: number): { body: string; next: number | null } {
-  const rest = patch.slice(Math.max(0, off))
-  if (rest.length <= max) return { body: rest, next: null }
-  const nl = rest.lastIndexOf("\n", max)
-  const end = nl > max / 2 ? nl : max
-  return { body: rest.slice(0, end), next: off + end + (rest[end] === "\n" ? 1 : 0) }
-}
 
 // a row of buttons as a rich block (RichBlockButtons, 10.3)
 const buttonsBlock = (row: InlineButton[]): RichBlock => ({
@@ -1220,13 +1099,13 @@ export class TelegramBot {
     // emoji is still a message — don't drop it as empty
     if (!text && !mediaFileID && !m.sticker) return
     const c = this.#chat(chatID)
-    const [cmd, ...rest] = text.split(/\s+/)
+    const [cmd = "", ...rest] = text.split(/\s+/)
 
     if (!this.#pairing.isPaired(chatID)) {
       if (c.awaiting?.kind === "pair") {
         if (cmd === "/cancel") {
           c.awaiting = null
-          return this.#tg.sendMessage({ chatID, text: "canceled." })
+          return this.#say(chatID, "canceled.")
         }
         if (!text.startsWith("/")) return this.#attemptPair(chatID, text)
       }
@@ -1234,21 +1113,18 @@ export class TelegramBot {
         const code = rest.join(" ")
         if (!code) {
           c.awaiting = { kind: "pair" }
-          return this.#tg.sendMessage({
+          return this.#say(
             chatID,
-            text: "🔐 Please enter the pairing code.\n\nJust paste the code and hit send (/cancel to give up).",
-            replyMarkup: { inline_keyboard: [], force_reply: true },
-          })
+            "🔐 Please enter the pairing code.\n\nJust paste the code and hit send (/cancel to give up).",
+            { inline_keyboard: [], force_reply: true },
+          )
         }
         return this.#attemptPair(chatID, code)
       }
       if (cmd === "start") {
-        return this.#tg.sendMessage({
-          chatID,
-          text: "This bot is locked. Tap /pair, then enter the code to authorize this chat.",
-        })
+        return this.#say(chatID, "This bot is locked. Tap /pair, then enter the code to authorize this chat.")
       }
-      return this.#tg.sendMessage({ chatID, text: "🔒 Not paired. Tap /pair and enter the code." })
+      return this.#say(chatID, "🔒 Not paired. Tap /pair and enter the code.")
     }
 
     console.error(`[tg] message from chat=${chatID} (${m.chat.type}) from=${m.from?.username ?? m.from?.id ?? "?"}`)
@@ -1258,9 +1134,9 @@ export class TelegramBot {
       if (cmd === "/cancel") {
         if (c.awaiting) {
           c.awaiting = null
-          return this.#tg.sendMessage({ chatID, text: "canceled." })
+          return this.#say(chatID, "canceled.")
         }
-        return this.#tg.sendMessage({ chatID, text: "(nothing to cancel)" })
+        return this.#say(chatID, "(nothing to cancel)")
       }
       if (c.awaiting) c.awaiting = null
       await this.#command(chatID, cmd.slice(1), rest.join(" "), m.message_id)
@@ -1334,11 +1210,18 @@ export class TelegramBot {
     await this.#onCallback(cq)
   }
 
+  // "answer and stop": the shape of a dozen early exits. None of them wants
+  // the message id back, and handing one out through a Promise<void> return
+  // is exactly the kind of thing type stripping used to wave through.
+  async #say(chatID: number, text: string, replyMarkup?: ReplyMarkup): Promise<void> {
+    await this.#tg.sendMessage({ chatID, text, ...(replyMarkup ? { replyMarkup } : {}) })
+  }
+
   async #attemptPair(chatID: number, code: string): Promise<void> {
     const res = this.#pairing.attempt(chatID, code.trim())
     if (res.status === "blocked") {
       const when = res.retryIn >= 60 ? `${Math.ceil(res.retryIn / 60)} min` : `~${res.retryIn}s`
-      return this.#tg.sendMessage({ chatID, text: `🛑 Too many wrong codes. Try again in ${when}.` })
+      return this.#say(chatID, `🛑 Too many wrong codes. Try again in ${when}.`)
     }
     this.#chat(chatID).awaiting = null
     if (res.status === "bad") {
@@ -1349,11 +1232,11 @@ export class TelegramBot {
           await this.#tg.sendMessage({ chatID: owner, text: `🔐 Pairing code was rotated: ${this.#pairing.code}` })
         }
       }
-      return this.#tg.sendMessage({ chatID, text: "✗ Wrong pairing code." })
+      return this.#say(chatID, "✗ Wrong pairing code.")
     }
     if (res.pairing === "owner")
-      return this.#tg.sendMessage({ chatID, text: "🔐 Paired. You are the **owner** — the bot is now locked to you." })
-    return this.#tg.sendMessage({ chatID, text: "🔐 Paired. Welcome — you can use the agent now." })
+      return this.#say(chatID, "🔐 Paired. You are the **owner** — the bot is now locked to you.")
+    return this.#say(chatID, "🔐 Paired. Welcome — you can use the agent now.")
   }
 
   async #resolveAwaiting(chatID: number, text: string, messageID?: number): Promise<void> {
@@ -1568,7 +1451,7 @@ export class TelegramBot {
       case "ws": {
         const names = this.#workspaces.map((w) => w.name)
         if (arg) {
-          if (!names.includes(arg)) return tg.sendMessage({ chatID, text: `no workspace '${arg}'` })
+          if (!names.includes(arg)) return this.#say(chatID, `no workspace '${arg}'`)
           c.workspace = arg
           c.sessionID = null
           c.freshOnNext = false
@@ -1594,7 +1477,7 @@ export class TelegramBot {
       }
       case "pair": {
         if (this.#pairing.isPaired(chatID))
-          return tg.sendMessage({ chatID, text: "already paired: share the code from /pair_status to authorize someone else." })
+          return this.#say(chatID, "already paired: share the code from /pair_status to authorize someone else.")
         await this.#attemptPair(chatID, arg)
         break
       }
@@ -2116,9 +1999,10 @@ export class TelegramBot {
             if (evt.role === "user" && evt.messageID) userMessages.add(evt.messageID)
             continue
           }
-          if (evt.sessionID !== sessionID) continue
+          if (eventSession(evt) !== sessionID) continue
           lastActivity = Date.now() // this turn is alive — push the watchdog out
-          if (userMessages.has(evt.messageID)) continue
+          const evtMessage = eventMessage(evt)
+          if (evtMessage !== undefined && userMessages.has(evtMessage)) continue
           if (evt.type === "part.delta" && evt.text) {
             // reasoning deltas build the collapsible 💭 block but never the answer text
             if (evt.partType === "reasoning") {
@@ -3021,8 +2905,10 @@ export class TelegramBot {
     const chatID = msg.chat.id
     const c = this.#chat(chatID)
     const ws = this.#activeWs(chatID)
-    const [verb, rest] = data.split(":")
-    const i = Number(rest)
+    const [verb, arg] = data.split(":")
+    const rest = arg ?? ""
+    // NaN, not 0: a verb that arrived without an argument must not address row 0
+    const i = arg === undefined ? NaN : Number(arg)
 
     switch (verb) {
       case "set":

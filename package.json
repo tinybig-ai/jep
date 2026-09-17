@@ -9,6 +9,14 @@
     "probe:harness": "node --experimental-strip-types src/probe-harness.ts",
     "cli": "node --experimental-strip-types src/cli.ts",
     "tg": "node --experimental-strip-types src/tg.ts",
-    "tg:mock": "JEP_TG_PAIR_CODE=TESTCODE JEP_TG_MOCK=1 node --experimental-strip-types src/tg.ts < fixture/telegram-mock.jsonl"
+    "tg:mock": "JEP_TG_PAIR_CODE=TESTCODE JEP_TG_MOCK=1 node --experimental-strip-types src/tg.ts < fixture/telegram-mock.jsonl",
+    "typecheck": "tsc",
+    "test": "node --test test/",
+    "test:e2e": "JEP_E2E=1 node --test --test-timeout=300000 test/e2e.test.ts",
+    "check": "npm run typecheck && npm test"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
   }
 }

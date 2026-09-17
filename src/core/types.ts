@@ -147,3 +147,10 @@ export type DomainEvent =
   | { type: "ask.requested"; sessionID: string; ask: AskRequest }
   | { type: "session.error"; sessionID: string; message: string }
   | { type: "other"; eventType: string; sessionID?: string; raw: unknown }
+
+// `server.connected` is the one event that belongs to no session, and only
+// some of the rest name a message. Reading either field straight off a
+// DomainEvent therefore doesn't type-check — these say the intent once
+// instead of scattering `"sessionID" in evt` through the consumers.
+export const eventSession = (e: DomainEvent): string | undefined => ("sessionID" in e ? e.sessionID : undefined)
+export const eventMessage = (e: DomainEvent): string | undefined => ("messageID" in e ? e.messageID : undefined)

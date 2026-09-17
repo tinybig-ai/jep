@@ -57,7 +57,8 @@ export interface RichTableCell {
 }
 
 export interface RichBlock {
-  type: string
+  /** absent on a list item, which is a bare container of blocks */
+  type?: string
   text?: RichText
   cells?: RichTableCell[][]
   is_bordered?: boolean
@@ -79,6 +80,9 @@ export interface RichBlock {
   summary?: RichText
   /** details block starts expanded */
   is_open?: boolean
+  /** RichBlockPhoto / RichBlockDocument: an attach:// reference to an uploaded file */
+  photo?: { type: string; media: string }
+  document?: { type: string; media: string }
 }
 
 const INLINE_RE =

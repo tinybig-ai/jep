@@ -329,7 +329,7 @@ async function main() {
     const line = await nextLine()
     if (line === null || isDone.value) break
     if (!line.trim()) continue
-    const [cmd, ...rest] = line.trim().split(/\s+/)
+    const [cmd = "", ...rest] = line.trim().split(/\s+/)
     await handle(cmd, rest.join(" ")).catch((err) => say(`  err: ${err.message}`))
   }
 

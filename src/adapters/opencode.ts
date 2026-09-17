@@ -47,9 +47,11 @@ interface SseFrame {
 interface ProviderModelMeta {
   capabilities?: { attachment?: boolean; input?: { image?: boolean } }
   limit?: { context?: number }
+  /** registry models carry their own provider; config ones are keyed by it */
+  providerID?: string
 }
 interface ProviderRoot {
-  all?: Array<{ models?: Record<string, ProviderModelMeta> }>
+  all?: Array<{ id?: string; models?: Record<string, ProviderModelMeta> }>
 }
 
 function parseSse(raw: string): SseFrame[] {
@@ -205,7 +207,9 @@ export class OpenCodeAdapter implements HarnessAdapter {
   async models(): Promise<ModelRef[]> {
     if (this.#modelsCache.length > 0 && Date.now() - this.#modelsAt < 60_000) return this.#modelsCache
     const refs: ModelRef[] = []
-    const [defProvider, defModel] = MODEL_REF.split("/")
+    // JEP_MODEL is "provider/model"; anything else is a misconfiguration, and
+    // a half-parsed ref would surface as a model that silently never runs
+    const [defProvider = "", defModel = ""] = MODEL_REF.split("/")
     refs.push({ providerID: defProvider, modelID: defModel })
     const configProviders = new Set<string>()
     try {

@@ -2,6 +2,7 @@ import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { startOpenCodeServer } from "./adapters/opencode.ts"
+import { eventSession } from "./core/types.ts"
 import type { DomainEvent } from "./core/types.ts"
 
 const FIXTURE = join(import.meta.dirname, "..", "fixture")
@@ -25,7 +26,7 @@ async function collectEvents(
   for await (const evt of adapter.events()) {
     if (stop.flag) break
     const key = evt.type === "other" ? `other:${evt.eventType}` : evt.type
-    if (evt.type === "other" || evt.sessionID === sessionID || evt.type === "server.connected") {
+    if (evt.type === "other" || eventSession(evt) === sessionID || evt.type === "server.connected") {
       counts.set(key, (counts.get(key) ?? 0) + 1)
     }
   }
