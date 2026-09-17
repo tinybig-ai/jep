@@ -84,14 +84,48 @@ Manual management (only if you edit the plist):
 launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.jep.tg.plist
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jep.tg.plist
 launchctl list | grep 'com.jep.tg'                        # expect loaded, exit 0
-tail -3 /tmp/jep-tg-live.log   # expect "mode: live · owner: 000000000 · paired chats: 1"
+tail -3 ~/Library/Logs/jep-tg.log  # expect "mode: live · owner: 000000000 · paired chats: 1"
 ```
 
-The plist pins the env (token, `JEP_DATA_HOME=/tmp/jep-tg-data`, `PATH` so the
-`opencode` CLI is found) and truncates `StandardOutPath`/`StandardErrorPath` to
-`/tmp/jep-tg-live.log` on each launch. The live bot **re-attaches to the
-existing pairing** (no re-pair, no new pairing code) because the owner is
-already persisted in `/tmp/jep-tg-data`.
+The plist pins the env (token, `JEP_DATA_HOME=~/.local/share/jep-tg`, `PATH` so
+the `opencode` CLI is found) and appends `StandardOutPath`/`StandardErrorPath`
+to `~/Library/Logs/jep-tg.log`. The live bot **re-attaches to the existing
+pairing** (no re-pair, no new pairing code) because the owner is already
+persisted in the data home.
+
+### Failure mode: the relaunch hangs with an empty log
+
+The source lives under `~/Documents`, which macOS protects with TCC. A
+launchd-spawned `node` has no Documents grant of its own, so its very first
+`open()` — module resolution walking up for `package.json` — blocks forever,
+with no prompt (`tccd` logs
+`service="kTCCServiceSystemPolicyDocumentsFolder"` against the process). The
+symptom is exact: the process is alive, `%CPU` is 0, and **nothing at all is
+written to the log**, where a healthy boot banners in about a second.
+
+```sh
+sample $(pgrep -f 'src/tg.ts') 3 -mayDie | grep -m1 -B2 'open '   # hung in __open
+log show --last 5m --predicate 'process == "tccd"' | grep DocumentsFolder
+```
+
+Recovery — run it from a shell that *does* have the grant (a terminal the user
+has already allowed), detached so it outlives the session, and unload the
+launchd job first so it stops respawning hung copies:
+
+```sh
+launchctl bootout gui/$(id -u)/com.jep.tg; pkill -9 -f 'src/tg.ts'
+python3 -c 'import os,plistlib,subprocess
+d=plistlib.load(open(os.path.expanduser("~/Library/LaunchAgents/com.jep.tg.plist"),"rb"))
+env=dict(os.environ); env.update(d["EnvironmentVariables"])
+log=open(os.path.expanduser("~/Library/Logs/jep-tg.log"),"a")
+print(subprocess.Popen(d["ProgramArguments"],env=env,stdout=log,stderr=log,
+    cwd="/Users/user/Documents/code/jep",start_new_session=True).pid)'
+```
+
+That loses `KeepAlive`, so it is a stopgap. The durable fixes are to grant
+`/opt/homebrew/bin/node` Full Disk Access (System Settings → Privacy &
+Security), or to move the repo out of `~/Documents` — `~/Desktop` and
+`~/Downloads` are protected the same way, anywhere else is not.
 
 Mock replay of a fixture:
 
