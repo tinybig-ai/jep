@@ -37,12 +37,18 @@ src/
                           // getUpdates + allowed_updates, TelegramApi interface
     html.ts               // PURE RENDERER — markdown → Telegram HTML (box tables)
     rich.ts               // PURE RENDERER — markdown → Rich Message blocks
+    gitview.ts            // PURE RENDERER — GitStatus → the /git screens' markdown
+    fmt.ts                // PURE FORMATTERS — durations, counts, ages, paths
     store.ts              // PERSISTENCE — titles + per-chat model pick, JSON file
     pair.ts               // OWNERSHIP — pairing codes, owner lock, rotation
 scripts/
   install.sh              // writes the plist, but proves a launchd job can read
                           // the checkout first (see section 5)
   jep-daemon.sh           // the plist's entry point: same probe at every launch
+test/
+  *.test.ts               // node --test, no framework. The pure modules get unit
+                          // tests; core/git.ts also builds real repos in a temp
+                          // dir; e2e.test.ts replays fixtures (opt-in, JEP_E2E=1)
 fixture/
   workspace-alpha/        // test working directories for the two harness workspaces
   workspace-beta/
@@ -443,15 +449,46 @@ explicit action, not a side effect of looking. That is the next thing to build.
 
 ## 11. Verification ritual
 
-1. `node --experimental-strip-types --check <file>` on every edited file.
+0. `npm install` once (the only dependencies are typescript and @types/node,
+   both dev-only — nothing the daemon runs at runtime has a dependency).
+1. `npm run check` — `tsc` then `node --test "test/*.test.ts"`. Roughly a
+   second, no network, no harness. **`--experimental-strip-types` strips
+   annotations without checking them and `node --check` sees only syntax, so
+   this is the only thing that reads the types at all.** Use
+   `node --experimental-strip-types --check <file>` for a fast syntax-only
+   answer mid-edit.
 2. Mock end-to-end through a fixture (pair → act → assert the `CALL ...` dump).
+   `npm run test:e2e` does it as assertions (opt-in: it boots a real harness
+   per workspace, ~45s). By hand when you want to *read* the dump:
    `JEP_DUMP_CHARS=20000` when a rich payload is longer than the 2000-char
-   dump cap — the git views are, and their buttons sit at the end.
+   cap — the git views are, and their buttons sit at the end.
    The mock reads JSON-lines updates from stdin and prints
    `CALL <method> chat=<id> msg=<id> mode=<HTML> [rich=<json>] text="..."`
    plus one indented `keyboard: ...` line per callback reply.
 3. Live restart (section 5) + `tail` the log + a real Telegram check by the
    user. After the user confirms, the feature is "shipped".
+
+What the tests actually cover — the pure modules, which is where the
+determinism is (PHILOSOPHY §7), plus the git grammars:
+
+| File | What it pins down |
+|------|-------------------|
+| `html.test.ts` | escape-before-markup, no inline tag spans a line, every stream prefix renders, box tables line up |
+| `rich.test.ts` | block shapes, the 20-column table bail-out, and the streaming-table invariant at every prefix |
+| `gitview.test.ts` | every tracking state, the row cap, and that paging a patch reproduces it exactly |
+| `git.test.ts` | porcelain v2 + `numstat -z` by hand, then real repos in a temp dir (unborn HEAD, rename+edit, subdirectory reads) |
+| `fmt.test.ts` | durations, counts, ages, `~` folding |
+
+Three bugs fell out of writing them, all of them live before that:
+
+- markup leaked into code spans — `` `__init__.py` `` rendered with an
+  underlined `init`, and `` `a ** b` `` bolded inside the span.
+- a link's href was escaped twice, so one `&` in a URL became `&amp;amp;`.
+- box tables padded on the *string* length, so a cell containing markup or an
+  escaped `&` bent the right-hand border. Columns are now measured on what the
+  reader sees.
+- (and a fourth, narrower: a single-column table kept its `|---|` separator as
+  a data row, because the separator filter required two columns.)
 
 Never move on from a broken state: partial features are fine, broken live bot
 is not.

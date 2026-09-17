@@ -7,22 +7,42 @@ export {}
 
 const esc = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
 
+// A code span is literal: `__init__.py` is a filename, not an underline, and
+// `a ** b ** c` is not a bold run. So markup is only ever applied to the
+// stretches *between* spans — this maps `f` over those and leaves the spans
+// themselves alone. Operates on already-escaped text, and returns escaped
+// text, so callers never double-escape.
+function outsideCode(t: string, f: (s: string) => string): string {
+  const out: string[] = []
+  let last = 0
+  for (const m of t.matchAll(/`([^`\n]+)`/g)) {
+    out.push(f(t.slice(last, m.index)))
+    out.push(`<code>${m[1]}</code>`)
+    last = m.index + m[0].length
+  }
+  out.push(f(t.slice(last)))
+  return out.join("")
+}
+
+const emphasis = (t: string): string =>
+  t
+    .replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>")
+    .replace(/__([^_\n]+)__/g, "<u>$1</u>")
+    .replace(/~~([^~\n]+)~~/g, "<s>$1</s>")
+
 // Operates on already-escaped text (returns escaped text). Held to that
 // contract so callers never double-escape.
 function toMarkup(t: string): string {
-  t = t.replace(/`([^`\n]+)`/g, (_m, c) => `<code>${c}</code>`)
-  t = t.replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>")
-  t = t.replace(/__([^_\n]+)__/g, "<u>$1</u>")
-  t = t.replace(/~~([^~\n]+)~~/g, "<s>$1</s>")
-  return t
+  return outsideCode(t, emphasis)
 }
 
 function inline(line: string): string {
-  let t = esc(line)
-  t = t.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_m, label, url) => `<a href="${esc(url)}">${label}</a>`)
-  t = toMarkup(t)
-  t = t.replace(/(^|[\s(])(\*|_)([^*_\n]+)\2(?=[.,;:!?)]\s*|\s|$)/g, "$1<i>$3</i>")
-  return t
+  // the url is taken from text that has already been escaped, so escaping it
+  // again here turned a single "&" into "&amp;amp;" in the href
+  const withLinks = (t: string): string =>
+    emphasis(t.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_m, label, url) => `<a href="${url}">${label}</a>`))
+      .replace(/(^|[\s(])(\*|_)([^*_\n]+)\2(?=[.,;:!?)]\s*|\s|$)/g, "$1<i>$3</i>")
+  return outsideCode(esc(line), withLinks)
 }
 
 export function isRow(line: string): boolean {
@@ -54,7 +74,13 @@ export interface ParsedTable {
 // out as intro, and trim trailing empty cells (leftovers of a jammed header).
 export function parseTable(parsedLines: string[]): ParsedTable | null {
   const cells = parsedLines.map(parseRow).filter((r) => r.length > 1 || r[0] !== "")
-  const body = cells.filter((r, ri) => ri === 0 || !(r.length >= 2 && r.every((c) => /^:?-{1,}$/.test(c))))
+  // A separator row is dropped wherever it appears — agents emit extra ones
+  // mid-table in ASCII-art style. The column count is part of the test because
+  // a lone "---" cell in a wide table is more likely to be content than a
+  // separator; at row 1, the only place GFM puts one, it is a separator even
+  // when the table has a single column. (Alignment colons on either side.)
+  const isSepRow = (r: string[]) => r.every((c) => /^:?-{1,}:?$/.test(c))
+  const body = cells.filter((r, ri) => ri === 0 || !(isSepRow(r) && (r.length >= 2 || ri === 1)))
   if (body.length === 0) return null
   let head = body[0]!
   let intro: string | undefined
@@ -77,6 +103,10 @@ export function parseTable(parsedLines: string[]): ParsedTable | null {
 // which mangles the box-drawing borders; long cells wrap onto extra lines
 // within the row instead of blowing out the table width.
 const TABLE_WIDTH = 36
+
+// Columns of text the reader sees: tags contribute nothing, and each of the
+// three entities we emit is one character on screen.
+const visibleLen = (html: string): number => [...html.replace(/<[^>]+>/g, "").replace(/&(amp|lt|gt);/g, "x")].length
 
 function wrapCell(raw: string, width: number): string[] {
   const words = raw.split(/\s+/).filter(Boolean)
@@ -129,17 +159,27 @@ function renderTable(rows: string[]): string {
     const floorTotal = floors.reduce((a, b) => a + b, 0) || 1
     for (let i = 0; i < targets.length; i++) targets[i] = Math.max(3, Math.floor((floors[i]! / floorTotal) * budget))
   }
+  // Columns are measured on what the *reader* sees, not on what goes on the
+  // wire: "&" is one column but five characters once escaped, `x` is one but
+  // fifteen once it is a <code> tag, and the backticks that made it one vanish
+  // entirely. Measuring the marked-up string padded every such row short and
+  // bent the right-hand border.
   const wrapped = raw.map((r) => r.map((c, ci) => wrapCell(c, targets[ci]!).map((line) => toMarkup(esc(line)))))
-  const widths = Array.from({ length: cols }, (_, ci) => {
-    return Math.max(...wrapped.map((r) => Math.max(...r[ci]!.map((l) => l.length))))
-  })
-  const pad = (s: string, w: number) => s + " ".repeat(Math.max(0, w - s.length))
+  const widths = Array.from({ length: cols }, (_, ci) =>
+    Math.max(...wrapped.map((r) => Math.max(...r[ci]!.map(visibleLen)))),
+  )
   const border = (start: string, mid: string, end: string) =>
     `${start}${widths.map((w) => "─".repeat(w + 2)).join(mid)}${end}`
   const rowLines = (row: string[][]) => {
     const height = Math.max(...row.map((c) => c.length))
     const out: string[] = []
-    for (let li = 0; li < height; li++) out.push(`│ ${row.map((c, ci) => pad(c[li] ?? "", widths[ci]!)).join(" │ ")} │`)
+    for (let li = 0; li < height; li++) {
+      const cells = row.map((c, ci) => {
+        const cell = c[li] ?? ""
+        return cell + " ".repeat(Math.max(0, widths[ci]! - visibleLen(cell)))
+      })
+      out.push(`│ ${cells.join(" │ ")} │`)
+    }
     return out
   }
   const out: string[] = [border("┌", "┬", "┐")]

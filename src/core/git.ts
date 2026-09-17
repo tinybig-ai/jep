@@ -89,7 +89,8 @@ export async function repoRoot(dir: string): Promise<string | null> {
 
 // porcelain v2 is the only status format with a documented, stable grammar —
 // v1's XY columns can't be told apart from a path that starts with a space.
-function parsePorcelain(out: string): { files: GitFile[]; branch: string; upstream: string | null; ahead: number; behind: number; detached: boolean } {
+// Exported because this grammar is the fiddly part and belongs in a test.
+export function parsePorcelain(out: string): { files: GitFile[]; branch: string; upstream: string | null; ahead: number; behind: number; detached: boolean } {
   const files: GitFile[] = []
   let branch = "(unknown)"
   let upstream: string | null = null
@@ -162,7 +163,7 @@ function entry(path: string, xy: string): GitFile {
 // which matches no status path, and the edit that came with the rename would
 // silently count as zero. In -z the record ends after the counts and the two
 // paths follow as their own tokens; the change belongs to the new one.
-function parseNumstat(out: string): Map<string, { additions: number; deletions: number; binary: boolean }> {
+export function parseNumstat(out: string): Map<string, { additions: number; deletions: number; binary: boolean }> {
   const m = new Map<string, { additions: number; deletions: number; binary: boolean }>()
   const tok = out.split("\0")
   for (let i = 0; i < tok.length; i++) {
