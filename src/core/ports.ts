@@ -1,5 +1,5 @@
 import type {
-  ApprovalRequest,
+  AskRequest,
   DomainEvent,
   FileDiff,
   Message,
@@ -52,7 +52,10 @@ export interface HarnessAdapter {
   messages(sessionID: string): Promise<Message[]>
   deleteSession(id: string): Promise<boolean>
   abort(sessionID: string): Promise<boolean>
-  respondApproval(sessionID: string, approval: ApprovalRequest, allow: boolean): Promise<boolean>
+  /** answer a pending ask with one of its own option ids. False when the ask
+   * is unknown or already answered — it may have timed out in the harness, or
+   * been answered from somewhere else. */
+  respondAsk(sessionID: string, askID: string, optionID: string): Promise<boolean>
   events(signal?: AbortSignal): AsyncIterable<DomainEvent>
   models?(): Promise<ModelRef[]>
   /** the `provider/model` a prompt runs on when `opts.model` is omitted — what

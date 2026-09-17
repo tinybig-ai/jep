@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
-import type { HarnessAdapter, ApprovalRequest, ModelRef, ModelCaps } from "../core/ports.ts"
+import type { HarnessAdapter, ModelRef, ModelCaps } from "../core/ports.ts"
 import type { DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionSummary } from "../core/types.ts"
 
 const OPENCODE_BIN = process.env.OPENCODE_BIN ?? "opencode"
@@ -420,12 +420,16 @@ export class OpenCodeAdapter implements HarnessAdapter {
     return this.#json(`/session/${encodeURIComponent(toNativeId(sessionID))}/abort`, { method: "POST" })
   }
 
-  async respondApproval(sessionID: string, approval: ApprovalRequest, allow: boolean): Promise<boolean> {
+  // opencode's own three answers, passed straight through: "always" is a
+  // standing rule it saves, not a second "once", so collapsing them into a
+  // boolean would throw away the only one of the three that changes anything
+  // beyond this call.
+  async respondAsk(sessionID: string, askID: string, optionID: string): Promise<boolean> {
     return this.#json(
-      `/session/${encodeURIComponent(toNativeId(sessionID))}/permissions/${encodeURIComponent(approval.id)}`,
+      `/session/${encodeURIComponent(toNativeId(sessionID))}/permissions/${encodeURIComponent(askID)}`,
       {
         method: "POST",
-        body: JSON.stringify({ response: allow ? "allowed" : "rejected" }),
+        body: JSON.stringify({ response: optionID }),
       },
     )
   }
@@ -528,8 +532,32 @@ export class OpenCodeAdapter implements HarnessAdapter {
           partType: (props.partType as string | undefined) ?? this.#partTypes.get(partID ?? "") ?? "",
           text: props.field === "text" ? (props.delta ?? "") as string : "",
         }
-      case "permission.updated":
-        return { type: "permission.requested", sessionID: sessionID ?? "", permissionID: props.id ?? "" }
+      case "permission.updated": {
+        // the id was all jep used to pass on, so the prompt read "🔐 per_a1b2…"
+        // — the one thing about the request that tells you nothing. What is
+        // being asked for is `permission` (the tool) and `patterns` (what it
+        // wants to touch), with the command itself down in metadata.
+        const meta = (props.metadata ?? {}) as Record<string, unknown>
+        const patterns = Array.isArray(props.patterns) ? (props.patterns as string[]) : []
+        const detail = [typeof meta.command === "string" ? meta.command : "", patterns.join("  ")]
+          .filter(Boolean)
+          .join("\n")
+        return {
+          type: "ask.requested",
+          sessionID: sessionID ?? "",
+          ask: {
+            id: (props.id as string) ?? "",
+            sessionID: sessionID ?? "",
+            title: (props.permission as string) || "permission",
+            ...(detail ? { detail } : {}),
+            options: [
+              { id: "once", label: "Allow once", style: "success" },
+              { id: "always", label: "Always allow" },
+              { id: "reject", label: "Deny", style: "danger" },
+            ],
+          },
+        }
+      }
       case "session.error":
         return { type: "session.error", sessionID: sessionID ?? "", message: props.error ?? "" }
       default:

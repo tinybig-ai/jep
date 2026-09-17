@@ -67,10 +67,10 @@ async function watchApprovals() {
       try {
         for await (const evt of ad.events()) {
           if (isDone.value) return
-          if (evt.type !== "permission.requested") continue
-          pendingApprovals.push({ id: evt.permissionID, sessionID: evt.sessionID })
-          say(`┌─ [approval] ${ws.name}: ${evt.permissionID}`)
-          say(`│   run: approve | deny [id]`)
+          if (evt.type !== "ask.requested") continue
+          pendingApprovals.push({ id: evt.ask.id, sessionID: evt.sessionID })
+          say(`┌─ [ask] ${ws.name}: ${evt.ask.title}${evt.ask.detail ? ` — ${evt.ask.detail.split("\n")[0]}` : ""}`)
+          say(`│   run: approve | deny [id]   (options: ${evt.ask.options.map((o) => o.id).join(" | ")})`)
           say(`└─`)
         }
       } catch {
@@ -205,7 +205,7 @@ async function handle(cmd: string, arg: string) {
         ? pendingApprovals.find((p) => p.id === arg)
         : pendingApprovals[pendingApprovals.length - 1]
       if (!pending) return say(`  (no pending approval${arg ? ` '${arg}'` : ""})`)
-      const ok = await ad.respondApproval(pending.sessionID, { ...pending, title: "", metadata: {} }, allow)
+      const ok = await ad.respondAsk(pending.sessionID, pending.id, allow ? "once" : "reject")
       pendingApprovals = pendingApprovals.filter((p) => p.id !== pending.id)
       say(`  ${allow ? "allowed" : "rejected"} ${pending.id}: ${ok}`)
       break

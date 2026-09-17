@@ -113,11 +113,28 @@ export interface SessionHold {
   startedAt: number
 }
 
-export interface ApprovalRequest {
+// What a harness needs a person to decide before it can carry on: a tool it
+// wants to run, a file it wants to touch, a question the model asked outright.
+// One shape for all of them, because from a phone they are the same thing — a
+// line of text with buttons under it. The options are the harness's own
+// vocabulary (opencode answers "once" / "always" / "reject"); jep carries them
+// through rather than inventing a yes/no and mapping back.
+export interface AskOption {
+  /** what goes back to the harness when this one is tapped */
+  id: string
+  label: string
+  /** green for the safe default, red for the destructive one */
+  style?: "success" | "danger"
+}
+
+export interface AskRequest {
   id: string
   sessionID: string
+  /** one line: what is being asked */
   title: string
-  metadata: unknown
+  /** the command, the path, the question's own context — shown under the title */
+  detail?: string
+  options: AskOption[]
 }
 
 export type DomainEvent =
@@ -127,6 +144,6 @@ export type DomainEvent =
   | { type: "part.updated"; sessionID: string; messageID: string; partID: string; partType: string; part?: Part }
   | { type: "part.delta"; sessionID: string; messageID: string; partID: string; text: string; partType?: string }
   | { type: "session.idle"; sessionID: string }
-  | { type: "permission.requested"; sessionID: string; permissionID: string }
+  | { type: "ask.requested"; sessionID: string; ask: AskRequest }
   | { type: "session.error"; sessionID: string; message: string }
   | { type: "other"; eventType: string; sessionID?: string; raw: unknown }

@@ -4,7 +4,7 @@ import { readFile, readdir } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import type { HarnessAdapter, ApprovalRequest, ModelRef, ModelCaps } from "../core/ports.ts"
+import type { HarnessAdapter, ModelRef, ModelCaps } from "../core/ports.ts"
 import type { DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionSummary } from "../core/types.ts"
 
 /**
@@ -518,9 +518,14 @@ export class CodexAdapter implements HarnessAdapter {
     return true
   }
 
-  // Codex exec runs under a sandbox policy rather than asking per tool call,
-  // so there is nothing to answer. Declared because the port requires it.
-  async respondApproval(_sessionID: string, _approval: ApprovalRequest, _allow: boolean): Promise<boolean> {
+  // `codex exec` decides with a sandbox policy instead of asking: its flags go
+  // as far as --approve-for-me (route approvals through an automatic review)
+  // and the bypass switches, and there is no channel on which a question could
+  // arrive. Approvals live in the interactive TUI and the app-server protocol,
+  // neither of which this adapter speaks. So nothing ever emits ask.requested
+  // here, and nothing can be answered — declared because the port requires it,
+  // and false is the honest answer rather than a silent "ok".
+  async respondAsk(_sessionID: string, _askID: string, _optionID: string): Promise<boolean> {
     return false
   }
 

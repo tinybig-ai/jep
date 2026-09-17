@@ -24,6 +24,8 @@ src/
     types.ts              // Message, DomainEvent, SessionSummary, ApprovalRequest
     compliance.ts         // assertAdapterImplements + compliance suites
   adapters/
+    claude-ask-mcp.mjs    // MCP server Claude Code calls instead of a permission
+                          // prompt; relays to jep over a unix socket
     opencode.ts           // the one real harness: opencode serve session lifecycle,
                           // prompt/events/models, spawn + health + close
   telegram/
@@ -35,6 +37,10 @@ src/
     rich.ts               // PURE RENDERER — markdown → Rich Message blocks
     store.ts              // PERSISTENCE — titles + per-chat model pick, JSON file
     pair.ts               // OWNERSHIP — pairing codes, owner lock, rotation
+scripts/
+  install.sh              // writes the plist, but proves a launchd job can read
+                          // the checkout first (see section 5)
+  jep-daemon.sh           // the plist's entry point: same probe at every launch
 fixture/
   workspace-alpha/        // test working directories for the two harness workspaces
   workspace-beta/
@@ -334,7 +340,62 @@ same hexagonal port:
   right away (`#suggestImageModel`, once per current model) — or switch
   manually in /settings, where `🖼` marks models that accept images.
 
-## 10. Verification ritual
+## 10. Asks (permission prompts, and questions)
+
+When a harness stops and needs a person — a tool waiting on permission, a
+question the model asked outright — it emits **one** event shape, whatever the
+harness is:
+
+```ts
+{ type: "ask.requested", sessionID, ask: { id, title, detail?, options: [{ id, label, style? }] } }
+```
+
+and is answered with `adapter.respondAsk(sessionID, askID, optionID)`. The
+option ids are the *harness's own vocabulary*, carried through untouched:
+opencode answers `once` / `always` / `reject`, and `always` writes a standing
+rule, so flattening the three into a boolean would drop the only answer that
+outlives the call.
+
+`bot.ts #askPrompt` renders it: title, the command or path fenced underneath,
+one button per option (green for the safe one, red for the destructive one),
+ephemeral in groups so the prompt is scoped to whoever is being asked. The
+pending ask remembers **which adapter** it came from — an ask can arrive from a
+workspace the chat is no longer looking at — and is dropped from the map before
+the round trip, so a second tap cannot answer twice.
+
+| Harness | Channel |
+|---------|---------|
+| opencode | `permission.updated` over SSE → `POST /session/:id/permissions/:permID` with `{response}` |
+| claude | `--permission-prompt-tool` → an MCP tool jep hosts (below) |
+| codex | none — `codex exec` decides with a sandbox policy; approvals live in the TUI and the app-server protocol, which this adapter doesn't speak |
+
+### The claude channel
+
+`claude -p` has nobody to ask, so anything gated is simply refused and the turn
+comes back having quietly not done the thing. `--permission-prompt-tool <tool>`
+replaces the prompt with a tool call, and whatever that tool answers is the
+decision. jep supplies it:
+
+- `src/adapters/claude-ask-mcp.mjs` — a stdio MCP server Claude Code spawns
+  itself (hence a file, and plain `.mjs`: it runs under Claude Code's node and
+  must not need type-stripping). It relays the question to jep over a unix
+  socket handed to it in `JEP_ASK_SOCKET`, with the jep session id in
+  `JEP_ASK_SESSION`, and **fails closed** — a missing socket, a broken channel
+  or 15 minutes of silence all come back as `deny`.
+- The adapter opens that socket lazily (one per adapter, in a temp dir), turns
+  each line into an `ask.requested`, and parks the turn until `respondAsk`
+  writes the decision back. `close()` denies everything still parked rather
+  than leaving turns waiting on a server that has stopped.
+
+**Argument order matters.** `--mcp-config` is variadic ("JSON files or
+strings", space-separated), so it swallows anything after it — including the
+positional prompt, which then reads as a missing config file and kills the run
+before it starts. The prompt goes first; the ask flags go last.
+
+The flag is checked once against `claude --help`: a build without it would
+reject the whole command line and take every turn with it.
+
+## 11. Verification ritual
 
 1. `node --experimental-strip-types --check <file>` on every edited file.
 2. Mock end-to-end through a fixture (pair → act → assert the `CALL ...` dump).
@@ -347,7 +408,7 @@ same hexagonal port:
 Never move on from a broken state: partial features are fine, broken live bot
 is not.
 
-## 11. Client truth
+## 12. Client truth
 
 - The user's Telegram client is **Nagram X** (its rendering drove the rich
   message work: plain `<pre>`/HTML tables looked bad, native Rich Blocks look
@@ -356,7 +417,7 @@ is not.
 - The `e2e` checks above, and any numeric/behaviour tweak, were driven by this
   client; re-verify against it when rendering changes.
 
-## 12. Bot API 10.2/10.3 features in use
+## 13. Bot API 10.2/10.3 features in use
 
 | Feature | Where | Notes |
 |---------|-------|-------|

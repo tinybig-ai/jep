@@ -5,7 +5,7 @@ import { promisify } from "node:util"
 import { homedir } from "node:os"
 import { basename, dirname, join, resolve } from "node:path"
 import type { HarnessAdapter, ModelCaps, ModelRef } from "../core/ports.ts"
-import type { FilePart, Part, ProjectSummary, TextPart, ReasoningPart, ToolCallPart } from "../core/types.ts"
+import type { AskOption, AskRequest, FilePart, Part, ProjectSummary, TextPart, ReasoningPart, ToolCallPart } from "../core/types.ts"
 import { mdToHtml } from "./html.ts"
 import { closeStreamingTable, mdTable, mdToRich } from "./rich.ts"
 import type { RichBlock } from "./rich.ts"
@@ -46,9 +46,11 @@ interface ChatState {
   sessionFresh: boolean
   harness: string | null
   inflight: AbortController | null
-  // permissionID -> prompt message for in-flight keyboard prompts; ephemeralID
-  // is set when the prompt was sent as a group ephemeral message
-  pending: Map<string, { sessionID: string; messageID: number; ephemeralID?: number }>
+  // asks waiting on a tap, by ask id: which session they belong to, which
+  // adapter to answer (an ask can arrive from a workspace this chat is no
+  // longer looking at), and the options as the harness worded them.
+  // ephemeralID is set when the prompt went out as a group ephemeral message.
+  pending: Map<string, { sessionID: string; adapter: HarnessAdapter; messageID: number; ephemeralID?: number; options: AskOption[] }>
   // snapshot behind the /ls and settings pickers — each entry keeps its own
   // origin workspace, since /ls spans every project; `dir` is set when that
   // project has no server running yet (see #listPicker)
@@ -646,6 +648,12 @@ const transcriptText = (raw: string): string => {
 // re-reading it. A long turn shows its opening and says how much it is
 // holding back.
 const TURN_CLIP = 300
+// what a tool wants to run, shown under the question. Long enough for a real
+// command, short enough that the buttons stay on the first screen.
+const ASK_DETAIL_CHARS = 400
+const clipDetail = (detail: string): string =>
+  detail.length <= ASK_DETAIL_CHARS ? detail : `${detail.slice(0, ASK_DETAIL_CHARS)}… (+${detail.length - ASK_DETAIL_CHARS} chars)`
+
 const clipTurn = (said: string): string =>
   said.length <= TURN_CLIP ? said : `${said.slice(0, TURN_CLIP).trimEnd()}… (+${said.length - TURN_CLIP} chars)`
 
@@ -2012,8 +2020,8 @@ export class TelegramBot {
             // a card just left the draft for its own permanent message — redraw
             // now so it doesn't linger as a flat status line until the next tick
             if (settled || Date.now() - lastEdit > 700) await renderLive()
-          } else if (evt.type === "permission.requested") {
-            await this.#permissionPrompt(chatID, sessionID, evt.permissionID)
+          } else if (evt.type === "ask.requested") {
+            await this.#askPrompt(chatID, ws.adapter, evt.ask)
           }
         }
       } catch (err) {
@@ -2178,36 +2186,58 @@ export class TelegramBot {
   // ask the user to allow/deny a tool call. In groups the prompt is sent as an
   // ephemeral message (visible to the requester + bot only, Bot API 10.2+);
   // anywhere it doesn't apply it degrades to a normal message.
-  async #permissionPrompt(chatID: number, sessionID: string, permissionID: string): Promise<void> {
+  // The harness has stopped and wants a person: a tool waiting on permission,
+  // or a question the model asked outright. One message, the options as the
+  // harness worded them, and the turn resumes on a tap.
+  //
+  // The option ids go back verbatim. opencode's three are "once", "always" and
+  // "reject", and "always" writes a standing rule — flattening that into a
+  // boolean would drop the only answer that outlives this call.
+  async #askPrompt(chatID: number, adapter: HarnessAdapter, ask: AskRequest): Promise<void> {
     const c = this.#chat(chatID)
-    const markup = kin([
-      [btn("Allow", `allow:${permissionID}`)],
-      [btn("Deny", `deny:${permissionID}`)],
-    ])
+    // Everything outbound goes through mdToHtml (see #recording), so this is
+    // markdown, not HTML. The detail is a command or a path: fenced, both
+    // because that is what it is and because a fence is the one thing markdown
+    // will not reinterpret. Clipped so a long command can't push the buttons
+    // off the screen.
+    const detail = ask.detail ? `\n\n\`\`\`\n${clipDetail(ask.detail)}\n\`\`\`` : ""
+    const text = `🔐 **${ask.title}**${detail}`
+    const markup = kin(
+      ask.options.map((o) => {
+        const b: InlineButton = btn(o.label.slice(0, 40), `ask:${ask.id}#${o.id}`)
+        if (o.style) b.style = o.style
+        return [b]
+      }),
+    )
+    const record = (messageID: number, ephemeralID?: number) => {
+      c.pending.set(ask.id, {
+        sessionID: ask.sessionID,
+        adapter,
+        messageID,
+        options: ask.options,
+        ...(ephemeralID !== undefined ? { ephemeralID } : {}),
+      })
+    }
     const isGroup = c.chatType === "group" || c.chatType === "supergroup"
     try {
       if (isGroup && c.lastUserID != null) {
         try {
           const r = await this.#tg.sendMessage({
             chatID,
-            text: `🔐 ${permissionID}`,
+            text,
             replyMarkup: markup,
             ephemeralMessageParameters: { receiver_user_id: c.lastUserID },
           })
-          c.pending.set(permissionID, {
-            sessionID,
-            messageID: r.message_id,
-            ...(r.ephemeral_message_id !== undefined ? { ephemeralID: r.ephemeral_message_id } : {}),
-          })
+          record(r.message_id, r.ephemeral_message_id)
           return
         } catch (err) {
-          console.error(`[permission] ephemeral prompt failed, using a plain one: ${(err as Error)?.message ?? err}`)
+          console.error(`[ask] ephemeral prompt failed, using a plain one: ${(err as Error)?.message ?? err}`)
         }
       }
-      const msg = await this.#tg.sendMessage({ chatID, text: `🔐 ${permissionID}`, replyMarkup: markup })
-      c.pending.set(permissionID, { sessionID, messageID: msg.message_id })
+      const msg = await this.#tg.sendMessage({ chatID, text, replyMarkup: markup })
+      record(msg.message_id)
     } catch (err) {
-      console.error(`[tg] permission prompt failed: ${(err as Error).message}`)
+      console.error(`[tg] ask prompt failed: ${(err as Error).message}`)
     }
   }
 
@@ -3094,19 +3124,35 @@ export class TelegramBot {
         await tg.answerCallbackQuery({ id: cq.id, text: stopped ? "stopping…" : "nothing running" })
         break
       }
-      case "allow":
-      case "deny": {
-        const pending = c.pending.get(rest)
+      case "ask": {
+        // "<ask id>#<option id>" — the ask id can carry anything but a '#',
+        // and splitting on the last one keeps that true
+        const cut = (rest ?? "").lastIndexOf("#")
+        const askID = cut < 0 ? (rest ?? "") : (rest ?? "").slice(0, cut)
+        const optionID = cut < 0 ? "" : (rest ?? "").slice(cut + 1)
+        const pending = c.pending.get(askID)
         if (!pending) return tg.answerCallbackQuery({ id: cq.id, text: "already answered" })
-        await ws.adapter.respondApproval(pending.sessionID, { id: rest, sessionID: pending.sessionID, title: "", metadata: {} }, verb === "allow")
-        c.pending.delete(rest)
+        const option = pending.options.find((o) => o.id === optionID)
+        if (!option) return tg.answerCallbackQuery({ id: cq.id, text: "stale button" })
+        // dropped before the round trip: a second tap while the harness is
+        // still thinking about the first would answer the same ask twice
+        c.pending.delete(askID)
+        // answered on the adapter the ask came from, not on whatever this chat
+        // is pointed at now — they are not always the same workspace
+        const ok = await pending.adapter
+          .respondAsk(pending.sessionID, askID, option.id)
+          .catch((err) => {
+            console.error(`[ask] respond failed: ${(err as Error)?.message ?? err}`)
+            return false
+          })
+        const verdict = ok ? `✅ ${option.label}` : `⚠️ ${option.label} — the harness didn't take it`
         if (pending.ephemeralID !== undefined) {
           // ephemeral messages have no editable message_id — just drop the prompt
           await this.#tg.deleteEphemeralMessage({ chatID, ephemeralMessageID: pending.ephemeralID }).catch(logFail("cleanup"))
         } else {
-          await this.#tg.editMessageText({ chatID, messageID: msg.message_id, text: verb === "allow" ? "✅ allowed" : "⛔ denied", replyMarkup: null })
+          await this.#tg.editMessageText({ chatID, messageID: msg.message_id, text: verdict, replyMarkup: null })
         }
-        await tg.answerCallbackQuery({ id: cq.id, text: verb === "allow" ? "allowed" : "denied" })
+        await tg.answerCallbackQuery({ id: cq.id, text: option.label })
         break
       }
       default:

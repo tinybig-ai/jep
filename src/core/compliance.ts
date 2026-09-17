@@ -14,7 +14,7 @@ export const HARNESS_ADAPTER_METHODS = [
   "messages",
   "deleteSession",
   "abort",
-  "respondApproval",
+  "respondAsk",
   "events",
   "close",
 ] as const
@@ -97,7 +97,7 @@ export async function runComplianceSuite(adapter: HarnessAdapter): Promise<Compl
   // Interaction-shaped methods: correct by construction if present; proven live
   // when you exercise tool gating (approval) or an in-flight turn (abort).
   rows.push({ method: "abort", ok: "manual", note: "run via CLI `abort` during a live turn" })
-  rows.push({ method: "respondApproval", ok: "manual", note: "requires a real permission request (tool gating)" })
+  rows.push({ method: "respondAsk", ok: "manual", note: "requires a real permission request (tool gating)" })
 
   await step("deleteSession", async () => {
     if (!(await adapter.deleteSession(sessionId))) throw new Error("deleteSession returned false")

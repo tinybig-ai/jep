@@ -1,10 +1,12 @@
 import { spawn, execFile, type ChildProcess } from "node:child_process"
-import { readFile, readdir, rm } from "node:fs/promises"
+import net from "node:net"
+import { readFile, readdir, rm, mkdtemp } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import type { HarnessAdapter, ApprovalRequest, ModelRef, ModelCaps } from "../core/ports.ts"
-import type { DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionHold, SessionSummary } from "../core/types.ts"
+import { fileURLToPath } from "node:url"
+import type { HarnessAdapter, ModelRef, ModelCaps } from "../core/ports.ts"
+import type { AskRequest, DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionHold, SessionSummary } from "../core/types.ts"
 
 /**
  * Claude Code as a harness.
@@ -20,6 +22,11 @@ import type { DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionHold,
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude"
 const CLAUDE_HOME = process.env.CLAUDE_HOME ?? path.join(os.homedir(), ".claude")
 const PROJECTS_DIR = path.join(CLAUDE_HOME, "projects")
+
+// The MCP server Claude Code calls in place of a permission prompt (see
+// claude-ask-mcp.mjs). Spawned by Claude Code, not by us, which is why it is a
+// file path rather than a function.
+const ASK_MCP = path.join(path.dirname(fileURLToPath(import.meta.url)), "claude-ask-mcp.mjs")
 
 const HARNESS_NS = "claude"
 const toInternalId = (native: string) => `${HARNESS_NS}://${native}`
@@ -52,6 +59,14 @@ export class ClaudeAdapter implements HarnessAdapter {
   // parsed transcript heads, keyed by file — re-reading every session on each
   // listSessions would make /ls crawl once a project has a few hundred
   #metaCache = new Map<string, { mtime: number; meta: TranscriptMeta | null }>()
+  // the ask channel: one unix socket for the whole adapter, opened the first
+  // time a turn runs, plus the turns parked on an unanswered question
+  #askSocket: string | null = null
+  #askServer: net.Server | null = null
+  #askWaiters = new Map<string, (decision: { decision: "allow" | "deny"; message?: string }) => void>()
+  #askSeq = 0
+  // whether this CLI build takes --permission-prompt-tool at all; asked once
+  #askSupported: boolean | null = null
 
   constructor(workspace: string) {
     this.workspace = workspace
@@ -281,6 +296,34 @@ export class ClaudeAdapter implements HarnessAdapter {
     const body = opts?.filePaths?.length ? `${text}\n\nAttached files:\n${opts.filePaths.map((f) => `- ${f}`).join("\n")}` : text
     args.push(body)
 
+    // Route permission prompts to the phone. Without this, print mode has
+    // nobody to ask and anything gated is simply refused — the turn comes back
+    // having quietly not done the thing.
+    //
+    // These go after the prompt, always: --mcp-config is variadic ("JSON files
+    // or strings", space-separated), so whatever follows it is swallowed as
+    // another config — including the prompt, which then reads as a missing file
+    // and kills the run before it starts.
+    if (await this.#asksSupported()) {
+      const sock = await this.#askChannel()
+      if (sock) {
+        args.push(
+          "--permission-prompt-tool",
+          "mcp__jep__ask",
+          "--mcp-config",
+          JSON.stringify({
+            mcpServers: {
+              jep: {
+                command: process.execPath,
+                args: [ASK_MCP],
+                env: { JEP_ASK_SOCKET: sock, JEP_ASK_SESSION: sessionID },
+              },
+            },
+          }),
+        )
+      }
+    }
+
     const child = spawn(CLAUDE_BIN, args, { cwd: this.workspace, stdio: ["ignore", "pipe", "pipe"] })
     this.#running.set(native, child)
 
@@ -422,11 +465,116 @@ export class ClaudeAdapter implements HarnessAdapter {
     return true
   }
 
-  // Claude Code gates tools with its own permission prompt, which print mode
-  // resolves via --permission-mode rather than by asking. Declared because the
-  // port requires it; there is nothing to answer here.
-  async respondApproval(_sessionID: string, _approval: ApprovalRequest, _allow: boolean): Promise<boolean> {
-    return false
+  // The turn is parked inside a tool call, waiting on this. Anything other than
+  // the allow option is a denial — Claude Code's prompt tool has two answers,
+  // and a denial carries a reason back to the model so it can say what it
+  // could not do rather than simply failing.
+  async respondAsk(_sessionID: string, askID: string, optionID: string): Promise<boolean> {
+    const waiter = this.#askWaiters.get(askID)
+    if (!waiter) return false
+    this.#askWaiters.delete(askID)
+    waiter(
+      optionID === "allow"
+        ? { decision: "allow" }
+        : { decision: "deny", message: "denied from Telegram" },
+    )
+    return true
+  }
+
+  // One socket per adapter, opened lazily and never announced anywhere: the
+  // path only reaches the MCP server we spawn, through its environment.
+  async #askChannel(): Promise<string | null> {
+    if (this.#askSocket) return this.#askSocket
+    try {
+      const dir = await mkdtemp(path.join(os.tmpdir(), "jep-claude-ask-"))
+      const sock = path.join(dir, "ask.sock")
+      const server = net.createServer((conn) => {
+        let buf = ""
+        conn.on("data", (chunk: Buffer) => {
+          buf += chunk.toString()
+          let nl = buf.indexOf("\n")
+          while (nl >= 0) {
+            const line = buf.slice(0, nl).trim()
+            buf = buf.slice(nl + 1)
+            if (line) this.#onAsk(line, conn)
+            nl = buf.indexOf("\n")
+          }
+        })
+        conn.on("error", (err) => console.error(`[claude] ask connection: ${err.message}`))
+      })
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject)
+        server.listen(sock, () => resolve())
+      })
+      // the bot's event loop, not this, is what keeps the process alive
+      server.unref()
+      this.#askServer = server
+      this.#askSocket = sock
+      return sock
+    } catch (err) {
+      console.error(`[claude] ask channel unavailable: ${(err as Error)?.message ?? err}`)
+      return null
+    }
+  }
+
+  // one question from the MCP server: turn it into an ask the frontend can
+  // render, and hold the socket open until somebody taps an answer
+  #onAsk(line: string, conn: net.Socket): void {
+    let msg: { id?: string; session?: string; tool?: string; input?: Record<string, unknown> }
+    try {
+      msg = JSON.parse(line)
+    } catch {
+      console.error(`[claude] unreadable ask: ${line.slice(0, 200)}`)
+      return
+    }
+    const askID = `ask${++this.#askSeq}`
+    const input = msg.input ?? {}
+    // the command for Bash, the path for a file tool, the whole input when it
+    // is something else — whatever actually says what is about to happen
+    const detail =
+      typeof input.command === "string"
+        ? input.command
+        : typeof input.file_path === "string"
+          ? input.file_path
+          : JSON.stringify(input)
+    this.#askWaiters.set(askID, (decision) => {
+      try {
+        conn.write(`${JSON.stringify({ id: msg.id, ...decision })}\n`)
+      } catch (err) {
+        console.error(`[claude] ask answer failed: ${(err as Error)?.message ?? err}`)
+      }
+    })
+    const ask: AskRequest = {
+      id: askID,
+      sessionID: msg.session ?? "",
+      title: `${msg.tool ?? "a tool"} wants to run`,
+      ...(detail ? { detail } : {}),
+      options: [
+        { id: "allow", label: "Allow", style: "success" },
+        { id: "deny", label: "Deny", style: "danger" },
+      ],
+    }
+    this.#emit({ type: "ask.requested", sessionID: ask.sessionID, ask })
+  }
+
+  // --permission-prompt-tool is what makes any of this reachable; an older
+  // build without it would reject the whole command line, taking every turn
+  // with it, so it is checked once against the CLI's own help.
+  async #asksSupported(): Promise<boolean> {
+    if (this.#askSupported !== null) return this.#askSupported
+    try {
+      const help = await new Promise<string>((resolve, reject) => {
+        execFile(CLAUDE_BIN, ["--help"], { timeout: 20_000, maxBuffer: 4_000_000 }, (err, stdout) =>
+          err ? reject(err) : resolve(stdout),
+        )
+      })
+      this.#askSupported = help.includes("--permission-prompt-tool")
+      if (!this.#askSupported) console.error("[claude] this CLI has no --permission-prompt-tool; tool prompts stay with the CLI")
+    } catch (err) {
+      console.error(`[claude] couldn't read CLI help: ${(err as Error)?.message ?? err}`)
+      this.#askSupported = false
+    }
+    return this.#askSupported
   }
 
   async *events(signal?: AbortSignal): AsyncIterable<DomainEvent> {
@@ -552,6 +700,15 @@ export class ClaudeAdapter implements HarnessAdapter {
     this.#closed = true
     for (const child of this.#running.values()) child.kill("SIGTERM")
     this.#running.clear()
+    // an unanswered ask outlives nothing: the socket goes, and every parked
+    // turn is told no rather than left waiting on a server that has stopped
+    for (const [id, waiter] of this.#askWaiters) {
+      waiter({ decision: "deny", message: "jep is shutting down" })
+      this.#askWaiters.delete(id)
+    }
+    this.#askServer?.close()
+    this.#askServer = null
+    this.#askSocket = null
     this.#emit({ type: "other", eventType: "adapter.closed", raw: null })
   }
 }
