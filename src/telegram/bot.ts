@@ -68,6 +68,11 @@ interface ChatState {
   settingsPage: number
   // the model that already got the "switch to a vision model" suggestion
   suggestedImage: string | null
+  // a prompt that couldn't be delivered because another run holds the session
+  // (see #reportHold), kept so the ⏹ button can send it once that run ends.
+  // One slot: a second blocked message replaces the first, which is what the
+  // button offering to send "your message" has to mean.
+  held: { sessionID: string; text: string; filePaths?: string[] } | null
   // last draft_id used for streaming previews (Bot API 9.4+), per chat
   draft: number
   // the chat's type ("private", "group", "supergroup", …) and the last
@@ -661,6 +666,13 @@ const tailTurns = (turns: string[]): string => {
   return kept.join("\n\n")
 }
 
+// asking who holds a session is itself best-effort: it runs on a path that is
+// already reporting a failure, and must never replace it with its own
+const logHold = (err: unknown): null => {
+  console.error(`[hold] lookup failed: ${(err as Error)?.message ?? err}`)
+  return null
+}
+
 const IMAGE_RE = /\.(png|jpe?g|webp|gif|svg)$/i
 const imageExt = (mime?: string): string | null => {
   const m = (mime ?? "").split(";")[0]?.trim()
@@ -938,6 +950,7 @@ export class TelegramBot {
         settingsMsg: null,
         settingsPage: 0,
         suggestedImage: null,
+        held: null,
         draft: 0,
         chatType: null,
         lastUserID: null,
@@ -2026,7 +2039,11 @@ export class TelegramBot {
         if (!shown && !textOf(turn).trim()) await presentBody("(stopped)")
       } else if (failure) {
         console.error(`[turn] harness error: ${failure.name}: ${failure.message}`)
-        await this.#tg.sendMessage({ chatID, text: `⚠️ ${failure.name}: ${failure.message}`.slice(0, MAX_MSG) })
+        // a session somebody else is already running in is not a fault the
+        // user can read their way out of — it's a decision (see #reportHold)
+        if (!(await this.#reportHold(chatID, ws, sessionID, promptText, opts?.filePaths))) {
+          await this.#tg.sendMessage({ chatID, text: `⚠️ ${failure.name}: ${failure.message}`.slice(0, MAX_MSG) })
+        }
       } else if (!shown && !textOf(turn).trim()) {
         console.error(`[turn] empty reply with no error (session ${sessionID})`)
         await this.#tg.sendMessage({ chatID, text: "⚠️ the model returned nothing (no text, no error)" })
@@ -2544,6 +2561,29 @@ export class TelegramBot {
     await this.#menu(chatID, lines, rows, { messageID })
   }
 
+  // Claude Code's background agents own a session while they run: a prompt
+  // into one fails instantly, and the harness's own words are instructions for
+  // somebody at a terminal ("run `claude attach b10bfbe0`"), which is exactly
+  // who a phone user is not. Say what is true — someone is already working in
+  // here — and offer the one move that gets the message through. Stopping that
+  // run keeps its conversation, but it is still ending somebody's work, so it
+  // never happens on its own: the user taps it. Returns false when nothing
+  // holds the session, and the caller reports the failure normally.
+  async #reportHold(chatID: number, ws: Ws, sessionID: string, text: string, filePaths?: string[]): Promise<boolean> {
+    const hold = await ws.adapter.sessionHold?.(sessionID).catch(logHold) ?? null
+    if (!hold) return false
+    const c = this.#chat(chatID)
+    c.held = { sessionID, text, ...(filePaths?.length ? { filePaths } : {}) }
+    const since = timeAgo(hold.startedAt)
+    const lines = [
+      `⏸ "${hold.label}" is already running${since ? ` — started ${since}` : ""}.`,
+      "",
+      "A running session won't take messages. Stopping it ends that run; the conversation itself is kept, and your message goes in next.",
+    ]
+    await this.#tg.sendMessage({ chatID, text: lines.join("\n"), replyMarkup: kin([[btn("⏹ Stop it & send", "hold:send")]]) })
+    return true
+  }
+
   // when a photo/document lands on a model we can't see it with, offer the
   // vision-capable ones directly (once per current model, not on every message).
   async #suggestImageModel(chatID: number): Promise<void> {
@@ -2976,6 +3016,35 @@ export class TelegramBot {
         this.#rememberChat(chatID)
         void this.#updateStatus(chatID).catch(logFail("status"))
         await this.#settingsHarness(chatID, msg.message_id)
+        break
+      }
+      // the one place jep ends a run it didn't start (see #reportHold). Narrow
+      // on purpose: it stops the session this message was blocked on, nothing
+      // else, and only the message that was blocked gets re-sent.
+      case "hold": {
+        const held = c.held
+        if (!held) return tg.answerCallbackQuery({ id: cq.id, text: "nothing waiting" })
+        // moved on since: the prompt was for a conversation this chat is no
+        // longer in, and stopping a run to send it somewhere else is not what
+        // the button said it would do
+        if (c.sessionID && c.sessionID !== held.sessionID) {
+          c.held = null
+          await tg.editMessageText({ chatID, messageID: msg.message_id, text: "(you've switched conversations since — send it again here)", replyMarkup: null })
+          return tg.answerCallbackQuery({ id: cq.id, text: "stale" })
+        }
+        c.held = null
+        await tg.editMessageText({ chatID, messageID: msg.message_id, text: "⏹ stopping that run…", replyMarkup: null })
+        const released = (await ws.adapter.releaseHold?.(held.sessionID).catch(logHold)) ?? false
+        if (!released) {
+          // it may have ended on its own in the meantime, so the message says
+          // what jep knows rather than guessing, and hands the prompt back
+          await tg.editMessageText({ chatID, messageID: msg.message_id, text: "⚠️ couldn't stop it — send your message again to retry", replyMarkup: null })
+          await tg.answerCallbackQuery({ id: cq.id, text: "couldn't stop it" })
+          break
+        }
+        await tg.editMessageText({ chatID, messageID: msg.message_id, text: "⏹ stopped — sending your message", replyMarkup: null })
+        await tg.answerCallbackQuery({ id: cq.id, text: "stopped" })
+        this.#runTurn(chatID, () => this.#freeText(chatID, held.text, { filePaths: held.filePaths }))
         break
       }
       case "abt": {

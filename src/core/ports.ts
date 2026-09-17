@@ -4,6 +4,7 @@ import type {
   FileDiff,
   Message,
   ProjectSummary,
+  SessionHold,
   SessionSummary,
 } from "./types.ts"
 
@@ -65,6 +66,15 @@ export interface HarnessAdapter {
    * adapter itself is rooted in — lets a frontend discover (and lazily start
    * serving) sessions that live outside the currently active workspace */
   listProjects?(): Promise<ProjectSummary[]>
+  /** Who else is in this session right now, when the harness can say — a run
+   * started outside jep that owns the session until it ends, so prompt() can
+   * only fail. Null when nobody holds it. Consulted on a failed turn, so the
+   * user is told "it's busy" rather than handed the harness's own words. */
+  sessionHold?(sessionID: string): Promise<SessionHold | null>
+  /** End that run so the session takes prompts again. The conversation is
+   * kept — this stops the holder, not the history. Never called on its own:
+   * it ends somebody's work, so it waits for the user to ask. */
+  releaseHold?(sessionID: string): Promise<boolean>
   /** file changes accumulated in this session so far, if the harness tracks them */
   diff?(sessionID: string): Promise<FileDiff[]>
   /** Stop the child server. Sessions stay on disk for the next boot. */

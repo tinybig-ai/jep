@@ -4,7 +4,7 @@ import { existsSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import type { HarnessAdapter, ApprovalRequest, ModelRef, ModelCaps } from "../core/ports.ts"
-import type { DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionSummary } from "../core/types.ts"
+import type { DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionHold, SessionSummary } from "../core/types.ts"
 
 /**
  * Claude Code as a harness.
@@ -452,6 +452,48 @@ export class ClaudeAdapter implements HarnessAdapter {
       }
     } finally {
       this.#bus.delete(push)
+    }
+  }
+
+  // `claude agents --json` is the only non-TTY way to see what is running.
+  // Rows carry both ids: `sessionId` is the one jep stores, `id` the short one
+  // every `claude` subcommand takes.
+  async #agentRow(sessionID: string): Promise<{ id: string; name?: string; startedAt?: number; kind?: string } | null> {
+    const native = this.#real(sessionID)
+    if (isPending(native)) return null
+    try {
+      const out = await new Promise<string>((resolve, reject) => {
+        execFile(CLAUDE_BIN, ["agents", "--json"], { timeout: 20_000 }, (err, stdout) => (err ? reject(err) : resolve(stdout)))
+      })
+      const rows = JSON.parse(out)
+      if (!Array.isArray(rows)) return null
+      return rows.find((r: { sessionId?: string }) => r?.sessionId === native) ?? null
+    } catch (err) {
+      console.error(`[claude] agents --json failed: ${(err as Error)?.message ?? err}`)
+      return null
+    }
+  }
+
+  // A background session owns its conversation while it runs: `--resume` on it
+  // exits immediately telling you to attach or stop it first. That message is
+  // written for somebody at a terminal, which is precisely who the user is not.
+  async sessionHold(sessionID: string): Promise<SessionHold | null> {
+    const row = await this.#agentRow(sessionID)
+    if (!row || row.kind !== "background") return null
+    return { label: String(row.name ?? row.id), startedAt: Number(row.startedAt) || 0 }
+  }
+
+  async releaseHold(sessionID: string): Promise<boolean> {
+    const row = await this.#agentRow(sessionID)
+    if (!row?.id) return false
+    try {
+      await new Promise<void>((resolve, reject) => {
+        execFile(CLAUDE_BIN, ["stop", row.id], { timeout: 30_000 }, (err) => (err ? reject(err) : resolve()))
+      })
+      return true
+    } catch (err) {
+      console.error(`[claude] stop ${row.id} failed: ${(err as Error)?.message ?? err}`)
+      return false
     }
   }
 

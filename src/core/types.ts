@@ -103,6 +103,16 @@ export interface FileDiff {
   status?: "added" | "deleted" | "modified"
 }
 
+// Another process is holding a session open (Claude Code's background agents,
+// say), so a prompt can't be sent into it until that run ends. Not an error
+// state: somebody is working in there, and the user has to decide what gives.
+export interface SessionHold {
+  // what the holder is called, for a message a person has to act on
+  label: string
+  // epoch ms the holding run started, 0 when the harness doesn't say
+  startedAt: number
+}
+
 export interface ApprovalRequest {
   id: string
   sessionID: string
