@@ -81,8 +81,18 @@ export interface Message {
   role: Role
   time: number
   parts: Part[]
+  /**
+   * What the harness says this turn cost, in USD. Reported, never computed:
+   * opencode prices the call itself and Claude Code returns total_cost_usd, and
+   * either is closer to the truth than jep multiplying tokens by a rate card
+   * it would have to keep up to date. Absent means the harness didn't say —
+   * which is not the same as free, and /usage says so.
+   */
+  cost?: number
+  /** "provider/model" that produced it, where the harness records it */
+  model?: string
   // harness-reported token usage for this message, when known (assistant
-  // messages only) — used to surface context usage, not for billing
+  // messages only) — context usage, and the denominator for a cost per turn
   tokens?: {
     input: number
     output: number

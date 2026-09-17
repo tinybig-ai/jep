@@ -13,6 +13,8 @@ import type { TelegramApi, TgMessage, TgUpdate, InlineButton, ReplyMarkup } from
 import { runComplianceSuite } from "../core/compliance.ts"
 import { eventMessage, eventSession } from "../core/types.ts"
 import { transcribe } from "../core/transcribe.ts"
+import { addUsage, emptyUsage, fmtMoney, usageChip, usageOf } from "../core/usage.ts"
+import type { Usage } from "../core/usage.ts"
 import { matches, rankHits, snippet } from "./search.ts"
 import type { Hit } from "./search.ts"
 import { IMAGE_RE, VOICE_MAX_SEC, audioOf, imageExt, sniffAudioExt, sniffImageExt, stickerPrompt } from "./media.ts"
@@ -594,6 +596,7 @@ const HELP = [
   "/git · branch, changes & diffs",
   "/queue · what's running & waiting",
   "/find · search your conversations",
+  "/usage · what this has cost",
   "/settings · model, workspace & more",
   "/remind · schedule a nudge (e.g. /remind 2h build)",
   "",
@@ -748,6 +751,7 @@ export class TelegramBot {
     { command: "git", description: "branch · changes · commits · diffs" },
     { command: "queue", description: "what's running, what's waiting" },
     { command: "find", description: "search your conversations" },
+    { command: "usage", description: "tokens and cost, here and in this project" },
     { command: "steer", description: "stop the running turn and say this instead" },
     { command: "settings", description: "status · model · rename · workspace" },
     { command: "log", description: "this conversation's history" },
@@ -1518,6 +1522,11 @@ export class TelegramBot {
       }
       case "find": {
         await this.#find(chatID, arg)
+        break
+      }
+      case "usage":
+      case "cost": {
+        await this.#usageView(chatID, null)
         break
       }
       case "steer": {
@@ -2352,6 +2361,7 @@ export class TelegramBot {
     const model = await this.#modelLabel(chatID, ws)
     const agent = this.#store.agent(chatID) ?? "build"
     let tokensLine = "–"
+    let spend = ""
     const sessionID = await this.#resolveSessionID(chatID)
     if (sessionID) {
       try {
@@ -2363,8 +2373,11 @@ export class TelegramBot {
           const limit = modelKey ? (await ws.adapter.capabilities?.().catch(() => undefined))?.get(modelKey)?.contextLimit : undefined
           tokensLine = limit ? `${fmtCount(total)}/${fmtCount(limit)}` : fmtCount(total)
         }
+        // context usage is the *last* turn; spend is all of them — two
+        // different questions that both belong on one line
+        spend = usageChip(usageOf(msgs))
       } catch (err) {
-        console.error(`[status] diff read failed: ${(err as Error)?.message ?? err}`)
+        console.error(`[status] session read failed: ${(err as Error)?.message ?? err}`)
       }
     }
     // Anything waiting is worth saying without being asked: the pin is the one
@@ -2372,7 +2385,7 @@ export class TelegramBot {
     // this" changes what you do next.
     const waiting = Math.max(0, this.#chat(chatID).queue.length - 1)
     // one line, one separator: what it's allowed to do, where, how full, on what
-    const text = [agentIcon(agent), fmtWsPath(ws.dir), tokensLine, model, waiting ? `⏳${waiting}` : ""]
+    const text = [agentIcon(agent), fmtWsPath(ws.dir), tokensLine, spend, model, waiting ? `⏳${waiting}` : ""]
       .filter(Boolean)
       .join(" · ")
 
@@ -2392,6 +2405,62 @@ export class TelegramBot {
     } catch (err) {
       console.error(`[status] pin failed: ${(err as Error)?.message ?? err}`)
     }
+  }
+
+  // ─── spend ───
+
+  // You are running paid harnesses; "how much has this cost" should not be a
+  // question you have to leave the phone to answer.
+  //
+  // Nothing is accumulated on disk for this. A conversation's spend is the sum
+  // of its own turns, which the transcript already holds exactly — a ledger
+  // would be a second copy of the truth, and the first one to go wrong (double
+  // counting a retried turn, missing one after a restart).
+  async #usageView(chatID: number, messageID: number | null): Promise<void> {
+    const ws = this.#activeWs(chatID)
+    const sessionID = await this.#resolveSessionID(chatID)
+    const here = sessionID ? usageOf(await ws.adapter.messages(sessionID).catch(() => [])) : emptyUsage()
+
+    // the workspace roll-up is bounded, and says so: one transcript read per
+    // conversation is the same cost /find pays, for the same reason
+    const mine = (await this.#everyConversation())
+      .filter((e) => e.ws === ws.name || e.dir === ws.dir)
+      .sort((a, b) => b.s.updatedAt - a.s.updatedAt)
+      .slice(0, SEARCH_DEPTH)
+    let rolled = emptyUsage()
+    await Promise.all(
+      mine.map(async (e) => {
+        try {
+          rolled = addUsage(rolled, usageOf(await ws.adapter.messages(e.s.id)))
+        } catch (err) {
+          console.error(`[usage] couldn't read ${e.s.id}: ${(err as Error)?.message ?? err}`)
+        }
+      }),
+    )
+
+    const money = (u: Usage): string => {
+      if (u.turns === 0) return "nothing yet"
+      if (u.priced === 0) return "not priced by this harness"
+      const known = fmtMoney(u.cost)
+      // a conversation can span a priced and an unpriced harness; saying "$0.40"
+      // when a third of the turns went unreported would be a lie of omission
+      return u.unpriced ? `${known} (+${u.unpriced} turn${u.unpriced === 1 ? "" : "s"} unpriced)` : known
+    }
+    const lines = [
+      `## 💰 ${fmtWsPath(ws.dir)}`,
+      "",
+      `**this conversation** · ${money(here)}`,
+      `${here.turns} turn${here.turns === 1 ? "" : "s"} · ${fmtCount(here.total)} tokens` +
+        (here.total ? ` (in ${fmtCount(here.input)} · out ${fmtCount(here.output)}` + (here.reasoning ? ` · thinking ${fmtCount(here.reasoning)}` : "") + (here.cacheRead ? ` · cached ${fmtCount(here.cacheRead)}` : "") + ")" : ""),
+      ...(here.models.length ? [`${here.models.join(", ")}`] : []),
+      "",
+      `**this workspace** · ${money(rolled)}`,
+      `${rolled.turns} turn${rolled.turns === 1 ? "" : "s"} · ${fmtCount(rolled.total)} tokens`,
+      "",
+      `across the ${mine.length} most recent conversation${mine.length === 1 ? "" : "s"} here · cost as the harness reported it`,
+    ]
+    const text = lines.join("\n")
+    await this.#screen(chatID, mdToRich(text), [[btn("⟳", "u:r")]], text, messageID)
   }
 
   // ─── the turn queue ───
@@ -3448,6 +3517,11 @@ export class TelegramBot {
           await tg.answerCallbackQuery({ id: cq.id, text: "stale button" })
           break
         }
+        await tg.answerCallbackQuery({ id: cq.id })
+        break
+      }
+      case "u": {
+        await this.#usageView(chatID, msg.message_id)
         await tg.answerCallbackQuery({ id: cq.id })
         break
       }

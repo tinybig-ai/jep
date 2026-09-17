@@ -289,4 +289,24 @@ describe("mock replay", { skip: enabled ? false : "set JEP_E2E=1 (boots a real h
       rmSync(home, { recursive: true, force: true })
     }
   })
+
+  test("usage reports the conversation's own spend", () => {
+    const home = mkdtempSync(join(tmpdir(), "jep-e2e-usage-"))
+    try {
+      // same two-pass trick: usage only exists once a turn has actually run
+      replay("telegram-mock-usage.jsonl", {}, home)
+      const calls = replay("telegram-mock-usage.jsonl", {}, home)
+      const view = calls.find((c) => JSON.stringify(c.rich ?? {}).includes("this conversation"))
+      assert.ok(view, "/usage draws a screen")
+      const shown = JSON.stringify(view.rich)
+      assert.match(shown, /this workspace/, "and rolls the project up too")
+      assert.match(shown, /tokens/)
+      // the local default is a free model, and the harness prices it at zero —
+      // which must read as $0, never as unknown
+      assert.match(shown, /\$0/)
+      assert.match(shown, /most recent conversation/, "with an honest scope footer")
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
 })

@@ -27,6 +27,7 @@ src/
                           // per-file + whole-tree patches (backs /git)
     transcribe.ts         // SPEECH → TEXT — decode (ffmpeg | afconvert) then
                           // whisper; serialized, one model load at a time
+    usage.ts              // PURE — tokens + harness-reported cost per session
   adapters/
     claude-ask-mcp.mjs    // MCP server Claude Code calls instead of a permission
                           // prompt; relays to jep over a unix socket
@@ -417,6 +418,35 @@ before it starts. The prompt goes first; the ask flags go last.
 The flag is checked once against `claude --help`: a build without it would
 reject the whole command line and take every turn with it.
 
+## 9. Spend (`/usage`)
+
+You are running paid harnesses; how much this has cost should not be a
+question you have to leave the phone to answer.
+
+`Message` now carries `cost` (USD) and `model`, both **reported** rather than
+computed: opencode prices each call (`cost` on the message, alongside
+`providerID`/`modelID`) and Claude Code returns `total_cost_usd` on its result
+event. Multiplying tokens by a rate card jep would have to keep current is
+strictly worse than asking the thing that made the call.
+
+`/usage` shows the current conversation exactly (its own transcript is the
+whole truth) and rolls up the workspace over its `JEP_SEARCH_DEPTH` most
+recent conversations, with a footer saying so. The pinned status line grows a
+cost chip.
+
+- **Nothing is accumulated on disk.** A ledger would be a second copy of the
+  truth and the first one to go wrong — double counting a retried turn, losing
+  one to a restart. Summing a transcript is exact and needs no bookkeeping.
+- **"Priced at zero" and "not priced" are different facts.** The local default
+  is free and opencode says so, which reads as `$0`. Codex reports no cost at
+  all, which reads as `$?` on the pin and "not priced by this harness" in the
+  screen — a harness that says nothing must never render as free. A
+  conversation spanning both shows the known figure plus `(+2 turns
+  unpriced)`.
+- **Context usage and spend are different questions** and both belong on the
+  pin: the token figure is the *last* turn against the model's limit (what is
+  left in the window), the cost is *all* of them.
+
 ## 9a. What survives a restart
 
 Sessions, titles, model picks, workspaces, the chat's workspace/conversation
@@ -652,6 +682,7 @@ determinism is (PHILOSOPHY §7), plus the git grammars:
 | `media.test.ts` | every audio shape Telegram sends, and the container/image signatures |
 | `search.test.ts` | snippets centred on the hit, and title-before-body ranking |
 | `store.test.ts` | every persisted field, by writing a file and loading it again |
+| `usage.test.ts` | token sums, and priced-at-zero versus never-priced |
 
 `e2e.test.ts` covers the four screens end to end: /git's three views, a voice
 note, the queue, and a plain paired conversation.

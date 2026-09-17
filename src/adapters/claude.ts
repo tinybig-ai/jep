@@ -330,6 +330,10 @@ export class ClaudeAdapter implements HarnessAdapter {
     let realID = pending ? "" : native
     const parts: Part[] = []
     let tokens: Message["tokens"]
+    // Claude Code prices the run itself and reports it on the result event —
+    // more honest than jep multiplying tokens by a rate card of its own
+    let cost: number | undefined
+    let model: string | undefined
     let failure: { name: string; message: string } | undefined
     let stderr = ""
     // index -> position in `parts`, so streamed deltas accumulate in place
@@ -413,6 +417,7 @@ export class ClaudeAdapter implements HarnessAdapter {
                 this.#emit({ type: "part.updated", sessionID: sid, messageID: sid, partID: part.id, partType: "tool", part })
               }
               if (d.message.usage) tokens = mapUsage(d.message.usage)
+              if (typeof d.message.model === "string") model = d.message.model
               continue
             }
 
@@ -422,6 +427,7 @@ export class ClaudeAdapter implements HarnessAdapter {
                 this.#emit({ type: "session.error", sessionID: sid, message: failure.message })
               }
               if (d.usage) tokens = mapUsage(d.usage)
+              if (typeof d.total_cost_usd === "number") cost = d.total_cost_usd
               this.#emit({ type: "session.idle", sessionID: sid })
             }
           }
@@ -454,6 +460,8 @@ export class ClaudeAdapter implements HarnessAdapter {
       // empty text blocks are common (a turn that only called tools)
       parts: parts.filter((p) => p.kind !== "text" || p.text.trim()),
       ...(tokens ? { tokens } : {}),
+      ...(cost !== undefined ? { cost } : {}),
+      ...(model ? { model } : {}),
       ...(failure ? { error: failure } : {}),
     }
   }

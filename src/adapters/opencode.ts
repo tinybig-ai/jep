@@ -118,12 +118,15 @@ function mapPart(part: any, workspace: string): Part {
 function mapMessage(info: any, parts: any[] | undefined, workspace: string): Message {
   const time = info.time && typeof info.time === "object" ? info.time.created : info.time
   const t = info.tokens
+  const model = info.providerID && info.modelID ? `${info.providerID}/${info.modelID}` : undefined
   return {
     id: info.id,
     sessionID: toInternalId(info.sessionID ?? ""),
     role: info.role === "user" ? "user" : "assistant",
     time: typeof time === "number" ? time : Date.now(),
     parts: (parts ?? []).map((p) => mapPart(p, workspace)),
+    ...(typeof info.cost === "number" ? { cost: info.cost } : {}),
+    ...(model ? { model } : {}),
     ...(t
       ? {
           tokens: {
