@@ -588,6 +588,79 @@ const stripInjectedContext = (text: string): string => {
   return i === -1 ? text : text.slice(i + JEP_CONTEXT_FOOTER.length)
 }
 
+// A harness splices a lot of machinery into the user's half of a transcript:
+// background-task notifications, the envelope around a slash command, the
+// stdout of a `!` shell line, system reminders. All of it is addressed to the
+// model, and replayed in /log it reads as the user saying things they never
+// said. Dropped whole — a turn that was only machinery disappears.
+const NOISE_BLOCKS = [
+  "system-reminder",
+  "task-notification",
+  "local-command-caveat",
+  "local-command-stdout",
+  "bash-stdout",
+  "bash-stderr",
+  "interrupted-output",
+  "command-message",
+  "command-args",
+]
+
+// These wrap something a person really said — a message relayed from another
+// chat, or from a peer session — in routing metadata. The envelope goes, the
+// message stays.
+const UNWRAP_BLOCKS = ["channel", "cross-session-message"]
+
+const dropBlocks = (text: string): string => {
+  let out = text
+  for (const name of UNWRAP_BLOCKS) out = out.replace(new RegExp(`</?${name}(\\s[^>]*)?>`, "g"), "")
+  for (const name of NOISE_BLOCKS) {
+    out = out.replace(new RegExp(`<${name}>[\\s\\S]*?</${name}>`, "g"), "")
+    // an unclosed one means the harness truncated mid-block; the rest of the
+    // message is that block's tail, so it goes too
+    out = out.replace(new RegExp(`<${name}>[\\s\\S]*$`), "")
+  }
+  return out.replace(/\n{3,}/g, "\n\n").trim()
+}
+
+// What the user actually typed, recovered from however the harness recorded
+// it. A slash command and a `!` shell line are real input and stay; their
+// surrounding bookkeeping does not.
+const transcriptText = (raw: string): string => {
+  const text = stripInjectedContext(raw)
+  const cmd = text.match(/<command-name>([^<]*)<\/command-name>/)
+  if (cmd) {
+    const args = text.match(/<command-args>([^<]*)<\/command-args>/)
+    return [cmd[1]?.trim(), args?.[1]?.trim()].filter(Boolean).join(" ")
+  }
+  const bash = text.match(/<bash-input>([\s\S]*?)<\/bash-input>/)
+  if (bash) return `! ${bash[1]!.trim()}`
+  return dropBlocks(text)
+}
+
+// A transcript is for finding the thread of the conversation again, not for
+// re-reading it. A long turn shows its opening and says how much it is
+// holding back.
+const TURN_CLIP = 300
+const clipTurn = (said: string): string =>
+  said.length <= TURN_CLIP ? said : `${said.slice(0, TURN_CLIP).trimEnd()}… (+${said.length - TURN_CLIP} chars)`
+
+// Cut whole turns off the front rather than characters off the string: a
+// character tail opens the history mid-sentence, in a turn whose speaker you
+// can no longer see.
+const tailTurns = (turns: string[]): string => {
+  const kept: string[] = []
+  let used = 0
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const turn = turns[i]!
+    if (kept.length && used + turn.length + 2 > MAX_MSG - 40) break
+    kept.unshift(turn)
+    used += turn.length + 2
+  }
+  const dropped = turns.length - kept.length
+  if (dropped) kept.unshift(`…${dropped} earlier turn${dropped === 1 ? "" : "s"}`)
+  return kept.join("\n\n")
+}
+
 const IMAGE_RE = /\.(png|jpe?g|webp|gif|svg)$/i
 const imageExt = (mime?: string): string | null => {
   const m = (mime ?? "").split(";")[0]?.trim()
@@ -1258,23 +1331,22 @@ export class TelegramBot {
         // snapshots are working notes, and reading them back is not what a
         // transcript is for — they turned /log into a wall you had to scan
         // past to find the actual exchange.
-        const text = msgs
+        const turns = msgs
           .map((m) => {
             const said = m.parts
               .filter((p): p is TextPart => p.kind === "text")
-              .map((p) => stripInjectedContext(p.text).trim())
+              .map((p) => transcriptText(p.text))
               .filter(Boolean)
               .join("\n")
             // an assistant turn that was only tool calls has nothing to show
-            return said ? `${m.role === "user" ? "👤" : "🤖"} ${said}` : ""
+            return said ? `${m.role === "user" ? "👤" : "🤖"} ${clipTurn(said)}` : ""
           })
           .filter(Boolean)
-          .join("\n\n")
-        if (!text) {
+        if (!turns.length) {
           await tg.sendMessage({ chatID, text: "(nothing said yet — only tool activity so far)" })
           return
         }
-        const body = text.length > MAX_MSG ? text.slice(-MAX_MSG) : text
+        const body = tailTurns(turns)
         // 10.3 expandable blockquote: the history folds away until tapped
         try {
           await tg.sendRichMessage({
