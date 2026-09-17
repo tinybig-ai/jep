@@ -171,4 +171,43 @@ describe("mock replay", { skip: enabled ? false : "set JEP_E2E=1 (boots a real h
       "and an undecodable one says what went wrong",
     )
   })
+
+  test("the queue is visible, droppable and steerable", () => {
+    const calls = replay("telegram-mock-queue.jsonl")
+
+    // /queue on an idle chat is a real answer, not an empty screen
+    assert.ok(
+      calls.some((c) => JSON.stringify(c.rich ?? {}).includes("nothing running")),
+      "an idle chat says so",
+    )
+
+    // three prompts fired in a row: one running, two behind it
+    const views = calls.filter((c) => JSON.stringify(c.rich ?? {}).includes("waiting"))
+    const counts = views.map((c) => JSON.stringify(c.rich).match(/waiting[^0-9]*(\d+)/)?.[1])
+    assert.ok(counts.includes("2"), `expected a queue of 2, saw ${JSON.stringify(counts)}`)
+    // dropping one has to change the list, not just answer the tap — the flag
+    // alone used to leave the dropped turn sitting there
+    assert.ok(counts.includes("1"), "dropping one leaves one")
+
+    const answers = calls.filter((c) => c.method === "answerCallbackQuery").map((c) => c.text)
+    assert.ok(answers.includes("dropped"), "a single drop is confirmed")
+    assert.ok(
+      answers.some((t) => /^dropped \d+$/.test(t)),
+      "and so is clearing the rest",
+    )
+    assert.ok(
+      answers.includes("that one is already running"),
+      "the running turn is not droppable — ⏹ Stop is the button for that",
+    )
+
+    // /steer with no argument explains itself rather than sending nothing
+    assert.ok(
+      calls.some((c) => c.text.startsWith("usage: /steer")),
+      "bare /steer says what it wants",
+    )
+    assert.ok(
+      calls.some((c) => /saying this next/.test(c.text)),
+      "and with an argument it says what it did",
+    )
+  })
 })

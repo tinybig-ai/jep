@@ -414,7 +414,46 @@ before it starts. The prompt goes first; the ask flags go last.
 The flag is checked once against `claude --help`: a build without it would
 reject the whole command line and take every turn with it.
 
-## 10a. Voice notes
+## 10. The turn queue (`/queue`, `/steer`)
+
+Turns within a chat run strictly in order — they share a harness session, so
+overlapping them would interleave two prompts in one conversation. That queue
+used to exist only as a promise chain, which meant nothing could *look* at it:
+a queued message got a 👀 reaction saying "received" and nothing more.
+
+`ChatState.queue` is now the same queue as data, `queue[0]` being the turn in
+flight. `#runTurn` records an item (id, the prompt as its label, when it was
+queued) and removes it in a `finally`.
+
+- `/queue` — one screen, redrawn in place: what is running and for how long,
+  what is waiting and in what order, an `✕` per waiting item, `🧹 Clear
+  waiting` and `⏹ Stop`.
+- The pinned status line carries `⏳<n>` whenever anything is waiting. That is
+  the always-visible half: the pin is the one place a phone can hold ambient
+  state, and "two things are behind this" changes what you do next.
+- `/steer <text>` — stops the running turn and sends that text **ahead of**
+  anything queued. No harness will take a second prompt into a running turn
+  (opencode reports the session held; codex and claude answer one prompt per
+  process), so this is the honest version of dropping a note into a turn:
+  what Esc-then-type does in a terminal. The conversation is kept; only that
+  one run ends.
+
+Two things that are easy to get wrong, and were:
+
+- **Dropping must both flag and remove.** The flag (`cancelled`) is what makes
+  the chained runner skip the turn — unpicking a promise chain mid-flight is
+  how you lose the turns behind it — but the removal is what the user actually
+  asked for. With the flag alone, a dropped turn sat in the list looking
+  queued.
+- **Waiting is not running.** `🧹 Clear waiting` never touches `queue[0]`, and
+  an `✕` on the running turn answers "that one is already running". Ending a
+  turn in flight is `⏹ Stop`, which is a different decision with a different
+  cost.
+
+Items are addressed by id, never by position: the list shifts under you the
+moment the running turn finishes.
+
+## 10b. Voice notes
 
 A voice note is a prompt you spoke, so it lands exactly where a typed one
 does. What is different is the waiting, and everything below follows from it.
@@ -457,7 +496,7 @@ whisper → post what was heard → run it as a prompt.
 its stdout is the transcript), which is how the e2e test asserts jep's
 handling without depending on what whisper heard.
 
-## 10b. The git view (`/git`)
+## 10c. The git view (`/git`)
 
 Workspace-scoped, read-only, and **not** the same thing as `/diff`: `/diff`
 asks the harness what *it* touched this session, `/git` reads the repo, so it
@@ -538,6 +577,9 @@ determinism is (PHILOSOPHY §7), plus the git grammars:
 | `git.test.ts` | porcelain v2 + `numstat -z` by hand, then real repos in a temp dir (unborn HEAD, rename+edit, subdirectory reads) |
 | `fmt.test.ts` | durations, counts, ages, `~` folding |
 | `media.test.ts` | every audio shape Telegram sends, and the container/image signatures |
+
+`e2e.test.ts` covers the four screens end to end: /git's three views, a voice
+note, the queue, and a plain paired conversation.
 
 Three bugs fell out of writing them, all of them live before that:
 

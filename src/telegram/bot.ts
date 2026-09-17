@@ -98,11 +98,26 @@ interface ChatState {
   // human sender — needed to scope ephemeral group prompts to that person
   chatType: string | null
   lastUserID: number | null
+  // What this chat has running and waiting, in order: queue[0] is the turn in
+  // flight. The promise chain in #runTurn enforces the ordering; this is the
+  // same queue as something you can *look at*, drop from and jump.
+  queue: QueuedTurn[]
   // the /git screen: the message it's drawn on, the tree it read, and enough
   // to redraw any of its three views. Files are addressed by index, same as
   // the conversation pickers, because callback_data caps at 64 bytes and a
   // real path blows straight through that.
   git: GitView | null
+}
+
+interface QueuedTurn {
+  /** addressed by id in callback_data, which can't hold a prompt */
+  id: number
+  /** what it is, in a list row — the prompt, clipped */
+  label: string
+  queuedAt: number
+  startedAt?: number
+  /** dropped while it waited: the runner checks this instead of running it */
+  cancelled: boolean
 }
 
 interface GitView {
@@ -561,6 +576,7 @@ const HELP = [
   "/new · start fresh",
   "/ls · switch chats",
   "/git · branch, changes & diffs",
+  "/queue · what's running & waiting",
   "/settings · model, workspace & more",
   "/remind · schedule a nudge (e.g. /remind 2h build)",
   "",
@@ -696,6 +712,8 @@ export class TelegramBot {
   // transcription, so far. drain() waits for it, which is what makes a fixture
   // replay deterministic instead of a race against the dump.
   #background = new Set<Promise<void>>()
+  // ids for queued turns: small, monotonic, and short enough for callback_data
+  #turnSeq = 0
   #reminderStore: ReminderStore
   // id -> live timer for every reminder currently scheduled from #reminderStore
   #reminderTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -711,6 +729,8 @@ export class TelegramBot {
     { command: "new", description: "start a fresh conversation" },
     { command: "ls", description: "your conversations" },
     { command: "git", description: "branch · changes · commits · diffs" },
+    { command: "queue", description: "what's running, what's waiting" },
+    { command: "steer", description: "stop the running turn and say this instead" },
     { command: "settings", description: "status · model · rename · workspace" },
     { command: "log", description: "this conversation's history" },
     { command: "remind", description: "remind me later, once or recurring (/remind 2h build · /remind every 1h build)" },
@@ -934,6 +954,7 @@ export class TelegramBot {
         draft: 0,
         chatType: null,
         lastUserID: null,
+        queue: [],
         git: null,
       }
       this.#chats.set(id, c)
@@ -1003,10 +1024,29 @@ export class TelegramBot {
   // and a harness session, so overlapping them would interleave two prompts
   // in one conversation. Queueing rather than rejecting means firing off
   // several thoughts in a row just works, which is the whole point on a phone.
-  #runTurn(chatID: number, fn: () => Promise<void>): void {
+  //
+  // Every turn is also recorded in ChatState.queue, so "what is this chat
+  // doing, and what is behind it" is a question with an answer (/queue) rather
+  // than something only the promise chain knows. A turn dropped while it waits
+  // is skipped rather than unqueued: unpicking a promise chain mid-flight is
+  // how you lose the turns behind it.
+  #runTurn(chatID: number, fn: () => Promise<void>, label = ""): QueuedTurn {
+    const c = this.#chat(chatID)
+    const item: QueuedTurn = { id: ++this.#turnSeq, label, queuedAt: Date.now(), cancelled: false }
+    c.queue.push(item)
+    const guarded = async () => {
+      try {
+        if (item.cancelled) return
+        item.startedAt = Date.now()
+        await fn()
+      } finally {
+        const i = c.queue.indexOf(item)
+        if (i !== -1) c.queue.splice(i, 1)
+      }
+    }
     const prev = this.#turns.get(chatID) ?? Promise.resolve()
     // `.then(fn, fn)` so one failed turn never strands the rest of the queue
-    const next = prev.then(fn, fn).catch((err) => {
+    const next = prev.then(guarded, guarded).catch((err) => {
       console.error(`turn failed (chat ${chatID}): ${(err as Error)?.message ?? err}`)
     })
     this.#turns.set(chatID, next)
@@ -1014,6 +1054,7 @@ export class TelegramBot {
     void next.then(() => {
       if (this.#turns.get(chatID) === next) this.#turns.delete(chatID)
     })
+    return item
   }
 
   /** wait for every queued turn to finish — used by mock mode before exit */
@@ -1144,10 +1185,14 @@ export class TelegramBot {
       // the acknowledgement goes where it is unambiguous: on the message
       // itself. It clears nothing and needs no cleanup.
       const queued = this.#turns.has(chatID)
-      this.#runTurn(chatID, async () => {
-        await this.#freeText(chatID, prompt, { filePaths })
-        if (mediaFileID) await this.#suggestImageModel(chatID)
-      })
+      this.#runTurn(
+        chatID,
+        async () => {
+          await this.#freeText(chatID, prompt, { filePaths })
+          if (mediaFileID) await this.#suggestImageModel(chatID)
+        },
+        prompt,
+      )
       if (queued) {
         void this.#tg.setMessageReaction({ chatID, messageID: m.message_id, emoji: "👀" }).catch(logFail("reaction"))
       }
@@ -1233,7 +1278,10 @@ export class TelegramBot {
     const a = this.#chat(chatID).awaiting
     // nothing was actually awaited — treat it as an ordinary prompt, queued
     // like any other so it can't block the update loop either
-    if (!a) return this.#runTurn(chatID, () => this.#freeText(chatID, text))
+    if (!a) {
+      this.#runTurn(chatID, () => this.#freeText(chatID, text), text)
+      return
+    }
     this.#chat(chatID).awaiting = null
     if (a.kind === "pair") return this.#attemptPair(chatID, text)
     if (a.kind === "use") return this.#resolveUse(chatID, text)
@@ -1314,7 +1362,7 @@ export class TelegramBot {
         return
       }
       await this.#addWorkspace(chatID, dir, sent.message_id)
-    })
+    }, `clone ${name}`)
   }
 
   async #resolveUse(chatID: number, term: string): Promise<void> {
@@ -1422,6 +1470,14 @@ export class TelegramBot {
       }
       case "git": {
         await this.#gitView(chatID, null)
+        break
+      }
+      case "queue": {
+        await this.#queueView(chatID, null)
+        break
+      }
+      case "steer": {
+        await this.#steer(chatID, arg)
         break
       }
       case "use": {
@@ -2160,8 +2216,14 @@ export class TelegramBot {
         console.error(`[status] diff read failed: ${(err as Error)?.message ?? err}`)
       }
     }
+    // Anything waiting is worth saying without being asked: the pin is the one
+    // place a phone can carry ambient state, and "two things are queued behind
+    // this" changes what you do next.
+    const waiting = Math.max(0, this.#chat(chatID).queue.length - 1)
     // one line, one separator: what it's allowed to do, where, how full, on what
-    const text = [agentIcon(agent), fmtWsPath(ws.dir), tokensLine, model].join(" · ")
+    const text = [agentIcon(agent), fmtWsPath(ws.dir), tokensLine, model, waiting ? `⏳${waiting}` : ""]
+      .filter(Boolean)
+      .join(" · ")
 
     const existing = this.#store.statusMsg(chatID)
     if (existing) {
@@ -2179,6 +2241,67 @@ export class TelegramBot {
     } catch (err) {
       console.error(`[status] pin failed: ${(err as Error)?.message ?? err}`)
     }
+  }
+
+  // ─── the turn queue ───
+
+  // What this chat is doing, and what is behind it. A 👀 on a message says
+  // "received"; this says where in the line it is, and lets you change your
+  // mind — because the phone case is firing off three thoughts in a row and
+  // then realising the second one was wrong.
+  async #queueView(chatID: number, messageID: number | null): Promise<void> {
+    const c = this.#chat(chatID)
+    const [running, ...waiting] = c.queue
+    const lines: string[] = []
+    if (!running) lines.push("💤 nothing running")
+    else {
+      const since = running.startedAt ? fmtDuration(Date.now() - running.startedAt) : "queued"
+      lines.push(`▶ **running** · ${since}`, running.label ? `   ${clipTitle(running.label, 60)}` : "   (a turn)")
+    }
+    if (waiting.length) {
+      lines.push("", `⏳ **waiting** · ${waiting.length}`)
+      waiting.forEach((q, i) => lines.push(`   ${i + 1}. ${clipTitle(q.label, 52) || "(a turn)"}`))
+    }
+    const rows: InlineButton[][] = []
+    // dropping is addressed by id, not position: the list shifts under you the
+    // moment the running turn finishes
+    for (const q of waiting.slice(0, 5)) rows.push([btn(`✕ ${clipTitle(q.label, 22) || "(a turn)"}`, `q:d${q.id}`)])
+    const tail: InlineButton[] = []
+    if (running) tail.push(styled(btn("⏹ Stop", "q:stop"), "danger"))
+    if (waiting.length) tail.push(btn("🧹 Clear waiting", "q:clear"))
+    tail.push(btn("⟳", "q:r"))
+    rows.push(tail)
+    const text = lines.join("\n")
+    const blocks: RichBlock[] = mdToRich(text)
+    await this.#screen(chatID, blocks, rows, text, messageID)
+  }
+
+  // Steering, as far as a harness allows it: none of them will take a second
+  // prompt into a running turn — opencode reports the session as held, codex
+  // and claude answer one prompt per process. So this is the honest version of
+  // "drop a note into the turn": stop what is running and say the new thing
+  // first, which is what Esc-then-type does in a terminal. The conversation is
+  // kept; only that one run ends.
+  async #steer(chatID: number, text: string): Promise<void> {
+    const c = this.#chat(chatID)
+    if (!text.trim()) {
+      await this.#say(chatID, "usage: /steer <what to say instead>\n\nStops the running turn and sends this next, ahead of anything queued.")
+      return
+    }
+    const wasRunning = c.queue.length > 0
+    const stopped = await this.#stopTurn(chatID)
+    // Ahead of the queue, not at the back of it: the point of steering is that
+    // the correction lands before the three things you said after it.
+    const item = this.#runTurn(chatID, () => this.#freeText(chatID, text), text)
+    const i = c.queue.indexOf(item)
+    if (i > 1) {
+      c.queue.splice(i, 1)
+      c.queue.splice(1, 0, item)
+    }
+    await this.#say(
+      chatID,
+      stopped ? "⏹ stopped — saying this next." : wasRunning ? "(nothing was running) — saying this next." : "↪ sending this next.",
+    )
   }
 
   // ─── git view ───
@@ -2221,7 +2344,7 @@ export class TelegramBot {
     const log = gitLogText(st.commits)
     const blocks = mdToRich(body)
     blocks.push(detailsBlock(`📜 Latest commits`, [{ type: "pre", text: log }], true))
-    const id = await this.#gitDraw(chatID, blocks, rows, `${body}\n\n📜 Latest commits\n\`\`\`\n${log}\n\`\`\``, messageID)
+    const id = await this.#screen(chatID, blocks, rows, `${body}\n\n📜 Latest commits\n\`\`\`\n${log}\n\`\`\``, messageID)
     // st.dir, not the workspace: a workspace can sit inside a repo, and every
     // path in the snapshot is relative to the root that repoStatus resolved
     if (id !== null)
@@ -2251,7 +2374,7 @@ export class TelegramBot {
     ]
     g.view = "log"
     g.logOff = from
-    await this.#gitDraw(
+    await this.#screen(
       chatID,
       [
         { type: "heading", size: 2, text: `📜 ${fmtWsPath(g.dir)}` },
@@ -2301,7 +2424,7 @@ export class TelegramBot {
     g.off = off
     g.next = next
     const text = [`## ⌗ ${title}`, "```diff", body, "```", paged].filter(Boolean).join("\n")
-    await this.#gitDraw(chatID, blocks, rows, text, messageID)
+    await this.#screen(chatID, blocks, rows, text, messageID)
   }
 
   // the whole patch as a .diff attachment — the honest answer to a diff too
@@ -2320,10 +2443,11 @@ export class TelegramBot {
     return "sent"
   }
 
-  // One renderer for all three git screens: rich blocks where the client takes
-  // them, the same content as markdown text plus an inline keyboard where it
-  // doesn't — the same degradation as #menu. Returns the message it drew on.
-  async #gitDraw(
+  // One renderer for every screen that is "a message you tap through" — the
+  // three /git views and /queue: rich blocks where the client takes them, the
+  // same content as markdown text plus an inline keyboard where it doesn't,
+  // the same degradation as #menu. Returns the message it drew on.
+  async #screen(
     chatID: number,
     blocks: RichBlock[],
     rows: InlineButton[][],
@@ -2339,7 +2463,7 @@ export class TelegramBot {
       const sent = await this.#tg.sendRichMessage({ chatID, rich_message: { blocks: rich } })
       return sent.message_id
     } catch (err) {
-      console.error(`[git] rich draw failed, falling back to classic: ${(err as Error)?.message ?? err}`)
+      console.error(`[screen] rich draw failed, falling back to classic: ${(err as Error)?.message ?? err}`)
     }
     try {
       if (messageID !== null) {
@@ -2349,7 +2473,7 @@ export class TelegramBot {
       const sent = await this.#tg.sendMessage({ chatID, text, replyMarkup: kin(rows) })
       return sent.message_id
     } catch (err) {
-      console.error(`[git] draw failed: ${(err as Error)?.message ?? err}`)
+      console.error(`[screen] draw failed: ${(err as Error)?.message ?? err}`)
       return null
     }
   }
@@ -2484,7 +2608,7 @@ export class TelegramBot {
       return
     }
     const queued = this.#turns.has(chatID)
-    this.#runTurn(chatID, () => this.#freeText(chatID, prompt))
+    this.#runTurn(chatID, () => this.#freeText(chatID, prompt), prompt)
     if (queued) {
       void this.#tg.setMessageReaction({ chatID, messageID: m.message_id, emoji: "👀" }).catch(logFail("reaction"))
     }
@@ -3130,6 +3254,46 @@ export class TelegramBot {
         await tg.answerCallbackQuery({ id: cq.id })
         break
       }
+      case "q": {
+        if (rest === "r") await this.#queueView(chatID, msg.message_id)
+        else if (rest === "stop") {
+          const stopped = await this.#stopTurn(chatID)
+          await this.#queueView(chatID, msg.message_id)
+          await tg.answerCallbackQuery({ id: cq.id, text: stopped ? "stopped" : "nothing was running" })
+          break
+        } else if (rest === "clear") {
+          // the running turn is not "waiting", and stopping it is a different
+          // button — clearing must never end what is already in flight
+          const dropped = c.queue.slice(1)
+          // both, and in this order: the flag is what makes the chained runner
+          // skip it, the removal is the thing the user actually asked for. On
+          // its own the flag left the dropped turns sitting in the list.
+          for (const q of dropped) q.cancelled = true
+          c.queue.length = 1
+          await this.#queueView(chatID, msg.message_id)
+          await tg.answerCallbackQuery({ id: cq.id, text: dropped.length ? `dropped ${dropped.length}` : "nothing waiting" })
+          break
+        } else if (rest.startsWith("d")) {
+          const id = Number(rest.slice(1))
+          const q = c.queue.find((x) => x.id === id)
+          // queue[0] is in flight; ⏹ Stop is the button for that
+          if (!q || c.queue.indexOf(q) === 0) {
+            await tg.answerCallbackQuery({ id: cq.id, text: q ? "that one is already running" : "already gone" })
+            await this.#queueView(chatID, msg.message_id)
+            break
+          }
+          q.cancelled = true
+          c.queue.splice(c.queue.indexOf(q), 1)
+          await this.#queueView(chatID, msg.message_id)
+          await tg.answerCallbackQuery({ id: cq.id, text: "dropped" })
+          break
+        } else {
+          await tg.answerCallbackQuery({ id: cq.id, text: "stale button" })
+          break
+        }
+        await tg.answerCallbackQuery({ id: cq.id })
+        break
+      }
       case "gitf": {
         if (!c.git || !Number.isInteger(i)) {
           await tg.answerCallbackQuery({ id: cq.id, text: "view expired — run /git again" })
@@ -3398,7 +3562,7 @@ export class TelegramBot {
         }
         await tg.editMessageText({ chatID, messageID: msg.message_id, text: "⏹ stopped — sending your message", replyMarkup: null })
         await tg.answerCallbackQuery({ id: cq.id, text: "stopped" })
-        this.#runTurn(chatID, () => this.#freeText(chatID, held.text, { filePaths: held.filePaths }))
+        this.#runTurn(chatID, () => this.#freeText(chatID, held.text, { filePaths: held.filePaths }), held.text)
         break
       }
       case "abt": {
