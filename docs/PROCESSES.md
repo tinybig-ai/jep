@@ -43,6 +43,7 @@ src/
     fmt.ts                // PURE FORMATTERS — durations, counts, ages, paths
     media.ts              // PURE — what is in a message (audio/image/sticker)
                           // and what to name the file it carries
+    search.ts             // PURE — matching, hit snippets, hit ranking
     store.ts              // PERSISTENCE — titles + per-chat model pick, JSON file
     pair.ts               // OWNERSHIP — pairing codes, owner lock, rotation
 scripts/
@@ -90,6 +91,7 @@ fixture/
 | `JEP_TRANSCRIBE_CMD` | replaces whisper entirely: run with the decoded WAV path appended, stdout is the transcript |
 | `JEP_TRANSCRIBE_TIMEOUT` | seconds before a transcription is given up on (default: 300) |
 | `JEP_VOICE_MAX_SEC` | longest voice note accepted (default: 600) |
+| `JEP_SEARCH_DEPTH` | transcripts `/find` will read, newest first (default: 40) |
 
 ## 5. Commands
 
@@ -414,6 +416,43 @@ before it starts. The prompt goes first; the ask flags go last.
 The flag is checked once against `claude --help`: a build without it would
 reject the whole command line and take every turn with it.
 
+## 9b. Search (`/find`)
+
+"The thread where I fixed the draft ids" was a question with no answer: `/ls`
+gives titles and ages, `/log` gives one conversation, and finding a phrase
+meant opening threads one at a time.
+
+`/find <text>` searches two things at two costs, and says which:
+
+- **titles, everywhere** — the cross-project index is already on disk
+  (`store.indexedSessions`), so this spans projects that have no server
+  running and costs nothing.
+- **messages, in the recent past of open projects** — reading a transcript is
+  a round trip per conversation, and starting a server per project to grep it
+  is exactly what `/ls` was fixed not to do. Capped at `JEP_SEARCH_DEPTH`
+  (40), newest first.
+
+The footer says what was actually searched (`searched 12 titles · 8
+transcripts`), so "nothing" is never mistaken for "not there". A title match
+outranks a body match — you searched for what you called it — then recency
+decides. One hit per conversation: this is a list of threads, not of lines.
+
+Hits are written into `c.picker` in the same shape `/ls` builds, so a row
+opens through the very same `open:<i>` callback, including switching project
+and starting a server for it.
+
+Two things worth keeping in mind:
+
+- **`#everyConversation` now dedupes by session id.** Two workspaces served by
+  one harness share its session store, so `listSessions()` returns the same
+  session under each — `/ls` had been showing the same thread twice, once per
+  project, which the search made obvious by showing it twice again. A session
+  knows its own directory, so that is the entry kept.
+- **A fixture cannot search its own prompts.** A prompt reaches the transcript
+  when its queued turn runs, which is after the fixture's own `/find` has gone
+  by; the e2e test replays the fixture twice against one data home so the
+  second pass has a past.
+
 ## 10. The turn queue (`/queue`, `/steer`)
 
 Turns within a chat run strictly in order — they share a harness session, so
@@ -577,6 +616,7 @@ determinism is (PHILOSOPHY §7), plus the git grammars:
 | `git.test.ts` | porcelain v2 + `numstat -z` by hand, then real repos in a temp dir (unborn HEAD, rename+edit, subdirectory reads) |
 | `fmt.test.ts` | durations, counts, ages, `~` folding |
 | `media.test.ts` | every audio shape Telegram sends, and the container/image signatures |
+| `search.test.ts` | snippets centred on the hit, and title-before-body ranking |
 
 `e2e.test.ts` covers the four screens end to end: /git's three views, a voice
 note, the queue, and a plain paired conversation.

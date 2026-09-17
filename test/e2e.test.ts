@@ -25,8 +25,10 @@ interface Call {
   raw: string
 }
 
-function replay(fixture: string, extraEnv: Record<string, string> = {}): Call[] {
-  const home = mkdtempSync(join(tmpdir(), "jep-e2e-"))
+function replay(fixture: string, extraEnv: Record<string, string> = {}, reuseHome?: string): Call[] {
+  // a caller passing a home keeps the sessions between replays, which is how a
+  // test can have a *past* to search
+  const home = reuseHome ?? mkdtempSync(join(tmpdir(), "jep-e2e-"))
   try {
     const out = execFileSync("node", ["--experimental-strip-types", "src/tg.ts"], {
       cwd: ROOT,
@@ -69,7 +71,7 @@ function replay(fixture: string, extraEnv: Record<string, string> = {}): Call[] 
         return { method, text, mode: raw.match(/ mode=(\w+)/)?.[1], rich, raw }
       })
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    if (!reuseHome) rmSync(home, { recursive: true, force: true })
   }
 }
 
@@ -209,5 +211,42 @@ describe("mock replay", { skip: enabled ? false : "set JEP_E2E=1 (boots a real h
       calls.some((c) => /saying this next/.test(c.text)),
       "and with an argument it says what it did",
     )
+  })
+
+  test("search finds a conversation by title and by what was said in it", () => {
+    const home = mkdtempSync(join(tmpdir(), "jep-e2e-find-"))
+    try {
+      // The first pass creates the conversations; a prompt only reaches the
+      // transcript when its queued turn runs, which is after this fixture's own
+      // /find has already gone by. The second pass is the one with a past.
+      replay("telegram-mock-find.jsonl", {}, home)
+      const calls = replay("telegram-mock-find.jsonl", {}, home)
+
+      assert.ok(
+        calls.some((c) => c.text.startsWith("usage: /find")),
+        "bare /find explains itself",
+      )
+
+      const results = calls.find((c) => JSON.stringify(c.rich ?? {}).includes("of them"))
+      assert.ok(results, "the search reports what it found")
+      const shown = JSON.stringify(results.rich)
+      assert.match(shown, /the pelican thread/, "a title match")
+      assert.match(shown, /unrelated notes/, "and a conversation that only *says* it")
+      assert.match(shown, /standing on the jetty/, "with the line it was found in")
+      assert.ok(shown.includes('"bold"'), "and the term marked inside that line")
+
+      // the footer says what was actually searched, so "nothing" is never
+      // mistaken for "not there"
+      const miss = calls.find((c) => c.text.includes("nothing for"))
+      assert.ok(miss, "a miss is reported")
+      assert.match(miss.text, /searched \d+ titles? · \d+ transcripts?/)
+
+      assert.ok(
+        JSON.stringify(results.rich).includes("open:"),
+        "and every hit is tappable through the same callback /ls uses",
+      )
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
   })
 })

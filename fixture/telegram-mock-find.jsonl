@@ -1,0 +1,8 @@
+{"update_id":1,"message":{"message_id":1,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"/pair TESTCODE"}}
+{"update_id":2,"message":{"message_id":2,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"/find"}}
+{"update_id":3,"message":{"message_id":3,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"/new the pelican thread"}}
+{"update_id":4,"message":{"message_id":4,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"Reply with the single word: ok"}}
+{"update_id":5,"message":{"message_id":5,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"/new unrelated notes"}}
+{"update_id":6,"message":{"message_id":6,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"A pelican is standing on the jetty. Reply with the single word: ok"}}
+{"update_id":7,"message":{"message_id":7,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"/find pelican"}}
+{"update_id":8,"message":{"message_id":8,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"/find zzzznotathing"}}

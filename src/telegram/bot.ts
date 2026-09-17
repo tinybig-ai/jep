@@ -5,7 +5,7 @@ import { promisify } from "node:util"
 import { homedir } from "node:os"
 import { basename, dirname, join, resolve } from "node:path"
 import type { HarnessAdapter, ModelCaps, ModelRef } from "../core/ports.ts"
-import type { AskOption, AskRequest, FilePart, Part, ProjectSummary, TextPart, ReasoningPart, ToolCallPart } from "../core/types.ts"
+import type { AskOption, AskRequest, FilePart, Part, ProjectSummary, SessionSummary, TextPart, ReasoningPart, ToolCallPart } from "../core/types.ts"
 import { mdToHtml } from "./html.ts"
 import { closeStreamingTable, mdTable, mdToRich } from "./rich.ts"
 import type { RichBlock } from "./rich.ts"
@@ -13,6 +13,8 @@ import type { TelegramApi, TgMessage, TgUpdate, InlineButton, ReplyMarkup } from
 import { runComplianceSuite } from "../core/compliance.ts"
 import { eventMessage, eventSession } from "../core/types.ts"
 import { transcribe } from "../core/transcribe.ts"
+import { matches, rankHits, snippet } from "./search.ts"
+import type { Hit } from "./search.ts"
 import { IMAGE_RE, VOICE_MAX_SEC, audioOf, imageExt, sniffAudioExt, sniffImageExt, stickerPrompt } from "./media.ts"
 import type { AudioIn } from "./media.ts"
 import { commits as gitCommits, fileDiff, fullDiff, isRepo, repoStatus } from "../core/git.ts"
@@ -149,6 +151,10 @@ const TURN_IDLE_MS = Number(process.env.JEP_TURN_IDLE_MS ?? "") || 5 * 60_000
 const CLONE_TIMEOUT_MS = 10 * 60_000
 const execFileAsync = promisify(execFile)
 const WIPE_PAGE = 4
+// How many transcripts /find will actually read. Each one is a round trip, and
+// the list is sorted newest-first, so this is "the recent past" — the footer
+// says so rather than implying the whole history was searched.
+const SEARCH_DEPTH = Number(process.env.JEP_SEARCH_DEPTH ?? "") || 40
 // files embedded into one rich message via attach:// (keep multipart modest)
 const MAX_RICH_FILES = 4
 
@@ -577,6 +583,7 @@ const HELP = [
   "/ls · switch chats",
   "/git · branch, changes & diffs",
   "/queue · what's running & waiting",
+  "/find · search your conversations",
   "/settings · model, workspace & more",
   "/remind · schedule a nudge (e.g. /remind 2h build)",
   "",
@@ -730,6 +737,7 @@ export class TelegramBot {
     { command: "ls", description: "your conversations" },
     { command: "git", description: "branch · changes · commits · diffs" },
     { command: "queue", description: "what's running, what's waiting" },
+    { command: "find", description: "search your conversations" },
     { command: "steer", description: "stop the running turn and say this instead" },
     { command: "settings", description: "status · model · rename · workspace" },
     { command: "log", description: "this conversation's history" },
@@ -1476,6 +1484,10 @@ export class TelegramBot {
         await this.#queueView(chatID, null)
         break
       }
+      case "find": {
+        await this.#find(chatID, arg)
+        break
+      }
       case "steer": {
         await this.#steer(chatID, arg)
         break
@@ -1582,6 +1594,142 @@ export class TelegramBot {
     void this.#updateStatus(chatID).catch(logFail("status"))
   }
 
+  // Every conversation this bot knows about, across every project, without
+  // starting a server for any of them — that used to leave one idle
+  // `opencode serve` per project behind every /ls. Live workspaces are read
+  // live (and their listing cached); the rest come from that cache, and only
+  // materialize a server when a row is actually opened.
+  async #everyConversation(): Promise<Array<{ s: SessionSummary; ws: string; dir?: string }>> {
+    const live = await Promise.all(
+      this.#workspaces.map(async (w) => {
+        try {
+          const list = await w.adapter.listSessions()
+          this.#store.setIndexedSessions(
+            w.dir,
+            w.adapter.id,
+            list.map((s) => ({ id: s.id, title: s.title, updatedAt: s.updatedAt })),
+          )
+          return list.map((s) => ({ s: s as SessionSummary, ws: w.name, dir: w.dir }))
+        } catch (err) {
+          console.error(`[ls] ${w.name} unreadable: ${(err as Error)?.message ?? err}`)
+          return []
+        }
+      }),
+    )
+    const liveDirs = new Set(this.#workspaces.map((w) => w.dir))
+    const harnessIDs = [...new Set(this.#workspaces.map((w) => w.adapter.id))]
+    const cold = (await this.#knownProjectDirs())
+      .filter((dir) => !liveDirs.has(dir))
+      .flatMap((dir) =>
+        harnessIDs.flatMap((h) =>
+          this.#store.indexedSessions(dir, h).map((s) => ({
+            s: { id: s.id, title: s.title, updatedAt: s.updatedAt, createdAt: s.updatedAt, workspace: dir } as SessionSummary,
+            ws: fmtWsPath(dir),
+            dir,
+          })),
+        ),
+      )
+    // One conversation, one row. Two workspaces served by the same harness
+    // share its session store, so listSessions() returns the same session
+    // under each of them — which showed the same thread twice in /ls, once per
+    // project, and twice again in a search. A session knows which directory it
+    // belongs to, so that entry is the one to keep.
+    const byID = new Map<string, { s: SessionSummary; ws: string; dir?: string }>()
+    for (const e of [...live.flat(), ...cold]) {
+      const prev = byID.get(e.s.id)
+      if (!prev || (e.s.workspace && e.dir === e.s.workspace)) byID.set(e.s.id, e)
+    }
+    return [...byID.values()]
+  }
+
+  // ─── search ───
+
+  // "the thread where I fixed the draft ids". /ls gives titles and ages, /log
+  // gives one conversation; neither answers that without opening threads one
+  // at a time.
+  //
+  // Titles are searched everywhere, because the cross-project index is already
+  // on disk and costs nothing. Bodies are searched only in workspaces that are
+  // already serving, and only the most recent few — reading a transcript is a
+  // round trip per conversation, and starting a server per project to grep it
+  // is exactly what /ls was fixed not to do. The footer says which it was, so
+  // "no hits" is never mistaken for "not there".
+  async #find(chatID: number, term: string): Promise<void> {
+    const c = this.#chat(chatID)
+    const q = term.trim()
+    if (q.length < 2) {
+      await this.#say(chatID, "usage: /find <text>\n\nSearches conversation titles everywhere, and the messages of the most recent ones in projects that are already open.")
+      return
+    }
+    const sent = await this.#tg.sendMessage({ chatID, text: `🔍 searching for "${q}"…` })
+    const all = await this.#everyConversation()
+    const hits: Hit[] = []
+    for (const e of all) {
+      const title = this.#displayTitle(e.s.id, e.s.title)
+      if (matches(title, q))
+        hits.push({ sessionID: e.s.id, ws: e.ws, dir: e.dir, title, updatedAt: e.s.updatedAt, where: "title" })
+    }
+    const titled = new Set(hits.map((h) => h.sessionID))
+
+    // bodies: live workspaces only, newest first, capped
+    const searchable = all
+      .filter((e) => !e.dir || this.#workspaces.some((w) => w.dir === e.dir))
+      .filter((e) => !titled.has(e.s.id))
+      .sort((a, b) => b.s.updatedAt - a.s.updatedAt)
+      .slice(0, SEARCH_DEPTH)
+    await Promise.all(
+      searchable.map(async (e) => {
+        const ws = this.#workspaces.find((w) => w.name === e.ws) ?? this.#workspaces.find((w) => w.dir === e.dir)
+        if (!ws) return
+        try {
+          const msgs = await ws.adapter.messages(e.s.id)
+          for (const m of msgs) {
+            const said = m.parts
+              .filter((p): p is TextPart => p.kind === "text")
+              .map((p) => transcriptText(p.text))
+              .join("\n")
+            if (!said || !matches(said, q)) continue
+            hits.push({
+              sessionID: e.s.id,
+              ws: e.ws,
+              dir: e.dir,
+              title: this.#displayTitle(e.s.id, e.s.title),
+              updatedAt: e.s.updatedAt,
+              where: "message",
+              snippet: snippet(said, q),
+            })
+            return // one hit per conversation: this is a list of threads, not of lines
+          }
+        } catch (err) {
+          console.error(`[find] couldn't read ${e.s.id}: ${(err as Error)?.message ?? err}`)
+        }
+      }),
+    )
+
+    const ranked = rankHits(hits).slice(0, MAX_LIST)
+    const scope = `searched ${all.length} title${all.length === 1 ? "" : "s"}${searchable.length ? ` · ${searchable.length} transcript${searchable.length === 1 ? "" : "s"}` : ""}`
+    if (!ranked.length) {
+      await this.#tg.editMessageText({ chatID, messageID: sent.message_id, text: `🔍 nothing for "${q}"\n\n${scope}`, replyMarkup: null })
+      c.picker = null
+      return
+    }
+    // the same snapshot shape /ls builds, so a row opens through the very same
+    // callback — including switching project and starting a server for it
+    c.picker = { messageID: sent.message_id, sessions: ranked.map((h) => ({ id: h.sessionID, ws: h.ws, ...(h.dir ? { dir: h.dir } : {}) })) }
+    c.page = 0
+    const lines = [`🔍 **${q}** · ${ranked.length} of them`, ""]
+    const rows: InlineButton[][] = ranked.map((h, i) => {
+      const age = timeAgo(h.updatedAt)
+      const tag = h.ws !== c.workspace ? ` · ${h.ws}` : ""
+      lines.push(`${i + 1}. **${clipTitle(h.title, 40)}**${tag}${age ? ` · ${age}` : ""}`)
+      if (h.snippet) lines.push(`   ${h.snippet}`)
+      return [btn(`${i + 1}. ${clipTitle(h.title, 24)}`, `open:${i}`)]
+    })
+    lines.push("", scope)
+    const text = lines.join("\n")
+    await this.#screen(chatID, mdToRich(text), rows, text, sent.message_id)
+  }
+
   // list sessions as tappable title buttons; callback snapshots into c.picker
   // each row: the conversation (tap to switch) + a small 🗑 next to it (tap
   // for a delete confirmation, via the existing deld/dely/deln flow) — one
@@ -1609,36 +1757,7 @@ export class TelegramBot {
     // Workspaces already running are listed live (and their listing cached);
     // the rest come from that cache, and only materialize a server when a row
     // is actually opened.
-    const live = await Promise.all(
-      this.#workspaces.map(async (w) => {
-        try {
-          const list = await w.adapter.listSessions()
-          this.#store.setIndexedSessions(
-            w.dir,
-            w.adapter.id,
-            list.map((s) => ({ id: s.id, title: s.title, updatedAt: s.updatedAt })),
-          )
-          return list.map((s) => ({ s, ws: w.name, dir: w.dir }))
-        } catch (err) {
-          console.error(`[ls] ${w.name} unreadable: ${(err as Error)?.message ?? err}`)
-          return []
-        }
-      }),
-    )
-    const liveDirs = new Set(this.#workspaces.map((w) => w.dir))
-    const harnessIDs = [...new Set(this.#workspaces.map((w) => w.adapter.id))]
-    const cold = (await this.#knownProjectDirs())
-      .filter((dir) => !liveDirs.has(dir))
-      .flatMap((dir) =>
-        harnessIDs.flatMap((h) =>
-          this.#store.indexedSessions(dir, h).map((s) => ({
-            s: { id: s.id, title: s.title, updatedAt: s.updatedAt, createdAt: s.updatedAt, workspace: dir },
-            ws: fmtWsPath(dir),
-            dir,
-          })),
-        ),
-      )
-    const entries = [...live.flat(), ...cold]
+    const entries = await this.#everyConversation()
     if (!entries.length) {
       const text = "(no conversations yet — just send a message)"
       if (edit) await this.#tg.editMessageText({ chatID, messageID: edit.messageID, text, replyMarkup: null })
