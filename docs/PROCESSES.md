@@ -25,6 +25,8 @@ src/
     compliance.ts         // assertAdapterImplements + compliance suites
     git.ts                // READ-ONLY GIT — porcelain v2 status, numstat, log,
                           // per-file + whole-tree patches (backs /git)
+    transcribe.ts         // SPEECH → TEXT — decode (ffmpeg | afconvert) then
+                          // whisper; serialized, one model load at a time
   adapters/
     claude-ask-mcp.mjs    // MCP server Claude Code calls instead of a permission
                           // prompt; relays to jep over a unix socket
@@ -39,9 +41,12 @@ src/
     rich.ts               // PURE RENDERER — markdown → Rich Message blocks
     gitview.ts            // PURE RENDERER — GitStatus → the /git screens' markdown
     fmt.ts                // PURE FORMATTERS — durations, counts, ages, paths
+    media.ts              // PURE — what is in a message (audio/image/sticker)
+                          // and what to name the file it carries
     store.ts              // PERSISTENCE — titles + per-chat model pick, JSON file
     pair.ts               // OWNERSHIP — pairing codes, owner lock, rotation
 scripts/
+  transcribe.py           // whisper driver: 16k mono WAV in, transcript out
   install.sh              // writes the plist, but proves a launchd job can read
                           // the checkout first (see section 5)
   jep-daemon.sh           // the plist's entry point: same probe at every launch
@@ -80,6 +85,11 @@ fixture/
 | `JEP_TG_PAIR_MAX/WINDOW/ROTATE` | pairing-attempt limits, window, rotation |
 | `JEP_TG_MODELS` | comma-separated extra model labels appended to the picker |
 | `OPENCODE_BIN` | path to the opencode CLI (default: `opencode` on PATH) |
+| `JEP_WHISPER_DIR` | whisper-local checkout, for voice notes (default: `~/Documents/code/whisper-local`) |
+| `JEP_WHISPER_MODEL` | whisper model (default: `medium` — the one already cached there) |
+| `JEP_TRANSCRIBE_CMD` | replaces whisper entirely: run with the decoded WAV path appended, stdout is the transcript |
+| `JEP_TRANSCRIBE_TIMEOUT` | seconds before a transcription is given up on (default: 300) |
+| `JEP_VOICE_MAX_SEC` | longest voice note accepted (default: 600) |
 
 ## 5. Commands
 
@@ -404,6 +414,49 @@ before it starts. The prompt goes first; the ask flags go last.
 The flag is checked once against `claude --help`: a build without it would
 reject the whole command line and take every turn with it.
 
+## 10a. Voice notes
+
+A voice note is a prompt you spoke, so it lands exactly where a typed one
+does. What is different is the waiting, and everything below follows from it.
+
+The chain: download → sniff the container → decode to 16 kHz mono WAV →
+whisper → post what was heard → run it as a prompt.
+
+- **It runs detached from the update loop** (`#detach`). Whisper takes about
+  eight seconds even for a two-second note, almost all of it loading the
+  1.5 GB medium model; awaiting that inside `handleUpdate` would stop the bot
+  reading updates for the duration. `drain()` waits for detached work, which
+  is also what makes a fixture replay deterministic instead of a race against
+  the dump.
+- **And outside the turn queue.** Transcribing needs nothing from the agent,
+  so a note sent into a working agent is transcribed immediately and only the
+  resulting prompt queues (with the same 👀 as a typed message).
+- **Transcriptions are serialized** inside `core/transcribe.ts`: the model is
+  1.5 GB resident, and the natural way to correct a voice note is to send
+  another one straight after it.
+- **The decode is a separate step, on purpose.** whisper's own loader shells
+  out to ffmpeg, so on a machine without ffmpeg it can read nothing at all —
+  and there is no ffmpeg on this one. macOS's `afconvert` reads the Ogg
+  container and the Opus codec natively (`afconvert --help-formats` lists
+  `'Oggf' = Ogg (.opus, .ogg, .oga)` with data format `opus`), so
+  `scripts/transcribe.py` takes an already-decoded WAV and hands whisper the
+  samples directly.
+- **The extension is sniffed from the bytes**, because the decoder picks its
+  parser from the file *name*: a CAF named `.oga` is refused, not sniffed.
+- **The receipt is what was *heard*.** A misheard prompt is then visible
+  instead of mysterious, and the turn it started can be stopped from its own
+  draft. A transcript is never treated as a command, even if it begins with a
+  slash — a spoken prompt is a prompt.
+- **Every failure says something.** The bug this replaced was silence: a voice
+  note produced no reply, no error and no log line, which on a phone is
+  indistinguishable from a message that never sent. Too long says the limit
+  and the variable that changes it; a missing decoder or venv says what to
+  install or set.
+
+`JEP_TRANSCRIBE_CMD` swaps the engine out (it gets the WAV path appended and
+its stdout is the transcript), which is how the e2e test asserts jep's
+handling without depending on what whisper heard.
+
 ## 10b. The git view (`/git`)
 
 Workspace-scoped, read-only, and **not** the same thing as `/diff`: `/diff`
@@ -465,6 +518,12 @@ explicit action, not a side effect of looking. That is the next thing to build.
    The mock reads JSON-lines updates from stdin and prints
    `CALL <method> chat=<id> msg=<id> mode=<HTML> [rich=<json>] text="..."`
    plus one indented `keyboard: ...` line per callback reply.
+
+   **A prompt in a fixture is really run, by a real agent, with the jep
+   checkout in its context.** Keep fixture prompts inert ("Reply with the
+   single word: yes"). A replay driven with a working prompt once left a new
+   TUI command and a broken test file behind in this repo — the mock is only
+   mock on the *Telegram* side.
 3. Live restart (section 5) + `tail` the log + a real Telegram check by the
    user. After the user confirms, the feature is "shipped".
 
@@ -478,6 +537,7 @@ determinism is (PHILOSOPHY §7), plus the git grammars:
 | `gitview.test.ts` | every tracking state, the row cap, and that paging a patch reproduces it exactly |
 | `git.test.ts` | porcelain v2 + `numstat -z` by hand, then real repos in a temp dir (unborn HEAD, rename+edit, subdirectory reads) |
 | `fmt.test.ts` | durations, counts, ages, `~` folding |
+| `media.test.ts` | every audio shape Telegram sends, and the container/image signatures |
 
 Three bugs fell out of writing them, all of them live before that:
 

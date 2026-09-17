@@ -33,6 +33,12 @@ export interface TgMessage {
     /** static preview, present for animated/video stickers */
     thumbnail?: { file_id: string }
   }
+  /** the press-and-hold mic: Ogg/Opus, and the reason transcription exists */
+  voice?: { file_id: string; duration?: number; mime_type?: string; file_size?: number }
+  /** an attached audio file (mp3/m4a/…) */
+  audio?: { file_id: string; duration?: number; file_name?: string; mime_type?: string; file_size?: number }
+  /** the round selfie clip — someone talking, in an mp4 */
+  video_note?: { file_id: string; duration?: number; file_size?: number }
   // set on group messages that were sent as ephemeral (visible to one user + bot)
   ephemeral_message_id?: number
 }

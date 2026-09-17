@@ -1,0 +1,4 @@
+{"update_id":1,"message":{"message_id":1,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"/pair TESTCODE"}}
+{"update_id":2,"message":{"message_id":2,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"voice":{"file_id":"voice-sample.caf","duration":7,"mime_type":"audio/ogg"}}}
+{"update_id":3,"message":{"message_id":3,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"voice":{"file_id":"voice-sample.caf","duration":4000,"mime_type":"audio/ogg"}}}
+{"update_id":4,"message":{"message_id":4,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"voice":{"file_id":"not-a-real-file.oga","duration":3,"mime_type":"audio/ogg"}}}

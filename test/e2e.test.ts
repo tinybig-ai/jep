@@ -25,7 +25,7 @@ interface Call {
   raw: string
 }
 
-function replay(fixture: string): Call[] {
+function replay(fixture: string, extraEnv: Record<string, string> = {}): Call[] {
   const home = mkdtempSync(join(tmpdir(), "jep-e2e-"))
   try {
     const out = execFileSync("node", ["--experimental-strip-types", "src/tg.ts"], {
@@ -34,7 +34,14 @@ function replay(fixture: string): Call[] {
       encoding: "utf8",
       // the dump truncates rich payloads by default, and the buttons this
       // asserts on sit at the end of them
-      env: { ...process.env, JEP_TG_MOCK: "1", JEP_TG_PAIR_CODE: "TESTCODE", JEP_DATA_HOME: home, JEP_DUMP_CHARS: "200000" },
+      env: {
+        ...process.env,
+        JEP_TG_MOCK: "1",
+        JEP_TG_PAIR_CODE: "TESTCODE",
+        JEP_DATA_HOME: home,
+        JEP_DUMP_CHARS: "200000",
+        ...extraEnv,
+      },
       stdio: ["pipe", "pipe", "pipe"],
       maxBuffer: 64 * 1024 * 1024,
     })
@@ -133,6 +140,35 @@ describe("mock replay", { skip: enabled ? false : "set JEP_E2E=1 (boots a real h
     assert.ok(
       calls.some((c) => c.method === "pinChatMessage"),
       "the status line is pinned",
+    )
+  })
+
+  test("a voice note is transcribed, shown, and run as the prompt", () => {
+    // The engine is stubbed through the documented override so the assertion
+    // is about jep's handling, not about what whisper heard. Everything before
+    // it is real: the download, the container sniff, the afconvert decode.
+    // (The trailing # swallows the audio path the override is handed.)
+    const calls = replay("telegram-mock-voice.jsonl", { JEP_TRANSCRIBE_CMD: 'echo "say only the word ok" #' })
+
+    const placeholder = calls.find((c) => c.text.includes("transcribing"))
+    assert.ok(placeholder, "something is said immediately — silence reads as a dropped message")
+
+    const receipt = calls.find((c) => c.method === "editMessageText" && c.text.startsWith("🎤 say only the word ok"))
+    assert.ok(receipt, "the placeholder becomes what was heard")
+
+    assert.ok(
+      calls.some((c) => c.method === "sendMessageDraft"),
+      "and then it runs as an ordinary prompt",
+    )
+
+    // the two failure paths say so rather than going quiet
+    assert.ok(
+      calls.some((c) => /limit is 10m/.test(c.text)),
+      "an over-long note is refused with the limit and how to change it",
+    )
+    assert.ok(
+      calls.some((c) => /couldn't transcribe/.test(c.text)),
+      "and an undecodable one says what went wrong",
     )
   })
 })

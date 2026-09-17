@@ -158,8 +158,13 @@ async function buildMockApi(): Promise<MockApi> {
     async setMyCommands(commands) {
       calls.push({ method: "setMyCommands", text: `n=${commands.length}: ${commands.map((c) => "/" + c.command).join(" ")}` })
     },
-    async getFileContent() {
-      // 1x1 transparent PNG so ingest/upload paths run without a real download
+    async getFileContent(fileID) {
+      // a file_id naming a file in fixture/ is served from there, which is how
+      // a fixture can carry real bytes (an audio clip to actually transcribe)
+      const fromFixture = join(FIXTURE, fileID)
+      if (/^[\w.-]+$/.test(fileID) && existsSync(fromFixture)) return readFileSync(fromFixture)
+      // otherwise a 1x1 transparent PNG, so ingest/upload paths run without a
+      // real download
       return Buffer.from(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
         "base64",

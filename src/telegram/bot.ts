@@ -12,6 +12,9 @@ import type { RichBlock } from "./rich.ts"
 import type { TelegramApi, TgMessage, TgUpdate, InlineButton, ReplyMarkup } from "./api.ts"
 import { runComplianceSuite } from "../core/compliance.ts"
 import { eventMessage, eventSession } from "../core/types.ts"
+import { transcribe } from "../core/transcribe.ts"
+import { IMAGE_RE, VOICE_MAX_SEC, audioOf, imageExt, sniffAudioExt, sniffImageExt, stickerPrompt } from "./media.ts"
+import type { AudioIn } from "./media.ts"
 import { commits as gitCommits, fileDiff, fullDiff, isRepo, repoStatus } from "../core/git.ts"
 import type { GitFile, GitStatus } from "../core/git.ts"
 import { clipTitle, fmtCount, fmtDuration, fmtHome, fmtWsPath, timeAgo } from "./fmt.ts"
@@ -678,39 +681,6 @@ const logHold = (err: unknown): null => {
   return null
 }
 
-const IMAGE_RE = /\.(png|jpe?g|webp|gif|svg)$/i
-const imageExt = (mime?: string): string | null => {
-  const m = (mime ?? "").split(";")[0]?.trim()
-  const byMime: Record<string, string> = {
-    "image/png": ".png",
-    "image/jpeg": ".jpg",
-    "image/webp": ".webp",
-    "image/gif": ".gif",
-    "image/svg+xml": ".svg",
-  }
-  return byMime[m ?? ""] ?? null
-}
-
-// Stickers and photo thumbnails arrive with no file name and no mime type, so
-// the extension has to come from the bytes. Getting it wrong matters: the
-// harness derives the mime it sends the model from the extension alone, so a
-// WEBP called .jpg is rejected as corrupt rather than read.
-const sniffImageExt = (b: Buffer): string | null => {
-  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return ".jpg"
-  if (b.length >= 4 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return ".png"
-  if (b.length >= 12 && b.toString("ascii", 0, 4) === "RIFF" && b.toString("ascii", 8, 12) === "WEBP") return ".webp"
-  if (b.length >= 4 && b.toString("ascii", 0, 4) === "GIF8") return ".gif"
-  return null
-}
-
-// what a sticker actually means, for the harness: the emoji is the content,
-// the set name is context. Sent as text so an animated sticker we can't
-// render still says something instead of arriving as an empty message.
-const stickerPrompt = (s: NonNullable<TgMessage["sticker"]>): string => {
-  const parts = [s.emoji, s.set_name ? `from the "${s.set_name}" sticker set` : ""].filter(Boolean)
-  return `[sticker${parts.length ? `: ${parts.join(" ")}` : ""}]`
-}
-
 export class TelegramBot {
   #tg: TelegramApi
   #workspaces: Ws[]
@@ -722,6 +692,10 @@ export class TelegramBot {
   #chats = new Map<number, ChatState>()
   // tail of each chat's turn queue — see #runTurn
   #turns = new Map<number, Promise<void>>()
+  // Work that runs off *both* the update loop and the turn queue —
+  // transcription, so far. drain() waits for it, which is what makes a fixture
+  // replay deterministic instead of a race against the dump.
+  #background = new Set<Promise<void>>()
   #reminderStore: ReminderStore
   // id -> live timer for every reminder currently scheduled from #reminderStore
   #reminderTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -1044,7 +1018,8 @@ export class TelegramBot {
 
   /** wait for every queued turn to finish — used by mock mode before exit */
   async drain(): Promise<void> {
-    while (this.#turns.size) await Promise.all([...this.#turns.values()])
+    while (this.#turns.size || this.#background.size)
+      await Promise.all([...this.#turns.values(), ...this.#background])
   }
 
   // best-effort turn cancellation, shared by the native stop button, /abort,
@@ -1095,9 +1070,10 @@ export class TelegramBot {
     const chatID = m.chat.id
     const text = (m.text ?? m.caption ?? "").trim()
     const mediaFileID = this.#mediaFileID(m)
+    const audio = audioOf(m)
     // an animated sticker with no thumbnail has nothing to download, but its
     // emoji is still a message — don't drop it as empty
-    if (!text && !mediaFileID && !m.sticker) return
+    if (!text && !mediaFileID && !m.sticker && !audio) return
     const c = this.#chat(chatID)
     const [cmd = "", ...rest] = text.split(/\s+/)
 
@@ -1130,6 +1106,13 @@ export class TelegramBot {
     console.error(`[tg] message from chat=${chatID} (${m.chat.type}) from=${m.from?.username ?? m.from?.id ?? "?"}`)
     c.chatType = m.chat.type
     if (m.from?.id != null) c.lastUserID = m.from.id
+    // A spoken prompt takes seconds to transcribe, which is far too long to
+    // hold the update loop, and it needs nothing from the agent — so it runs
+    // detached and rejoins the normal path once there are words.
+    if (audio) {
+      this.#detach("voice", this.#voiceNote(chatID, m, audio))
+      return
+    }
     if (text.startsWith("/")) {
       if (cmd === "/cancel") {
         if (c.awaiting) {
@@ -1188,14 +1171,21 @@ export class TelegramBot {
 
   // download a message's attachment into the uploads dir so the harness can
   // read it as a file part (absolute path).
-  async #ingestMedia(chatID: number, m: TgMessage): Promise<string> {
-    const fileID = this.#mediaFileID(m)
+  async #ingestMedia(chatID: number, m: TgMessage, override?: { fileID: string; ext: string; audio?: true }): Promise<string> {
+    const fileID = override?.fileID ?? this.#mediaFileID(m)
     if (!fileID) throw new Error("no attachment")
     const docName = m.document?.file_name
     const docMime = m.document?.mime_type
     const bytes = await this.#tg.getFileContent(fileID)
     const ext =
-      docName?.slice(docName.lastIndexOf(".")).toLowerCase() || imageExt(docMime) || sniffImageExt(bytes) || ".jpg"
+      // for audio the bytes decide, since the decoder reads the name and a
+      // mislabelled container is refused rather than sniffed
+      (override?.audio ? sniffAudioExt(bytes) : null) ||
+      override?.ext ||
+      docName?.slice(docName.lastIndexOf(".")).toLowerCase() ||
+      imageExt(docMime) ||
+      sniffImageExt(bytes) ||
+      ".jpg"
     const name = `upl-${chatID}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`
     await mkdir(this.#uploadsDir, { recursive: true })
     const filePath = join(this.#uploadsDir, name)
@@ -2419,6 +2409,84 @@ export class TelegramBot {
       record(msg.message_id)
     } catch (err) {
       console.error(`[tg] ask prompt failed: ${(err as Error).message}`)
+    }
+  }
+
+  // fire-and-forget, but tracked: the failure is logged and drain() can wait
+  #detach(tag: string, work: Promise<void>): void {
+    const p: Promise<void> = work.catch(logFail(tag)).finally(() => this.#background.delete(p))
+    this.#background.add(p)
+  }
+
+  // ─── voice input ───
+
+  // A voice note is a prompt you spoke, so it ends up exactly where a typed
+  // one does. What is different is the wait: whisper takes seconds, so this
+  // runs detached from the update loop (the bot stays responsive) and outside
+  // the turn queue (transcribing needs nothing from the agent — a note sent
+  // into a working agent is transcribed straight away and only the prompt
+  // waits its turn).
+  //
+  // Every failure says something. The bug this fixes was silence: a voice note
+  // produced no reply, no error and no log line, which is the worst possible
+  // answer on a phone because it is indistinguishable from a dropped message.
+  async #voiceNote(chatID: number, m: TgMessage, a: AudioIn): Promise<void> {
+    const c = this.#chat(chatID)
+    c.chatType = m.chat.type
+    if (m.from?.id != null) c.lastUserID = m.from.id
+    if (a.seconds > VOICE_MAX_SEC) {
+      await this.#say(
+        chatID,
+        `⚠️ that ${a.kind} is ${fmtDuration(a.seconds * 1000)} long — the limit is ${fmtDuration(VOICE_MAX_SEC * 1000)}. Send a shorter one, or raise JEP_VOICE_MAX_SEC.`,
+      )
+      return
+    }
+    // the placeholder is the whole point of announcing this: on a phone, eight
+    // silent seconds after sending something reads as "it didn't go"
+    const sent = await this.#tg.sendMessage({ chatID, text: "🎤 transcribing…" })
+    const fail = (why: string) =>
+      this.#tg.editMessageText({ chatID, messageID: sent.message_id, text: `⚠️ couldn't transcribe that ${a.kind}: ${why}` })
+
+    let file: string
+    try {
+      file = await this.#ingestMedia(chatID, m, { fileID: a.fileID, ext: a.ext, audio: true })
+    } catch (err) {
+      console.error(`[voice] download failed: ${(err as Error)?.message ?? err}`)
+      await fail((err as Error)?.message ?? "couldn't download it")
+      return
+    }
+
+    let text: string
+    try {
+      const t = await transcribe(file)
+      text = t.text
+      console.error(`[voice] ${a.kind} ${a.seconds}s → ${text.length} chars (${t.via})`)
+    } catch (err) {
+      const why = (err as Error)?.message ?? String(err)
+      console.error(`[voice] ${why}`)
+      await fail(why)
+      return
+    }
+
+    // The receipt is what was *heard*, not what was said. A misheard prompt is
+    // then visible rather than mysterious, and the turn it starts can be
+    // stopped from its own draft.
+    await this.#tg
+      .editMessageText({ chatID, messageID: sent.message_id, text: `🎤 ${text}` })
+      .catch(logFail("voice receipt"))
+
+    const caption = (m.caption ?? "").trim()
+    const prompt = caption ? `${caption}\n\n${text}` : text
+    // from here it is an ordinary message: it can answer a question the bot
+    // asked (a rename, a pairing code), or start a turn and queue behind one
+    if (c.awaiting) {
+      await this.#resolveAwaiting(chatID, prompt, m.message_id)
+      return
+    }
+    const queued = this.#turns.has(chatID)
+    this.#runTurn(chatID, () => this.#freeText(chatID, prompt))
+    if (queued) {
+      void this.#tg.setMessageReaction({ chatID, messageID: m.message_id, emoji: "👀" }).catch(logFail("reaction"))
     }
   }
 
