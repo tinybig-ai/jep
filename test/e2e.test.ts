@@ -75,6 +75,35 @@ function replay(fixture: string, extraEnv: Record<string, string> = {}, reuseHom
   }
 }
 
+/**
+ * A repository with known contents: 20 commits (so the log pages), one heavily
+ * modified file (so the diff pages) and one untracked file.
+ *
+ * The /git assertions used to run against fixture/workspace-alpha, which sits
+ * inside the jep checkout — so they passed only while this repo happened to
+ * have uncommitted changes, and broke the moment it was committed.
+ */
+function seedRepo(): string {
+  const dir = mkdtempSync(join(tmpdir(), "jep-e2e-repo-"))
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-c", "user.email=t@example.com", "-c", "user.name=T", ...args], { cwd: dir, encoding: "utf8" })
+  git("init", "-q", "-b", "main", ".")
+  for (let i = 1; i <= 20; i++) {
+    writeFileSync(join(dir, "history.txt"), `commit ${i}\n`)
+    git("add", ".")
+    git("commit", "-qm", `change number ${i}`)
+  }
+  writeFileSync(join(dir, "big.txt"), Array.from({ length: 400 }, (_, i) => `line ${i}`).join("\n"))
+  git("add", ".")
+  git("commit", "-qm", "add a big file")
+  // now make it dirty, in three different ways
+  writeFileSync(join(dir, "big.txt"), Array.from({ length: 400 }, (_, i) => `changed line ${i}`).join("\n"))
+  writeFileSync(join(dir, "history.txt"), "edited\n")
+  git("add", "history.txt")
+  writeFileSync(join(dir, "brand-new.txt"), "fresh\n")
+  return dir
+}
+
 /** every button label + callback_data in a rich message, flattened */
 const buttons = (c: Call): Array<{ text: string; callback_data: string }> =>
   (c.rich?.blocks ?? [])
@@ -85,7 +114,16 @@ const blockTypes = (c: Call): string[] => (c.rich?.blocks ?? []).map((b) => Stri
 
 describe("mock replay", { skip: enabled ? false : "set JEP_E2E=1 (boots a real harness)" }, () => {
   test("the /git fixture drives all three screens", () => {
-    const calls = replay("telegram-mock-git.jsonl")
+    const repo = seedRepo()
+    try {
+      runGitScreens(repo)
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+    }
+  })
+
+  function runGitScreens(repo: string): void {
+    const calls = replay("telegram-mock-git.jsonl", { JEP_WORKSPACES: repo })
 
     const commands = calls.find((c) => c.method === "setMyCommands")
     assert.ok(commands, "the command menu is published at boot")
@@ -111,7 +149,12 @@ describe("mock replay", { skip: enabled ? false : "set JEP_E2E=1 (boots a real h
       (c.rich!.blocks ?? []).filter((b) => b.type === "paragraph").map((b) => String(b.text ?? "")),
     )
     assert.ok(pages.includes("commits 1–15"), `no first page in ${JSON.stringify(pages)}`)
-    assert.ok(pages.includes("commits 16–30"), "Older › advanced a page")
+    // the end of the range depends on how many commits the repo has; the start
+    // is the thing "Older ›" is responsible for
+    assert.ok(
+      pages.some((p) => /^commits 16–\d+$/.test(p)),
+      `Older › did not advance a page: ${JSON.stringify(pages)}`,
+    )
 
     // the diff pager offers more, and every screen stays well inside the
     // wire limit — a message Telegram rejects shows nothing at all
@@ -124,7 +167,7 @@ describe("mock replay", { skip: enabled ? false : "set JEP_E2E=1 (boots a real h
     const doc = calls.find((c) => c.method === "sendDocument")
     assert.ok(doc, "📎 As file sends the patch as a document")
     assert.match(doc.text, /\.diff/)
-  })
+  }
 
   test("a fresh chat pairs, answers, and never sends unrendered text", () => {
     const calls = replay("telegram-mock.jsonl")
