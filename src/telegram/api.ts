@@ -142,18 +142,35 @@ const CALL_TIMEOUT_MS = 20_000
 // uploads and downloads move real bytes over a phone-grade link
 const FILE_TIMEOUT_MS = 60_000
 
+// A connection that drops mid-call — DNS, a reset, this machine's network
+// blinking once an hour — is not an answer from Telegram, it is the request
+// never arriving. Surfaced raw, that TypeError ("fetch failed") aborted
+// whatever turn was in flight, so one blip cost an agent's whole run. Those
+// are retried. A timeout is not: Telegram may have accepted that request and
+// be slow to answer, and a second copy would post the message twice.
+const RETRY_DELAYS_MS = [500, 2_000]
+const isConnectionError = (err: unknown): boolean =>
+  err instanceof TypeError && /fetch failed|network|socket|terminated/i.test(err.message)
+
 export function createTelegramApi(token: string): TelegramApi {
   const url = (method: string) => `${TG_API}${token}/${method}`
 
   async function tgJson<T>(target: string, init: RequestInit, label: string, timeoutMs: number): Promise<T> {
-    try {
-      const res = await fetch(target, { ...init, signal: AbortSignal.timeout(timeoutMs) })
-      const json = (await res.json()) as { ok: boolean; result: T; description?: string }
-      if (!json.ok) throw new Error(`telegram ${label}: ${json.description ?? "unknown error"}`)
-      return json.result
-    } catch (err) {
-      if ((err as Error)?.name === "TimeoutError") throw new Error(`telegram ${label}: timed out after ${timeoutMs}ms`)
-      throw err
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const res = await fetch(target, { ...init, signal: AbortSignal.timeout(timeoutMs) })
+        const json = (await res.json()) as { ok: boolean; result: T; description?: string }
+        if (!json.ok) throw new Error(`telegram ${label}: ${json.description ?? "unknown error"}`)
+        return json.result
+      } catch (err) {
+        if ((err as Error)?.name === "TimeoutError") throw new Error(`telegram ${label}: timed out after ${timeoutMs}ms`)
+        const delay = RETRY_DELAYS_MS[attempt]
+        // getUpdates rides blips out in its own poll loop, and a retry here
+        // would only delay that; everything else gets its second chance here
+        if (delay === undefined || label === "getUpdates" || !isConnectionError(err)) throw err
+        console.error(`[tg] ${label}: ${(err as Error).message} — retrying in ${delay}ms`)
+        await new Promise((resolve) => setTimeout(resolve, delay))
+      }
     }
   }
 
