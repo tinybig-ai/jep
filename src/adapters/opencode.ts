@@ -542,7 +542,12 @@ export class OpenCodeAdapter implements HarnessAdapter {
           type: "part.updated",
           sessionID: sessionID ?? "",
           messageID: part?.messageID ?? messageID ?? "",
-          partID: partID ?? "",
+          // the part's own id, NOT a top-level event partID — opencode 1.18
+          // puts the id inside part and sends no partID field. Keying these
+          // events by anything else lands every full-state snapshot in one
+          // shared slot, and the live view renders the answer twice: once
+          // from the delta-accumulated part, once from this orphan.
+          partID: part?.id ?? partID ?? "",
           partType: (part?.type as string) ?? "",
           part: part ? mapPart(part, this.workspace) : undefined,
         }
