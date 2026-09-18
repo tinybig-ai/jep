@@ -366,6 +366,24 @@ describe("mock replay", { skip: enabled ? false : "set JEP_E2E=1 (boots a real h
     assert.match(all, /a note from a person/, "a human message is quoted too")
   })
 
+  test("settings offers MCP and skills screens that answer honestly", () => {
+    // The mock harness's config has no mcp key and opencode has no skill
+    // concept — both screens must say so plainly rather than rendering an
+    // empty list that looks like a bug. Against the real machine these same
+    // screens list the codex TOML servers and the ~/.claude skills.
+    const calls = replay("telegram-mock-mcp.jsonl")
+    const rich = calls.filter((c) => c.rich).map((c) => JSON.stringify(c.rich))
+    assert.ok(
+      rich.some((r) => r.includes("MCP servers") && r.includes("none configured")),
+      "the MCP screen opens from settings and states the empty truth",
+    )
+    assert.ok(
+      rich.some((r) => r.includes("Skills") && r.includes("no skills")),
+      "a harness without skills is told, not faked",
+    )
+    assert.ok(rich.some((r) => r.includes("set:mcp") && r.includes("set:skills")), "settings root carries both entries")
+  })
+
   test("the spinner goes out before anything is fetched or asked", () => {
     // A photo is the case that used to break this: the download (getFile, then
     // the bytes — two round trips to Telegram) was awaited before the turn was

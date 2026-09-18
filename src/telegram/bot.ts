@@ -15,6 +15,10 @@ import { eventMessage, eventSession } from "../core/types.ts"
 import { transcribe } from "../core/transcribe.ts"
 import { addUsage, emptyUsage, fmtMoney, usageChip, usageOf } from "../core/usage.ts"
 import type { Usage } from "../core/usage.ts"
+import { readClaudeMcp, readCodexMcp, readOpencodeMcp, writeClaudeProjectEnabled, writeCodexMcpEnabled, writeOpencodeMcpEnabled } from "../core/mcpconfig.ts"
+import type { McpServer } from "../core/mcpconfig.ts"
+import { listSkills, writeSkillModelInvocation } from "../core/skills.ts"
+import type { Skill } from "../core/skills.ts"
 import { matches, rankHits, snippet } from "./search.ts"
 import type { Hit } from "./search.ts"
 import { IMAGE_RE, VOICE_MAX_SEC, audioOf, imageExt, sniffAudioExt, sniffImageExt, stickerPrompt } from "./media.ts"
@@ -3217,6 +3221,7 @@ export class TelegramBot {
       // exists is how the only route to something ends up undiscoverable, and
       // with one harness it still answers "what is actually running this?"
       [btn(`🔌 Harness · ${this.#activeWs(chatID).adapter.id}`, "set:harness")],
+      [btn("🔌 MCP servers", "set:mcp"), btn("🧩 Skills", "set:skills")],
       [btn(`🔎 Internals · ${internalsPreset(this.#store.internals(chatID))}`, "set:internals")],
       [btn(`🧩 Context · ${this.#store.injectContext(chatID) ? "on" : "off"}`, "ctx:toggle")],
       [btn("✏️ Rename conversation", "set:rename")],
@@ -3272,6 +3277,105 @@ export class TelegramBot {
         : "The only harness installed here. Install another (e.g. codex) and it shows up."
     const lines = ["🔌 Harness", "", `current: ${current}`, "", hint]
     await this.#menu(chatID, lines, rows, { messageID })
+  }
+
+  // ─── MCP servers & skills ────────────────────────────────────────────────
+
+  // Where each harness keeps its MCP config — the same resolution the
+  // harnesses themselves use, so what this shows is what the agent will load.
+  #mcpPaths(): { opencode: string; codex: string; claude: string } {
+    const xdg = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config")
+    return {
+      opencode: join(xdg, "opencode", "opencode.json"),
+      codex: join(homedir(), ".codex", "config.toml"),
+      claude: join(homedir(), ".claude.json"),
+    }
+  }
+
+  // 🔌 MCP: what tool servers the active harness will start, read from the
+  // harness's own config — zero turns, and true while an agent runs. Tap a
+  // server to toggle it: a native `enabled` flag for opencode and codex, the
+  // disabledMcpjsonServers list for claude's project scope. Claude's
+  // user-scoped servers have no disabled state (present = on), so their rows
+  // don't pretend to toggle.
+  async #settingsMcp(chatID: number, messageID: number | null): Promise<void> {
+    const ws = this.#activeWs(chatID)
+    const harness = ws.adapter.id
+    const paths = this.#mcpPaths()
+    let servers: McpServer[] = []
+    let note = ""
+    try {
+      if (harness === "opencode") servers = await readOpencodeMcp(paths.opencode)
+      else if (harness === "codex") servers = await readCodexMcp(paths.codex)
+      else if (harness === "claude") {
+        const claude = await readClaudeMcp(paths.claude, ws.dir)
+        servers = [...claude.user, ...claude.project]
+      }
+    } catch (err) {
+      note = `⚠️ couldn't read the config: ${(err as Error).message}`
+    }
+    const lines: string[] = ["🔌 MCP servers", "", `harness: ${harness}`]
+    if (note) lines.push("", note)
+    else if (!servers.length) lines.push("", "none configured in this harness's config.")
+    const rows: InlineButton[][] = []
+    for (const s of servers) {
+      const state = s.enabled ? "✅" : "🚫"
+      const detail = s.detail ? ` — ${clipTitle(s.detail, 24)}` : ""
+      lines.push(`${state} **${s.name}** · ${s.kind}${detail}`)
+      // claude user-scoped has no off state: a row without a toggle is more
+      // honest than one that promises an action it can't perform
+      const toggles = harness === "claude" && !s.detail.startsWith("http") && !("disabled" in s)
+      rows.push([btn(`${s.enabled ? "Disable" : "Enable"} ${s.name}`, `mcpt:${s.name}`)])
+      if (toggles) rows.pop()
+    }
+    rows.push([btn("‹ Back", "set:root")])
+    await this.#menu(chatID, lines, rows, messageID === null ? undefined : { messageID })
+  }
+
+  async #mcpToggle(chatID: number, name: string, messageID: number): Promise<string> {
+    const ws = this.#activeWs(chatID)
+    const harness = ws.adapter.id
+    const paths = this.#mcpPaths()
+    const servers = harness === "opencode" ? await readOpencodeMcp(paths.opencode) : harness === "codex" ? await readCodexMcp(paths.codex) : (await readClaudeMcp(paths.claude, ws.dir)).project
+    const current = servers.find((s) => s.name === name)
+    if (!current) throw new Error(`no MCP server named ${name}`)
+    const enabled = !current.enabled
+    if (harness === "opencode") await writeOpencodeMcpEnabled(paths.opencode, name, enabled)
+    else if (harness === "codex") await writeCodexMcpEnabled(paths.codex, name, enabled)
+    else await writeClaudeProjectEnabled(paths.claude, ws.dir, name, enabled)
+    return `${name}: ${enabled ? "enabled" : "disabled"}`
+  }
+
+  // 🧩 Skills: the SKILL.md directories the harness loads, with their one-line
+  // description. Only Claude-style harnesses have them. A tap flips
+  // `disable-model-invocation` in the skill's own frontmatter — one line in a
+  // prose file, everything else untouched.
+  async #settingsSkills(chatID: number, messageID: number | null): Promise<void> {
+    const ws = this.#activeWs(chatID)
+    if (ws.adapter.id !== "claude") {
+      const lines = ["🧩 Skills", "", `harness ${ws.adapter.id} has no skills — they're a Claude mechanism.`]
+      await this.#menu(chatID, lines, [[btn("‹ Back", "set:root")]], messageID === null ? undefined : { messageID })
+      return
+    }
+    let skills: Skill[] = []
+    let note = ""
+    try {
+      skills = await listSkills([join(homedir(), ".claude", "skills"), join(homedir(), ".agents", "skills")], join(ws.dir, ".claude", "skills"))
+    } catch (err) {
+      note = `⚠️ couldn't read the skill directories: ${(err as Error).message}`
+    }
+    const lines: string[] = ["🧩 Skills"]
+    if (note) lines.push("", note)
+    else if (!skills.length) lines.push("", "none installed — a skill is a folder with a SKILL.md in ~/.claude/skills.")
+    const rows: InlineButton[][] = []
+    for (const s of skills) {
+      const state = s.disableModelInvocation ? "🚫" : "✅"
+      const scope = s.scope === "project" ? "· project" : ""
+      lines.push(`${state} **${s.name}** ${scope}${s.description ? ` — ${clipTitle(s.description, 40)}` : ""}`)
+      rows.push([btn(`${s.disableModelInvocation ? "Allow model use" : "Hide from model"}`, `sklt:${encodeURIComponent(s.path)}`)])
+    }
+    rows.push([btn("‹ Back", "set:root")])
+    await this.#menu(chatID, lines, rows, messageID === null ? undefined : { messageID })
   }
 
   // The browser is bounded to one root (JEP_BROWSE_ROOT, default $HOME) so a
@@ -3605,6 +3709,8 @@ export class TelegramBot {
         else if (rest === "rename") await this.#settingsRename(chatID, msg.message_id)
         else if (rest === "ws") await this.#settingsWorkspace(chatID, msg.message_id)
         else if (rest === "harness") await this.#settingsHarness(chatID, msg.message_id)
+        else if (rest === "mcp") await this.#settingsMcp(chatID, msg.message_id)
+        else if (rest === "skills") await this.#settingsSkills(chatID, msg.message_id)
         // a new message rather than an edit of this one: the picker's own
         // "‹ Back" cleans itself up, and Settings is still there behind it
         else if (rest === "ls") await this.#listPicker(chatID, "Conversations:", false)
@@ -3617,6 +3723,35 @@ export class TelegramBot {
         }
         await tg.answerCallbackQuery({ id: cq.id })
         break
+      case "mcpt": {
+        let said = "toggled"
+        try {
+          said = await this.#mcpToggle(chatID, rest, msg.message_id)
+        } catch (err) {
+          said = `⚠️ ${(err as Error).message}`
+        }
+        await this.#settingsMcp(chatID, msg.message_id)
+        await tg.answerCallbackQuery({ id: cq.id, text: said })
+        break
+      }
+      case "sklt": {
+        // callback_data is capped at 64 bytes and a path blows through it, so
+        // the skill list encodes the path; decode and flip
+        let said = "toggled"
+        try {
+          const skillPath = decodeURIComponent(rest)
+          const skills = await listSkills([join(homedir(), ".claude", "skills"), join(homedir(), ".agents", "skills")], join(this.#activeWs(chatID).dir, ".claude", "skills"))
+          const skill = skills.find((s) => s.path === skillPath)
+          if (!skill) throw new Error("skill moved or deleted")
+          await writeSkillModelInvocation(skillPath, !skill.disableModelInvocation)
+          said = `${skill.name}: ${skill.disableModelInvocation ? "visible to model" : "hidden from model"}`
+        } catch (err) {
+          said = `⚠️ ${(err as Error).message}`
+        }
+        await this.#settingsSkills(chatID, msg.message_id)
+        await tg.answerCallbackQuery({ id: cq.id, text: said })
+        break
+      }
       case "ctx": {
         const on = !this.#store.injectContext(chatID)
         this.#store.setInjectContext(chatID, on)

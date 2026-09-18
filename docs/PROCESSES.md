@@ -28,6 +28,10 @@ src/
     transcribe.ts         // SPEECH → TEXT — decode (ffmpeg | afconvert) then
                           // whisper; serialized, one model load at a time
     usage.ts              // PURE — tokens + harness-reported cost per session
+    mcpconfig.ts          // PURE — MCP servers per harness: opencode JSON,
+                          // codex TOML (section-line editor), claude .claude.json
+    skills.ts             // PURE — SKILL.md discovery (bounded walk) + the
+                          // disable-model-invocation frontmatter toggle
   adapters/
     claude-ask-mcp.mjs    // MCP server Claude Code calls instead of a permission
                           // prompt; relays to jep over a unix socket
@@ -691,6 +695,39 @@ it.
 `git.test.ts` pushes for real, to a bare repo in a temp dir: the commits
 arrive, the upstream gets set, a second push needs no flags, and a diverged
 push is rejected with an explanation.
+
+## 10d. MCP servers & skills (Settings)
+
+Config-as-data screens, in the same spirit as `/git` and `/usage`: everything
+here reads the harness's **own** config files — zero turns, instant, true while
+an agent runs — and the one write per screen changes exactly one line.
+
+**🔌 MCP** (per active harness, since each reads its own config):
+
+- opencode: `~/.config/opencode/opencode.json` → `mcp.<name>.enabled`
+- codex: `~/.codex/config.toml` → `[mcp_servers.<name>]` sections
+- claude: `~/.claude.json` user-scoped `mcpServers` (no disabled state —
+  present means on, so those rows don't pretend to toggle) plus the active
+  workspace's `.mcp.json` gated by `disabledMcpjsonServers`
+
+Tap a server to toggle it. The codex writer is a **section-line editor**, not a
+TOML re-serialiser: it finds `[mcp_servers.<name>]`, replaces the `enabled`
+line (or inserts one before the section's first sub-table, so `[mcp_servers.x.env]`
+stays out of the parent), and the rest of the file is byte-identical. The
+opencode writer rewrites the whole JSON — whole-line `//` comments in it are
+tolerated on read and lost on write.
+
+**🧩 Skills** (claude only — opencode and codex have no skill concept, and their
+screen says so rather than faking an empty list). A bounded walk of
+`~/.claude/skills` (including the synced UUID buckets), `~/.agents/skills`, and
+`<workspace>/.claude/skills`; project entries shadow user entries of the same
+name, which is how Claude resolves them. A tap flips
+`disable-model-invocation` in the skill's own frontmatter — one line, prose
+untouched.
+
+Both parsers are pure (`core/mcpconfig.ts`, `core/skills.ts`) and covered by
+unit tests on real temp files; the codex toggle is additionally round-tripped
+against a copy of the machine's actual config.
 
 ## 11. Verification ritual
 
