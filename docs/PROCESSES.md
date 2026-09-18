@@ -98,6 +98,7 @@ fixture/
 | `JEP_VOICE_MAX_SEC` | longest voice note accepted (default: 600) |
 | `JEP_SEARCH_DEPTH` | transcripts `/find` will read, newest first (default: 40) |
 | `JEP_PENDING_MAX_AGE` | seconds a queued-but-unsent message stays worth sending after a restart (default: 3600) |
+| `JEP_TOOL_IDLE_MS` | watchdog ceiling while a tool part is `running` — known-live quiet work (default: 1200000) |
 
 ## 5. Commands
 

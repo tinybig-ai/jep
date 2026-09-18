@@ -160,6 +160,11 @@ const MAX_LIST = 10
 // clock — but total silence is not. Only a turn that has emitted no events at
 // all for this long gets abandoned.
 const TURN_IDLE_MS = Number(process.env.JEP_TURN_IDLE_MS ?? "") || 5 * 60_000
+// While a tool part is in `running` status the harness is executing known-live
+// work — tests, builds, subagents — that may sit quiet far longer than a
+// generating model ever would. Silence behind a running tool is not a stall,
+// so it gets its own, much longer ceiling.
+const TOOL_IDLE_MS = Number(process.env.JEP_TOOL_IDLE_MS ?? "") || 20 * 60_000
 // How long after the harness's "session.idle" to wait for the blocking prompt()
 // call to return before finalizing from the streamed parts. Idle means the turn
 // is done, so a hung request shouldn't get more than this to come back.
@@ -2060,11 +2065,18 @@ export class TelegramBot {
 
     const sub = new AbortController()
     // activity watchdog: every event on this session pushes the deadline out,
-    // so a turn only dies if it has genuinely stalled (see TURN_IDLE_MS)
+    // so a turn only dies if it has genuinely stalled. What counts as stalled
+    // depends on what the turn is doing (see the two ceilings below).
     let lastActivity = Date.now()
     let idleAbort = false
+    let stalledAfter = TURN_IDLE_MS
     const idleTimer = setInterval(() => {
-      if (Date.now() - lastActivity < TURN_IDLE_MS) return
+      // a pending permission ask means the turn is waiting on the human, not
+      // stalled — no ceiling applies until it is answered
+      if (c.pending.size > 0) return
+      const ceiling = liveParts.some((p) => p.kind === "tool" && p.status === "running") ? TOOL_IDLE_MS : TURN_IDLE_MS
+      if (Date.now() - lastActivity < ceiling) return
+      stalledAfter = ceiling
       idleAbort = true
       ac.abort()
     }, 15_000)
@@ -2464,7 +2476,7 @@ export class TelegramBot {
         } else {
           // a stall is not a stop: say so, or it looks like the turn was
           // cancelled deliberately and the silence goes unexplained
-          const stalled = `⚠️ no activity for ${Math.round(TURN_IDLE_MS / 60_000)}m — turn abandoned`
+          const stalled = `⚠️ no activity for ${Math.round(stalledAfter / 60_000)}m — turn abandoned`
           if (!shown) await presentBody(idleAbort ? stalled : "(stopped)")
           else if (idleAbort) await this.#tg.sendMessage({ chatID, text: stalled })
         }
