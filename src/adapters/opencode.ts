@@ -405,6 +405,13 @@ export class OpenCodeAdapter implements HarnessAdapter {
       if ((err as Error)?.name === "AbortError") {
         throw new Error(opts?.signal?.aborted ? "prompt aborted" : `prompt timed out after ${timeout}ms`)
       }
+      // "fetch failed" is Node's generic "the connection dropped" message, and
+      // it reads like a mystery. Name what actually happened — the local
+      // opencode server reset or refused the request — and carry the OS code.
+      if (err instanceof TypeError && /fetch failed/i.test(err.message)) {
+        const cause = (err as { cause?: { code?: string } }).cause
+        throw new Error(`opencode server connection lost${cause?.code ? ` (${cause.code})` : ""}`)
+      }
       throw err
     } finally {
       if (timer) clearTimeout(timer)

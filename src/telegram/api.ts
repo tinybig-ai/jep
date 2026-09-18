@@ -169,8 +169,16 @@ export function createTelegramApi(token: string): TelegramApi {
     for (let attempt = 0; ; attempt++) {
       try {
         const res = await fetch(target, { ...init, signal: AbortSignal.timeout(timeoutMs) })
-        const json = (await res.json()) as { ok: boolean; result: T; description?: string }
-        if (!json.ok) throw new Error(`telegram ${label}: ${json.description ?? "unknown error"}`)
+        const json = (await res.json()) as { ok: boolean; result: T; description?: string; parameters?: { retry_after?: number } }
+        if (!json.ok) {
+          // Flood control is a pause, not a failure — Telegram names how long.
+          // Surfacing it on the error lets a caller (the draft streamer) hold
+          // off instead of hammering the same request and keeping the window
+          // open forever.
+          const err = new Error(`telegram ${label}: ${json.description ?? "unknown error"}`) as Error & { retryAfter?: number }
+          if (typeof json.parameters?.retry_after === "number") err.retryAfter = json.parameters.retry_after
+          throw err
+        }
         return json.result
       } catch (err) {
         if ((err as Error)?.name === "TimeoutError") throw new Error(`telegram ${label}: timed out after ${timeoutMs}ms`)

@@ -496,6 +496,7 @@ function buildLiveBlocks(
   s: InternalsSettings,
   flushedToolIDs: Set<string>,
   reasoningStarted: Map<string, number>,
+  reasoningEnded: Map<string, number>,
   live = false,
 ): RichBlock[] {
   if (s.layout === "minimal") {
@@ -503,12 +504,15 @@ function buildLiveBlocks(
     // nothing collapsible to protect) — same icon-line-then-text shape live
     // as in the final message, just growing in place as parts stream in.
     // durationMs isn't known yet mid-stream, so estimate it from when we
-    // first saw this part.
+    // first saw this part, and stop the clock once its step has finished.
     const bits: string[] = []
     for (const p of parts) {
       if (p.kind === "reasoning" && s.thinking !== "off" && p.text.trim()) {
         const started = p.id ? reasoningStarted.get(p.id) : undefined
-        const ms = p.durationMs ?? (started !== undefined ? Date.now() - started : undefined)
+        const ended = p.id ? reasoningEnded.get(p.id) : undefined
+        const ms =
+          p.durationMs ??
+          (started !== undefined ? (ended ?? Date.now()) - started : undefined)
         bits.push(`💭 ${thinkingPhrase(ms).toLowerCase()}`)
       } else if (p.kind === "tool" && s.tools !== "off") bits.push(toolIcon(p))
     }
@@ -1961,31 +1965,37 @@ export class TelegramBot {
     // actually sent as one — and the opening draft deliberately isn't, so the
     // final render asks rather than assumes (it falls back on its own).
     let richOK: boolean | null = null
+    // A draft auto-expires after ~30s (it is a preview, not a message), so a
+    // turn that spends longer than that in silent work — a tool running, a
+    // harness that has nothing to say yet — loses its spinner unless something
+    // re-pings it. The keep-alive below re-sends whatever the draft last showed,
+    // and these remember what that was. Empty text means the spinner itself.
+    let lastBlocks: RichBlock[] | null = null
+    let lastHint = ""
     try {
-      // An empty text draft is the native shimmer (Bot API 9.4+): it says
-      // "received, working" with nothing in it, which is the whole job of the
-      // first frame. A rich draft carrying a thinking block says that too, but
-      // it lands as a block of content — so the very first thing the user got
-      // back was a thinking block, and the acknowledgement was indistinguishable
-      // from the answer starting. Content waits for renderLive; this frame is
-      // only the spinner.
-      await this.#tg.sendMessageDraft({ chatID, draftID, text: "", canStop: true })
-      draftMode = "text"
+      // RichBlockThinking (Bot API 10.2, <tg-thinking> in HTML): a native,
+      // client-animated "Thinking…" placeholder valid only in rich drafts. Open
+      // the spinner here so the whole turn stays one rich draft — the alternative
+      // is a *text* draft switched over to rich on the same draft_id mid-stream,
+      // which Telegram accepts but never draws on some clients.
+      await this.#tg.sendRichMessageDraft({
+        chatID,
+        draftID,
+        rich_message: { blocks: [{ type: "thinking", text: "Thinking…" }] },
+        canStop: true,
+      })
+      draftMode = "rich"
+      richOK = true
+      lastBlocks = [{ type: "thinking", text: "Thinking…" }]
     } catch (err) {
-      console.error(`[draft] text failed: ${(err as Error)?.message ?? err}`)
+      console.error(`[draft] rich failed: ${(err as Error)?.message ?? err}`)
       try {
-        // RichBlockThinking (Bot API 10.2, <tg-thinking> in HTML): a native,
-        // client-animated "Thinking…" placeholder valid only in draft messages.
-        await this.#tg.sendRichMessageDraft({
-          chatID,
-          draftID,
-          rich_message: { blocks: [{ type: "thinking", text: "Thinking…" }] },
-          canStop: true,
-        })
-        draftMode = "rich"
-        richOK = true
+        // An empty text draft is the plain-text shimmer (Bot API 9.4+) — the
+        // fallback for clients that take text drafts but not rich ones.
+        await this.#tg.sendMessageDraft({ chatID, draftID, text: "", canStop: true })
+        draftMode = "text"
       } catch (err2) {
-        console.error(`[draft] rich failed too: ${(err2 as Error)?.message ?? err2}`)
+        console.error(`[draft] text failed too: ${(err2 as Error)?.message ?? err2}`)
         /* draft streaming unsupported → legacy edit-in-place below */
       }
     }
@@ -2051,6 +2061,12 @@ export class TelegramBot {
       ac.abort()
     }, 15_000)
     let lastEdit = 0
+    // When Telegram flood-limits the draft (429 "Too Many Requests") the only
+    // correct response is to stop sending for the retry_after it names. The old
+    // behaviour kept firing on the 700ms cadence regardless, which held the
+    // flood window open for the rest of the turn — every frame dropped, the
+    // spinner frozen, and no back-off ever let it recover.
+    let floodUntil = 0
     let lastText: string | null = null
     let lastHadMarkup = true
     let lastRich = ""
@@ -2076,6 +2092,12 @@ export class TelegramBot {
     // when we first saw each reasoning part — durationMs isn't known until
     // the harness finalizes the part, so this is the live estimate
     const reasoningStarted = new Map<string, number>()
+    // when a step ends (opencode's step-finish marker) its reasoning is done,
+    // so the live estimate must stop ticking. Minimal layout keeps the reasoning
+    // inline as an icon row instead of flushing a card, so without this a
+    // finished step's "Thought for Ns" just climbs forever, in lockstep with
+    // every other step's.
+    const reasoningEnded = new Map<string, number>()
     const textBuf = new Map<string, string>()
     // `message.part.updated` fires for the user's own message parts too — track
     // those message ids and skip them so the prompt never leaks into the draft
@@ -2103,9 +2125,15 @@ export class TelegramBot {
     // a finished reasoning part has no explicit "done" event of its own, but
     // opencode's step-finish marker tells us the step (and its reasoning) is over
     const flushPendingReasoning = async () => {
-      if (internals.thinking === "off" || internals.layout === "minimal") return
+      if (internals.thinking === "off") return
       for (const p of liveParts) {
-        if (p.kind !== "reasoning" || !p.id || !p.text.trim() || flushedReasoningIDs.has(p.id)) continue
+        if (p.kind !== "reasoning" || !p.id || !p.text.trim() || flushedReasoningIDs.has(p.id) || reasoningEnded.has(p.id)) continue
+        if (internals.layout === "minimal") {
+          // nothing to flush here — the icon row keeps it inline. Freezing the
+          // timer is the only thing a finished step needs.
+          reasoningEnded.set(p.id, Date.now())
+          continue
+        }
         flushedReasoningIDs.add(p.id)
         const started = reasoningStarted.get(p.id)
         const ms = p.durationMs ?? (started !== undefined ? Date.now() - started : undefined)
@@ -2131,8 +2159,9 @@ export class TelegramBot {
       // the rest of the turn's live output with it — invisibly. Rendering is
       // decoration: a failure must cost the animation, never the answer.
       if (finished) return // the final message is already out; nothing to preview
+      if (Date.now() < floodUntil) return // Telegram is throttling us — skip this frame rather than reset the window
       try {
-        const blocks = buildLiveBlocks(liveParts, internals, flushedToolIDs, reasoningStarted, true)
+        const blocks = buildLiveBlocks(liveParts, internals, flushedToolIDs, reasoningStarted, reasoningEnded, true)
         const json = JSON.stringify(blocks)
         if (json === lastRich) return
         lastRich = json
@@ -2146,6 +2175,7 @@ export class TelegramBot {
             await this.#tg.sendRichMessageDraft({ chatID, draftID, rich_message: { blocks } })
             richOK = true
             draftMode = "rich"
+            lastBlocks = blocks
             lastEdit = Date.now()
             return
           } catch (err) {
@@ -2153,13 +2183,35 @@ export class TelegramBot {
             console.error(`[draft] rich draft refused, falling back to text: ${(err as Error)?.message ?? err}`)
           }
         }
-        if (draftMode !== "none") await this.#tg.sendMessageDraft({ chatID, draftID, text: hint })
-        else if (placeholder) await this.#tg.editMessageText({ chatID, messageID: placeholder.message_id, text: hint || "…" })
+        if (draftMode !== "none") {
+          await this.#tg.sendMessageDraft({ chatID, draftID, text: hint })
+          lastHint = hint
+        } else if (placeholder) await this.#tg.editMessageText({ chatID, messageID: placeholder.message_id, text: hint || "…" })
       } catch (err) {
+        const wait = (err as { retryAfter?: number })?.retryAfter
+        if (wait) floodUntil = Date.now() + wait * 1_000 + 250
         console.error(`[draft] renderLive failed (mode=${draftMode}): ${(err as Error)?.stack ?? err}`)
       }
       lastEdit = Date.now()
     }
+
+    // A draft is a ~30-second preview: left unpushed it vanishes, and on a turn
+    // that spends minutes in silent work (a tool running, a harness that has
+    // nothing to say yet) that reads as "the spinner died". Re-send whatever the
+    // draft last showed, well inside the expiry window, so the spinner survives
+    // until there is content — or the final message lands.
+    const keepAlive = setInterval(() => {
+      if (finished || Date.now() < floodUntil || draftMode === "none") return
+      void (async () => {
+        try {
+          if (draftMode === "rich" && lastBlocks) await this.#tg.sendRichMessageDraft({ chatID, draftID, rich_message: { blocks: lastBlocks } })
+          else await this.#tg.sendMessageDraft({ chatID, draftID, text: lastHint, canStop: true })
+        } catch (err) {
+          const wait = (err as { retryAfter?: number })?.retryAfter
+          if (wait) floodUntil = Date.now() + wait * 1_000 + 250
+        }
+      })()
+    }, 20_000)
 
     const clearPlaceholder = async (body: string) => {
       if (!placeholder) return
@@ -2382,18 +2434,31 @@ export class TelegramBot {
         if (!shown) await presentBody(idleAbort ? stalled : "(stopped)")
         else if (idleAbort) await this.#tg.sendMessage({ chatID, text: stalled })
       } else {
-        const text = `⚠️ ${(err as Error).message}`.slice(-MAX_MSG)
-        if (placeholder) {
-          lastText = text
-          lastHadMarkup = false
-          await this.#tg.editMessageText({ chatID, messageID: placeholder.message_id, text, replyMarkup: null })
+        // A connection loss is not the same as an empty answer: the turn may
+        // have streamed most of its reply before the server dropped it. Show
+        // what we already have rather than discarding it behind a bare error.
+        const msg = (err as Error).message
+        const dropped = /connection lost|fetch failed|ECONNREFUSED|ECONNRESET|socket hang up/i.test(msg)
+        const partial = textOf(liveParts).trim()
+        if (dropped && partial) {
+          const shown = await presentParts(dropFlushed(liveParts), internals)
+          if (shown) await this.#tg.sendMessage({ chatID, text: "⚠️ the AI server dropped the connection — the answer above may be incomplete." })
+          else await this.#tg.sendMessage({ chatID, text: "⚠️ the AI server dropped the connection before an answer arrived." })
         } else {
-          await this.#tg.sendMessage({ chatID, text })
+          const text = (dropped ? "⚠️ the AI server dropped the connection." : `⚠️ ${msg}`).slice(-MAX_MSG)
+          if (placeholder) {
+            lastText = text
+            lastHadMarkup = false
+            await this.#tg.editMessageText({ chatID, messageID: placeholder.message_id, text, replyMarkup: null })
+          } else {
+            await this.#tg.sendMessage({ chatID, text })
+          }
         }
       }
     } finally {
       clearInterval(typingTimer)
       clearInterval(idleTimer)
+      clearInterval(keepAlive)
       sub.abort()
       await streamTask.catch(logFail("stream"))
       c.inflight = null
