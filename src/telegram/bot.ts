@@ -156,6 +156,10 @@ const MAX_LIST = 10
 // clock — but total silence is not. Only a turn that has emitted no events at
 // all for this long gets abandoned.
 const TURN_IDLE_MS = Number(process.env.JEP_TURN_IDLE_MS ?? "") || 5 * 60_000
+// How long after the harness's "session.idle" to wait for the blocking prompt()
+// call to return before finalizing from the streamed parts. Idle means the turn
+// is done, so a hung request shouldn't get more than this to come back.
+const IDLE_GRACE_MS = 5_000
 // a shallow clone of anything sane is well under this; past it, assume the
 // remote is wedged rather than leaving the chat waiting indefinitely
 const CLONE_TIMEOUT_MS = 10 * 60_000
@@ -2076,6 +2080,14 @@ export class TelegramBot {
     // been sent, showing up as a duplicate with the still-generating spinner
     // stuck on the end of it.
     let finished = false
+    // The harness's "session.idle" says the turn is over, and normally prompt()
+    // (the blocking POST) returns right around then. But that request can hang
+    // even after the model has finished — the answer is fully streamed, yet the
+    // turn never finalizes, the spinner never clears, and the next message sits
+    // queued behind a turn that will never end. When idle arrives and prompt()
+    // hasn't returned after a short grace period, finalize from what we streamed.
+    let idleGrace: ReturnType<typeof setTimeout> | null = null
+    let finishedViaIdle = false
     // parts assembled live from the event stream, keyed by partID so updates
     // replace rather than duplicate; mirrors the final `reply.parts` order
     const liveParts: Part[] = []
@@ -2350,6 +2362,15 @@ export class TelegramBot {
             if (settled || Date.now() - lastEdit > 700) await renderLive()
           } else if (evt.type === "ask.requested") {
             await this.#askPrompt(chatID, ws.adapter, evt.ask)
+          } else if (evt.type === "session.idle") {
+            // the turn is done. Give prompt() a moment to return with its own
+            // accounting (tokens, cost); if it's hung, finalize from liveParts.
+            if (!finished && idleGrace === null) {
+              idleGrace = setTimeout(() => {
+                finishedViaIdle = true
+                ac.abort()
+              }, IDLE_GRACE_MS)
+            }
           }
         }
       } catch (err) {
@@ -2428,11 +2449,18 @@ export class TelegramBot {
       if (ac.signal.aborted) {
         // render whatever we streamed so far (partial details included)
         const shown = await presentParts(dropFlushed(liveParts), internals)
-        // a stall is not a stop: say so, or it looks like the turn was
-        // cancelled deliberately and the silence goes unexplained
-        const stalled = `⚠️ no activity for ${Math.round(TURN_IDLE_MS / 60_000)}m — turn abandoned`
-        if (!shown) await presentBody(idleAbort ? stalled : "(stopped)")
-        else if (idleAbort) await this.#tg.sendMessage({ chatID, text: stalled })
+        if (finishedViaIdle) {
+          // The turn genuinely finished — the harness said "session.idle" and the
+          // answer is fully streamed; only the blocking prompt() call never came
+          // back. `shown` is the answer, so don't stamp it with a stall warning.
+          if (!shown) await presentBody("(no output)")
+        } else {
+          // a stall is not a stop: say so, or it looks like the turn was
+          // cancelled deliberately and the silence goes unexplained
+          const stalled = `⚠️ no activity for ${Math.round(TURN_IDLE_MS / 60_000)}m — turn abandoned`
+          if (!shown) await presentBody(idleAbort ? stalled : "(stopped)")
+          else if (idleAbort) await this.#tg.sendMessage({ chatID, text: stalled })
+        }
       } else {
         // A connection loss is not the same as an empty answer: the turn may
         // have streamed most of its reply before the server dropped it. Show
@@ -2459,6 +2487,7 @@ export class TelegramBot {
       clearInterval(typingTimer)
       clearInterval(idleTimer)
       clearInterval(keepAlive)
+      if (idleGrace) clearTimeout(idleGrace)
       sub.abort()
       await streamTask.catch(logFail("stream"))
       c.inflight = null
