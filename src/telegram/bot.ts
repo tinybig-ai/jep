@@ -2446,6 +2446,9 @@ export class TelegramBot {
       // message that replaces it
       finished = true
       sub.abort()
+      // the cause code (UND_ERR_HEADERS_TIMEOUT etc.) is the diagnostic that
+      // tells a connection reset from a stall — log it rather than swallow it
+      console.error(`[turn] prompt failed: ${(err as Error)?.stack ?? err}`)
       if (ac.signal.aborted) {
         // render whatever we streamed so far (partial details included)
         const shown = await presentParts(dropFlushed(liveParts), internals)

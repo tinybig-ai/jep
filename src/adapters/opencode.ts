@@ -3,12 +3,23 @@ import { readFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { Agent } from "undici"
 import type { HarnessAdapter, ModelRef, ModelCaps } from "../core/ports.ts"
 import type { DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionSummary } from "../core/types.ts"
 
 const OPENCODE_BIN = process.env.OPENCODE_BIN ?? "opencode"
 const MODEL_REF = process.env.JEP_MODEL ?? "localfree-models-proxy/auto"
 const DEFAULT_TIMEOUT_MS = 180_000
+
+// A turn against a slow (free) model can legitimately run past Node's default
+// 5-minute fetch timeouts (undici's headersTimeout/bodyTimeout), and the whole
+// point of the adapter is that a long run is not an error. Zero disables the
+// wall-clock ceilings; liveness is owned by the caller's idle watchdog instead.
+// The cast bridges two structurally-divergent copies of undici's types — the
+// npm package's and @types/node's bundled undici-types; at runtime they are
+// the same Dispatcher and the global fetch accepts it.
+type FetchDispatcher = NonNullable<Parameters<typeof fetch>[1]>["dispatcher"]
+const NO_TIMEOUT_AGENT = new Agent({ headersTimeout: 0, bodyTimeout: 0 }) as unknown as FetchDispatcher
 
 // Namespaces every session id we expose at the port boundary, so ids from
 // different harness adapters can never collide and stay stable across
@@ -394,6 +405,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ parts, model, ...(opts?.agent ? { agent: opts.agent } : {}) }),
         signal: controller.signal,
+        dispatcher: NO_TIMEOUT_AGENT,
       })
       if (!res.ok) {
         const textError = await res.text().catch(() => "")
@@ -454,7 +466,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
     signal?.addEventListener("abort", onAbort, { once: true })
     let res: Response
     try {
-      res = await fetch(this.#url("/event"), { signal: controller.signal })
+      res = await fetch(this.#url("/event"), { signal: controller.signal, dispatcher: NO_TIMEOUT_AGENT })
     } catch (err) {
       // losing this subscription means no live streaming for the whole turn
       if (!controller.signal.aborted) console.error(`[events] subscribe failed: ${(err as Error)?.message ?? err}`)
