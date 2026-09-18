@@ -309,7 +309,7 @@ body, `is_open` for default-expanded). They are tap-to-expand natively, so
 
 Per-chat policy lives in `store.json` (`InternalsSettings`, via `ChatStore`):
 - `thinking` / `tools`: `off` | `collapsed` | `expanded` (defaults `collapsed`).
-- `layout`: `per-step` (default) | `per-section` | `combined`.
+- `layout`: `per-step` (default) | `per-section` | `combined` | `minimal`.
   - `per-step` — one `details` per opencode step (`splitSteps` on
     `step-start`/`step-finish`), holding that step's reasoning + tool calls;
     answer text follows each step.
@@ -317,13 +317,24 @@ Per-chat policy lives in `store.json` (`InternalsSettings`, via `ChatStore`):
     interleaved with the answer; auto-rolls up to `combined` past `MAX_DETAILS`
     (12) so the message still sends.
   - `combined` — one `💭 Thinking` + one `⚙ Tools` above the answer.
+  - `minimal` — no collapse, no `details` at all: one `💭`/`⚙` icon line
+    followed by answer text. Streaming **splits this into multiple messages**
+    (`minimal.ts`: `splitMinimalSegments`/`minimalSegmentBlocks`): internals
+    accumulate in a segment, and the moment user-visible text is finalized by
+    later internals (a reasoning/tool event, step boundary, new text part, or
+    an ask) the segment ships as its own permanent message and the draft
+    restarts at a fresh spinner (`flushMinimalSegment` in `#freeText`). Flushed
+    part ids live in `minimalFlushed` so both the live draft and the final
+    re-read (`dropFlushed`) exclude them; fast turns with no boundary still
+    render as a single message.
 - Tool bodies are `input` + `output` (JSON-stringified), head+tail capped at
   `MAX_TOOL_CHARS` (1500).
 
-UI: `/settings → 🔎 Internals` (rich menu). Three **presets** — Simple
-(off/off), Detailed (collapsed/collapsed/per-step, default), Debug
-(expanded/expanded/per-section) — set all three at once (active preset shown
-green); each row also cycles independently. HTML fallback uses `> ` blockquotes
+UI: `/settings → 🔎 Internals` (rich menu). Four **presets** — Simple
+(off/off), Minimal (collapsed/collapsed/minimal), Detailed
+(collapsed/collapsed/per-step, default), Debug (expanded/expanded/per-section) —
+set all three at once (active preset shown green); each row also cycles
+independently. HTML fallback uses `> ` blockquotes
 (not collapsible).
 
 

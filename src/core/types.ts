@@ -21,6 +21,10 @@ export interface ProjectSummary {
 export interface TextPart {
   kind: "text"
   text: string
+  // harness's stable part id, when known — the minimal layout delivers
+  // finished text segments as their own messages and must be able to drop
+  // exactly those parts from both the live view and the final re-read
+  id?: string
 }
 
 export interface ToolCallPart {
@@ -53,6 +57,7 @@ export interface ReasoningPart {
 
 export interface SnapshotPart {
   kind: "snapshot"
+  id?: string
 }
 
 export interface FilePart {
@@ -60,11 +65,13 @@ export interface FilePart {
   filePath: string
   fileName?: string
   mimeType?: string
+  id?: string
 }
 
 export interface OtherPart {
   kind: "other"
   nativeType: string
+  id?: string
 }
 
 export type Part =

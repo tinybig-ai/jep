@@ -8,6 +8,7 @@ import type { HarnessAdapter, ModelCaps, ModelRef } from "../core/ports.ts"
 import type { AskOption, AskRequest, FilePart, Part, ProjectSummary, SessionSummary, TextPart, ReasoningPart, ToolCallPart } from "../core/types.ts"
 import { mdToHtml } from "./html.ts"
 import { closeStreamingTable, mdTable, mdToRich } from "./rich.ts"
+import { splitMinimalSegments, minimalSegmentBlocks, thinkingPhrase } from "./minimal.ts"
 import type { RichBlock } from "./rich.ts"
 import type { TelegramApi, TgMessage, TgUpdate, InlineButton, ReplyMarkup } from "./api.ts"
 import { runComplianceSuite } from "../core/compliance.ts"
@@ -343,9 +344,6 @@ const detailsBlock = (summary: string, blocks: RichBlock[], open: boolean): Rich
   blocks,
 })
 
-// "Thought for Ns" once we know how long it actually took (sub-second rounds
-// up to 1s rather than printing "0s"); "Thinking" while that's still unknown
-const thinkingPhrase = (ms?: number): string => (ms != null ? `Thought for ${fmtDuration(Math.max(ms, 1000))}` : "Thinking")
 // several reasoning parts (one per step) can end up merged into one combined
 // block/label — sum whatever duration each part actually reports, or give up
 // and show no duration if none of them have it
@@ -469,7 +467,9 @@ function richPerStep(parts: Part[], s: InternalsSettings): RichBlock[] {
 
 // no collapse at all: one icon+name per reasoning/tool part, in order, as a
 // single line up front — then the plain answer text. Nothing to expand,
-// nothing for a Telegram edit to ever reset.
+// nothing for a Telegram edit to ever reset. In a streamed minimal turn this
+// renders the *final* (still-open) segment; the segments before it were
+// already sent as their own messages.
 function richMinimal(parts: Part[], s: InternalsSettings): RichBlock[] {
   const bits: string[] = []
   for (const p of parts) {
@@ -513,11 +513,13 @@ function buildLiveBlocks(
   live = false,
 ): RichBlock[] {
   if (s.layout === "minimal") {
-    // nothing ever gets flushed to its own message in minimal mode (there's
-    // nothing collapsible to protect) — same icon-line-then-text shape live
-    // as in the final message, just growing in place as parts stream in.
-    // durationMs isn't known yet mid-stream, so estimate it from when we
-    // first saw this part, and stop the clock once its step has finished.
+    // minimal mode has nothing collapsible to protect, so a segment is an
+    // icon-line-then-text pair; finished segments are flushed to their own
+    // permanent messages by #freeText (see minimalFlushed), and the draft
+    // starts fresh for the next segment. What's left here is the *open*
+    // segment plus any just-finished internals. durationMs isn't known yet
+    // mid-stream, so estimate it from when we first saw this part, and stop
+    // the clock once its step has finished.
     const bits: string[] = []
     for (const p of parts) {
       if (p.kind === "reasoning" && s.thinking !== "off" && p.text.trim()) {
@@ -1956,6 +1958,10 @@ export class TelegramBot {
     const c = this.#chat(chatID)
     let filePaths = opts?.filePaths
     const internals = this.#store.internals(chatID)
+    // minimal layout feeds finished text segments to the transcript as their
+    // own messages while streaming; everything below that splits parts into
+    // per-segment boundaries only exists in minimal mode
+    const minimal = internals.layout === "minimal"
 
     const ac = new AbortController()
     c.inflight = ac
@@ -2172,8 +2178,59 @@ export class TelegramBot {
         }
       }
     }
+    // minimal layout delivers finished text segments as their own messages —
+    // "all icons + all text in one screenful" flattened the turn's chronology,
+    // so instead each segment (internals + the text that finalized it) ships
+    // the moment its text completes, and the draft restarts fresh for the next.
+    const minimalFlushed = new Set<string>()
+    let minimalOpenTextID: string | null = null
+    const minimalVisible = (parts: Part[]): Part[] => parts.filter((p) => !(p.id && minimalFlushed.has(p.id)))
+    const flushMinimalSegment = async (): Promise<void> => {
+      if (finished) return // the final render is about to run; segments belong to it
+      const first = splitMinimalSegments(minimalVisible(liveParts))[0]!
+      if (!first.text.length) return // nothing user-visible yet — keep accumulating
+      const blocks = minimalSegmentBlocks(first, {
+        thinking: internals.thinking !== "off",
+        tools: internals.tools !== "off",
+        ms: (p) => {
+          const started = p.id ? reasoningStarted.get(p.id) : undefined
+          const ended = p.id ? reasoningEnded.get(p.id) : undefined
+          return p.durationMs ?? (started !== undefined ? (ended ?? Date.now()) - started : undefined)
+        },
+        icon: toolIcon,
+      })
+      if (!blocks.length) return
+      try {
+        await this.#tg.sendRichMessage({ chatID, rich_message: { blocks } })
+      } catch (err) {
+        console.error(`[card] minimal segment send failed: ${(err as Error)?.message ?? err}`)
+        return
+      }
+      for (const p of [...first.icons, ...first.text]) if (p.id) minimalFlushed.add(p.id)
+      if (minimalOpenTextID) minimalFlushed.add(minimalOpenTextID)
+      minimalOpenTextID = null
+      // the segment just left the draft for the transcript — restart the draft
+      // at a fresh spinner, or the flushed text lingers until the next event
+      lastRich = ""
+      try {
+        if (draftMode === "rich") {
+          await this.#tg.sendRichMessageDraft({ chatID, draftID, rich_message: { blocks: [{ type: "thinking", text: "Thinking…" }] }, canStop: true })
+          lastBlocks = [{ type: "thinking", text: "Thinking…" }]
+        } else if (draftMode === "text") {
+          await this.#tg.sendMessageDraft({ chatID, draftID, text: "" })
+          lastHint = ""
+        } else if (placeholder) {
+          await this.#tg.editMessageText({ chatID, messageID: placeholder.message_id, text: "…" })
+        }
+      } catch {
+        /* the next event re-renders anyway */
+      }
+      lastEdit = Date.now()
+    }
+
     const dropFlushed = (parts: Part[]): Part[] =>
       parts.filter((p) => {
+        if (p.id && minimalFlushed.has(p.id)) return false
         if (p.kind === "tool") return !flushedToolIDs.has(p.id)
         if (p.kind === "reasoning") return !p.id || !flushedReasoningIDs.has(p.id)
         return true
@@ -2189,12 +2246,12 @@ export class TelegramBot {
       if (finished) return // the final message is already out; nothing to preview
       if (Date.now() < floodUntil) return // Telegram is throttling us — skip this frame rather than reset the window
       try {
-        const blocks = buildLiveBlocks(liveParts, internals, flushedToolIDs, reasoningStarted, reasoningEnded, true)
+        const blocks = buildLiveBlocks(minimalVisible(liveParts), internals, flushedToolIDs, reasoningStarted, reasoningEnded, true)
         const json = JSON.stringify(blocks)
         if (json === lastRich) return
         lastRich = json
         if (blocks.length === 0) return // nothing to show yet — keep the "…" frame
-        const tail = textOf(liveParts).slice(-(MAX_MSG - 80))
+        const tail = textOf(minimalVisible(liveParts)).slice(-(MAX_MSG - 80))
         const hint = closeStreamingTable(tail)
         // first content is also where the draft stops being a spinner: try the
         // rich form once, and keep the plain tail for clients that refuse it
@@ -2354,15 +2411,28 @@ export class TelegramBot {
           if (evt.type === "part.delta" && evt.text) {
             // reasoning deltas build the collapsible 💭 block but never the answer text
             if (evt.partType === "reasoning") {
+              // new internals after user-visible text: that text just finalized
+              if (minimal && minimalOpenTextID !== null) await flushMinimalSegment()
               if (!reasoningStarted.has(evt.partID)) reasoningStarted.set(evt.partID, Date.now())
               reasoningBuf.set(evt.partID, (reasoningBuf.get(evt.partID) ?? "") + evt.text)
               upsert(evt.partID, { kind: "reasoning", text: reasoningBuf.get(evt.partID)!, id: evt.partID })
             } else {
+              // a fresh text part after one that was already streaming closes
+              // the previous segment (text-after-text, no markers between)
+              if (minimal && minimalOpenTextID !== null && evt.partID !== minimalOpenTextID) await flushMinimalSegment()
               textBuf.set(evt.partID, (textBuf.get(evt.partID) ?? "") + evt.text)
-              upsert(evt.partID, { kind: "text", text: textBuf.get(evt.partID)! })
+              upsert(evt.partID, { kind: "text", text: textBuf.get(evt.partID)!, id: evt.partID })
+              if (minimal && !minimalFlushed.has(evt.partID)) minimalOpenTextID = evt.partID
             }
             if (Date.now() - lastEdit > 700) await renderLive()
           } else if (evt.type === "part.updated" && evt.part) {
+            // a text part refreshes the open segment; anything else (tool,
+            // marker, reasoning) after open text is that text's finalizer
+            if (evt.part.kind === "text") {
+              if (minimal && !minimalFlushed.has(evt.partID)) minimalOpenTextID = evt.partID
+            } else if (minimal && minimalOpenTextID !== null) {
+              await flushMinimalSegment()
+            }
             upsert(evt.partID, evt.part)
             if (evt.part.kind === "reasoning" && !reasoningStarted.has(evt.partID)) reasoningStarted.set(evt.partID, Date.now())
             let settled = false
@@ -2377,6 +2447,7 @@ export class TelegramBot {
             // now so it doesn't linger as a flat status line until the next tick
             if (settled || Date.now() - lastEdit > 700) await renderLive()
           } else if (evt.type === "ask.requested") {
+            if (minimal && minimalOpenTextID !== null) await flushMinimalSegment()
             await this.#askPrompt(chatID, ws.adapter, evt.ask)
           } else if (evt.type === "session.idle") {
             // the turn is done. Give prompt() a moment to return with its own
@@ -2428,11 +2499,15 @@ export class TelegramBot {
       } catch (err) {
         console.error(`[turn] couldn't re-read messages, using the returned one: ${(err as Error)?.message ?? err}`)
       }
-      const media = turn.filter((p): p is FilePart => p.kind === "file")
       // tool/reasoning parts already posted as their own message during
-      // streaming stay out of the final combined message (dropFlushed)
-      const shown = await presentParts(dropFlushed(turn), internals)
-      if (!shown && textOf(turn).trim()) await presentBody(textOf(turn), media)
+      // streaming — and minimal text segments, likewise delivered — stay out
+      // of the final combined message (dropFlushed). Every "was anything
+      // shown / is anything left" check keys off the *visible* parts, or a
+      // fully-delivered turn would be re-sent by the fallbacks below.
+      const visible = dropFlushed(turn)
+      const media = visible.filter((p): p is FilePart => p.kind === "file")
+      const shown = await presentParts(visible, internals)
+      if (!shown && textOf(visible).trim()) await presentBody(textOf(visible), media)
       else if (!shown && placeholder) await this.#tg.deleteMessage({ chatID, messageID: placeholder.message_id })
       // A turn must never end silently. An error the harness reported gets
       // said out loud even when there was also content, and a turn that
@@ -2444,7 +2519,7 @@ export class TelegramBot {
         // arrives here rather than as a rejected prompt whenever the
         // harness-side abort finalizes the turn before the client's own
         // AbortController lands. Treat it as the outcome it is.
-        if (!shown && !textOf(turn).trim()) await presentBody("(stopped)")
+        if (!shown && !textOf(visible).trim() && minimalFlushed.size === 0) await presentBody("(stopped)")
       } else if (failure) {
         console.error(`[turn] harness error: ${failure.name}: ${failure.message}`)
         // a session somebody else is already running in is not a fault the
@@ -2452,7 +2527,7 @@ export class TelegramBot {
         if (!(await this.#reportHold(chatID, ws, sessionID, promptText, filePaths))) {
           await this.#tg.sendMessage({ chatID, text: `⚠️ ${failure.name}: ${failure.message}`.slice(0, MAX_MSG) })
         }
-      } else if (!shown && !textOf(turn).trim()) {
+      } else if (!shown && !textOf(visible).trim() && minimalFlushed.size === 0) {
         console.error(`[turn] empty reply with no error (session ${sessionID})`)
         await this.#tg.sendMessage({ chatID, text: "⚠️ the model returned nothing (no text, no error)" })
       }
@@ -2472,7 +2547,9 @@ export class TelegramBot {
           // The turn genuinely finished — the harness said "session.idle" and the
           // answer is fully streamed; only the blocking prompt() call never came
           // back. `shown` is the answer, so don't stamp it with a stall warning.
-          if (!shown) await presentBody("(no output)")
+          // (minimal layout may have shipped the whole answer as segments, in
+          // which case nothing left to show is a success, not silence)
+          if (!shown && minimalFlushed.size === 0) await presentBody("(no output)")
         } else {
           // a stall is not a stop: say so, or it looks like the turn was
           // cancelled deliberately and the silence goes unexplained

@@ -82,7 +82,7 @@ function parseSse(raw: string): SseFrame[] {
 function mapPart(part: any, workspace: string): Part {
   switch (part?.type) {
     case "text":
-      return { kind: "text", text: part.text ?? "" }
+      return { kind: "text", text: part.text ?? "", ...(part.id ? { id: part.id } : {}) }
     case "tool":
       return {
         kind: "tool",
