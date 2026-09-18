@@ -8,6 +8,8 @@ export interface TgUser {
   id: number
   username?: string
   first_name?: string
+  /** true for the bot's own messages — how a swipe-reply is told apart */
+  is_bot?: boolean
 }
 
 export interface TgMessage {
@@ -41,6 +43,8 @@ export interface TgMessage {
   video_note?: { file_id: string; duration?: number; file_size?: number }
   // set on group messages that were sent as ephemeral (visible to one user + bot)
   ephemeral_message_id?: number
+  /** present when the user swipe-replied — the message being pointed at */
+  reply_to_message?: TgMessage
 }
 
 export interface TgUpdate {

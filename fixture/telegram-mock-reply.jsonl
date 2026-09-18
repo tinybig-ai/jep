@@ -1,0 +1,5 @@
+{"update_id":1,"message":{"message_id":1,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"/pair TESTCODE"}}
+{"update_id":2,"message":{"message_id":2,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"Reply with the single word: yes"}}
+{"update_id":3,"message":{"message_id":3,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"what broke?","reply_to_message":{"message_id":900,"chat":{"id":123,"type":"private"},"from":{"id":999,"is_bot":true,"first_name":"jep"},"text":"build failed"}}}
+{"update_id":4,"message":{"message_id":4,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"and this?","reply_to_message":{"message_id":901,"chat":{"id":123,"type":"private"},"from":{"id":222,"first_name":"Someone"},"text":"a note from a person"}}}
+{"update_id":5,"message":{"message_id":5,"chat":{"id":123,"type":"private"},"from":{"id":123,"first_name":"Test"},"text":"/queue"}}

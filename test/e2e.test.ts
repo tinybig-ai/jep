@@ -353,6 +353,19 @@ describe("mock replay", { skip: enabled ? false : "set JEP_E2E=1 (boots a real h
     }
   })
 
+  test("replying to a message relays its text in quotes", () => {
+    // The referent the user is pointing at has to reach the harness, or the
+    // prompt opens on a bare "this" with nothing to attach to. Here the queue
+    // label *is* the relayed prompt (see #runTurn), so it is the evidence.
+    const calls = replay("telegram-mock-reply.jsonl")
+
+    const views = calls.filter((c) => JSON.stringify(c.rich ?? {}).includes("Replying to this message:"))
+    assert.ok(views.length >= 2, "each reply carries its referent")
+    const all = JSON.stringify(views.map((v) => v.rich))
+    assert.match(all, /build failed/, "a bot message is quoted verbatim")
+    assert.match(all, /a note from a person/, "a human message is quoted too")
+  })
+
   test("the spinner goes out before anything is fetched or asked", () => {
     // A photo is the case that used to break this: the download (getFile, then
     // the bytes — two round trips to Telegram) was awaited before the turn was

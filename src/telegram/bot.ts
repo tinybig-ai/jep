@@ -209,6 +209,12 @@ const MAX_TOOL_CHARS = 1500
 // beyond this many collapses we roll per-section up to one block (message limits)
 const MAX_DETAILS = 12
 
+// How much of a swipe-replied system message rides along with the prompt. jep's
+// own messages cap at MAX_MSG, so this is the part that can actually be pointed
+// at; past it the quote is clipped rather than bloating the prompt and the
+// replayable queue entry saved to disk.
+const QUOTED_REPLY_CHARS = 2000
+
 const stringifyTool = (v: unknown): string => {
   if (v == null) return ""
   if (typeof v === "string") return v
@@ -1229,7 +1235,9 @@ export class TelegramBot {
         : undefined
       // a sticker on its own carries no text, so say what it was — the image
       // alone doesn't tell the model it's a sticker or which emoji it stands for
-      const prompt = text || (m.sticker ? stickerPrompt(m.sticker) : text)
+      const base = text || (m.sticker ? stickerPrompt(m.sticker) : text)
+      // a swipe-reply to a system message carries that message with the prompt
+      const prompt = this.#withQuotedReply(m, base)
       // A turn opens with a spinner, but a turn that has to wait its place in
       // the queue opens with nothing — and the screen is already busy with the
       // one in front of it, so a message sent into a working agent looked
@@ -1270,6 +1278,32 @@ export class TelegramBot {
       return s.thumbnail?.file_id ?? null
     }
     return null
+  }
+
+  // A swipe-reply points at a message — the bot's own, or the user's own
+  // earlier words. The prompt that reaches the harness is what they typed;
+  // without the referent it opens on a bare "this" with nothing to attach to,
+  // so the pointed-at text rides along, quoted.
+  #quotedReply(m: TgMessage): string | null {
+    const r = m.reply_to_message
+    if (!r) return null
+    const body = (r.text ?? r.caption ?? "").trim()
+    if (!body) return null
+    return body.length > QUOTED_REPLY_CHARS ? `${body.slice(0, QUOTED_REPLY_CHARS)}…` : body
+  }
+
+  // The user's prompt with the pointed-at system message quoted above it — a
+  // markdown blockquote, so it reads as a quotation rather than as the user's
+  // own words and survives the harness's markdown handling intact.
+  #withQuotedReply(m: TgMessage, body: string): string {
+    const q = this.#quotedReply(m)
+    if (!q) return body
+    const quoted = q
+      .split("\n")
+      .map((line) => (line ? `> ${line}` : ">"))
+      .join("\n")
+    const label = "Replying to this message:"
+    return body ? `${label}\n${quoted}\n\n${body}` : `${label}\n${quoted}`
   }
 
   // download a message's attachment into the uploads dir so the harness can
@@ -2958,7 +2992,9 @@ export class TelegramBot {
       .catch(logFail("voice receipt"))
 
     const caption = (m.caption ?? "").trim()
-    const prompt = caption ? `${caption}\n\n${text}` : text
+    const spoken = caption ? `${caption}\n\n${text}` : text
+    // a swipe-reply to a system message carries that message with the prompt
+    const prompt = this.#withQuotedReply(m, spoken)
     // from here it is an ordinary message: it can answer a question the bot
     // asked (a rename, a pairing code), or start a turn and queue behind one
     if (c.awaiting) {
