@@ -3889,10 +3889,14 @@ export class TelegramBot {
     const chatID = msg.chat.id
     const c = this.#chat(chatID)
     const ws = this.#activeWs(chatID)
-    const [verb, arg] = data.split(":")
-    const rest = arg ?? ""
+    // only the FIRST colon separates the verb: option ids may carry colons of
+    // their own ("0:red"), and splitting on every one of them mangled the
+    // question buttons into "stale button" refusals nobody could see
+    const colon = data.indexOf(":")
+    const verb = colon < 0 ? data : data.slice(0, colon)
+    const rest = colon < 0 ? "" : data.slice(colon + 1)
     // NaN, not 0: a verb that arrived without an argument must not address row 0
-    const i = arg === undefined ? NaN : Number(arg)
+    const i = colon < 0 ? NaN : Number(rest)
 
     switch (verb) {
       case "set":
@@ -4417,6 +4421,7 @@ export class TelegramBot {
         const askID = cut < 0 ? (rest ?? "") : (rest ?? "").slice(0, cut)
         const optionID = cut < 0 ? "" : (rest ?? "").slice(cut + 1)
         const pending = c.pending.get(askID)
+        console.log(`[ask] tap askID=${askID.slice(0, 24)} option="${optionID.slice(0, 40)}" pending=${!!pending}`)
         if (!pending) return tg.answerCallbackQuery({ id: cq.id, text: "already answered" })
         const option = pending.options.find((o) => o.id === optionID)
         if (!option) return tg.answerCallbackQuery({ id: cq.id, text: "stale button" })
