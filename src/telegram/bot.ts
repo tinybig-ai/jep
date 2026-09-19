@@ -105,6 +105,11 @@ interface ChatState {
   skills: Skill[]
   skillsPage: number
   mcpPage: number
+  // the model labels behind the 🤖 picker and the 🖼 vision suggestion —
+  // addressed by index, because aggregated-provider model ids blow through
+  // callback_data's 64-byte cap (one oversized button rejects the whole menu)
+  modelList: string[]
+  imagePicks: string[]
   // directory browser state: the folder being shown and the subfolders in it.
   // Buttons address entries by index because callback_data caps at 64 bytes,
   // which a real path blows straight through.
@@ -1018,6 +1023,8 @@ export class TelegramBot {
         skills: [],
         skillsPage: 0,
         mcpPage: 0,
+        modelList: [],
+        imagePicks: [],
         browse: null,
         page: 0,
         settingsMsg: null,
@@ -3831,6 +3838,7 @@ export class TelegramBot {
       labels.push(label)
     }
     const pages = Math.max(1, Math.ceil(labels.length / MAX_LIST))
+    c.modelList = labels
     // Opening the picker jumps to whichever page holds the current model, so
     // the green row is in front of you. It used to resume c.settingsPage — the
     // last page you happened to stop on — which made every model on the pages
@@ -3849,7 +3857,10 @@ export class TelegramBot {
       const image = caps.get(label)?.image === true
       if (image) anyImage = true
       const shown = label === "default" && defaultRef ? `default (${defaultRef})` : label
-      const b: InlineButton = btn(`${shown}${image ? " 🖼" : ""}`, label === "default" ? "mdl:off" : `mdl:${label}`)
+      // the button carries the index, not the label — a model id like
+      // "fireworks-ai/accounts/fireworks/models/deepseek-…" is 70+ bytes of
+      // callback_data, and one oversized button rejects the entire menu
+      const b: InlineButton = btn(`${shown}${image ? " 🖼" : ""}`, `mdl:${i}`)
       if (mark) b.style = "success" // green = the model this chat runs on
       rows.push([b])
     }
@@ -3925,10 +3936,11 @@ export class TelegramBot {
       if (picks.length === 3) break
     }
     if (picks.length === 0) return
-    const rows: InlineButton[][] = picks.map((label) => [btn(`🖼 ${label}`, `mdli:${label}`)])
-    rows.push([btn("All models ›", "set:model")])
     c.suggestedImage = current
     c.imageRetry = retry
+    c.imagePicks = picks
+    const rows: InlineButton[][] = picks.map((label, i) => [btn(`🖼 ${label}`, `mdli:${i}`)])
+    rows.push([btn("All models ›", "set:model")])
     await this.#tg.sendMessage({
       chatID,
       text: "🖼 This model can't read images. Switch to a vision-capable one?",
@@ -4113,29 +4125,36 @@ export class TelegramBot {
         break
       }
       case "mdl": {
+        // the button addresses c.modelList by index (callback_data cap); a
+        // legacy "off" from an old message still clears the model
         const harnessID = this.#activeWs(chatID).adapter.id
-        if (rest === "off") this.#store.clearModel(chatID, harnessID)
-        else this.#store.setModel(chatID, harnessID, rest)
+        const label = /^\d+$/.test(rest) ? c.modelList[Number(rest)] ?? "" : rest
+        if (!label) return tg.answerCallbackQuery({ id: cq.id, text: "stale list — reopen Model" })
+        if (label === "default") this.#store.clearModel(chatID, harnessID)
+        else this.#store.setModel(chatID, harnessID, label)
         await this.#settingsModel(chatID, msg.message_id)
-        await tg.answerCallbackQuery({ id: cq.id, text: rest === "off" ? "back to default" : `model: ${rest}` })
+        await tg.answerCallbackQuery({ id: cq.id, text: label === "default" ? "back to default" : `model: ${label}` })
         void this.#updateStatus(chatID).catch(logFail("status"))
         break
       }
       case "mdli": {
         // a pick from the 🖼 vision suggestion: switch, collapse the prompt
         // into a one-line confirmation, and resend the image turn that
-        // triggered it — the model the message was meant for now runs it
+        // triggered it — the model the message was meant for now runs it.
+        // The pick indexes c.imagePicks (a long label can't ride callback_data).
+        const label = c.imagePicks[Number(rest)] ?? ""
+        if (!label) return tg.answerCallbackQuery({ id: cq.id, text: "stale list — resend the image" })
         const harnessID = this.#activeWs(chatID).adapter.id
-        this.#store.setModel(chatID, harnessID, rest)
+        this.#store.setModel(chatID, harnessID, label)
         const retry = c.imageRetry
         c.imageRetry = undefined
         await this.#tg.editMessageText({
           chatID,
           messageID: msg.message_id,
-          text: `🖼 switched to **${rest}**${retry ? " — resending your message" : ""}`,
+          text: `🖼 switched to **${label}**${retry ? " — resending your message" : ""}`,
           replyMarkup: null,
         })
-        await tg.answerCallbackQuery({ id: cq.id, text: `model: ${rest}` })
+        await tg.answerCallbackQuery({ id: cq.id, text: `model: ${label}` })
         void this.#updateStatus(chatID).catch(logFail("status"))
         if (retry) {
           // label-only queue payload: the ingest thunk can't survive a restart
