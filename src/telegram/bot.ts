@@ -1975,7 +1975,7 @@ export class TelegramBot {
       // button to its own label instead of splitting the row evenly, so the
       // 🗑 actually reads as smaller than the conversation button next to it.
       // No separate text list — the buttons already say what they need to.
-      const result = await this.#menu(chatID, [caption, ...more], rows, edit)
+      const result = await this.#menu(chatID, [caption, ...more, ...rows], edit)
       messageID = edit ? edit.messageID : result.messageID
     }
     if (messageID === undefined) return
@@ -3120,7 +3120,7 @@ export class TelegramBot {
     if (isQuestion) {
       const lines = [`❓ ${ask.title}`, ...(ask.detail ? ["", ...ask.detail.split("\n\n")] : [])]
       const rows = ask.options.map((o) => [btn(o.label.slice(0, 40), `ask:${ask.id}#${o.id}`)])
-      const sent = await this.#menu(chatID, lines, rows)
+      const sent = await this.#menu(chatID, [...lines, ...rows])
       if (sent.messageID !== undefined) {
         c.pending.set(ask.id, {
           sessionID: ask.sessionID,
@@ -3361,19 +3361,28 @@ export class TelegramBot {
     await this.#tg.editMessageText({ chatID, messageID, text, replyMarkup: null }).catch(logFail("verdict"))
   }
 
-  // Render a menu (info lines + button rows) as a Rich Message — paragraphs plus
-  // RichBlockButtons — so options render natively in rich clients. Anything that
-  // rejects rich messages falls back to classic HTML text + inline keyboard, so
-  // menus keep working on every client.
+  // Render a menu as a Rich Message — paragraphs plus RichBlockButtons, in the
+  // exact order given, so a list screen can put each row's button directly
+  // under its line instead of a wall of text above a wall of buttons. Anything
+  // that rejects rich messages falls back to classic HTML text + inline
+  // keyboard, so menus keep working on every client.
   async #menu(
     chatID: number,
-    lines: string[],
-    rows: InlineButton[][],
+    items: Array<string | InlineButton[]>,
     edit?: { messageID: number },
   ): Promise<{ messageID?: number }> {
     const blocks: RichBlock[] = []
-    for (const line of lines) if (line.trim()) blocks.push({ type: "paragraph", text: line })
-    for (const row of rows) blocks.push(buttonsBlock(row))
+    const textLines: string[] = []
+    const allRows: InlineButton[][] = []
+    for (const item of items) {
+      if (typeof item === "string") {
+        if (item.trim()) blocks.push({ type: "paragraph", text: item })
+        textLines.push(item)
+      } else {
+        blocks.push(buttonsBlock(item))
+        allRows.push(item)
+      }
+    }
     try {
       if (edit) {
         await this.#tg.editRichMessage({ chatID, messageID: edit.messageID, rich_message: { blocks } })
@@ -3384,12 +3393,12 @@ export class TelegramBot {
     } catch (err) {
       console.error(`[menu] rich menu failed, falling back to classic: ${(err as Error)?.message ?? err}`)
     }
-    const body = lines.join("\n")
+    const body = textLines.join("\n")
     if (edit) {
-      await this.#tg.editMessageText({ chatID, messageID: edit.messageID, text: body, replyMarkup: kin(rows) })
+      await this.#tg.editMessageText({ chatID, messageID: edit.messageID, text: body, replyMarkup: kin(allRows) })
       return {}
     }
-    const sent = await this.#tg.sendMessage({ chatID, text: body, replyMarkup: kin(rows) })
+    const sent = await this.#tg.sendMessage({ chatID, text: body, replyMarkup: kin(allRows) })
     return { messageID: sent.message_id }
   }
 
@@ -3431,7 +3440,7 @@ export class TelegramBot {
       [btn("‹ Done", "set:done")],
     ]
 
-    const sent = await this.#menu(chatID, lines, rows, messageID === null ? undefined : { messageID })
+    const sent = await this.#menu(chatID, [...lines, ...rows], messageID === null ? undefined : { messageID })
     if (sent.messageID !== undefined) c.settingsMsg = sent.messageID
   }
 
@@ -3455,7 +3464,7 @@ export class TelegramBot {
         ? "Tap one to switch — starts a fresh conversation there."
         : "➕ Add project to browse for another, or clone one."
     const lines = ["🗂 Workspace", "", `current: ${c.workspace}`, "", hint]
-    await this.#menu(chatID, lines, rows, messageID === null ? undefined : { messageID })
+    await this.#menu(chatID, [...lines, ...rows], messageID === null ? undefined : { messageID })
   }
 
   // 🔌 Harness: which agent runtime answers, for this chat. Sessions belong to
@@ -3475,7 +3484,7 @@ export class TelegramBot {
         ? "Switching starts a fresh conversation — sessions don't move between harnesses."
         : "The only harness installed here. Install another (e.g. codex) and it shows up."
     const lines = ["🔌 Harness", "", `current: ${current}`, "", hint]
-    await this.#menu(chatID, lines, rows, { messageID })
+    await this.#menu(chatID, [...lines, ...rows], { messageID })
   }
 
   // ─── MCP servers & skills ────────────────────────────────────────────────
@@ -3513,22 +3522,21 @@ export class TelegramBot {
     } catch (err) {
       note = `⚠️ couldn't read the config: ${(err as Error).message}`
     }
-    const lines: string[] = ["🔌 MCP servers", "", `harness: ${harness}`]
-    if (note) lines.push("", note)
-    else if (!servers.length) lines.push("", "none configured in this harness's config.")
-    const rows: InlineButton[][] = []
+    const items: Array<string | InlineButton[]> = ["🔌 MCP servers", "", `harness: ${harness}`]
+    if (note) items.push("", note)
+    else if (!servers.length) items.push("", "none configured in this harness's config.")
     for (const s of servers) {
       const state = s.enabled ? "✅" : "🚫"
       const detail = s.detail ? ` — ${clipTitle(s.detail, 24)}` : ""
-      lines.push(`${state} **${s.name}** · ${s.kind}${detail}`)
+      items.push(`${state} **${s.name}** · ${s.kind}${detail}`)
       // claude user-scoped has no off state: a row without a toggle is more
       // honest than one that promises an action it can't perform
       const toggles = harness === "claude" && !s.detail.startsWith("http") && !("disabled" in s)
-      rows.push([btn(`${s.enabled ? "Disable" : "Enable"} ${s.name}`, `mcpt:${s.name}`)])
-      if (toggles) rows.pop()
+      // the toggle sits directly under the line it acts on
+      if (!toggles) items.push([btn(`${s.enabled ? "Disable" : "Enable"} ${s.name}`, `mcpt:${s.name}`)])
     }
-    rows.push([btn("‹ Back", "set:root")])
-    await this.#menu(chatID, lines, rows, messageID === null ? undefined : { messageID })
+    items.push([btn("‹ Back", "set:root")])
+    await this.#menu(chatID, items, messageID === null ? undefined : { messageID })
   }
 
   async #mcpToggle(chatID: number, name: string, messageID: number): Promise<string> {
@@ -3560,20 +3568,21 @@ export class TelegramBot {
     } catch (err) {
       note = `⚠️ couldn't read the skill directories: ${(err as Error).message}`
     }
-    const lines: string[] = [`🧩 Skills · ${ws.adapter.id}`]
-    if (note) lines.push("", note)
+    const items: Array<string | InlineButton[]> = [`🧩 Skills · ${ws.adapter.id}`]
+    if (note) items.push("", note)
     else if (!skills.length)
-      lines.push("", `none installed — a skill is a folder with a SKILL.md in ${dirs.userDirs[0]?.replace(homedir(), "~") ?? "its skill directory"}.`)
-    const rows: InlineButton[][] = []
+      items.push("", `none installed — a skill is a folder with a SKILL.md in ${dirs.userDirs[0]?.replace(homedir(), "~") ?? "its skill directory"}.`)
     c.skills = skills
     for (const [i, s] of skills.entries()) {
       const state = !dirs.toggleable ? "" : s.disableModelInvocation ? "🚫" : "✅"
       const scope = s.scope === "project" ? "· project" : ""
-      lines.push(`${state} **${s.name}** ${scope}${s.description ? ` — ${clipTitle(s.description, 40)}` : ""}`.trim())
-      if (dirs.toggleable) rows.push([btn(`${s.disableModelInvocation ? "Allow model use" : "Hide from model"}`, `sklt:${i}`)])
+      items.push(`${state} **${s.name}** ${scope}${s.description ? ` — ${clipTitle(s.description, 40)}` : ""}`.trim())
+      // the toggle sits directly under the line it acts on, not in a
+      // detached wall of buttons at the bottom
+      if (dirs.toggleable) items.push([btn(`${s.disableModelInvocation ? "Allow model use" : "Hide from model"}`, `sklt:${i}`)])
     }
-    rows.push([btn("‹ Back", "set:root")])
-    await this.#menu(chatID, lines, rows, messageID === null ? undefined : { messageID })
+    items.push([btn("‹ Back", "set:root")])
+    await this.#menu(chatID, items, messageID === null ? undefined : { messageID })
   }
 
   // The browser is bounded to one root (JEP_BROWSE_ROOT, default $HOME) so a
@@ -3634,7 +3643,7 @@ export class TelegramBot {
       dirs.length ? "📦 = git repo" : "(no subfolders here)",
       ...(already ? ["", "already a workspace"] : []),
     ]
-    await this.#menu(chatID, lines, rows, messageID === null ? undefined : { messageID })
+    await this.#menu(chatID, [...lines, ...rows], messageID === null ? undefined : { messageID })
   }
 
   // Brings a directory up as a workspace and points this chat at it. Spawning
@@ -3644,12 +3653,12 @@ export class TelegramBot {
     const c = this.#chat(chatID)
     const existing = this.#workspaces.find((w) => w.dir === dir)
     if (!existing) {
-      await this.#menu(chatID, ["📂 Add project", "", `starting ${fmtHome(dir)}…`], [], { messageID })
+      await this.#menu(chatID, ["📂 Add project", "", `starting ${fmtHome(dir)}…`], { messageID })
       try {
         this.#workspaces.push(await this.#spawn(dir))
       } catch (err) {
         const msg = (err as Error)?.message ?? String(err)
-        await this.#menu(chatID, ["📂 Add project", "", `⚠️ couldn't start there:`, msg.slice(0, 300)], [[btn("‹ Back", "wsadd")]], { messageID })
+        await this.#menu(chatID, ["📂 Add project", "", `⚠️ couldn't start there:`, msg.slice(0, 300), [btn("‹ Back", "wsadd")]], { messageID })
         return
       }
       this.#store.addWorkspace(dir)
@@ -3682,7 +3691,7 @@ export class TelegramBot {
       [btn("‹ Back", "set:root")],
     ]
     const lines = ["🧭 Agent", "", `current: ${current}`, "", "Build executes tools. Plan is read-only — no edits."]
-    await this.#menu(chatID, lines, rows, { messageID })
+    await this.#menu(chatID, [...lines, ...rows], { messageID })
   }
 
   // 🔎 Internals: how much the agent shows per reply (thinking + tool calls).
@@ -3717,7 +3726,7 @@ export class TelegramBot {
       "Tap any value to cycle it. Collapsed blocks open on tap.",
       `preset: ${preset}`,
     ]
-    await this.#menu(chatID, lines, rows, { messageID })
+    await this.#menu(chatID, [...lines, ...rows], { messageID })
   }
 
   async #settingsModel(chatID: number, messageID: number, requestPage?: number): Promise<void> {
@@ -3782,7 +3791,7 @@ export class TelegramBot {
       ...(anyImage ? ["🖼 = accepts images"] : []),
       ...(pages > 1 ? [`page ${page + 1} / ${pages} (${labels.length} models)`] : []),
     ]
-    await this.#menu(chatID, lines, rows, { messageID })
+    await this.#menu(chatID, [...lines, ...rows], { messageID })
   }
 
   // Claude Code's background agents own a session while they run: a prompt
@@ -3857,8 +3866,7 @@ export class TelegramBot {
     if (!ids.length) {
       await this.#menu(
         chatID,
-        ["✏️ Rename", "", "(no conversations to rename — just send a message first)"],
-        [[btn("‹ Back", "set:root")]],
+        ["✏️ Rename", "", "(no conversations to rename — just send a message first)", [btn("‹ Back", "set:root")]],
         { messageID },
       )
       return
@@ -3882,7 +3890,7 @@ export class TelegramBot {
     rows.push([btn("‹ Back", "set:root")])
     c.picker = { messageID, sessions: ids.map((id) => ({ id, ws: c.workspace })) }
     c.del = null
-    await this.#menu(chatID, ["✏️ Rename", "", "Which conversation? (no active conversation yet)"], rows, { messageID })
+    await this.#menu(chatID, ["✏️ Rename", "", "Which conversation? (no active conversation yet)", ...rows], { messageID })
   }
 
   async #onCallback(cq: NonNullable<TgUpdate["callback_query"]>): Promise<void> {
@@ -4320,7 +4328,7 @@ export class TelegramBot {
         const prompt = clone
           ? ["⬇︎ Clone repo", "", `into ${fmtHome(c.browse.cwd)}`, "", "Send the repository URL (/cancel to stop)."]
           : ["📁+ New folder", "", `in ${fmtHome(c.browse.cwd)}`, "", "Send a name for it (/cancel to stop)."]
-        await this.#menu(chatID, prompt, [[btn("‹ Back", "wsadd")]], { messageID: msg.message_id })
+        await this.#menu(chatID, [...prompt, [btn("‹ Back", "wsadd")]], { messageID: msg.message_id })
         await tg.answerCallbackQuery({ id: cq.id })
         break
       }
@@ -4356,13 +4364,13 @@ export class TelegramBot {
         // starting a harness takes a moment (opencode spawns a server); say so
         await tg.answerCallbackQuery({ id: cq.id, text: "starting…" })
         if (!this.#workspaces.some((w) => w.dir === dir && w.adapter.id === rest)) {
-          await this.#menu(chatID, ["🔌 Harness", "", `starting ${rest}…`], [], { messageID: msg.message_id })
+          await this.#menu(chatID, ["🔌 Harness", "", `starting ${rest}…`], { messageID: msg.message_id })
           try {
             this.#workspaces.push(await this.#spawn(dir, rest))
           } catch (err) {
             const m = (err as Error)?.message ?? String(err)
             console.error(`[harness] cannot start ${rest} for ${dir}: ${m}`)
-            await this.#menu(chatID, ["🔌 Harness", "", `⚠️ couldn't start ${rest}:`, m.slice(0, 300)], [[btn("‹ Back", "set:harness")]], { messageID: msg.message_id })
+            await this.#menu(chatID, ["🔌 Harness", "", `⚠️ couldn't start ${rest}:`, m.slice(0, 300), [btn("‹ Back", "set:harness")]], { messageID: msg.message_id })
             break
           }
         }
