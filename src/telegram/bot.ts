@@ -7,7 +7,7 @@ import { basename, dirname, join, resolve } from "node:path"
 import type { HarnessAdapter, ModelCaps, ModelRef } from "../core/ports.ts"
 import type { AskOption, AskRequest, FilePart, Part, ProjectSummary, SessionSummary, TextPart, ReasoningPart, ToolCallPart } from "../core/types.ts"
 import { mdToHtml } from "./html.ts"
-import { closeStreamingTable, mdTable, mdToRich, richTextFromBlocks } from "./rich.ts"
+import { closeStreamingTable, inlineRich, mdTable, mdToRich, richTextFromBlocks } from "./rich.ts"
 import { splitMinimalSegments, minimalSegmentBlocks, thinkingPhrase } from "./minimal.ts"
 import type { RichBlock } from "./rich.ts"
 import type { TelegramApi, TgMessage, TgUpdate, InlineButton, ReplyMarkup } from "./api.ts"
@@ -103,6 +103,8 @@ interface ChatState {
   // buttons, because a SKILL.md path (the synced buckets bury them deep)
   // blows straight through callback_data's 64-byte cap
   skills: Skill[]
+  skillsPage: number
+  mcpPage: number
   // directory browser state: the folder being shown and the subfolders in it.
   // Buttons address entries by index because callback_data caps at 64 bytes,
   // which a real path blows straight through.
@@ -1013,6 +1015,8 @@ export class TelegramBot {
         del: null,
         awaiting: null,
         skills: [],
+        skillsPage: 0,
+        mcpPage: 0,
         browse: null,
         page: 0,
         settingsMsg: null,
@@ -3376,7 +3380,9 @@ export class TelegramBot {
     const allRows: InlineButton[][] = []
     for (const item of items) {
       if (typeof item === "string") {
-        if (item.trim()) blocks.push({ type: "paragraph", text: item })
+        // rich paragraphs take inline markup only after inlineRich parses it —
+        // a raw `**name**` line would render its asterisks verbatim
+        if (item.trim()) blocks.push({ type: "paragraph", text: inlineRich(item) })
         textLines.push(item)
       } else {
         blocks.push(buttonsBlock(item))
@@ -3506,7 +3512,8 @@ export class TelegramBot {
   // disabledMcpjsonServers list for claude's project scope. Claude's
   // user-scoped servers have no disabled state (present = on), so their rows
   // don't pretend to toggle.
-  async #settingsMcp(chatID: number, messageID: number | null): Promise<void> {
+  async #settingsMcp(chatID: number, messageID: number | null, page = 0): Promise<void> {
+    const c = this.#chat(chatID)
     const ws = this.#activeWs(chatID)
     const harness = ws.adapter.id
     const paths = this.#mcpPaths()
@@ -3522,10 +3529,15 @@ export class TelegramBot {
     } catch (err) {
       note = `⚠️ couldn't read the config: ${(err as Error).message}`
     }
+    const PER = 8
+    const pages = Math.max(1, Math.ceil(servers.length / PER))
+    const p = Math.min(Math.max(page, 0), pages - 1)
+    c.mcpPage = p
     const items: Array<string | InlineButton[]> = ["🔌 MCP servers", "", `harness: ${harness}`]
+    if (pages > 1) items.push(`page ${p + 1}/${pages}`)
     if (note) items.push("", note)
     else if (!servers.length) items.push("", "none configured in this harness's config.")
-    for (const s of servers) {
+    for (const s of servers.slice(p * PER, (p + 1) * PER)) {
       const state = s.enabled ? "✅" : "🚫"
       const detail = s.detail ? ` — ${clipTitle(s.detail, 24)}` : ""
       items.push(`${state} **${s.name}** · ${s.kind}${detail}`)
@@ -3535,6 +3547,10 @@ export class TelegramBot {
       // the toggle sits directly under the line it acts on
       if (!toggles) items.push([btn(`${s.enabled ? "Disable" : "Enable"} ${s.name}`, `mcpt:${s.name}`)])
     }
+    const nav: InlineButton[] = []
+    if (p > 0) nav.push(btn("‹ Prev", "mcpp:prev"))
+    if (p < pages - 1) nav.push(btn("Next ›", "mcpp:next"))
+    if (nav.length) items.push(nav)
     items.push([btn("‹ Back", "set:root")])
     await this.#menu(chatID, items, messageID === null ? undefined : { messageID })
   }
@@ -3555,8 +3571,9 @@ export class TelegramBot {
 
   // 🧩 Skills: the SKILL.md directories the harness loads, with their one-line
   // description. A tap flips `disable-model-invocation` in the skill's own
-  // frontmatter — one line in a prose file, everything else untouched.
-  async #settingsSkills(chatID: number, messageID: number | null): Promise<void> {
+  // frontmatter — one line in a prose file, everything else untouched. Long
+  // lists page; ℹ️ opens the full description.
+  async #settingsSkills(chatID: number, messageID: number | null, page = 0): Promise<void> {
     const c = this.#chat(chatID)
     const ws = this.#activeWs(chatID)
     // the adapter owns its roots; the core table covers harnesses that don't
@@ -3568,21 +3585,53 @@ export class TelegramBot {
     } catch (err) {
       note = `⚠️ couldn't read the skill directories: ${(err as Error).message}`
     }
+    c.skills = skills
+    const PER = 8
+    const pages = Math.max(1, Math.ceil(skills.length / PER))
+    const p = Math.min(Math.max(page, 0), pages - 1)
+    c.skillsPage = p
     const items: Array<string | InlineButton[]> = [`🧩 Skills · ${ws.adapter.id}`]
+    if (pages > 1) items.push(`page ${p + 1}/${pages}`)
     if (note) items.push("", note)
     else if (!skills.length)
       items.push("", `none installed — a skill is a folder with a SKILL.md in ${dirs.userDirs[0]?.replace(homedir(), "~") ?? "its skill directory"}.`)
-    c.skills = skills
-    for (const [i, s] of skills.entries()) {
+    for (const s of skills.slice(p * PER, (p + 1) * PER)) {
+      const i = skills.indexOf(s)
       const state = !dirs.toggleable ? "" : s.disableModelInvocation ? "🚫" : "✅"
       const scope = s.scope === "project" ? "· project" : ""
       items.push(`${state} **${s.name}** ${scope}${s.description ? ` — ${clipTitle(s.description, 40)}` : ""}`.trim())
-      // the toggle sits directly under the line it acts on, not in a
+      // toggle and details sit directly under the line they act on, not in a
       // detached wall of buttons at the bottom
-      if (dirs.toggleable) items.push([btn(`${s.disableModelInvocation ? "Allow model use" : "Hide from model"}`, `sklt:${i}`)])
+      const row: InlineButton[] = []
+      if (dirs.toggleable) items.push([btn(`${s.disableModelInvocation ? "Allow model use" : "Hide from model"}`, `sklt:${i}`), btn("ℹ️", `skdt:${i}`)])
+      else items.push([btn("ℹ️", `skdt:${i}`)])
     }
+    const nav: InlineButton[] = []
+    if (p > 0) nav.push(btn("‹ Prev", "sklp:prev"))
+    if (p < pages - 1) nav.push(btn("Next ›", "sklp:next"))
+    if (nav.length) items.push(nav)
     items.push([btn("‹ Back", "set:root")])
     await this.#menu(chatID, items, messageID === null ? undefined : { messageID })
+  }
+
+  // one skill in full: name, where it lives, and the whole description the
+  // one-liner clips. A stale index reopens the list rather than dead-ending.
+  async #skillDetails(chatID: number, i: number, messageID: number): Promise<void> {
+    const c = this.#chat(chatID)
+    const s = c.skills[i]
+    if (!s) return this.#settingsSkills(chatID, messageID)
+    await this.#menu(
+      chatID,
+      [
+        `🧩 ${s.name}`,
+        `scope: ${s.scope}`,
+        `\`${s.path.replace(homedir(), "~")}\``,
+        "",
+        s.description || "(no description)",
+        [btn("‹ Back to list", "sklb")],
+      ],
+      { messageID },
+    )
   }
 
   // The browser is bounded to one root (JEP_BROWSE_ROOT, default $HOME) so a
@@ -3957,8 +4006,30 @@ export class TelegramBot {
         } catch (err) {
           said = `⚠️ ${(err as Error).message}`
         }
-        await this.#settingsSkills(chatID, msg.message_id)
+        await this.#settingsSkills(chatID, msg.message_id, c.skillsPage)
         await tg.answerCallbackQuery({ id: cq.id, text: said })
+        break
+      }
+      case "sklp": {
+        // skills list paging — clamp lives in the renderer
+        await this.#settingsSkills(chatID, msg.message_id, c.skillsPage + (rest === "prev" ? -1 : 1))
+        await tg.answerCallbackQuery({ id: cq.id, text: rest === "prev" ? "previous page" : "next page" })
+        break
+      }
+      case "skdt": {
+        await this.#skillDetails(chatID, Number(rest), msg.message_id)
+        await tg.answerCallbackQuery({ id: cq.id })
+        break
+      }
+      case "sklb": {
+        // back from a skill's details to the page it was listed on
+        await this.#settingsSkills(chatID, msg.message_id, c.skillsPage)
+        await tg.answerCallbackQuery({ id: cq.id })
+        break
+      }
+      case "mcpp": {
+        await this.#settingsMcp(chatID, msg.message_id, c.mcpPage + (rest === "prev" ? -1 : 1))
+        await tg.answerCallbackQuery({ id: cq.id, text: rest === "prev" ? "previous page" : "next page" })
         break
       }
       case "ctx": {

@@ -114,7 +114,7 @@ function richText(t: RichText | undefined): string {
 const INLINE_RE =
   /(\*\*([^*\n]*)\*\*|__([^_\n]*)__|\*([^*\n]*)\*|_([^_\n]*)_|`([^`\n]*)`|~~([^~\n]*)~~|\[([^\]\n]*)\]\((https?:\/\/[^\s)]+)\))/g
 
-function inlineRich(s: string): RichText {
+export function inlineRich(s: string): RichText {
   const out: RichTextPart[] = []
   let last = 0
   let hit = false
