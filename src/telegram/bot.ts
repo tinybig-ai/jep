@@ -77,7 +77,8 @@ interface ChatState {
   // adapter to answer (an ask can arrive from a workspace this chat is no
   // longer looking at), and the options as the harness worded them.
   // ephemeralID is set when the prompt went out as a group ephemeral message.
-  pending: Map<string, { sessionID: string; adapter: HarnessAdapter; messageID: number; ephemeralID?: number; options: AskOption[] }>
+  // questionPartID is set when this is a question tool response (not a permission ask).
+  pending: Map<string, { sessionID: string; adapter: HarnessAdapter; messageID: number; ephemeralID?: number; options: AskOption[]; questionPartID?: string }>
   // snapshot behind the /ls and settings pickers — each entry keeps its own
   // origin workspace, since /ls spans every project; `dir` is set when that
   // project has no server running yet (see #listPicker)
@@ -2466,14 +2467,30 @@ export class TelegramBot {
               await flushPendingReasoning()
               settled = true
             }
-            // the "question" tool is the model asking the user something — surface
-            // it as a message so the human actually sees the question rather than
-            // just a gear icon that never resolves
+            // the "question" tool is the model asking the user something — render
+            // it as a rich message with inline buttons so the human can answer
+            // directly rather than seeing raw JSON
             if (evt.part.kind === "tool" && evt.part.name === "question" && evt.part.status === "running") {
               const q = toolInput(evt.part)
-              const text = typeof q.question === "string" ? q.question : typeof q.text === "string" ? q.text : stringifyTool(q)
-              if (text.trim()) {
-                await this.#tg.sendMessage({ chatID, text: `❓ ${text}`.slice(0, MAX_MSG) })
+              const questionText = typeof q.question === "string" ? q.question : typeof q.text === "string" ? q.text : ""
+              const options: string[] = Array.isArray(q.options) ? q.options.map(String) : Array.isArray(q.choices) ? q.choices.map(String) : []
+              if (questionText.trim()) {
+                const text = `❓ ${questionText}`
+                const buttons: InlineButton[][] = []
+                if (options.length) {
+                  // one row per option, each as a callback button
+                  options.forEach((opt) => buttons.push([btn(opt, `q:${evt.partID}#${opt}`)]))
+                }
+                const markup = buttons.length ? kin(buttons) : { inline_keyboard: [], force_reply: true }
+                const msg = await this.#tg.sendMessage({ chatID, text: mdToHtml(text).slice(0, MAX_MSG), replyMarkup: markup })
+                // remember this question so button taps / replies can answer it
+                c.pending.set(`q:${evt.partID}`, {
+                  sessionID,
+                  adapter: ws.adapter,
+                  messageID: msg.message_id,
+                  options: options.length ? options.map((o) => ({ id: o, label: o })) : [{ id: "reply", label: "Reply" }],
+                  questionPartID: evt.partID,
+                })
               }
             }
             // a card just left the draft for its own permanent message — redraw
@@ -4364,7 +4381,7 @@ export class TelegramBot {
             console.error(`[ask] respond failed: ${(err as Error)?.message ?? err}`)
             return false
           })
-        const verdict = ok ? `✅ ${option.label}` : `⚠️ ${option.label} — the harness didn't take it`
+        const verdict = ok ? `✅ ${option.label}` : `️ ${option.label} — the harness didn't take it`
         if (pending.ephemeralID !== undefined) {
           // ephemeral messages have no editable message_id — just drop the prompt
           await this.#tg.deleteEphemeralMessage({ chatID, ephemeralMessageID: pending.ephemeralID }).catch(logFail("cleanup"))
@@ -4372,6 +4389,26 @@ export class TelegramBot {
           await this.#tg.editMessageText({ chatID, messageID: msg.message_id, text: verdict, replyMarkup: null })
         }
         await tg.answerCallbackQuery({ id: cq.id, text: option.label })
+        break
+      }
+      case "q": {
+        // question tool callback: "<partID>#<option>"
+        const cut = (rest ?? "").lastIndexOf("#")
+        const partID = cut < 0 ? (rest ?? "") : (rest ?? "").slice(0, cut)
+        const answer = cut < 0 ? "" : (rest ?? "").slice(cut + 1)
+        const pending = c.pending.get(`q:${partID}`)
+        if (!pending) return tg.answerCallbackQuery({ id: cq.id, text: "already answered" })
+        c.pending.delete(`q:${partID}`)
+        // respond to the question via the adapter (uses the same mechanism as asks)
+        const ok = await pending.adapter
+          .respondAsk(pending.sessionID, partID, answer)
+          .catch((err) => {
+            console.error(`[question] respond failed: ${(err as Error)?.message ?? err}`)
+            return false
+          })
+        const verdict = ok ? `✅ ${answer}` : `⚠️ ${answer} — the harness didn't take it`
+        await this.#tg.editMessageText({ chatID, messageID: msg.message_id, text: verdict, replyMarkup: null })
+        await tg.answerCallbackQuery({ id: cq.id, text: answer })
         break
       }
       default:
