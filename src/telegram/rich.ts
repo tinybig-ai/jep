@@ -85,6 +85,32 @@ export interface RichBlock {
   document?: { type: string; media: string }
 }
 
+// Plain text back out of a sent rich message — the inverse of mdToRich.
+// Rich messages carry no `text` field on the wire, so a quoted reply to one
+// cannot reuse the message's own words: they have to be lifted out of the
+// blocks. Text lives in paragraph/pre/heading bodies, details summaries,
+// table cells and list items; buttons, attachments and bare dividers are
+// chrome, not content.
+export function richTextFromBlocks(blocks: RichBlock[]): string {
+  const lines: string[] = []
+  const walk = (b: RichBlock): void => {
+    if (b.summary) lines.push(richText(b.summary))
+    if (b.text) lines.push(richText(b.text))
+    if (b.credit) lines.push(richText(b.credit))
+    if (b.cells) for (const row of b.cells) lines.push(row.map((c) => richText(c.text)).join(" | "))
+    if (b.blocks) for (const sub of b.blocks) walk(sub)
+    if (b.items) for (const item of b.items) for (const sub of item.blocks ?? []) walk(sub)
+  }
+  for (const b of blocks) walk(b)
+  return lines.filter((l) => l.trim()).join("\n")
+}
+
+function richText(t: RichText | undefined): string {
+  if (t == null) return ""
+  if (typeof t === "string") return t
+  return t.map((p) => (typeof p === "string" ? p : richText(p.text) || p.url || "")).join("")
+}
+
 const INLINE_RE =
   /(\*\*([^*\n]*)\*\*|__([^_\n]*)__|\*([^*\n]*)\*|_([^_\n]*)_|`([^`\n]*)`|~~([^~\n]*)~~|\[([^\]\n]*)\]\((https?:\/\/[^\s)]+)\))/g
 

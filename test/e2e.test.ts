@@ -360,10 +360,11 @@ describe("mock replay", { skip: enabled ? false : "set JEP_E2E=1 (boots a real h
     const calls = replay("telegram-mock-reply.jsonl")
 
     const views = calls.filter((c) => JSON.stringify(c.rich ?? {}).includes("Replying to this message:"))
-    assert.ok(views.length >= 2, "each reply carries its referent")
+    assert.ok(views.length >= 3, "each reply carries its referent")
     const all = JSON.stringify(views.map((v) => v.rich))
     assert.match(all, /build failed/, "a bot message is quoted verbatim")
     assert.match(all, /a note from a person/, "a human message is quoted too")
+    assert.match(all, /the rich answer/, "a rich bot message is quoted from its blocks")
   })
 
   test("settings offers MCP and skills screens that answer honestly", () => {

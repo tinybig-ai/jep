@@ -7,7 +7,7 @@ import { basename, dirname, join, resolve } from "node:path"
 import type { HarnessAdapter, ModelCaps, ModelRef } from "../core/ports.ts"
 import type { AskOption, AskRequest, FilePart, Part, ProjectSummary, SessionSummary, TextPart, ReasoningPart, ToolCallPart } from "../core/types.ts"
 import { mdToHtml } from "./html.ts"
-import { closeStreamingTable, mdTable, mdToRich } from "./rich.ts"
+import { closeStreamingTable, mdTable, mdToRich, richTextFromBlocks } from "./rich.ts"
 import { splitMinimalSegments, minimalSegmentBlocks, thinkingPhrase } from "./minimal.ts"
 import type { RichBlock } from "./rich.ts"
 import type { TelegramApi, TgMessage, TgUpdate, InlineButton, ReplyMarkup } from "./api.ts"
@@ -1306,7 +1306,10 @@ export class TelegramBot {
   #quotedReply(m: TgMessage): string | null {
     const r = m.reply_to_message
     if (!r) return null
-    const body = (r.text ?? r.caption ?? "").trim()
+    // the bot's own replies are rich messages and arrive with no `text` —
+    // their words come back as blocks, so lift them out the same way a plain
+    // message's text is read
+    const body = (r.text ?? r.caption ?? richTextFromBlocks(r.rich_message?.blocks ?? [])).trim()
     if (!body) return null
     return body.length > QUOTED_REPLY_CHARS ? `${body.slice(0, QUOTED_REPLY_CHARS)}…` : body
   }
@@ -2189,6 +2192,7 @@ export class TelegramBot {
       if (finished) return // the final render is about to run; segments belong to it
       const first = splitMinimalSegments(minimalVisible(liveParts))[0]!
       if (!first.text.length) return // nothing user-visible yet — keep accumulating
+      if (!textOf(first.text).trim()) return // whitespace-only — wait for real content
       const blocks = minimalSegmentBlocks(first, {
         thinking: internals.thinking !== "off",
         tools: internals.tools !== "off",
@@ -2200,6 +2204,8 @@ export class TelegramBot {
         icon: toolIcon,
       })
       if (!blocks.length) return
+      const segIds = [...first.icons, ...first.text].map((p) => p.id).filter(Boolean)
+      console.log(`[flush] segment send: text="${textOf(first.text).slice(0, 40).replace(/\n/g, "\\n")}" ids=${segIds.length} flushed=${minimalFlushed.size}`)
       try {
         await this.#tg.sendRichMessage({ chatID, rich_message: { blocks } })
       } catch (err) {
@@ -2356,6 +2362,7 @@ export class TelegramBot {
     const presentParts = async (parts: Part[], s: InternalsSettings): Promise<boolean> => {
       const media = parts.filter((p): p is FilePart => p.kind === "file")
       const blocks = buildRich(parts, s)
+      if (minimal) console.log(`[present] parts=${parts.length} blocks=${blocks.length} flushed=${minimalFlushed.size} text="${textOf(parts).slice(0, 40).replace(/\n/g, "\\n")}"`)
       const attached: Array<{ name: string; filePath: string }> = []
       media
         .filter((f): f is FilePart & { filePath: string } => !!f.filePath)

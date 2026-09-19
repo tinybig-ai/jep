@@ -4,7 +4,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { closeStreamingTable, mdTable, mdToRich } from "../src/telegram/rich.ts"
+import { closeStreamingTable, mdTable, mdToRich, richTextFromBlocks } from "../src/telegram/rich.ts"
 import type { RichBlock } from "../src/telegram/rich.ts"
 
 const types = (blocks: RichBlock[]): (string | undefined)[] => blocks.map((b) => b.type)
@@ -168,4 +168,36 @@ test("every prefix of a streaming table renders without throwing", () => {
     const slice = full.slice(0, i)
     assert.doesNotThrow(() => mdToRich(closeStreamingTable(slice)), `failed at prefix ${i}`)
   }
+})
+
+test("richTextFromBlocks lifts the words out of the blocks the bot sent", () => {
+  const blocks: RichBlock[] = [
+    { type: "heading", size: 1, text: "the rich answer" },
+    { type: "paragraph", text: [{ type: "bold", text: "fixed" }, { type: "code", text: "pack.ts" }, " now"] },
+  ]
+  assert.equal(richTextFromBlocks(blocks), "the rich answer\nfixedpack.ts now")
+})
+
+test("richTextFromBlocks walks details, tables and list items", () => {
+  const blocks: RichBlock[] = [
+    { type: "details", summary: "why", is_open: false, blocks: [{ type: "paragraph", text: "the why" }] },
+    { type: "table", cells: [[{ text: "file" }, { text: "+" }], [{ text: "a.ts" }, { text: "12" }]] },
+    { type: "bulleted_list", items: [{ blocks: [{ type: "paragraph", text: "one" }] }, { blocks: [{ type: "paragraph", text: "two" }] }] },
+  ]
+  const out = richTextFromBlocks(blocks)
+  assert.match(out, /why/)
+  assert.match(out, /the why/)
+  assert.match(out, /file \| \+/)
+  assert.match(out, /a\.ts \| 12/)
+  assert.match(out, /one\ntwo/)
+})
+
+test("richTextFromBlocks skips chrome — buttons, attachments, empty blocks", () => {
+  const blocks: RichBlock[] = [
+    { type: "buttons", buttons: [{ text: "tap" }] },
+    { type: "divider" },
+    { type: "photo", photo: { type: "photo", media: "attach://x.png" } },
+    { type: "paragraph", text: "real content" },
+  ]
+  assert.equal(richTextFromBlocks(blocks), "real content")
 })

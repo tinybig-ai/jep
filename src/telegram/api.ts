@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises"
 import { basename } from "node:path"
+import type { RichBlock } from "./rich.ts"
 
 const TG_API = "https://api.telegram.org/bot"
 const TG_FILE = "https://api.telegram.org/file/bot"
@@ -41,6 +42,8 @@ export interface TgMessage {
   audio?: { file_id: string; duration?: number; file_name?: string; mime_type?: string; file_size?: number }
   /** the round selfie clip — someone talking, in an mp4 */
   video_note?: { file_id: string; duration?: number; file_size?: number }
+  /** rich-message payload — bot replies carry their words in blocks, not text */
+  rich_message?: { blocks?: RichBlock[] }
   // set on group messages that were sent as ephemeral (visible to one user + bot)
   ephemeral_message_id?: number
   /** present when the user swipe-replied — the message being pointed at */
