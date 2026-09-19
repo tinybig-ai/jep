@@ -117,6 +117,10 @@ interface ChatState {
   settingsPage: number
   // the model that already got the "switch to a vision model" suggestion
   suggestedImage: string | null
+  // the image turn that was offered a vision model for — selecting one from
+  // the 🖼 picker resends it under the new model (in-memory: the ingest thunk
+  // can't survive a restart, same as any attachment turn)
+  imageRetry?: { text: string; ingest: () => Promise<string[]> }
   // a prompt that couldn't be delivered because another run holds the session
   // (see #reportHold), kept so the ⏹ button can send it once that run ends.
   // One slot: a second blocked message replaces the first, which is what the
@@ -1019,6 +1023,7 @@ export class TelegramBot {
         settingsMsg: null,
         settingsPage: 0,
         suggestedImage: null,
+        imageRetry: undefined,
         // the one copy of a message that was never delivered — see #reportHold
         held: this.#store.held(id),
         draft: 0,
@@ -1305,7 +1310,7 @@ export class TelegramBot {
         chatID,
         async () => {
           await this.#freeText(chatID, prompt, { ...(ingest ? { ingest } : {}) })
-          if (mediaFileID) await this.#suggestImageModel(chatID)
+          if (mediaFileID) await this.#suggestImageModel(chatID, { text: prompt, ingest: ingest! })
         },
         // A message carrying an attachment is not replayable across a restart:
         // the file is still on Telegram's servers at this point, because the
@@ -3896,7 +3901,12 @@ export class TelegramBot {
 
   // when a photo/document lands on a model we can't see it with, offer the
   // vision-capable ones directly (once per current model, not on every message).
-  async #suggestImageModel(chatID: number): Promise<void> {
+  // A pick switches and RESENDS the image turn; the plain model picker is a
+  // settings screen — this one is an action prompt, so it confirms and closes.
+  async #suggestImageModel(
+    chatID: number,
+    retry?: { text: string; ingest: () => Promise<string[]> },
+  ): Promise<void> {
     const c = this.#chat(chatID)
     const ws = this.#activeWs(chatID)
     const current = this.#store.model(chatID, ws.adapter.id) ?? "default"
@@ -3915,9 +3925,10 @@ export class TelegramBot {
       if (picks.length === 3) break
     }
     if (picks.length === 0) return
-    const rows: InlineButton[][] = picks.map((label) => [btn(`🖼 ${label}`, `mdl:${label}`)])
+    const rows: InlineButton[][] = picks.map((label) => [btn(`🖼 ${label}`, `mdli:${label}`)])
     rows.push([btn("All models ›", "set:model")])
     c.suggestedImage = current
+    c.imageRetry = retry
     await this.#tg.sendMessage({
       chatID,
       text: "🖼 This model can't read images. Switch to a vision-capable one?",
@@ -4108,6 +4119,30 @@ export class TelegramBot {
         await this.#settingsModel(chatID, msg.message_id)
         await tg.answerCallbackQuery({ id: cq.id, text: rest === "off" ? "back to default" : `model: ${rest}` })
         void this.#updateStatus(chatID).catch(logFail("status"))
+        break
+      }
+      case "mdli": {
+        // a pick from the 🖼 vision suggestion: switch, collapse the prompt
+        // into a one-line confirmation, and resend the image turn that
+        // triggered it — the model the message was meant for now runs it
+        const harnessID = this.#activeWs(chatID).adapter.id
+        this.#store.setModel(chatID, harnessID, rest)
+        const retry = c.imageRetry
+        c.imageRetry = undefined
+        await this.#tg.editMessageText({
+          chatID,
+          messageID: msg.message_id,
+          text: `🖼 switched to **${rest}**${retry ? " — resending your message" : ""}`,
+          replyMarkup: null,
+        })
+        await tg.answerCallbackQuery({ id: cq.id, text: `model: ${rest}` })
+        void this.#updateStatus(chatID).catch(logFail("status"))
+        if (retry) {
+          // label-only queue payload: the ingest thunk can't survive a restart
+          this.#runTurn(chatID, () => this.#freeText(chatID, retry.text, { ingest: retry.ingest }), {
+            label: retry.text,
+          })
+        }
         break
       }
       case "agt": {
