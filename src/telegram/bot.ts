@@ -1189,6 +1189,28 @@ export class TelegramBot {
     const c = this.#chat(chatID)
     const [cmd = "", ...rest] = text.split(/\s+/)
 
+    // check if this is a text reply to a question message
+    if (m.reply_to_message?.message_id) {
+      const repliedMsgID = m.reply_to_message.message_id
+      // find the pending question by message ID
+      for (const [key, pending] of c.pending.entries()) {
+        if (pending.messageID === repliedMsgID && pending.questionPartID) {
+          // this is an answer to a question
+          c.pending.delete(key)
+          const ok = await pending.adapter
+            .respondAsk(pending.sessionID, pending.questionPartID, text)
+            .catch((err) => {
+              console.error(`[question] respond failed: ${(err as Error)?.message ?? err}`)
+              return false
+            })
+          const verdict = ok ? `✅ Answered` : `⚠️ the harness didn't take it`
+          await this.#tg.editMessageText({ chatID, messageID: repliedMsgID, text: verdict, replyMarkup: null })
+          await this.#tg.sendMessage({ chatID, text: verdict })
+          return
+        }
+      }
+    }
+
     if (!this.#pairing.isPaired(chatID)) {
       if (c.awaiting?.kind === "pair") {
         if (cmd === "/cancel") {
