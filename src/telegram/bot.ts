@@ -2112,6 +2112,9 @@ export class TelegramBot {
     // a question tool call stopped this turn on purpose; the ❓ prompt is the
     // outcome, so the abort fallbacks below must not stamp "(stopped)" on it
     let questionAsked = false
+    // same, when this turn ended at a step boundary to hand the queue to the
+    // harness — the steering message's own turn is the visible outcome
+    let steered = false
     // parts assembled live from the event stream, keyed by partID so updates
     // replace rather than duplicate; mirrors the final `reply.parts` order
     const liveParts: Part[] = []
@@ -2464,6 +2467,16 @@ export class TelegramBot {
             } else if (evt.part.kind === "other" && evt.part.nativeType === "step-finish") {
               await flushPendingReasoning()
               settled = true
+              // a message queued behind this turn is a steering input: hand it
+              // to the harness at this step boundary — the model finished a
+              // full tool round, so nothing is cut mid-flight — instead of
+              // waiting out however many steps the turn had left
+              const waiting = c.queue.some((q, i) => i > 0 && !q.cancelled && q.prompt)
+              if (waiting && !questionAsked) {
+                steered = true
+                ac.abort()
+                void ws.adapter.abort(sessionID).catch(logFail("abort"))
+              }
             }
             // the "question" tool is the model asking the user something — render
             // it as a rich message with inline buttons so the human can answer
@@ -2556,7 +2569,7 @@ export class TelegramBot {
         // arrives here rather than as a rejected prompt whenever the
         // harness-side abort finalizes the turn before the client's own
         // AbortController lands. Treat it as the outcome it is.
-        if (!shown && !textOf(visible).trim() && minimalFlushed.size === 0 && !questionAsked) await presentBody("(stopped)")
+        if (!shown && !textOf(visible).trim() && minimalFlushed.size === 0 && !questionAsked && !steered) await presentBody("(stopped)")
       } else if (failure) {
         console.error(`[turn] harness error: ${failure.name}: ${failure.message}`)
         // a session somebody else is already running in is not a fault the
@@ -2587,13 +2600,13 @@ export class TelegramBot {
           // back. `shown` is the answer, so don't stamp it with a stall warning.
           // (minimal layout may have shipped the whole answer as segments, in
           // which case nothing left to show is a success, not silence)
-          if (!shown && minimalFlushed.size === 0 && !questionAsked) await presentBody("(no output)")
+          if (!shown && minimalFlushed.size === 0 && !questionAsked && !steered) await presentBody("(no output)")
         } else {
           // a stall is not a stop: say so, or it looks like the turn was
           // cancelled deliberately and the silence goes unexplained
           const stalled = `⚠️ no activity for ${Math.round(stalledAfter / 60_000)}m — turn abandoned`
-          if (!shown && !questionAsked) await presentBody(idleAbort ? stalled : "(stopped)")
-          else if (idleAbort && !questionAsked) await this.#tg.sendMessage({ chatID, text: stalled })
+          if (!shown && !questionAsked && !steered) await presentBody(idleAbort ? stalled : "(stopped)")
+          else if (idleAbort && !questionAsked && !steered) await this.#tg.sendMessage({ chatID, text: stalled })
         }
       } else {
         // A connection loss is not the same as an empty answer: the turn may
