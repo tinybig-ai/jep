@@ -795,13 +795,10 @@ export class TelegramBot {
     { command: "new", description: "start a fresh conversation" },
     { command: "ls", description: "your conversations" },
     { command: "git", description: "branch · changes · commits · diffs" },
-    { command: "queue", description: "what's running, what's waiting" },
     { command: "find", description: "search your conversations" },
-    { command: "usage", description: "tokens and cost, here and in this project" },
     { command: "steer", description: "stop the running turn and say this instead" },
     { command: "settings", description: "status · model · rename · workspace" },
-    { command: "log", description: "this conversation's history" },
-    { command: "remind", description: "remind me later, once or recurring (/remind 2h build · /remind every 1h build)" },
+    { command: "remind", description: "remind me later — /remind 2h build · /remind every 1h build" },
   ]
 
   // lazily starts serving a directory this bot didn't boot with — how
@@ -1555,48 +1552,7 @@ export class TelegramBot {
         break
       }
       case "log": {
-        const sessionID = await this.#ensureSession(chatID)
-        const msgs = await ws.adapter.messages(sessionID)
-        if (!msgs.length) {
-          await tg.sendMessage({ chatID, text: "(empty — send a message to start)" })
-          return
-        }
-        // Just the conversation: who said what. Reasoning, tool calls and
-        // snapshots are working notes, and reading them back is not what a
-        // transcript is for — they turned /log into a wall you had to scan
-        // past to find the actual exchange.
-        const turns = msgs
-          .map((m) => {
-            const said = m.parts
-              .filter((p): p is TextPart => p.kind === "text")
-              .map((p) => transcriptText(p.text))
-              .filter(Boolean)
-              .join("\n")
-            // an assistant turn that was only tool calls has nothing to show
-            return said ? `${m.role === "user" ? "👤" : "🤖"} ${clipTurn(said)}` : ""
-          })
-          .filter(Boolean)
-        if (!turns.length) {
-          await tg.sendMessage({ chatID, text: "(nothing said yet — only tool activity so far)" })
-          return
-        }
-        const body = tailTurns(turns)
-        // 10.3 expandable blockquote: the history folds away until tapped
-        try {
-          await tg.sendRichMessage({
-            chatID,
-            rich_message: {
-              blocks: [
-                { type: "heading", size: 1, text: "📜 Conversation history" },
-                { type: "expandable_blockquote", text: body },
-              ],
-            },
-          })
-          break
-        } catch (err) {
-          console.error(`[history] rich send failed, falling back to text: ${(err as Error)?.message ?? err}`)
-        }
-        await tg.sendMessage({ chatID, text: body })
+        await this.#logView(chatID)
         break
       }
       case "diff": {
@@ -2725,16 +2681,22 @@ export class TelegramBot {
       .join(" · ")
 
     const existing = this.#store.statusMsg(chatID)
+    // the pin is also the tap surface for the introspection screens: usage and
+    // queue are ambient state (they live on this line already), so their
+    // buttons belong here rather than in the command menu
+    const pinButtons = kin([
+      [btn("📊 usage", "u:o"), btn("⏳ queue", "q:o")],
+    ])
     if (existing) {
       try {
-        await this.#tg.editMessageText({ chatID, messageID: existing, text })
+        await this.#tg.editMessageText({ chatID, messageID: existing, text, replyMarkup: pinButtons })
         return
       } catch (err) {
         console.error(`[status] edit of pinned msg failed, re-pinning: ${(err as Error)?.message ?? err}`)
       }
     }
     try {
-      const sent = await this.#tg.sendMessage({ chatID, text, disableNotification: true })
+      const sent = await this.#tg.sendMessage({ chatID, text, disableNotification: true, replyMarkup: pinButtons })
       this.#store.setStatusMsg(chatID, sent.message_id)
       await this.#tg.pinChatMessage({ chatID, messageID: sent.message_id, disableNotification: true })
     } catch (err) {
@@ -2751,6 +2713,55 @@ export class TelegramBot {
   // of its own turns, which the transcript already holds exactly — a ledger
   // would be a second copy of the truth, and the first one to go wrong (double
   // counting a retried turn, missing one after a restart).
+  // Just the conversation: who said what. Reasoning, tool calls and
+  // snapshots are working notes, and reading them back is not what a
+  // transcript is for — they turned /log into a wall you had to scan
+  // past to find the actual exchange. Reached by /log and the Settings
+  // 📜 button; kept out of the command menu because reading a transcript
+  // is introspection, not an action you type for.
+  async #logView(chatID: number): Promise<void> {
+    const ws = this.#activeWs(chatID)
+    const tg = this.#tg
+    const sessionID = await this.#ensureSession(chatID)
+    const msgs = await ws.adapter.messages(sessionID)
+    if (!msgs.length) {
+      await tg.sendMessage({ chatID, text: "(empty — send a message to start)" })
+      return
+    }
+    const turns = msgs
+      .map((m) => {
+        const said = m.parts
+          .filter((p): p is TextPart => p.kind === "text")
+          .map((p) => transcriptText(p.text))
+          .filter(Boolean)
+          .join("\n")
+        // an assistant turn that was only tool calls has nothing to show
+        return said ? `${m.role === "user" ? "👤" : "🤖"} ${clipTurn(said)}` : ""
+      })
+      .filter(Boolean)
+    if (!turns.length) {
+      await tg.sendMessage({ chatID, text: "(nothing said yet — only tool activity so far)" })
+      return
+    }
+    const body = tailTurns(turns)
+    // 10.3 expandable blockquote: the history folds away until tapped
+    try {
+      await tg.sendRichMessage({
+        chatID,
+        rich_message: {
+          blocks: [
+            { type: "heading", size: 1, text: "📜 Conversation history" },
+            { type: "expandable_blockquote", text: body },
+          ],
+        },
+      })
+      return
+    } catch (err) {
+      console.error(`[history] rich send failed, falling back to text: ${(err as Error)?.message ?? err}`)
+    }
+    await tg.sendMessage({ chatID, text: body })
+  }
+
   async #usageView(chatID: number, messageID: number | null): Promise<void> {
     const ws = this.#activeWs(chatID)
     const sessionID = await this.#resolveSessionID(chatID)
@@ -3437,6 +3448,7 @@ export class TelegramBot {
       [btn(`🔌 Harness · ${this.#activeWs(chatID).adapter.id}`, "set:harness")],
       [btn("🔌 MCP servers", "set:mcp"), btn("🧩 Skills", "set:skills")],
       [btn(`🔎 Internals · ${internalsPreset(this.#store.internals(chatID))}`, "set:internals")],
+      [btn("📜 Conversation log", "set:log")],
       [btn(`🧩 Context · ${this.#store.injectContext(chatID) ? "on" : "off"}`, "ctx:toggle")],
       [btn("✏️ Rename conversation", "set:rename")],
       // always shown, even with a single workspace: this is now the only way
@@ -3970,6 +3982,7 @@ export class TelegramBot {
         else if (rest === "harness") await this.#settingsHarness(chatID, msg.message_id)
         else if (rest === "mcp") await this.#settingsMcp(chatID, msg.message_id)
         else if (rest === "skills") await this.#settingsSkills(chatID, msg.message_id)
+        else if (rest === "log") await this.#logView(chatID)
         // a new message rather than an edit of this one: the picker's own
         // "‹ Back" cleans itself up, and Settings is still there behind it
         else if (rest === "ls") await this.#listPicker(chatID, "Conversations:", false)
@@ -4170,12 +4183,15 @@ export class TelegramBot {
         break
       }
       case "u": {
-        await this.#usageView(chatID, msg.message_id)
+        // "o" opens from the pin as a fresh view (the pin stays); anything
+        // else is the view's own ⟳ refresh
+        await this.#usageView(chatID, rest === "o" ? null : msg.message_id)
         await tg.answerCallbackQuery({ id: cq.id })
         break
       }
       case "q": {
-        if (rest === "r") await this.#queueView(chatID, msg.message_id)
+        if (rest === "o") await this.#queueView(chatID, null)
+        else if (rest === "r") await this.#queueView(chatID, msg.message_id)
         else if (rest === "stop") {
           const stopped = await this.#stopTurn(chatID)
           await this.#queueView(chatID, msg.message_id)
