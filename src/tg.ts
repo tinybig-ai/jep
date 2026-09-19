@@ -299,10 +299,12 @@ async function main() {
   // and shut the children down first. `workspaces` is the live array the bot
   // itself appends to, so lazily-started servers get cleaned up too.
   let stopping = false
+  let gwClose: (() => Promise<void>) | null = null
   const shutdown = async (sig: string) => {
     if (stopping) return
     stopping = true
     console.error(`${sig} — stopping ${workspaces.length} workspace server(s)`)
+    await gwClose?.().catch(() => {})
     await Promise.all(workspaces.map((w) => w.adapter.close().catch(() => {})))
     process.exit(0)
   }
@@ -343,6 +345,20 @@ async function main() {
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean), UPLOADS_DIR, spawnWorkspace, available, ReminderStore.load(join(DATA_HOME, "reminders.json")))
+
+  // The native phone client's side door: same process, same workspace
+  // servers, no Telegram involved. Optional — set JEP_GW_PORT to turn it on.
+  if (process.env.JEP_GW_PORT) {
+    const { startGateway } = await import("./gateway.ts")
+    const gw = await startGateway({
+      adapters: () => workspaces.map((w) => ({ name: w.name, adapter: w.adapter })),
+      dataHome: DATA_HOME,
+      port: Number(process.env.JEP_GW_PORT),
+      pairCode: process.env.JEP_GW_PAIR_CODE,
+    })
+    console.error(`gateway: POST /pair {"code":…} on http://<tailscale-or-lan-ip>:${process.env.JEP_GW_PORT}`)
+    gwClose = () => gw.close()
+  }
 
   // One-shot at boot, and boot is exactly when the network is least likely to
   // be up: the machine has often just woken, which is what kills the long poll
