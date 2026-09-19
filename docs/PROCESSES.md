@@ -729,11 +729,19 @@ stays out of the parent), and the rest of the file is byte-identical. The
 opencode writer rewrites the whole JSON — whole-line `//` comments in it are
 tolerated on read and lost on write.
 
-**🧩 Skills** (claude only — opencode and codex have no skill concept, and their
-screen says so rather than faking an empty list). A bounded walk of
-`~/.claude/skills` (including the synced UUID buckets), `~/.agents/skills`, and
-`<workspace>/.claude/skills`; project entries shadow user entries of the same
-name, which is how Claude resolves them. A tap flips
+**🧩 Skills** (per active harness — same SKILL.md format everywhere, different
+roots). Verified against each harness's own loader, not guessed:
+
+- claude: `~/.claude/skills` (including the synced UUID buckets),
+  `~/.agents/skills`, `<workspace>/.claude/skills`
+- opencode: the same user dirs (it auto-loads them) plus
+  `<workspace>/.opencode/skills` and `.opencode/skill`
+- codex: `$CODEX_HOME/skills` (default `~/.codex/skills`); its SKILL.md has no
+  disable flag, so codex rows show without a toggle rather than writing a
+  flag codex would never read
+
+Project entries shadow user entries of the same name, which is how the
+harnesses resolve them. Where the toggle means something, a tap flips
 `disable-model-invocation` in the skill's own frontmatter — one line, prose
 untouched.
 

@@ -1,13 +1,16 @@
 // PURE — agent skills on disk: a directory of subdirectories, each with a
 // SKILL.md whose YAML-ish frontmatter carries the name, a description, and an
-// optional `disable-model-invocation` flag. Only Claude-style harnesses have
-// them; opencode and codex use other mechanisms and get no screen.
+// optional `disable-model-invocation` flag. The same file format runs under
+// every harness; what differs is where each one looks and whether it honors
+// the flag — codex reads $CODEX_HOME/skills and has no toggle.
 //
 // Reads take directories; the one write changes one frontmatter line and
 // leaves the rest of the file byte-for-byte alone — a skill is prose with a
 // header, not a data format.
 
 import { readFile, readdir, writeFile } from "node:fs/promises"
+import { homedir } from "node:os"
+import { join } from "node:path"
 
 export interface Skill {
   name: string
@@ -18,14 +21,51 @@ export interface Skill {
   disableModelInvocation: boolean
 }
 
-export async function listSkills(userDirs: string[], projectDir: string): Promise<Skill[]> {
-  const scans = [...userDirs.map((d) => readSkillDir(d, "user" as const)), readSkillDir(projectDir, "project" as const)]
+export async function listSkills(userDirs: string[], projectDirs: string[]): Promise<Skill[]> {
+  const scans = [...userDirs.map((d) => readSkillDir(d, "user" as const)), ...projectDirs.map((d) => readSkillDir(d, "project" as const))]
   const found = (await Promise.all(scans)).flat()
-  // project skills shadow user skills of the same name — that's how Claude
-  // resolves them, and the list should say what will actually run
+  // project skills shadow user skills of the same name — that's how the
+  // harnesses resolve them, and the list should say what will actually run
   const byName = new Map<string, Skill>()
   for (const s of found) byName.set(s.name, s)
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name))
+}
+
+// Where each harness looks, and whether flipping `disable-model-invocation`
+// means anything to it. Verified against the harnesses' own loaders:
+// claude scans ~/.claude/skills and ~/.agents/skills plus <ws>/.claude/skills;
+// opencode auto-loads those same user dirs plus <ws>/.opencode/skill(s);
+// codex reads $CODEX_HOME/skills (default ~/.codex/skills) and its SKILL.md
+// has no disable flag — show, don't toggle.
+export interface SkillDirs {
+  userDirs: string[]
+  projectDirs: string[]
+  toggleable: boolean
+}
+
+export function skillDirsFor(harness: string, workspaceDir: string): SkillDirs {
+  const home = homedir()
+  if (harness === "codex") {
+    return {
+      userDirs: [join(process.env.CODEX_HOME ?? join(home, ".codex"), "skills")],
+      projectDirs: [],
+      toggleable: false,
+    }
+  }
+  if (harness === "opencode") {
+    return {
+      userDirs: [join(home, ".claude", "skills"), join(home, ".agents", "skills")],
+      projectDirs: [join(workspaceDir, ".opencode", "skills"), join(workspaceDir, ".opencode", "skill")],
+      toggleable: true,
+    }
+  }
+  // claude, and any harness we don't know yet gets the widest net: the
+  // cross-agent ~/.agents/skills convention plus the Claude originals
+  return {
+    userDirs: [join(home, ".claude", "skills"), join(home, ".agents", "skills")],
+    projectDirs: [join(workspaceDir, ".claude", "skills")],
+    toggleable: true,
+  }
 }
 
 // SKILL.md files sit at uneven depths: a plain skill dir has them at depth 2,

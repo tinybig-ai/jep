@@ -7,7 +7,7 @@ import assert from "node:assert/strict"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { listSkills, parseFrontmatter, writeSkillModelInvocation } from "../src/core/skills.ts"
+import { listSkills, parseFrontmatter, skillDirsFor, writeSkillModelInvocation } from "../src/core/skills.ts"
 
 test("frontmatter: plain values, folded description, and the disable flag", () => {
   const { name, description, disableModelInvocation } = parseFrontmatter(
@@ -37,7 +37,7 @@ test("list: user and project scopes, project shadows user, sorted by name", asyn
   skill(project, "review", "---\nname: review\ndescription: Project override.\n---\nbody")
   mkdirSync(join(project, "not-a-skill")) // no SKILL.md — skipped
   try {
-    const skills = await listSkills([user], project)
+    const skills = await listSkills([user], [project])
     assert.deepEqual(
       skills.map((s) => `${s.name}@${s.scope}`),
       ["loop@user", "review@project"],
@@ -47,6 +47,24 @@ test("list: user and project scopes, project shadows user, sorted by name", asyn
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test("dirs: each harness gets its own roots, and only some can toggle", () => {
+  const ws = "/proj"
+  const claude = skillDirsFor("claude", ws)
+  assert.deepEqual(claude.projectDirs, [`${ws}/.claude/skills`])
+  assert.equal(claude.toggleable, true)
+  const opencode = skillDirsFor("opencode", ws)
+  assert.deepEqual(opencode.projectDirs, [`${ws}/.opencode/skills`, `${ws}/.opencode/skill`])
+  assert.equal(opencode.toggleable, true)
+  // opencode auto-loads the cross-agent user dirs, same as claude
+  assert.deepEqual(opencode.userDirs, claude.userDirs)
+  const codex = skillDirsFor("codex", ws)
+  assert.ok(codex.userDirs[0]!.endsWith("/skills"))
+  assert.equal(codex.toggleable, false, "codex has no disable flag — read-only")
+  // unknown harnesses get the widest net rather than a dead end
+  const other = skillDirsFor("mystery", ws)
+  assert.deepEqual(other.userDirs, claude.userDirs)
 })
 
 test("toggle: flipping an existing flag rewrites one line", async () => {

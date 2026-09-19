@@ -18,7 +18,7 @@ import { addUsage, emptyUsage, fmtMoney, usageChip, usageOf } from "../core/usag
 import type { Usage } from "../core/usage.ts"
 import { readClaudeMcp, readCodexMcp, readOpencodeMcp, writeClaudeProjectEnabled, writeCodexMcpEnabled, writeOpencodeMcpEnabled } from "../core/mcpconfig.ts"
 import type { McpServer } from "../core/mcpconfig.ts"
-import { listSkills, writeSkillModelInvocation } from "../core/skills.ts"
+import { listSkills, skillDirsFor, writeSkillModelInvocation } from "../core/skills.ts"
 import type { Skill } from "../core/skills.ts"
 import { matches, rankHits, snippet } from "./search.ts"
 import type { Hit } from "./search.ts"
@@ -3546,27 +3546,24 @@ export class TelegramBot {
   // prose file, everything else untouched.
   async #settingsSkills(chatID: number, messageID: number | null): Promise<void> {
     const ws = this.#activeWs(chatID)
-    if (ws.adapter.id !== "claude") {
-      const lines = ["🧩 Skills", "", `harness ${ws.adapter.id} has no skills — they're a Claude mechanism.`]
-      await this.#menu(chatID, lines, [[btn("‹ Back", "set:root")]], messageID === null ? undefined : { messageID })
-      return
-    }
+    const dirs = skillDirsFor(ws.adapter.id, ws.dir)
     let skills: Skill[] = []
     let note = ""
     try {
-      skills = await listSkills([join(homedir(), ".claude", "skills"), join(homedir(), ".agents", "skills")], join(ws.dir, ".claude", "skills"))
+      skills = await listSkills(dirs.userDirs, dirs.projectDirs)
     } catch (err) {
       note = `⚠️ couldn't read the skill directories: ${(err as Error).message}`
     }
-    const lines: string[] = ["🧩 Skills"]
+    const lines: string[] = [`🧩 Skills · ${ws.adapter.id}`]
     if (note) lines.push("", note)
-    else if (!skills.length) lines.push("", "none installed — a skill is a folder with a SKILL.md in ~/.claude/skills.")
+    else if (!skills.length)
+      lines.push("", `none installed — a skill is a folder with a SKILL.md in ${dirs.userDirs[0]?.replace(homedir(), "~") ?? "its skill directory"}.`)
     const rows: InlineButton[][] = []
     for (const s of skills) {
-      const state = s.disableModelInvocation ? "🚫" : "✅"
+      const state = !dirs.toggleable ? "" : s.disableModelInvocation ? "🚫" : "✅"
       const scope = s.scope === "project" ? "· project" : ""
-      lines.push(`${state} **${s.name}** ${scope}${s.description ? ` — ${clipTitle(s.description, 40)}` : ""}`)
-      rows.push([btn(`${s.disableModelInvocation ? "Allow model use" : "Hide from model"}`, `sklt:${encodeURIComponent(s.path)}`)])
+      lines.push(`${state} **${s.name}** ${scope}${s.description ? ` — ${clipTitle(s.description, 40)}` : ""}`.trim())
+      if (dirs.toggleable) rows.push([btn(`${s.disableModelInvocation ? "Allow model use" : "Hide from model"}`, `sklt:${encodeURIComponent(s.path)}`)])
     }
     rows.push([btn("‹ Back", "set:root")])
     await this.#menu(chatID, lines, rows, messageID === null ? undefined : { messageID })
@@ -3938,7 +3935,9 @@ export class TelegramBot {
         let said = "toggled"
         try {
           const skillPath = decodeURIComponent(rest)
-          const skills = await listSkills([join(homedir(), ".claude", "skills"), join(homedir(), ".agents", "skills")], join(this.#activeWs(chatID).dir, ".claude", "skills"))
+          const ws = this.#activeWs(chatID)
+          const dirs = skillDirsFor(ws.adapter.id, ws.dir)
+          const skills = await listSkills(dirs.userDirs, dirs.projectDirs)
           const skill = skills.find((s) => s.path === skillPath)
           if (!skill) throw new Error("skill moved or deleted")
           await writeSkillModelInvocation(skillPath, !skill.disableModelInvocation)
