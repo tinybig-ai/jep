@@ -156,6 +156,16 @@ export interface AskRequest {
   kind?: "permission" | "question"
 }
 
+// Where a harness looks for skills, and whether flipping
+// `disable-model-invocation` in a SKILL.md means anything to it. Declared on
+// the adapter port so every harness owns its own roots; core/skills.ts keeps
+// the shared convention table for adapters that don't override.
+export interface SkillDirs {
+  userDirs: string[]
+  projectDirs: string[]
+  toggleable: boolean
+}
+
 export type DomainEvent =
   | { type: "server.connected" }
   | { type: "message.created"; sessionID: string; messageID: string; role?: string }

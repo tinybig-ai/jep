@@ -11,6 +11,7 @@
 import { readFile, readdir, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
+import type { SkillDirs } from "./types.ts"
 
 export interface Skill {
   name: string
@@ -32,17 +33,12 @@ export async function listSkills(userDirs: string[], projectDirs: string[]): Pro
 }
 
 // Where each harness looks, and whether flipping `disable-model-invocation`
-// means anything to it. Verified against the harnesses' own loaders:
-// claude scans ~/.claude/skills and ~/.agents/skills plus <ws>/.claude/skills;
-// opencode auto-loads those same user dirs plus <ws>/.opencode/skill(s);
-// codex reads $CODEX_HOME/skills (default ~/.codex/skills) and its SKILL.md
-// has no disable flag — show, don't toggle.
-export interface SkillDirs {
-  userDirs: string[]
-  projectDirs: string[]
-  toggleable: boolean
-}
-
+// means anything to it. This is the fallback convention table for adapters
+// that don't declare `skillDirs()` on the port; the shape itself lives in
+// core/types.ts. claude scans ~/.claude/skills and ~/.agents/skills plus
+// <ws>/.claude/skills; opencode auto-loads those same user dirs plus
+// <ws>/.opencode/skill(s); codex reads $CODEX_HOME/skills (default
+// ~/.codex/skills) and its SKILL.md has no disable flag — show, don't toggle.
 export function skillDirsFor(harness: string, workspaceDir: string): SkillDirs {
   const home = homedir()
   if (harness === "codex") {

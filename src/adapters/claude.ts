@@ -6,7 +6,7 @@ import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import type { HarnessAdapter, ModelRef, ModelCaps } from "../core/ports.ts"
-import type { AskRequest, DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionHold, SessionSummary } from "../core/types.ts"
+import type { AskRequest, DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionHold, SessionSummary, SkillDirs } from "../core/types.ts"
 
 /**
  * Claude Code as a harness.
@@ -583,6 +583,15 @@ export class ClaudeAdapter implements HarnessAdapter {
       this.#askSupported = false
     }
     return this.#askSupported
+  }
+
+  // claude scans the cross-agent user dirs plus its own project root
+  skillDirs(): SkillDirs {
+    return {
+      userDirs: [path.join(os.homedir(), ".claude", "skills"), path.join(os.homedir(), ".agents", "skills")],
+      projectDirs: [path.join(this.workspace, ".claude", "skills")],
+      toggleable: true,
+    }
   }
 
   async *events(signal?: AbortSignal): AsyncIterable<DomainEvent> {

@@ -5,7 +5,7 @@ import { existsSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import type { HarnessAdapter, ModelRef, ModelCaps } from "../core/ports.ts"
-import type { DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionSummary } from "../core/types.ts"
+import type { DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionSummary, SkillDirs } from "../core/types.ts"
 
 /**
  * Codex CLI as a harness.
@@ -532,6 +532,16 @@ export class CodexAdapter implements HarnessAdapter {
   // The port wants one long-lived stream; Codex only streams inside a turn.
   // Subscribers therefore attach to an in-process bus that prompt() feeds as
   // it parses each turn's stdout.
+  // codex discovers skills in $CODEX_HOME/skills only (default ~/.codex/skills),
+  // and its SKILL.md frontmatter has no disable flag — show, don't toggle
+  skillDirs(): SkillDirs {
+    return {
+      userDirs: [path.join(process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex"), "skills")],
+      projectDirs: [],
+      toggleable: false,
+    }
+  }
+
   async *events(signal?: AbortSignal): AsyncIterable<DomainEvent> {
     const queue: DomainEvent[] = [{ type: "server.connected" }]
     let wake: (() => void) | null = null

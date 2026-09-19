@@ -3546,7 +3546,8 @@ export class TelegramBot {
   // prose file, everything else untouched.
   async #settingsSkills(chatID: number, messageID: number | null): Promise<void> {
     const ws = this.#activeWs(chatID)
-    const dirs = skillDirsFor(ws.adapter.id, ws.dir)
+    // the adapter owns its roots; the core table covers harnesses that don't
+    const dirs = ws.adapter.skillDirs?.() ?? skillDirsFor(ws.adapter.id, ws.dir)
     let skills: Skill[] = []
     let note = ""
     try {
@@ -3936,7 +3937,7 @@ export class TelegramBot {
         try {
           const skillPath = decodeURIComponent(rest)
           const ws = this.#activeWs(chatID)
-          const dirs = skillDirsFor(ws.adapter.id, ws.dir)
+          const dirs = ws.adapter.skillDirs?.() ?? skillDirsFor(ws.adapter.id, ws.dir)
           const skills = await listSkills(dirs.userDirs, dirs.projectDirs)
           const skill = skills.find((s) => s.path === skillPath)
           if (!skill) throw new Error("skill moved or deleted")

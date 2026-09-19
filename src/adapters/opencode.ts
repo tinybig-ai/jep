@@ -5,8 +5,7 @@ import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { Agent } from "undici"
 import type { HarnessAdapter, ModelRef, ModelCaps } from "../core/ports.ts"
-import type { AskOption, DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionSummary } from "../core/types.ts"
-
+import type { AskOption, DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionSummary, SkillDirs } from "../core/types.ts"
 const OPENCODE_BIN = process.env.OPENCODE_BIN ?? "opencode"
 const MODEL_REF = process.env.JEP_MODEL ?? "localfree-models-proxy/auto"
 const DEFAULT_TIMEOUT_MS = 180_000
@@ -458,6 +457,16 @@ export class OpenCodeAdapter implements HarnessAdapter {
         body: JSON.stringify({ response: optionID }),
       },
     )
+  }
+
+  // opencode auto-loads the cross-agent user dirs and its own project roots
+  // (verified against its own loader: `.opencode/skill(s)/<name>/SKILL.md`)
+  skillDirs(): SkillDirs {
+    return {
+      userDirs: [path.join(os.homedir(), ".claude", "skills"), path.join(os.homedir(), ".agents", "skills")],
+      projectDirs: [path.join(this.workspace, ".opencode", "skills"), path.join(this.workspace, ".opencode", "skill")],
+      toggleable: true,
+    }
   }
 
   async *events(signal?: AbortSignal): AsyncIterable<DomainEvent> {

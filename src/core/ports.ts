@@ -6,6 +6,7 @@ import type {
   ProjectSummary,
   SessionHold,
   SessionSummary,
+  SkillDirs,
 } from "./types.ts"
 
 export interface ModelRef {
@@ -57,6 +58,11 @@ export interface HarnessAdapter {
    * been answered from somewhere else. */
   respondAsk(sessionID: string, askID: string, optionID: string): Promise<boolean>
   events(signal?: AbortSignal): AsyncIterable<DomainEvent>
+  /** where this harness looks for skills, and whether its SKILL.md frontmatter
+   * honors a disable flag. Optional: adapters that don't declare it get the
+   * shared convention table in core/skills.ts, so a new harness works before
+   * it customizes — but every harness can own its own roots. */
+  skillDirs?(): SkillDirs
   models?(): Promise<ModelRef[]>
   /** the `provider/model` a prompt runs on when `opts.model` is omitted — what
    * "default" actually resolves to, so a frontend can name it instead of
