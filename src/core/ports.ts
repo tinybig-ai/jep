@@ -56,6 +56,9 @@ export interface HarnessAdapter {
    * is unknown or already answered — it may have timed out in the harness, or
    * been answered from somewhere else. */
   respondAsk(sessionID: string, askID: string, optionID: string): Promise<boolean>
+  /** answer a pending `question` tool call, one answer per question in order.
+   * Optional: only harnesses with a question channel implement it. */
+  respondQuestion?(sessionID: string, requestID: string, answers: string[][]): Promise<boolean>
   events(signal?: AbortSignal): AsyncIterable<DomainEvent>
   models?(): Promise<ModelRef[]>
   /** the `provider/model` a prompt runs on when `opts.model` is omitted — what

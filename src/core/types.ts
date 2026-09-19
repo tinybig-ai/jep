@@ -152,6 +152,8 @@ export interface AskRequest {
   /** the command, the path, the question's own context — shown under the title */
   detail?: string
   options: AskOption[]
+  /** permission asks answer once/always/reject; questions carry their own choices */
+  kind?: "permission" | "question"
 }
 
 export type DomainEvent =

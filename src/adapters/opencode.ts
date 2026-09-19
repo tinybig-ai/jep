@@ -5,7 +5,7 @@ import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { Agent } from "undici"
 import type { HarnessAdapter, ModelRef, ModelCaps } from "../core/ports.ts"
-import type { DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionSummary } from "../core/types.ts"
+import type { AskOption, DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionSummary } from "../core/types.ts"
 
 const OPENCODE_BIN = process.env.OPENCODE_BIN ?? "opencode"
 const MODEL_REF = process.env.JEP_MODEL ?? "localfree-models-proxy/auto"
@@ -460,6 +460,25 @@ export class OpenCodeAdapter implements HarnessAdapter {
     )
   }
 
+  // a `question` tool call: the model asked the human something outright and
+  // the turn is parked until an answer arrives. One answer per question, in
+  // order — each answer is the array of option labels chosen (or the typed
+  // custom answer). This is the v1 route (scoped by the `directory` query
+  // param, not the session path); the `/api/session/.../question/...` v2 route
+  // exists in 1.18 too but never matches the tool's pending request.
+  async respondQuestion(sessionID: string, requestID: string, answers: string[][]): Promise<boolean> {
+    const res = await fetch(
+      this.#url(`/question/${encodeURIComponent(requestID)}/reply?directory=${encodeURIComponent(this.workspace)}`),
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ answers }),
+        signal: AbortSignal.timeout(30_000),
+      },
+    )
+    return res.ok
+  }
+
   async *events(signal?: AbortSignal): AsyncIterable<DomainEvent> {
     const controller = new AbortController()
     const onAbort = () => controller.abort()
@@ -563,6 +582,35 @@ export class OpenCodeAdapter implements HarnessAdapter {
           partType: (props.partType as string | undefined) ?? this.#partTypes.get(partID ?? "") ?? "",
           text: props.field === "text" ? (props.delta ?? "") as string : "",
         }
+      case "question.asked": {
+        // the `question` tool: the model parked the turn on the human. Each
+        // question carries its own choices; option ids are "<question idx>:<label>"
+        // so a tap names both the slot it fills and the answer it carries.
+        const questions = (Array.isArray(props.questions) ? props.questions : []) as Array<{
+          question?: string
+          header?: string
+          options?: Array<{ label?: string }>
+        }>
+        const options: AskOption[] = []
+        questions.forEach((q, qi) => {
+          for (const o of q.options ?? []) {
+            const label = String(o?.label ?? "").trim()
+            if (label) options.push({ id: `${qi}:${label.slice(0, 28)}`, label: label.slice(0, 64) })
+          }
+        })
+        return {
+          type: "ask.requested",
+          sessionID: sessionID ?? "",
+          ask: {
+            id: (props.id as string) ?? "",
+            sessionID: sessionID ?? "",
+            kind: "question",
+            title: questions[0]?.header || questions[0]?.question || "question",
+            ...(questions.length ? { detail: questions.map((q) => q.question ?? "").filter(Boolean).join("\n\n") } : {}),
+            options,
+          },
+        }
+      }
       case "permission.updated": {
         // the id was all jep used to pass on, so the prompt read "🔐 per_a1b2…"
         // — the one thing about the request that tells you nothing. What is
