@@ -2187,31 +2187,38 @@ export class TelegramBot {
     // the moment its text completes, and the draft restarts fresh for the next.
     const minimalFlushed = new Set<string>()
     let minimalOpenTextID: string | null = null
+    // a segment send pins the parts as flushed only AFTER the message is away
+    // (nothing can un-post it), so the turn-completion render races an
+    // in-flight flush: prompt() resolves while the send is awaiting, the parts
+    // aren't marked yet, and dropFlushed re-sends the whole answer. One
+    // in-flight flush to wait on closes that gap — and doubles as a guard so a
+    // second finalizer can't fire a duplicate segment while one is under way.
+    let segmentFlushInFlight: Promise<void> | null = null
     const minimalVisible = (parts: Part[]): Part[] => parts.filter((p) => !(p.id && minimalFlushed.has(p.id)))
-    const flushMinimalSegment = async (): Promise<void> => {
-      if (finished) return // the final render is about to run; segments belong to it
-      const first = splitMinimalSegments(minimalVisible(liveParts))[0]!
-      if (!first.text.length) return // nothing user-visible yet — keep accumulating
-      if (!textOf(first.text).trim()) return // whitespace-only — wait for real content
-      const blocks = minimalSegmentBlocks(first, {
-        thinking: internals.thinking !== "off",
-        tools: internals.tools !== "off",
-        ms: (p) => {
-          const started = p.id ? reasoningStarted.get(p.id) : undefined
-          const ended = p.id ? reasoningEnded.get(p.id) : undefined
-          return p.durationMs ?? (started !== undefined ? (ended ?? Date.now()) - started : undefined)
-        },
-        icon: toolIcon,
-      })
-      if (!blocks.length) return
-      const segIds = [...first.icons, ...first.text].map((p) => p.id).filter(Boolean)
-      console.log(`[flush] segment send: text="${textOf(first.text).slice(0, 40).replace(/\n/g, "\\n")}" ids=${segIds.length} flushed=${minimalFlushed.size}`)
-      try {
-        await this.#tg.sendRichMessage({ chatID, rich_message: { blocks } })
-      } catch (err) {
-        console.error(`[card] minimal segment send failed: ${(err as Error)?.message ?? err}`)
-        return
-      }
+    const flushMinimalSegment = (): Promise<void> => {
+      if (finished) return Promise.resolve() // the final render is about to run; segments belong to it
+      if (segmentFlushInFlight) return segmentFlushInFlight
+      segmentFlushInFlight = (async () => {
+        const first = splitMinimalSegments(minimalVisible(liveParts))[0]!
+        if (!first.text.length) return // nothing user-visible yet — keep accumulating
+        if (!textOf(first.text).trim()) return // whitespace-only — wait for real content
+        const blocks = minimalSegmentBlocks(first, {
+          thinking: internals.thinking !== "off",
+          tools: internals.tools !== "off",
+          ms: (p) => {
+            const started = p.id ? reasoningStarted.get(p.id) : undefined
+            const ended = p.id ? reasoningEnded.get(p.id) : undefined
+            return p.durationMs ?? (started !== undefined ? (ended ?? Date.now()) - started : undefined)
+          },
+          icon: toolIcon,
+        })
+        if (!blocks.length) return
+        try {
+          await this.#tg.sendRichMessage({ chatID, rich_message: { blocks } })
+        } catch (err) {
+          console.error(`[card] minimal segment send failed: ${(err as Error)?.message ?? err}`)
+          return
+        }
       for (const p of [...first.icons, ...first.text]) if (p.id) minimalFlushed.add(p.id)
       if (minimalOpenTextID) minimalFlushed.add(minimalOpenTextID)
       minimalOpenTextID = null
@@ -2232,6 +2239,15 @@ export class TelegramBot {
         /* the next event re-renders anyway */
       }
       lastEdit = Date.now()
+      })()
+      segmentFlushInFlight
+        .catch(() => {
+          /* the error is logged above — the flush is one-way either way */
+        })
+        .finally(() => {
+          segmentFlushInFlight = null
+        })
+      return segmentFlushInFlight
     }
 
     const dropFlushed = (parts: Part[]): Part[] =>
@@ -2511,6 +2527,9 @@ export class TelegramBot {
       // of the final combined message (dropFlushed). Every "was anything
       // shown / is anything left" check keys off the *visible* parts, or a
       // fully-delivered turn would be re-sent by the fallbacks below.
+      // A segment send marks its parts flushed only after it lands, so if one
+      // is in flight now the final render would re-send it — wait for it.
+      if (segmentFlushInFlight) await segmentFlushInFlight
       const visible = dropFlushed(turn)
       const media = visible.filter((p): p is FilePart => p.kind === "file")
       const shown = await presentParts(visible, internals)
@@ -2549,6 +2568,7 @@ export class TelegramBot {
       console.error(`[turn] prompt failed: ${(err as Error)?.stack ?? err}`)
       if (ac.signal.aborted) {
         // render whatever we streamed so far (partial details included)
+        if (segmentFlushInFlight) await segmentFlushInFlight
         const shown = await presentParts(dropFlushed(liveParts), internals)
         if (finishedViaIdle) {
           // The turn genuinely finished — the harness said "session.idle" and the
@@ -2572,6 +2592,7 @@ export class TelegramBot {
         const dropped = /connection lost|fetch failed|ECONNREFUSED|ECONNRESET|socket hang up/i.test(msg)
         const partial = textOf(liveParts).trim()
         if (dropped && partial) {
+          if (segmentFlushInFlight) await segmentFlushInFlight
           const shown = await presentParts(dropFlushed(liveParts), internals)
           if (shown) await this.#tg.sendMessage({ chatID, text: "⚠️ the AI server dropped the connection — the answer above may be incomplete." })
           else await this.#tg.sendMessage({ chatID, text: "⚠️ the AI server dropped the connection before an answer arrived." })
