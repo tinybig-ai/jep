@@ -57,6 +57,9 @@ type Awaiting =
   | { kind: "rename"; sessionID: string; backTo?: number }
   | { kind: "newfolder"; dir: string }
   | { kind: "clone"; dir: string }
+  // the "Other" button on a question prompt was tapped — the next message the
+  // person sends is the free-form answer to that ask (see "askq" below)
+  | { kind: "ask"; askID: string }
 
 interface ChatState {
   workspace: string
@@ -1276,12 +1279,12 @@ export class TelegramBot {
     if (text.startsWith("/")) {
       if (cmd === "/cancel") {
         if (c.awaiting) {
-          c.awaiting = null
+          this.#clearAwaiting(c)
           return this.#say(chatID, "canceled.")
         }
         return this.#say(chatID, "(nothing to cancel)")
       }
-      if (c.awaiting) c.awaiting = null
+      if (c.awaiting) this.#clearAwaiting(c)
       await this.#command(chatID, cmd.slice(1), rest.join(" "), m.message_id)
     } else if (c.awaiting) {
       await this.#resolveAwaiting(chatID, text, m.message_id)
@@ -1437,6 +1440,14 @@ export class TelegramBot {
     return this.#say(chatID, "🔐 Paired. Welcome — you can use the agent now.")
   }
 
+  // drop whatever the next message was parked for — and, when that was a
+  // free-form question answer, the question itself, so a later message can't
+  // resurrect a prompt the user cancelled
+  #clearAwaiting(c: ChatState): void {
+    if (c.awaiting?.kind === "ask") c.pending.delete(c.awaiting.askID)
+    c.awaiting = null
+  }
+
   async #resolveAwaiting(chatID: number, text: string, messageID?: number): Promise<void> {
     const a = this.#chat(chatID).awaiting
     // nothing was actually awaited — treat it as an ordinary prompt, queued
@@ -1450,6 +1461,25 @@ export class TelegramBot {
     if (a.kind === "use") return this.#resolveUse(chatID, text)
     if (a.kind === "newfolder") return this.#resolveNewFolder(chatID, a.dir, text)
     if (a.kind === "clone") return this.#resolveClone(chatID, a.dir, text)
+    // free-form answer to a question prompt's "Other" button: run it back as
+    // the answer exactly like a tapped option would
+    if (a.kind === "ask") {
+      const c = this.#chat(chatID)
+      const pending = c.pending.get(a.askID)
+      if (pending) {
+        c.pending.delete(a.askID)
+        const resolved = await this.#resolveSessionID(chatID)
+        if (resolved && resolved !== pending.sessionID) {
+          return this.#say(chatID, "switch back to that conversation to answer")
+        }
+        const answer = text.trim()
+        if (answer) {
+          await this.#verdictEdit(chatID, pending.messageID, `✅ ${answer}`)
+          this.#runTurn(chatID, () => this.#freeText(chatID, answer), { prompt: { text: answer, queuedAt: Date.now() } })
+        }
+      }
+      return
+    }
     const t = text.trim()
     this.#store.setTitle(a.sessionID, t)
     // confirm without a chatty receipt: a 👍 on the name they just sent
@@ -3155,11 +3185,28 @@ export class TelegramBot {
     // will not reinterpret. Clipped so a long command can't push the buttons
     // off the screen.
     const isQuestion = ask.kind === "question"
-    // questions render through #menu like the settings tree — paragraphs plus
-    // native RichBlockButtons, classic-HTML fallback for clients without rich
+    // Questions render as plaintext rows — the question, then each option
+    // numbered — and a single row of buttons at the bottom: "1"…"n" plus an
+    // "Other" button for a free-form answer, all side by side. The buttons
+    // carry only the option index, never its label: a long option would blow
+    // Telegram's 64-byte callback_data cap and reject the whole menu.
     if (isQuestion) {
-      const lines = [`❓ ${ask.title}`, ...(ask.detail ? ["", ...ask.detail.split("\n\n")] : [])]
-      const rows = ask.options.map((o) => [btn(o.label.slice(0, 40), `ask:${ask.id}#${o.id}`)])
+      const lines = [`❓ ${ask.title}`]
+      if (ask.detail) lines.push("", ...ask.detail.split("\n\n"))
+      ask.options.forEach((o, i) => {
+        lines.push(`${i + 1}. ${o.label.replace(/\s+/g, " ").trim().slice(0, 40)}`)
+      })
+      const numbered: InlineButton[] = ask.options.map((o, i) => {
+        const b = btn(String(i + 1), `askq:${i}`)
+        return o.style ? styled(b, o.style) : b
+      })
+      numbered.push(btn("Other", "askq:o"))
+      // one row whenever it fits, else wrap at 8 a row (a phone squeezes past
+      // ~8 buttons); Other rides on the last run either way
+      const rows: InlineButton[][] = []
+      for (let i = 0; i < numbered.length; i += 8) {
+        rows.push(numbered.slice(i, i + 8))
+      }
       const sent = await this.#menu(chatID, [...lines, ...rows])
       if (sent.messageID !== undefined) {
         c.pending.set(ask.id, {
@@ -3436,12 +3483,20 @@ export class TelegramBot {
       console.error(`[menu] rich menu failed, falling back to classic: ${(err as Error)?.message ?? err}`)
     }
     const body = textLines.join("\n")
-    if (edit) {
-      await this.#tg.editMessageText({ chatID, messageID: edit.messageID, text: body, replyMarkup: kin(allRows) })
-      return {}
+    // the classic fallback can be rejected too (a button that still exceeds
+    // callback_data's cap) — log and move on, never let the menu kill the
+    // stream loop it was rendered from
+    try {
+      if (edit) {
+        await this.#tg.editMessageText({ chatID, messageID: edit.messageID, text: body, replyMarkup: kin(allRows) })
+      } else {
+        const sent = await this.#tg.sendMessage({ chatID, text: body, replyMarkup: kin(allRows) })
+        return { messageID: sent.message_id }
+      }
+    } catch (err) {
+      console.error(`[menu] classic fallback failed: ${(err as Error)?.message ?? err}`)
     }
-    const sent = await this.#tg.sendMessage({ chatID, text: body, replyMarkup: kin(allRows) })
-    return { messageID: sent.message_id }
+    return {}
   }
 
   async #settingsRoot(chatID: number, messageID: number | null): Promise<void> {
@@ -4624,6 +4679,34 @@ export class TelegramBot {
         }
         await tg.answerCallbackQuery({ id: cq.id, text: option.label })
         break
+      }
+      case "askq": {
+        // "askq:<i>" — numbered option i (0-based); "askq:o" — a free-form
+        // answer. The button carries only the index; the option label rides in
+        // the pending entry, found by the message the tap landed on (message
+        // ids are unique per chat, so no long ask id needs to fit callback_data).
+        const pendingEntry = [...c.pending.entries()].find(([, p]) => p.messageID === msg.message_id)
+        if (!pendingEntry) return tg.answerCallbackQuery({ id: cq.id, text: "already answered" })
+        const [askID, pendingQ] = pendingEntry
+        if (rest === "o") {
+          // park the next message as this question's answer, then leave the
+          // buttons visible until it comes
+          c.awaiting = { kind: "ask", askID }
+          return tg.answerCallbackQuery({ id: cq.id, text: "type your answer as your next message" })
+        }
+        const option = pendingQ.options[Number(rest)]
+        if (!option) return tg.answerCallbackQuery({ id: cq.id, text: "stale button" })
+        // the turn was stopped when the question was asked; the answer goes
+        // back as an ordinary message the model reads and carries on from.
+        // Drop the pending entry first so a second tap can't answer twice.
+        c.pending.delete(askID)
+        const resolved = await this.#resolveSessionID(chatID)
+        if (resolved && resolved !== pendingQ.sessionID) {
+          return tg.answerCallbackQuery({ id: cq.id, text: "switch back to that conversation to answer" })
+        }
+        await this.#verdictEdit(chatID, msg.message_id, `✅ ${option.label}`)
+        this.#runTurn(chatID, () => this.#freeText(chatID, option.label), { prompt: { text: option.label, queuedAt: Date.now() } })
+        return tg.answerCallbackQuery({ id: cq.id, text: "answered" })
       }
       default:
         await tg.answerCallbackQuery({ id: cq.id, text: "stale button" })
