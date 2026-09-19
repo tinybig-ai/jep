@@ -99,6 +99,10 @@ interface ChatState {
   del: { messageID: number; i: number } | null
   // an arg-taking command was sent bare; next plain text is the answer
   awaiting: Awaiting | null
+  // the skill list behind the 🧩 Skills screen — addressed by index from the
+  // buttons, because a SKILL.md path (the synced buckets bury them deep)
+  // blows straight through callback_data's 64-byte cap
+  skills: Skill[]
   // directory browser state: the folder being shown and the subfolders in it.
   // Buttons address entries by index because callback_data caps at 64 bytes,
   // which a real path blows straight through.
@@ -1008,6 +1012,7 @@ export class TelegramBot {
         picker: null,
         del: null,
         awaiting: null,
+        skills: [],
         browse: null,
         page: 0,
         settingsMsg: null,
@@ -3541,10 +3546,10 @@ export class TelegramBot {
   }
 
   // 🧩 Skills: the SKILL.md directories the harness loads, with their one-line
-  // description. Only Claude-style harnesses have them. A tap flips
-  // `disable-model-invocation` in the skill's own frontmatter — one line in a
-  // prose file, everything else untouched.
+  // description. A tap flips `disable-model-invocation` in the skill's own
+  // frontmatter — one line in a prose file, everything else untouched.
   async #settingsSkills(chatID: number, messageID: number | null): Promise<void> {
+    const c = this.#chat(chatID)
     const ws = this.#activeWs(chatID)
     // the adapter owns its roots; the core table covers harnesses that don't
     const dirs = ws.adapter.skillDirs?.() ?? skillDirsFor(ws.adapter.id, ws.dir)
@@ -3560,11 +3565,12 @@ export class TelegramBot {
     else if (!skills.length)
       lines.push("", `none installed — a skill is a folder with a SKILL.md in ${dirs.userDirs[0]?.replace(homedir(), "~") ?? "its skill directory"}.`)
     const rows: InlineButton[][] = []
-    for (const s of skills) {
+    c.skills = skills
+    for (const [i, s] of skills.entries()) {
       const state = !dirs.toggleable ? "" : s.disableModelInvocation ? "🚫" : "✅"
       const scope = s.scope === "project" ? "· project" : ""
       lines.push(`${state} **${s.name}** ${scope}${s.description ? ` — ${clipTitle(s.description, 40)}` : ""}`.trim())
-      if (dirs.toggleable) rows.push([btn(`${s.disableModelInvocation ? "Allow model use" : "Hide from model"}`, `sklt:${encodeURIComponent(s.path)}`)])
+      if (dirs.toggleable) rows.push([btn(`${s.disableModelInvocation ? "Allow model use" : "Hide from model"}`, `sklt:${i}`)])
     }
     rows.push([btn("‹ Back", "set:root")])
     await this.#menu(chatID, lines, rows, messageID === null ? undefined : { messageID })
@@ -3931,17 +3937,14 @@ export class TelegramBot {
         break
       }
       case "sklt": {
-        // callback_data is capped at 64 bytes and a path blows through it, so
-        // the skill list encodes the path; decode and flip
+        // the button addresses the listed skill by index (a SKILL.md path
+        // blows through callback_data's 64-byte cap); the snapshot it indexes
+        // into is re-read on every render, so a stale tap just misses
         let said = "toggled"
         try {
-          const skillPath = decodeURIComponent(rest)
-          const ws = this.#activeWs(chatID)
-          const dirs = ws.adapter.skillDirs?.() ?? skillDirsFor(ws.adapter.id, ws.dir)
-          const skills = await listSkills(dirs.userDirs, dirs.projectDirs)
-          const skill = skills.find((s) => s.path === skillPath)
-          if (!skill) throw new Error("skill moved or deleted")
-          await writeSkillModelInvocation(skillPath, !skill.disableModelInvocation)
+          const skill = c.skills[Number(rest)]
+          if (!skill) throw new Error("stale list — reopen Skills")
+          await writeSkillModelInvocation(skill.path, !skill.disableModelInvocation)
           said = `${skill.name}: ${skill.disableModelInvocation ? "visible to model" : "hidden from model"}`
         } catch (err) {
           said = `⚠️ ${(err as Error).message}`
