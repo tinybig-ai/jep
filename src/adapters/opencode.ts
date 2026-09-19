@@ -460,25 +460,6 @@ export class OpenCodeAdapter implements HarnessAdapter {
     )
   }
 
-  // a `question` tool call: the model asked the human something outright and
-  // the turn is parked until an answer arrives. One answer per question, in
-  // order — each answer is the array of option labels chosen (or the typed
-  // custom answer). This is the v1 route (scoped by the `directory` query
-  // param, not the session path); the `/api/session/.../question/...` v2 route
-  // exists in 1.18 too but never matches the tool's pending request.
-  async respondQuestion(sessionID: string, requestID: string, answers: string[][]): Promise<boolean> {
-    const res = await fetch(
-      this.#url(`/question/${encodeURIComponent(requestID)}/reply?directory=${encodeURIComponent(this.workspace)}`),
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ answers }),
-        signal: AbortSignal.timeout(30_000),
-      },
-    )
-    return res.ok
-  }
-
   async *events(signal?: AbortSignal): AsyncIterable<DomainEvent> {
     const controller = new AbortController()
     const onAbort = () => controller.abort()

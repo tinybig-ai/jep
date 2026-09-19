@@ -87,10 +87,9 @@ interface ChatState {
       messageID: number
       ephemeralID?: number
       options: AskOption[]
-      // question tool calls answer one question at a time; a slot fills as the
-      // user taps (or types) and the whole thing posts once every slot is set
+      // kind marks a question tool call: its turn was stopped at ask time and
+      // the answer goes back as an ordinary message (see the ask callback)
       kind?: "permission" | "question"
-      answers?: Array<string[] | null>
     }
   >
   // snapshot behind the /ls and settings pickers — each entry keeps its own
@@ -1203,30 +1202,19 @@ export class TelegramBot {
     const c = this.#chat(chatID)
     const [cmd = "", ...rest] = text.split(/\s+/)
 
-    // a swipe-reply to a question prompt is the typed answer to its first
-    // unanswered slot — buttons remain the way to answer the choice questions
+    // a swipe-reply to a question prompt is the typed answer: the question's
+    // turn is already stopped, so it goes back as an ordinary message
     if (m.reply_to_message?.message_id) {
       const repliedMsgID = m.reply_to_message.message_id
       for (const [key, pending] of c.pending.entries()) {
         if (pending.messageID !== repliedMsgID || pending.kind !== "question") continue
-        const slot = pending.answers?.findIndex((a) => a === null) ?? -1
-        if (slot < 0 || !pending.answers) break
-        pending.answers[slot] = [text]
-        if (!pending.answers.every((a) => a !== null)) {
-          return this.#say(chatID, `↩ noted — ${pending.answers.filter((a) => a !== null).length}/${pending.answers.length} answered`)
-        }
         c.pending.delete(key)
-        const answers = pending.answers as string[][]
-        const ok = pending.adapter.respondQuestion
-          ? await pending.adapter
-              .respondQuestion(pending.sessionID, key, answers)
-              .catch((err) => {
-                console.error(`[question] reply failed: ${(err as Error)?.message ?? err}`)
-                return false
-              })
-          : false
-        const verdict = ok ? `✅ ${answers.map((a) => a.join(", ")).join(" | ")}` : `⚠️ the harness didn't take it`
-        await this.#tg.editMessageText({ chatID, messageID: repliedMsgID, text: verdict, replyMarkup: null })
+        const resolved = await this.#resolveSessionID(chatID)
+        if (resolved && resolved !== pending.sessionID) {
+          return this.#say(chatID, "switch back to that conversation to answer")
+        }
+        await this.#verdictEdit(chatID, repliedMsgID, `✅ ${text}`)
+        this.#runTurn(chatID, () => this.#freeText(chatID, text), { prompt: { text, queuedAt: Date.now() } })
         return
       }
     }
@@ -2156,6 +2144,9 @@ export class TelegramBot {
     // hasn't returned after a short grace period, finalize from what we streamed.
     let idleGrace: ReturnType<typeof setTimeout> | null = null
     let finishedViaIdle = false
+    // a question tool call stopped this turn on purpose; the ❓ prompt is the
+    // outcome, so the abort fallbacks below must not stamp "(stopped)" on it
+    let questionAsked = false
     // parts assembled live from the event stream, keyed by partID so updates
     // replace rather than duplicate; mirrors the final `reply.parts` order
     const liveParts: Part[] = []
@@ -2518,6 +2509,15 @@ export class TelegramBot {
           } else if (evt.type === "ask.requested") {
             if (minimal && minimalOpenTextID !== null) await flushMinimalSegment()
             await this.#askPrompt(chatID, ws.adapter, evt.ask)
+            if (evt.ask.kind === "question") {
+              // the question tool parks the turn until a human answers — which
+              // reads as "still streaming" for as long as the phone is silent.
+              // Stop the turn instead; the tapped answer (or typed reply) goes
+              // back as an ordinary message the model can read and carry on.
+              questionAsked = true
+              ac.abort()
+              void ws.adapter.abort(sessionID).catch(logFail("abort"))
+            }
           } else if (evt.type === "session.idle") {
             // the turn is done. Give prompt() a moment to return with its own
             // accounting (tokens, cost); if it's hung, finalize from liveParts.
@@ -2591,7 +2591,7 @@ export class TelegramBot {
         // arrives here rather than as a rejected prompt whenever the
         // harness-side abort finalizes the turn before the client's own
         // AbortController lands. Treat it as the outcome it is.
-        if (!shown && !textOf(visible).trim() && minimalFlushed.size === 0) await presentBody("(stopped)")
+        if (!shown && !textOf(visible).trim() && minimalFlushed.size === 0 && !questionAsked) await presentBody("(stopped)")
       } else if (failure) {
         console.error(`[turn] harness error: ${failure.name}: ${failure.message}`)
         // a session somebody else is already running in is not a fault the
@@ -2622,13 +2622,13 @@ export class TelegramBot {
           // back. `shown` is the answer, so don't stamp it with a stall warning.
           // (minimal layout may have shipped the whole answer as segments, in
           // which case nothing left to show is a success, not silence)
-          if (!shown && minimalFlushed.size === 0) await presentBody("(no output)")
+          if (!shown && minimalFlushed.size === 0 && !questionAsked) await presentBody("(no output)")
         } else {
           // a stall is not a stop: say so, or it looks like the turn was
           // cancelled deliberately and the silence goes unexplained
           const stalled = `⚠️ no activity for ${Math.round(stalledAfter / 60_000)}m — turn abandoned`
-          if (!shown) await presentBody(idleAbort ? stalled : "(stopped)")
-          else if (idleAbort) await this.#tg.sendMessage({ chatID, text: stalled })
+          if (!shown && !questionAsked) await presentBody(idleAbort ? stalled : "(stopped)")
+          else if (idleAbort && !questionAsked) await this.#tg.sendMessage({ chatID, text: stalled })
         }
       } else {
         // A connection loss is not the same as an empty answer: the turn may
@@ -3110,8 +3110,25 @@ export class TelegramBot {
     // will not reinterpret. Clipped so a long command can't push the buttons
     // off the screen.
     const isQuestion = ask.kind === "question"
-    const detail = ask.detail ? `\n\n${isQuestion ? ask.detail : `\`\`\`\n${clipDetail(ask.detail)}\`\`\``}` : ""
-    const text = `${isQuestion ? "❓" : "🔐"} **${ask.title}**${detail}`
+    // questions render through #menu like the settings tree — paragraphs plus
+    // native RichBlockButtons, classic-HTML fallback for clients without rich
+    if (isQuestion) {
+      const lines = [`❓ ${ask.title}`, ...(ask.detail ? ["", ...ask.detail.split("\n\n")] : [])]
+      const rows = ask.options.map((o) => [btn(o.label.slice(0, 40), `ask:${ask.id}#${o.id}`)])
+      const sent = await this.#menu(chatID, lines, rows)
+      if (sent.messageID !== undefined) {
+        c.pending.set(ask.id, {
+          sessionID: ask.sessionID,
+          adapter,
+          messageID: sent.messageID,
+          options: ask.options,
+          kind: "question",
+        })
+      }
+      return
+    }
+    const detail = ask.detail ? `\n\n\`\`\`\n${clipDetail(ask.detail)}\`\`\`` : ""
+    const text = `🔐 **${ask.title}**${detail}`
     const markup = kin(
       ask.options.map((o) => {
         const b: InlineButton = btn(o.label.slice(0, 40), `ask:${ask.id}#${o.id}`)
@@ -3126,13 +3143,6 @@ export class TelegramBot {
         messageID,
         options: ask.options,
         ...(ephemeralID !== undefined ? { ephemeralID } : {}),
-        ...(isQuestion
-          ? // one slot per question, counted off the option ids' "<idx>:" prefix
-            {
-              kind: "question" as const,
-              answers: Array.from({ length: ask.options.reduce((n, o) => Math.max(n, Number(o.id.split(":")[0]) + 1 || 1), 1) }, () => null),
-            }
-          : {}),
       })
     }
     const isGroup = c.chatType === "group" || c.chatType === "supergroup"
@@ -3332,6 +3342,19 @@ export class TelegramBot {
   }
 
   // ─── settings button-tree ───
+
+  // A question prompt just got answered: replace it with the verdict. The
+  // message may be rich (menu form) or classic (fallback form) — try rich
+  // first, fall back to text, and never let the cleanup fail the answer.
+  async #verdictEdit(chatID: number, messageID: number, text: string): Promise<void> {
+    try {
+      await this.#tg.editRichMessage({ chatID, messageID, rich_message: { blocks: [{ type: "paragraph", text }] } })
+      return
+    } catch {
+      /* not a rich message — fall through */
+    }
+    await this.#tg.editMessageText({ chatID, messageID, text, replyMarkup: null }).catch(logFail("verdict"))
+  }
 
   // Render a menu (info lines + button rows) as a Rich Message — paragraphs plus
   // RichBlockButtons — so options render natively in rich clients. Anything that
@@ -4398,29 +4421,18 @@ export class TelegramBot {
         const option = pending.options.find((o) => o.id === optionID)
         if (!option) return tg.answerCallbackQuery({ id: cq.id, text: "stale button" })
         if (pending.kind === "question") {
-          // a question call may carry several questions: "<question idx>:<label>"
-          // fills just that slot, and nothing posts until every slot is set
-          const cut2 = optionID.indexOf(":")
-          const qi = cut2 < 0 ? 0 : Number(optionID.slice(0, cut2)) || 0
-          if (pending.answers && qi < pending.answers.length) pending.answers[qi] = [option.label]
-          if (!pending.answers?.every((a) => a !== null)) {
-            return tg.answerCallbackQuery({ id: cq.id, text: `${option.label} — tap the remaining answers` })
-          }
-          // all slots set — drop before the round trip so a second tap can't
-          // answer the same question twice
+          // the turn was stopped when the question was asked; the answer goes
+          // back as an ordinary message the model reads and carries on from.
+          // Drop the pending entry first so a second tap can't answer twice.
           c.pending.delete(askID)
-          const answers = pending.answers as string[][]
-          const ok = pending.adapter.respondQuestion
-            ? await pending.adapter
-                .respondQuestion(pending.sessionID, askID, answers)
-                .catch((err) => {
-                  console.error(`[question] reply failed: ${(err as Error)?.message ?? err}`)
-                  return false
-                })
-            : false
-          const verdict = ok ? `✅ ${answers.map((a) => a.join(", ")).join(" | ")}` : `⚠️ the harness didn't take it`
-          await this.#tg.editMessageText({ chatID, messageID: msg.message_id, text: verdict, replyMarkup: null })
-          return tg.answerCallbackQuery({ id: cq.id, text: ok ? "answered" : "refused" })
+          const resolved = await this.#resolveSessionID(chatID)
+          if (resolved && resolved !== pending.sessionID) {
+            return tg.answerCallbackQuery({ id: cq.id, text: "switch back to that conversation to answer" })
+          }
+          const answer = option.label
+          await this.#verdictEdit(chatID, msg.message_id, `✅ ${answer}`)
+          this.#runTurn(chatID, () => this.#freeText(chatID, answer), { prompt: { text: answer, queuedAt: Date.now() } })
+          return tg.answerCallbackQuery({ id: cq.id, text: "answered" })
         }
         // dropped before the round trip: a second tap while the harness is
         // still thinking about the first would answer the same ask twice
