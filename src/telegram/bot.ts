@@ -2466,6 +2466,16 @@ export class TelegramBot {
               await flushPendingReasoning()
               settled = true
             }
+            // the "question" tool is the model asking the user something — surface
+            // it as a message so the human actually sees the question rather than
+            // just a gear icon that never resolves
+            if (evt.part.kind === "tool" && evt.part.name === "question" && evt.part.status === "running") {
+              const q = toolInput(evt.part)
+              const text = typeof q.question === "string" ? q.question : typeof q.text === "string" ? q.text : stringifyTool(q)
+              if (text.trim()) {
+                await this.#tg.sendMessage({ chatID, text: `❓ ${text}`.slice(0, MAX_MSG) })
+              }
+            }
             // a card just left the draft for its own permanent message — redraw
             // now so it doesn't linger as a flat status line until the next tick
             if (settled || Date.now() - lastEdit > 700) await renderLive()
