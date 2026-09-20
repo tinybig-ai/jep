@@ -27,7 +27,12 @@ fun JepApp(app: AppViewModel) {
                 key = c.sessionId,
                 factory = viewModelFactory { initializer { ChatViewModel(app.chat(), c.sessionId, c.title) } },
             )
-            ChatScreen(vm) { app.back() }
+            ChatScreen(
+                vm,
+                onBack = { app.back() },
+                onNew = { app.newSession() },
+                onForgetPairing = { app.forgetPairing() },
+            )
         }
         else -> SessionsScreen(
             app.sessions.collectAsState().value,

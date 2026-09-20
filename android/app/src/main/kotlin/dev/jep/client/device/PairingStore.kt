@@ -21,7 +21,11 @@ class PairingStore(private val prefs: android.content.SharedPreferences) {
         val trimmed = input.trim()
         if (trimmed.isEmpty()) return null
         val withScheme = if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) trimmed else "http://$trimmed"
-        val url = withScheme.toHttpUrlOrNull() ?: return null
+        var url = withScheme.toHttpUrlOrNull()
+        if (url == null) {
+            // people type "host: 8931"; OkHttp won't, so shrug the space off
+            url = withScheme.replace(Regex(":\\s+"), ":").toHttpUrlOrNull() ?: return null
+        }
         return url.toString().trimEnd('/')
     }
 

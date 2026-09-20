@@ -56,6 +56,9 @@ data class HistoryRes(val messages: List<MessageDto> = emptyList())
 data class NewSessionRes(val session: SessionDto)
 
 @Serializable
+data class AttachRes(val id: String, val name: String = "")
+
+@Serializable
 data class AskOptionDto(val id: String, val label: String, val style: String? = null)
 
 @Serializable

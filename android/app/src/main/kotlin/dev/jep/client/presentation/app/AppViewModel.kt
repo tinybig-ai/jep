@@ -1,8 +1,9 @@
 package dev.jep.client.presentation.app
 
+import android.app.Application
 import android.content.Context
 import android.content.SharedPreferences
-import androidx.lifecycle.ViewModel
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.jep.client.data.GatewayChatRepository
 import dev.jep.client.device.JepHttp
@@ -20,8 +21,8 @@ sealed interface Screen {
     data class Chat(val sessionId: String, val title: String) : Screen
 }
 
-class AppViewModel(context: Context) : ViewModel() {
-    val pairing = PairingStore(context.getSharedPreferences("jep", Context.MODE_PRIVATE))
+class AppViewModel(application: Application) : AndroidViewModel(application) {
+    val pairing = PairingStore(application.getSharedPreferences("jep", Context.MODE_PRIVATE))
 
     private val _screen = MutableStateFlow<Screen>(Screen.Sessions)
     val screen = _screen.asStateFlow()
@@ -109,6 +110,14 @@ class AppViewModel(context: Context) : ViewModel() {
 
     fun back() {
         _screen.value = Screen.Sessions
+    }
+
+    fun forgetPairing() {
+        pairing.forget()
+        repo = null
+        _paired.value = false
+        _screen.value = Screen.Sessions
+        _sessions.value = emptyList()
     }
 
     /** every chat opens against the same port; ChatViewModels share it */

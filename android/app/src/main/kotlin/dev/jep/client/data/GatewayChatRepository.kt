@@ -1,5 +1,6 @@
 package dev.jep.client.data
 
+import dev.jep.client.data.dto.AttachRes
 import dev.jep.client.data.dto.ErrorDto
 import dev.jep.client.data.dto.HistoryRes
 import dev.jep.client.data.dto.MessageRes
@@ -15,12 +16,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.net.URLEncoder
 
 // The gateway's protocol, behind the one port the app knows. OkHttp lives
 // here and nowhere else; domain and presentation stay transport-blind.
@@ -82,9 +86,35 @@ class GatewayChatRepository(
     override suspend fun history(sessionId: String): List<ChatMessage> =
         decode("/history", HistoryRes.serializer(), payload("id" to sessionId)).messages.map { it.toDomain() }
 
-    override suspend fun prompt(sessionId: String, text: String): ChatMessage {
-        val dto = decode("/prompt", MessageRes.serializer(), payload("id" to sessionId, "text" to text))
+    override suspend fun prompt(sessionId: String, text: String, files: List<String>): ChatMessage {
+        val body = buildJsonObject {
+            put("id", sessionId)
+            put("text", text)
+            if (files.isNotEmpty()) put("files", JsonArray(files.map { JsonPrimitive(it) }))
+        }.toString()
+        val dto = decode("/prompt", MessageRes.serializer(), body)
         return (dto.message ?: error("gateway returned no message for the turn")).toDomain()
+    }
+
+    override suspend fun rename(sessionId: String, title: String): Boolean =
+        post("/rename", payload("id" to sessionId, "title" to title)).first in 200..299
+
+    override suspend fun delete(sessionId: String): Boolean =
+        post("/delete", payload("id" to sessionId)).first in 200..299
+
+    override suspend fun attach(sessionId: String, filename: String, bytes: ByteArray): String {
+        val q = "id=${URLEncoder.encode(sessionId, "UTF-8")}&name=${URLEncoder.encode(filename, "UTF-8")}"
+        val res = withContext(Dispatchers.IO) {
+            val builder = Request.Builder().url("$base/attach?$q")
+            token()?.let { builder.header("authorization", "Bearer $it") }
+            val req = builder.post(bytes.toRequestBody("application/octet-stream".toMediaType())).build()
+            http.newCall(req).execute().use { it.code to it.body?.string().orEmpty() }
+        }
+        if (res.first !in 200..299) {
+            val err = runCatching { json.decodeFromString(ErrorDto.serializer(), res.second) }.getOrNull()
+            throw ApiFailure(res.first, err?.message ?: "gateway said ${res.first}")
+        }
+        return json.decodeFromString(AttachRes.serializer(), res.second).id
     }
 
     override suspend fun stop(sessionId: String): Boolean =

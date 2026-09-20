@@ -49,8 +49,12 @@ interface ChatRepository {
     suspend fun sessions(): List<SessionSummary>
     suspend fun newSession(title: String?): SessionSummary
     suspend fun history(sessionId: String): List<ChatMessage>
-    suspend fun prompt(sessionId: String, text: String): ChatMessage
+    suspend fun prompt(sessionId: String, text: String, files: List<String> = emptyList()): ChatMessage
     suspend fun stop(sessionId: String): Boolean
     suspend fun respond(askId: String, optionId: String): Boolean
+    suspend fun rename(sessionId: String, title: String): Boolean
+    suspend fun delete(sessionId: String): Boolean
+    /** upload a file to the gateway; returns the id to pass in the next prompt */
+    suspend fun attach(sessionId: String, filename: String, bytes: ByteArray): String
     fun events(): Flow<ChatEvent>
 }

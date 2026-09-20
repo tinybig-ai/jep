@@ -1,5 +1,8 @@
 package dev.jep.client.presentation.chat
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.jep.client.domain.model.Ask
@@ -19,8 +22,14 @@ import kotlinx.coroutines.launch
 class ChatViewModel(
     private val repo: ChatRepository,
     val sessionId: String,
-    val title: String,
+    initialTitle: String,
 ) : ViewModel() {
+
+    // a chat the user renamed no longer matches the sessions-list title
+    var title by mutableStateOf(initialTitle)
+        private set
+
+    data class Attachment(val id: String, val name: String)
 
     /** the turn being written right now, unit = streaming part */
     data class LiveTurn(
@@ -36,6 +45,8 @@ class ChatViewModel(
         val failure: String? = null,
         val sending: Boolean = false,
         val lost: Boolean = false,
+        val attachments: List<Attachment> = emptyList(),
+        val notice: String? = null,
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -97,16 +108,17 @@ class ChatViewModel(
     fun send(text: String) {
         val trimmed = text.trim()
         if (trimmed.isEmpty() || _state.value.sending) return
+        val files = _state.value.attachments
         val pending = ChatMessage(
             id = "local-${System.nanoTime()}",
             role = Role.USER,
             time = System.currentTimeMillis(),
-            parts = listOf(ChatPart.Text(trimmed)),
+            parts = listOf(ChatPart.Text(if (files.isEmpty()) trimmed else trimmed + "\n\n[attached: ${files.joinToString(", ") { it.name }}]")),
         )
         optimistic.add(pending)
-        _state.update { it.copy(messages = it.messages + pending, sending = true, live = null, failure = null) }
+        _state.update { it.copy(messages = it.messages + pending, sending = true, live = null, failure = null, attachments = emptyList()) }
         viewModelScope.launch {
-            runCatching { repo.prompt(sessionId, trimmed) }
+            runCatching { repo.prompt(sessionId, trimmed, files.map { it.id }) }
                 .onSuccess { final ->
                     optimistic.removeAll { it.id == pending.id }
                     _state.update { it.copy(messages = it.messages + final, sending = false, live = null) }
@@ -114,6 +126,41 @@ class ChatViewModel(
                 }
                 .onFailure { err ->
                     _state.update { it.copy(sending = false, failure = err.message ?: "the turn failed") }
+                }
+        }
+    }
+
+    fun attach(filename: String, bytes: ByteArray) {
+        viewModelScope.launch {
+            runCatching { repo.attach(sessionId, filename, bytes) }
+                .onSuccess { id ->
+                    _state.update { it.copy(attachments = it.attachments + Attachment(id, filename)) }
+                }
+                .onFailure { err -> _state.update { it.copy(notice = "couldn't attach \"$filename\": ${err.message}") } }
+        }
+    }
+
+    fun removeAttachment(id: String) {
+        _state.update { it.copy(attachments = it.attachments.filterNot { a -> a.id == id }) }
+    }
+
+    fun rename(newTitle: String) {
+        val clean = newTitle.trim()
+        if (clean.isEmpty()) return
+        viewModelScope.launch {
+            runCatching { repo.rename(sessionId, clean) }
+                .onSuccess { title = clean }
+                .onFailure { err -> _state.update { it.copy(notice = "rename failed: ${err.message}") } }
+        }
+    }
+
+    fun delete(onDone: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            runCatching { repo.delete(sessionId) }
+                .onSuccess { onDone(true) }
+                .onFailure { err ->
+                    _state.update { it.copy(notice = "couldn't delete: ${err.message}") }
+                    onDone(false)
                 }
         }
     }

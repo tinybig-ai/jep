@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- the gateway is plain http on a LAN/Tailscale host; that is the app's
+         whole point, so cleartext is permitted by policy rather than blocked -->
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

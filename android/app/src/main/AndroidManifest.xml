@@ -10,6 +10,7 @@
     <application
         android:label="jep"
         android:supportsRtl="true"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:theme="@android:style/Theme.Material.NoActionBar">
 
         <activity
