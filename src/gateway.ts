@@ -20,6 +20,9 @@ export interface GatewayDeps {
   port: number
   /** pinned pairing code; generated fresh per boot when omitted */
   pairCode?: string
+  /** attempts per address per minute before the pair gate slams shut; a
+   * production default, loosened by tests that must pair repeatedly */
+  pairLimit?: number
 }
 
 export interface GatewayHandle {
@@ -31,6 +34,7 @@ export interface GatewayHandle {
 }
 
 const TOKEN_FILE = "gateway-tokens.json"
+const TITLES_FILE = "gateway-titles.json"
 const BODY_MAX = 1 << 20
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -52,14 +56,36 @@ const saveTokens = async (dataHome: string, tokens: Map<string, number>): Promis
   await writeFile(join(dataHome, TOKEN_FILE), JSON.stringify(Object.fromEntries(tokens), null, 1))
 }
 
+// The phone renames conversations its own way — like Telegram, the rename is a
+// client concern. jep's harnesses don't expose one, so the gateway keeps its
+// own overrides (persisted, like the tokens) and overlays them on listings.
+async function loadTitles(dataHome: string): Promise<Map<string, string>> {
+  try {
+    const raw = JSON.parse(await readFile(join(dataHome, TITLES_FILE), "utf8")) as Record<string, string>
+    return new Map(Object.entries(raw))
+  } catch {
+    return new Map()
+  }
+}
+
+const saveTitles = async (dataHome: string, titles: Map<string, string>): Promise<void> => {
+  await mkdir(dataHome, { recursive: true })
+  await writeFile(join(dataHome, TITLES_FILE), JSON.stringify(Object.fromEntries(titles), null, 1))
+}
+
+/** keep a phone-supplied leaf filename from walking out of the uploads dir */
+function leafName(name: string): string {
+  const base = name.split(/[\\/]/).pop() ?? "file"
+  return base.replace(/[^\w.\- ]/g, "_").slice(0, 120) || "file"
+}
+
 // DoS guard on the one unauthenticated endpoint (mirrors the Telegram Pairing
-// limits): at most 5 attempts per rolling minute per address.
-const PAIR_MAX = 5
+// limits): at most N attempts per rolling minute per address.
 const PAIR_WINDOW_MS = 60_000
 const pairAttempts = new Map<string, number[]>()
-function pairRateOK(ip: string): boolean {
+function pairRateOK(max: number, ip: string): boolean {
   const seen = (pairAttempts.get(ip) ?? []).filter((t) => Date.now() - t < PAIR_WINDOW_MS)
-  if (seen.length >= PAIR_MAX) return false
+  if (seen.length >= max) return false
   seen.push(Date.now())
   pairAttempts.set(ip, seen)
   for (const [k, v] of pairAttempts) if (v.length === 0) pairAttempts.delete(k)
@@ -83,13 +109,30 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
   }
 }
 
+// attachments are handed over as raw octets, not JSON
+const ATTACH_MAX = 32 << 20
+async function readRaw(req: IncomingMessage, cap: number): Promise<Buffer | null> {
+  const chunks: Buffer[] = []
+  let size = 0
+  for await (const chunk of req) {
+    size += (chunk as Buffer).length
+    if (size > cap) return null
+    chunks.push(chunk as Buffer)
+  }
+  return Buffer.concat(chunks)
+}
+
 export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   const pairCode = deps.pairCode ?? newPairCode()
   let tokens = await loadTokens(deps.dataHome)
+  const titles = await loadTitles(deps.dataHome)
 
   // help-files the phone needs, resolved as events and commands arrive
   const sessionAdapters = new Map<string, HarnessAdapter>()
   const askSessions = new Map<string, string>()
+  // uploads land in <dataHome>/attachments, remembered by id for the next prompt
+  const attachments = new Map<string, { path: string; name: string; sessionID: string }>()
+  const attachmentRoot = join(deps.dataHome, "attachments")
 
   // fan-out: one push feed per device, none of them ever addressable by token
   const clients = new Set<ServerResponse>()
@@ -181,7 +224,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       if (path === "/health" && req.method === "GET") return json(res, 200, { ok: true, paired: tokens.size > 0 })
 
       if (path === "/pair" && req.method === "POST") {
-        if (!pairRateOK(ip)) return json(res, 429, { error: "too many attempts, wait a minute" })
+        if (!pairRateOK(deps.pairLimit ?? 5, ip)) return json(res, 429, { error: "too many attempts, wait a minute" })
         const body = (await readBody(req)) as { code?: string } | undefined
         if (typeof body?.code !== "string" || !same(body.code.trim(), pairCode)) {
           return json(res, 403, { error: "wrong pairing code" })
@@ -209,6 +252,21 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         return
       }
 
+      // attach carries raw octets, not JSON — handle before the body gate
+      if (path === "/attach" && req.method === "POST") {
+        const attachSession = url.searchParams.get("id")
+        const attachName = leafName(url.searchParams.get("name") ?? "file")
+        const raw = await readRaw(req, ATTACH_MAX)
+        if (raw == null) return json(res, 413, { error: "attachment too large" })
+        if (!attachSession) return json(res, 400, { error: "id required" })
+        const attachID = `att-${randomBytes(8).toString("hex")}`
+        await mkdir(attachmentRoot, { recursive: true })
+        const stored = join(attachmentRoot, `${attachID}-${attachName}`)
+        await writeFile(stored, raw)
+        attachments.set(attachID, { path: stored, name: attachName, sessionID: attachSession })
+        return json(res, 200, { id: attachID, name: attachName })
+      }
+
       const body = await readBody(req)
       if (body === undefined && req.method === "POST") return json(res, 400, { error: "bad json" })
       const b = (body ?? {}) as Record<string, unknown>
@@ -223,7 +281,8 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           const list = await adapter.listSessions().catch(() => [])
           for (const s of list) {
             sessionAdapters.set(s.id, adapter)
-            items.push({ ...s, adapter: name })
+            const overridden = titles.get(s.id)
+            items.push({ ...s, title: overridden ?? s.title, adapter: name })
           }
         }
         items.sort((x, y) => y.updatedAt - x.updatedAt)
@@ -244,6 +303,25 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       const adapter = await ensureListed(id)
       if (!adapter) return json(res, 404, { error: "unknown session" })
 
+      if (path === "/rename") {
+        const name = str("title")
+        if (!name) return json(res, 400, { error: "title required" })
+        titles.set(id, name)
+        await saveTitles(deps.dataHome, titles)
+        return json(res, 200, { ok: true })
+      }
+
+      if (path === "/delete") {
+        sessionAdapters.delete(id)
+        attachments.forEach((v, k) => {
+          if (v.sessionID === id) attachments.delete(k)
+        })
+        titles.delete(id)
+        await saveTitles(deps.dataHome, titles)
+        const gone = await adapter.deleteSession(id).catch(() => false)
+        return json(res, gone ? 200 : 404, gone ? { ok: true } : { error: "couldn't delete" })
+      }
+
       if (path === "/history") {
         const messages = await adapter.messages(id).catch(() => [])
         return json(res, 200, { messages })
@@ -253,9 +331,11 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const text = str("text")
         if (!text) return json(res, 400, { error: "text required" })
         if (active.has(id)) return json(res, 409, { error: "busy" })
+        const files: string[] = Array.isArray(b.files) ? b.files.filter((f): f is string => typeof f === "string") : []
+        const filePaths = files.map((fid) => attachments.get(fid)?.path).filter((p): p is string => Boolean(p))
         active.add(id)
         try {
-          const message = await adapter.prompt(id, text)
+          const message = await adapter.prompt(id, text, { filePaths })
           return json(res, 200, { message })
         } catch (err) {
           return json(res, 502, { error: String((err as Error)?.message ?? err) })

@@ -23,12 +23,15 @@ the stream, for plain clients).
 |---|---|---|
 | `POST /pair` | `{code}` | `{token}` — 5 tries / 60 s |
 | `GET /health` | — | `{ok,paired}` |
-| `POST /sessions` | — | `{items[]}` all sessions, every adapter merged |
+| `POST /sessions` | — | `{items[]}` all sessions, every adapter merged, client renames applied |
 | `POST /new` | `{title?}` | `{session}` |
 | `POST /history` | `{id}` | `{messages[]}` full replay from the harness |
-| `POST /prompt` | `{id,text}` | `{message}` resolves when the turn ends |
+| `POST /prompt` | `{id,text,files?}` | `{message}` resolves when the turn ends; `files` are `attach` ids sent to the harness as `filePaths` |
 | `POST /respond` | `{askID,optionID}` | `{ok}` |
 | `POST /stop` | `{id}` | `{stopped}` |
+| `POST /rename` | `{id,title}` | `{ok}` — a client-side title override (Telegram-style chat rename), persisted in `<DATA_HOME>/gateway-titles.json`, overlaid on `/sessions` |
+| `POST /delete` | `{id}` | `{ok}` — removes the session from the harness |
+| `POST /attach` | raw octets, `?id=<session>&name=<name>` | `{id,name}` — buffers up to 32 MB under `<DATA_HOME>/attachments`; the id feeds the next `/prompt`'s `files` |
 | `GET /stream` | — | SSE, never ends |
 
 Errors are a bare `{error}` with a fitting status. A second prompt into a
@@ -53,7 +56,8 @@ server pushes nothing down on its own.
 
 ## What the server does NOT do
 
-No chat-store reads/writes, no Telegram cross-talk: the gateway statelessly
-reflects the harness ports. Sessions prompted from the phone are invisible to
+No chat-store reads/writes, no Telegram cross-talk: the gateway reflects the
+harness ports; the only state it keeps is the tokens and the client-side
+rename overrides. Sessions prompted from the phone are invisible to
 Telegram's live view (the bot only renders turns it starts itself) and vice
 versa — turn ownership follows whoever called `prompt()`.

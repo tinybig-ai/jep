@@ -28,7 +28,7 @@ function fakeAdapter(): HarnessAdapter {
     async listSessions() {
       return [session]
     },
-    async prompt(_sessionID, text) {
+async prompt(_sessionID, text) {
       const message: Message = {
         id: "m1",
         sessionID: "s1",
@@ -37,6 +37,9 @@ function fakeAdapter(): HarnessAdapter {
         parts: [{ kind: "text", text: `echo: ${text}` }],
       }
       return message
+    },
+    async deleteSession() {
+      return true
     },
     async messages() {
       return [{ id: "m0", sessionID: "s1", role: "user", time: 1, parts: [{ kind: "text", text: "hi" }] }]
@@ -66,6 +69,7 @@ function spawnGateway(): { gw: Promise<GatewayHandle> } {
       dataHome: mkdtempSync(join(tmpdir(), "gw-test-")),
       port: 0,
       pairCode: "TESTCODE",
+      pairLimit: 100,
     }),
   }
 }
@@ -132,6 +136,37 @@ test("prompt resolves to the harness's final message; a double prompt is 409", a
     assert.equal(res.status, 200)
     const { message } = (await res.json()) as { message: Message }
     assert.equal(message.role, "assistant")
+  } finally {
+    await g.close()
+  }
+})
+
+test("rename overlays a client-side title; delete removes; attach feeds the next prompt", async () => {
+  const { gw } = spawnGateway()
+  const g = await gw
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const token = await pair(base, "TESTCODE")
+    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" }
+
+    const renamed = await fetch(`${base}/rename`, { method: "POST", headers, body: JSON.stringify({ id: "s1", title: "My Chat" }) })
+    assert.equal(renamed.status, 200)
+    const sess = await fetch(`${base}/sessions`, { method: "POST", headers })
+    const { items } = (await sess.json()) as { items: Array<{ id: string; title: string }> }
+    assert.equal(items[0]?.title, "My Chat")
+
+    const up = await fetch(`${base}/attach?id=s1&name=screen.png`, { method: "POST", headers, body: new Uint8Array([1, 2, 3, 4]) })
+    assert.equal(up.status, 200)
+    const { id: attachID } = (await up.json()) as { id: string }
+    const promptRes = await fetch(`${base}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ id: "s1", text: "look", files: [attachID] }),
+    })
+    assert.equal(promptRes.status, 200)
+
+    const del = await fetch(`${base}/delete`, { method: "POST", headers, body: JSON.stringify({ id: "s1" }) })
+    assert.equal(del.status, 200)
   } finally {
     await g.close()
   }
