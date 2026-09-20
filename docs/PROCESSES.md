@@ -119,8 +119,11 @@ Telegram `getUpdates` 502 used to `process.exit(1)` — now the poll loop retrie
 with backoff, and launchd `KeepAlive` restarts anything that still dies):
 
 ```sh
-# reload after a code change: SIGKILL it, launchd brings it back with new code
-pkill -9 -f 'src/tg.ts'; sleep 5; pgrep -fl 'src/tg.ts'   # expect a running node
+# reload after a code change: launchd restarts it with the new code. NEVER
+# pkill + nohup instead — that double-spawns against launchd's respawn, two
+# daemons then fight over getUpdates and updates vanish into the stale one
+launchctl kickstart -k gui/$(id -u)/com.jep.tg; sleep 5
+pgrep -fl 'src/tg.ts'   # expect exactly ONE node
 ```
 
 Manual management (only if you edit the plist):
@@ -840,5 +843,6 @@ alive). They do survive a restart: `ReminderStore` persists them to
 that came due while the bot was down fires immediately (the delay clamps to
 0). Bot API `schedule_date` is not used (unsupported in private chats).
 
-**Deploy:** after these changes, reload the daemon (section 5) — `pkill -9 -f
-'src/tg.ts'` — and confirm from the log that it returns in live mode.
+**Deploy:** after these changes, reload the daemon (section 5) —
+`launchctl kickstart -k gui/$(id -u)/com.jep.tg` — and confirm from the log
+that it returns in live mode.
