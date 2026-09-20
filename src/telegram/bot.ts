@@ -2324,9 +2324,17 @@ export class TelegramBot {
       try {
         const blocks = buildLiveBlocks(minimalVisible(liveParts), internals, flushedToolIDs, reasoningStarted, reasoningEnded, true)
         const json = JSON.stringify(blocks)
-        if (json === lastRich) return
+        // an unchanged frame still re-sends on the expiry beat: drafts vanish
+        // after ~30s unpushed, so the 1s tick also keeps silent stretches alive
+        const unchanged = json === lastRich
+        if (unchanged && Date.now() - lastEdit < 20_000) return
         lastRich = json
-        if (blocks.length === 0) return // nothing to show yet — keep the "…" frame
+        if (blocks.length === 0) {
+          // nothing to show yet — keep the "…" frame alive
+          if (unchanged && lastBlocks) await this.#tg.sendRichMessageDraft({ chatID, draftID, rich_message: { blocks: lastBlocks }, canStop: true })
+          lastEdit = Date.now()
+          return
+        }
         const tail = textOf(minimalVisible(liveParts)).slice(-(MAX_MSG - 80))
         const hint = closeStreamingTable(tail)
         // first content is also where the draft stops being a spinner: try the
@@ -2348,6 +2356,7 @@ export class TelegramBot {
           }
         }
         if (draftMode !== "none") {
+          if (hint === lastHint && Date.now() - lastEdit < 20_000) return
           await this.#tg.sendMessageDraft({ chatID, draftID, text: hint, canStop: true })
           lastHint = hint
         } else if (placeholder) await this.#tg.editMessageText({ chatID, messageID: placeholder.message_id, text: hint || "…" })
@@ -2359,18 +2368,14 @@ export class TelegramBot {
       lastEdit = Date.now()
     }
 
-    // A draft is a ~30-second preview: left unpushed it vanishes, and on a turn
-    // that spends minutes in silent work (a tool running, a harness that has
-    // nothing to say yet) that reads as "the spinner died". Re-send whatever the
-    // draft last showed, well inside the expiry window, so the spinner survives
-    // until there is content — or the final message lands.
+    // A draft is a ~30-second preview: left unpushed it vanishes. This tick
+    // re-renders every second, so a running tool's elapsed clock ticks along
+    // (sending only when the frame actually changed), silent stretches stay
+    // alive on the expiry beat, and the frame never outlives the flood guard.
     const keepAlive = setInterval(() => {
-      if (finished || Date.now() < floodUntil || draftMode === "none") return
-      // re-render, not re-send: a running tool's elapsed time changes the
-      // frame, so the keep-alive is what makes a long tool call tick instead
-      // of sitting as a frozen spinner for however long the tool takes
+      if (finished || draftMode === "none") return
       void renderLive()
-    }, 20_000)
+    }, 1_000)
 
     const clearPlaceholder = async (body: string) => {
       if (!placeholder) return
