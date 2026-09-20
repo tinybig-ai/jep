@@ -117,9 +117,45 @@ test("sessions merge adapter names; history replays from the harness", async () 
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify({ id: "s1" }),
     })
-    const { messages } = (await history.json()) as { messages: Message[] }
+    const { messages, hasMore } = (await history.json()) as { messages: Message[]; hasMore: boolean }
     assert.equal(messages.length, 1)
     assert.equal(messages[0]?.parts[0]?.kind, "text")
+    assert.equal(hasMore, false)
+  } finally {
+    await g.close()
+  }
+})
+
+test("history pages the newest limit; before walks older windows; hasMore flips", async () => {
+  const adapter = fakeAdapter()
+  const history: Message[] = []
+  for (let i = 0; i < 5; i++) {
+    history.push({ id: `m${i}`, sessionID: "s1", role: i === 0 ? "user" : "assistant", time: i + 1, parts: [{ kind: "text", text: `msg ${i}` }] })
+  }
+  adapter.messages = async () => history
+  const g = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter }],
+    dataHome: mkdtempSync(join(tmpdir(), "gw-test-")),
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+  })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const token = await pair(base, "TESTCODE")
+    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" }
+    const first = await fetch(`${base}/history`, { method: "POST", headers, body: JSON.stringify({ id: "s1", limit: 2 }) })
+    const page1 = (await first.json()) as { messages: Message[]; hasMore: boolean }
+    assert.deepEqual(page1.messages.map((m) => m.id), ["m3", "m4"])
+    assert.equal(page1.hasMore, true)
+    const second = await fetch(`${base}/history`, { method: "POST", headers, body: JSON.stringify({ id: "s1", limit: 2, before: page1.messages[0]!.time }) })
+    const page2 = (await second.json()) as { messages: Message[]; hasMore: boolean }
+    assert.deepEqual(page2.messages.map((m) => m.id), ["m1", "m2"])
+    assert.equal(page2.hasMore, true)
+    const third = await fetch(`${base}/history`, { method: "POST", headers, body: JSON.stringify({ id: "s1", limit: 2, before: page2.messages[0]!.time }) })
+    const page3 = (await third.json()) as { messages: Message[]; hasMore: boolean }
+    assert.deepEqual(page3.messages.map((m) => m.id), ["m0"])
+    assert.equal(page3.hasMore, false)
   } finally {
     await g.close()
   }

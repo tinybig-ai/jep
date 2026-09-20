@@ -25,7 +25,7 @@ the stream, for plain clients).
 | `GET /health` | — | `{ok,paired}` |
 | `POST /sessions` | — | `{items[]}` all sessions, every adapter merged, client renames applied |
 | `POST /new` | `{title?}` | `{session}` |
-| `POST /history` | `{id}` | `{messages[]}` full replay from the harness |
+| `POST /history` | `{id,limit?,before?}` | `{messages[],hasMore}` — newest `limit` messages (or, when `before` is a time, the newest `limit` older than it); `hasMore` says older pages exist |
 | `POST /prompt` | `{id,text,files?}` | `{message}` resolves when the turn ends; `files` are `attach` ids sent to the harness as `filePaths` |
 | `POST /respond` | `{askID,optionID}` | `{ok}` |
 | `POST /stop` | `{id}` | `{stopped}` |

@@ -323,8 +323,16 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       }
 
       if (path === "/history") {
-        const messages = await adapter.messages(id).catch(() => [])
-        return json(res, 200, { messages })
+        const limit = typeof b.limit === "number" ? Math.max(0, Math.floor(b.limit)) : 0
+        const before = typeof b.before === "number" ? b.before : 0
+        // the harness gives us the whole scroll; the phone asks for a window —
+        // the newest `limit` messages, or everything older than `before`
+        const window = (await adapter.messages(id).catch(() => []))
+          .filter((m) => !before || m.time < before)
+          .sort((a, b) => a.time - b.time)
+        const hasMore = limit > 0 && window.length > limit
+        const messages = limit > 0 ? window.slice(-limit) : window
+        return json(res, 200, { messages, hasMore })
       }
 
       if (path === "/prompt") {

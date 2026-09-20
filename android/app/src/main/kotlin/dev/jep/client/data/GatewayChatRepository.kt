@@ -9,6 +9,7 @@ import dev.jep.client.data.dto.PairRes
 import dev.jep.client.data.dto.SessionDto
 import dev.jep.client.data.dto.SessionsRes
 import dev.jep.client.domain.repository.ChatEvent
+import dev.jep.client.domain.repository.HistoryBatch
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.repository.ChatRepository
 import dev.jep.client.domain.model.SessionSummary
@@ -60,7 +61,8 @@ class GatewayChatRepository(
             val err = runCatching { json.decodeFromString(ErrorDto.serializer(), text) }.getOrNull()
             throw ApiFailure(code, err?.message ?: "gateway said $code")
         }
-        return json.decodeFromString(serializer, text)
+        // a whole conversation can be megabytes; never decode it on the UI thread
+        return withContext(Dispatchers.Default) { json.decodeFromString(serializer, text) }
     }
 
     override suspend fun pair(baseUrl: String, code: String): String {
@@ -83,8 +85,19 @@ class GatewayChatRepository(
 
     override suspend fun newSession(title: String?): SessionSummary = (if (title == null) decode("/new", NewSessionRes.serializer()) else decode("/new", NewSessionRes.serializer(), payload("title" to title))).session.toDomain()
 
-    override suspend fun history(sessionId: String): List<ChatMessage> =
-        decode("/history", HistoryRes.serializer(), payload("id" to sessionId)).messages.map { it.toDomain() }
+    override suspend fun history(sessionId: String, limit: Int, before: Long): HistoryBatch =
+        withContext(Dispatchers.Default) {
+            val res = decode(
+                "/history",
+                HistoryRes.serializer(),
+                buildJsonObject {
+                    put("id", sessionId)
+                    if (limit > 0) put("limit", limit)
+                    if (before > 0) put("before", before)
+                }.toString(),
+            )
+            HistoryBatch(res.messages.map { it.toDomain() }, res.hasMore)
+        }
 
     override suspend fun prompt(sessionId: String, text: String, files: List<String>): ChatMessage {
         val body = buildJsonObject {

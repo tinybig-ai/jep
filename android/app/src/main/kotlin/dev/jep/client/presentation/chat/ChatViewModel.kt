@@ -19,6 +19,13 @@ import kotlinx.coroutines.launch
 // The open conversation: stateful merge of the authoritative history and the
 // live stream. Prompt runs happen in the repository/gateway and outlive this
 // screen entirely — a closed chat costs nothing, a reopened one re-syncs.
+//
+// History is paged: only the newest WINDOW messages load up front; older pages
+// come on demand when the user scrolls to the top. A whole conversation can be
+// hundreds of messages long, so an unbounded initial fetch made loading slow
+// and handing megabytes of JSON to the UI thread crashed the app.
+const val WINDOW = 120
+
 class ChatViewModel(
     private val repo: ChatRepository,
     val sessionId: String,
@@ -47,6 +54,8 @@ class ChatViewModel(
         val lost: Boolean = false,
         val attachments: List<Attachment> = emptyList(),
         val notice: String? = null,
+        val hasMore: Boolean = false,
+        val loadingOlder: Boolean = false,
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -88,19 +97,46 @@ class ChatViewModel(
     }
 
     // the harness's own record is authoritative once served; optimistic rows
-    // survive only until they show up there
+    // survive only until they show up there. History is paged: the newest
+    // window only, then older pages on demand via loadOlder().
     fun refresh() {
         viewModelScope.launch {
-            runCatching { repo.history(sessionId) }
-                .onSuccess { served ->
-                    val servedIds = served.map { it.id }.toSet()
+            runCatching { repo.history(sessionId, limit = WINDOW) }
+                .onSuccess { batch ->
+                    val servedIds = batch.messages.map { it.id }.toSet()
                     optimistic.removeAll { it.id in servedIds }
                     _state.update { st ->
                         st.copy(
-                            messages = served + optimistic.toList(),
+                            messages = batch.messages + optimistic.toList(),
                             live = if (st.sending) st.live else null,
+                            hasMore = batch.hasMore,
                         )
                     }
+                }
+        }
+    }
+
+    fun loadOlder() {
+        val st = _state.value
+        if (st.loadingOlder || !st.hasMore) return
+        val oldest = st.messages.minOfOrNull { it.time } ?: return
+        _state.update { it.copy(loadingOlder = true) }
+        viewModelScope.launch {
+            runCatching { repo.history(sessionId, limit = WINDOW, before = oldest) }
+                .onSuccess { batch ->
+                    _state.update { prev ->
+                        val priorIds = prev.messages.map { it.id }.toSet()
+                        val fresh = batch.messages.filter { it.id !in priorIds }
+                        prev.copy(
+                            // the older page goes in front; keep everything we hold
+                            messages = fresh + prev.messages,
+                            hasMore = batch.hasMore,
+                            loadingOlder = false,
+                        )
+                    }
+                }
+                .onFailure {
+                    _state.update { it.copy(loadingOlder = false) }
                 }
         }
     }

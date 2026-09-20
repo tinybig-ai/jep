@@ -50,7 +50,7 @@ data class MessageDto(
 data class MessageRes(val message: MessageDto? = null)
 
 @Serializable
-data class HistoryRes(val messages: List<MessageDto> = emptyList())
+data class HistoryRes(val messages: List<MessageDto> = emptyList(), val hasMore: Boolean = false)
 
 @Serializable
 data class NewSessionRes(val session: SessionDto)

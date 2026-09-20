@@ -7,6 +7,12 @@ import dev.jep.client.domain.model.Role
 import dev.jep.client.domain.model.SessionSummary
 import kotlinx.coroutines.flow.Flow
 
+/** one paged slice of a conversation; `hasMore` means older messages exist */
+data class HistoryBatch(
+    val messages: List<ChatMessage>,
+    val hasMore: Boolean,
+)
+
 // Events the push feed forwards, translated out of the wire's vocabulary.
 // The presentation layer renders from these alone; it never learns how they
 // traveled or who sent them.
@@ -48,7 +54,8 @@ interface ChatRepository {
     suspend fun pair(baseUrl: String, code: String): String
     suspend fun sessions(): List<SessionSummary>
     suspend fun newSession(title: String?): SessionSummary
-    suspend fun history(sessionId: String): List<ChatMessage>
+    /** fetch the newest `limit` messages, or the newest `limit` older than `before` (ms) */
+    suspend fun history(sessionId: String, limit: Int = 0, before: Long = 0): HistoryBatch
     suspend fun prompt(sessionId: String, text: String, files: List<String> = emptyList()): ChatMessage
     suspend fun stop(sessionId: String): Boolean
     suspend fun respond(askId: String, optionId: String): Boolean

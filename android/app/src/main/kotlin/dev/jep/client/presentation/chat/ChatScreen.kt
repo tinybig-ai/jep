@@ -58,6 +58,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -87,10 +88,24 @@ fun ChatScreen(
 ) {
     val state by vm.state.collectAsState()
 
-    val rendered = remember(state) { state.messages + listOfNotNull(liveAsMessage(state.live)) }
+    // the streaming live row and a history row can carry the same message id
+    // (opencode snapshots the in-flight message); LazyColumn keys must stay
+    // unique, so the live copy wins and the identical history row is dropped
+    val rendered = remember(state) {
+        val liveId = state.live?.messageId
+        state.messages.filterNot { it.id == liveId } + listOfNotNull(liveAsMessage(state.live))
+    }
     val listState = rememberLazyListState()
     LaunchedEffect(rendered.size, rendered.lastOrNull()?.id, state.live) {
         if (rendered.isNotEmpty()) listState.animateScrollToItem(rendered.size - 1)
+    }
+
+    // approaching the top of a long conversation pulls the previous page
+    LaunchedEffect(listState, state.hasMore) {
+        snapshotFlow { listState.firstVisibleItemIndex }
+            .collect { index ->
+                if (index <= 2 && state.hasMore && !state.loadingOlder) vm.loadOlder()
+            }
     }
 
     var renameOpen by remember { mutableStateOf(false) }
