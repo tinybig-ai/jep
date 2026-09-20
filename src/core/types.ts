@@ -40,6 +40,10 @@ export interface ToolCallPart {
   // literal call args/result and often don't carry a diff or match count
   title?: string
   metadata?: unknown
+  /** epoch ms the tool started, when the harness says — a running tool shows
+   * a live elapsed time in the draft, so a long tool reads as "waiting" and
+   * not as a frozen spinner */
+  startedAt?: number
 }
 
 export interface ReasoningPart {

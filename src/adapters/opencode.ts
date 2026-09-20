@@ -94,6 +94,7 @@ function mapPart(part: any, workspace: string): Part {
         status: part.state?.status,
         title: part.state?.title,
         metadata: part.state?.metadata,
+        ...(typeof part.state?.time?.start === "number" ? { startedAt: part.state.time.start } : {}),
       }
     case "reasoning": {
       const start = part.time?.start

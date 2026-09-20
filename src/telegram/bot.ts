@@ -342,6 +342,17 @@ const TOOL_ICON: Record<string, string> = {
 }
 const toolIcon = (t: ToolCallPart): string => TOOL_ICON[t.name] ?? `⚙ ${t.name}`
 
+// a running tool ticks: "⚙ bash · 3m" — a long tool call reads as waiting,
+// not as a frozen spinner. Sub-minute shows nothing; the line only changes
+// on minute boundaries, which the keep-alive re-render picks up.
+const toolLiveIcon = (t: ToolCallPart): string => {
+  const icon = toolIcon(t)
+  if (t.status !== "running" || t.startedAt === undefined) return icon
+  const secs = Math.floor((Date.now() - t.startedAt) / 1000)
+  if (secs < 60) return icon
+  return `${icon} · ${fmtDuration(secs * 1000)}`
+}
+
 function toolBody(t: ToolCallPart): string {
   const meta = toolMeta(t)
   const input = toolInput(t)
@@ -561,7 +572,7 @@ function buildLiveBlocks(
           p.durationMs ??
           (started !== undefined ? (ended ?? Date.now()) - started : undefined)
         bits.push(`💭 ${thinkingPhrase(ms).toLowerCase()}`)
-      } else if (p.kind === "tool" && s.tools !== "off") bits.push(toolIcon(p))
+      } else if (p.kind === "tool" && s.tools !== "off") bits.push(toolLiveIcon(p))
     }
     const out: RichBlock[] = []
     if (bits.length) out.push({ type: "paragraph", text: bits.join("  ") })
@@ -2353,15 +2364,10 @@ export class TelegramBot {
     // until there is content — or the final message lands.
     const keepAlive = setInterval(() => {
       if (finished || Date.now() < floodUntil || draftMode === "none") return
-      void (async () => {
-        try {
-          if (draftMode === "rich" && lastBlocks) await this.#tg.sendRichMessageDraft({ chatID, draftID, rich_message: { blocks: lastBlocks } })
-          else await this.#tg.sendMessageDraft({ chatID, draftID, text: lastHint, canStop: true })
-        } catch (err) {
-          const wait = (err as { retryAfter?: number })?.retryAfter
-          if (wait) floodUntil = Date.now() + wait * 1_000 + 250
-        }
-      })()
+      // re-render, not re-send: a running tool's elapsed time changes the
+      // frame, so the keep-alive is what makes a long tool call tick instead
+      // of sitting as a frozen spinner for however long the tool takes
+      void renderLive()
     }, 20_000)
 
     const clearPlaceholder = async (body: string) => {
