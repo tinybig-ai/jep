@@ -342,15 +342,14 @@ const TOOL_ICON: Record<string, string> = {
 }
 const toolIcon = (t: ToolCallPart): string => TOOL_ICON[t.name] ?? `⚙ ${t.name}`
 
-// a running tool ticks: "⚙ bash · 3m" — a long tool call reads as waiting,
-// not as a frozen spinner. Sub-minute shows nothing; the line only changes
-// on minute boundaries, which the keep-alive re-render picks up.
+// a running tool ticks: "⚙ bash · 12s" — a long tool call reads as waiting,
+// not as a frozen spinner. Seconds under a minute, same as the thinking
+// phrase; the line only changes when the displayed unit changes, which the
+// keep-alive re-render picks up.
 const toolLiveIcon = (t: ToolCallPart): string => {
   const icon = toolIcon(t)
   if (t.status !== "running" || t.startedAt === undefined) return icon
-  const secs = Math.floor((Date.now() - t.startedAt) / 1000)
-  if (secs < 60) return icon
-  return `${icon} · ${fmtDuration(secs * 1000)}`
+  return `${icon} · ${fmtDuration(Math.max(Date.now() - t.startedAt, 1000))}`
 }
 
 function toolBody(t: ToolCallPart): string {
@@ -2285,7 +2284,7 @@ export class TelegramBot {
           await this.#tg.sendRichMessageDraft({ chatID, draftID, rich_message: { blocks: [{ type: "thinking", text: "Thinking…" }] }, canStop: true })
           lastBlocks = [{ type: "thinking", text: "Thinking…" }]
         } else if (draftMode === "text") {
-          await this.#tg.sendMessageDraft({ chatID, draftID, text: "" })
+          await this.#tg.sendMessageDraft({ chatID, draftID, text: "", canStop: true })
           lastHint = ""
         } else if (placeholder) {
           await this.#tg.editMessageText({ chatID, messageID: placeholder.message_id, text: "…" })
@@ -2334,7 +2333,10 @@ export class TelegramBot {
         // rich form once, and keep the plain tail for clients that refuse it
         if (draftMode !== "none" && richOK !== false) {
           try {
-            await this.#tg.sendRichMessageDraft({ chatID, draftID, rich_message: { blocks } })
+            // canStop on every live frame: the stoppable trait rides the draft,
+            // and a content frame without it turns the client's stop button off
+            // for the rest of the stream
+            await this.#tg.sendRichMessageDraft({ chatID, draftID, rich_message: { blocks }, canStop: true })
             richOK = true
             draftMode = "rich"
             lastBlocks = blocks
@@ -2346,7 +2348,7 @@ export class TelegramBot {
           }
         }
         if (draftMode !== "none") {
-          await this.#tg.sendMessageDraft({ chatID, draftID, text: hint })
+          await this.#tg.sendMessageDraft({ chatID, draftID, text: hint, canStop: true })
           lastHint = hint
         } else if (placeholder) await this.#tg.editMessageText({ chatID, messageID: placeholder.message_id, text: hint || "…" })
       } catch (err) {
