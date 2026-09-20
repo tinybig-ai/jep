@@ -13,7 +13,7 @@ data class SessionSummary(
 
 sealed interface ChatPart {
     data class Text(val text: String) : ChatPart
-    data class Tool(val name: String, val status: ToolStatus?, val title: String?) : ChatPart
+    data class Tool(val id: String?, val name: String, val status: ToolStatus?, val title: String?) : ChatPart
     data class Reasoning(val text: String) : ChatPart
     data class Unsupported(val kind: String) : ChatPart
 }

@@ -34,6 +34,6 @@ fun AskDto.toDomain() = Ask(
 private fun PartDto.toDomain(): ChatPart? = when (kind) {
     "text" -> text?.let { ChatPart.Text(it) }
     "reasoning" -> text?.let { ChatPart.Reasoning(it) }
-    "tool" -> ChatPart.Tool(name.orEmpty(), status?.let { runCatching { ToolStatus.valueOf(it.uppercase()) }.getOrNull() }, title)
+    "tool" -> ChatPart.Tool(id, name.orEmpty(), status?.let { runCatching { ToolStatus.valueOf(it.uppercase()) }.getOrNull() }, title)
     else -> null
 }

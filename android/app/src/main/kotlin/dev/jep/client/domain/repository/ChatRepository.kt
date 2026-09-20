@@ -23,6 +23,7 @@ sealed interface ChatEvent {
     data class PartChanged(
         override val sessionId: String,
         val messageId: String,
+        val partId: String?,
         val part: ChatPart,
     ) : ChatEvent
 
