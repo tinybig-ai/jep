@@ -119,11 +119,19 @@ Telegram `getUpdates` 502 used to `process.exit(1)` — now the poll loop retrie
 with backoff, and launchd `KeepAlive` restarts anything that still dies):
 
 ```sh
-# reload after a code change: launchd restarts it with the new code. NEVER
-# pkill + nohup instead — that double-spawns against launchd's respawn, two
-# daemons then fight over getUpdates and updates vanish into the stale one
+# reload after a code change — launchd restarts it with the new code:
 launchctl kickstart -k gui/$(id -u)/com.jep.tg; sleep 5
 pgrep -fl 'src/tg.ts'   # expect exactly ONE node
+
+# a plist change (env vars, ProgramArguments) needs the definition reloaded,
+# not just the process killed — kickstart reruns the OLD definition:
+launchctl bootout gui/$(id -u)/com.jep.tg; sleep 2
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jep.tg.plist
+
+# NEVER pkill + nohup a manual copy: launchd's respawn plus the manual one
+# makes two daemons that fight over getUpdates (Telegram 409 Conflicts) and
+# silently eat each other's updates. If a manual copy exists anyway, kill it
+# and let launchd own the one instance.
 ```
 
 Manual management (only if you edit the plist):
