@@ -1,16 +1,26 @@
 package dev.jep.client.presentation.sessions
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.DataObject
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
@@ -22,6 +32,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -98,6 +109,8 @@ private fun SessionRow(session: SessionSummary, onOpen: (SessionSummary) -> Unit
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            Spacer(Modifier.width(10.dp))
+            HarnessBadge(session.harness)
         }
         Text(
             // the workspace's friendly name and its harness, not the raw path
@@ -108,6 +121,26 @@ private fun SessionRow(session: SessionSummary, onOpen: (SessionSummary) -> Unit
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
         )
+    }
+}
+
+// The avatar for a conversation is the harness behind it. A harness names its
+// own mark by id; unknown harnesses fall back to a generic one, so a new
+// adapter is never a blank row. (Until adapters can ship artwork, these are
+// glyphs the client owns.)
+@Composable
+private fun HarnessBadge(harness: String?) {
+    val icon = when (harness) {
+        "opencode" -> Icons.Filled.Terminal
+        "codex" -> Icons.Filled.DataObject
+        "claude" -> Icons.Filled.AutoAwesome
+        else -> Icons.Filled.SmartToy
+    }
+    Box(
+        Modifier.size(32.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceContainer),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, harness ?: "harness", Modifier.size(17.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
