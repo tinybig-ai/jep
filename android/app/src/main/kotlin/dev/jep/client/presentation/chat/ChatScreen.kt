@@ -35,15 +35,21 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowDropUp
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExitToApp
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -290,9 +296,9 @@ private fun SettingsDialog(vm: ChatViewModel, onDismiss: () -> Unit) {
                 SectionLabel("MODEL", top = 12.dp)
                 ModelDropdown(state.models) { vm.setModel(it) }
                 SectionLabel("AGENT", top = 12.dp)
-                SettingRow("Default (harness)", selected = state.agent == null, subtitle = null, onPick = { vm.setAgent(null) })
-                SettingRow("🔨 Build", selected = state.agent == "build", subtitle = "executes tools", onPick = { vm.setAgent("build") })
-                SettingRow("📝 Plan", selected = state.agent == "plan", subtitle = "read-only — no edits", onPick = { vm.setAgent("plan") })
+                SettingRow("Default (harness)", selected = state.agent == null, subtitle = null, onPick = { vm.setAgent(null) }, leading = { SettingIcon(Icons.Filled.Star) })
+                SettingRow("Build", selected = state.agent == "build", subtitle = "executes tools", onPick = { vm.setAgent("build") }, leading = { SettingIcon(Icons.Filled.Build) })
+                SettingRow("Plan", selected = state.agent == "plan", subtitle = "read-only — no edits", onPick = { vm.setAgent("plan") }, leading = { SettingIcon(Icons.Filled.Description) })
             }
         },
         confirmButton = {
@@ -302,8 +308,9 @@ private fun SettingsDialog(vm: ChatViewModel, onDismiss: () -> Unit) {
 }
 
 // The model picker, collapsed to one row: the list was an endless scroll inside
-// Settings. Tap to open the choices, ✓ marks the active one, 🖼 a vision model,
-// and the context limit rides along.
+// Settings. Tap to open the choices; a check marks the active one, every row
+// carries an icon (an image icon for a vision model), and the context limit
+// rides along.
 @Composable
 private fun ModelDropdown(choices: ModelChoices?, onPick: (String?) -> Unit) {
     var open by remember { mutableStateOf(false) }
@@ -331,18 +338,24 @@ private fun ModelDropdown(choices: ModelChoices?, onPick: (String?) -> Unit) {
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             DropdownMenuItem(
                 text = { Text(choices?.default?.let { "Default · ${it.substringAfterLast('/')}" } ?: "Default (harness)") },
-                trailingIcon = { if (current == null) Text("✓", color = MaterialTheme.colorScheme.primary) },
+                leadingIcon = { SettingIcon(Icons.Filled.Star) },
+                trailingIcon = { if (current == null) Icon(Icons.Filled.Check, "selected", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary) },
                 onClick = { open = false; onPick(null) },
             )
             choices?.all?.forEach { m ->
                 DropdownMenuItem(
-                    text = {
-                        Text(
-                            (if (m.image) "🖼 " else "") + m.modelID +
-                                if (m.contextLimit > 0) "  ·  ${fmtTokens(m.contextLimit)}" else "",
+                    text = { Text(m.modelID + if (m.contextLimit > 0) "  ·  ${fmtTokens(m.contextLimit)}" else "") },
+                    // every model gets a mark; a vision model gets the eye-catching
+                    // one — a real icon, not an emoji that reads as decoration
+                    leadingIcon = {
+                        Icon(
+                            if (m.image) Icons.Filled.Image else Icons.Filled.SmartToy,
+                            if (m.image) "accepts images" else null,
+                            Modifier.size(18.dp),
+                            tint = if (m.image) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     },
-                    trailingIcon = { if (current == m.ref) Text("✓", color = MaterialTheme.colorScheme.primary) },
+                    trailingIcon = { if (current == m.ref) Icon(Icons.Filled.Check, "selected", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary) },
                     onClick = { open = false; onPick(m.ref) },
                 )
             }
@@ -361,12 +374,18 @@ private fun SectionLabel(text: String, top: androidx.compose.ui.unit.Dp = 0.dp) 
 }
 
 @Composable
+private fun SettingIcon(icon: androidx.compose.ui.graphics.vector.ImageVector) {
+    Icon(icon, null, Modifier.size(18.dp).padding(end = 0.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+}
+
+@Composable
 private fun SettingRow(
     label: String,
     selected: Boolean,
     subtitle: String?,
     onPick: () -> Unit,
     checkable: Boolean = true,
+    leading: (@Composable () -> Unit)? = null,
 ) {
     Row(
         Modifier.fillMaxWidth()
@@ -374,6 +393,9 @@ private fun SettingRow(
             .padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        leading?.let {
+            Box(Modifier.padding(end = 12.dp)) { it() }
+        }
         Column(Modifier.weight(1f)) {
             Text(
                 label,
@@ -384,7 +406,9 @@ private fun SettingRow(
                 Text(it, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        if (selected && checkable) Text("✓", color = MaterialTheme.colorScheme.primary, fontSize = 16.sp)
+        if (selected && checkable) {
+            Icon(Icons.Filled.Check, "selected", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+        }
     }
 }
 
@@ -578,7 +602,7 @@ private fun FileRow(part: ChatPart.File) {
         shape = RoundedCornerShape(10.dp),
     ) {
         Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("📎", fontSize = 14.sp)
+            Icon(Icons.Filled.AttachFile, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
             Column(Modifier.padding(start = 8.dp)) {
                 Text(
                     part.name ?: part.path.substringAfterLast('/'),

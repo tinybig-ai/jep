@@ -17,8 +17,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Source
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -182,21 +185,31 @@ private fun Browser(
             if (b?.parent != null) {
                 item {
                     SelectRow(
-                        title = "⬆︎  Up",
+                        title = "Up",
                         subtitle = b.parent,
                         selected = false,
                         onClick = onBrowseUp,
+                        icon = { Icon(Icons.Filled.ArrowUpward, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) },
                     )
                 }
             }
             items(b?.dirs?.size ?: 0) { i ->
                 val d = b!!.dirs[i]
                 SelectRow(
-                    title = (if (d.git) "📦  " else "📁  ") + d.name,
+                    title = d.name,
                     subtitle = if (d.git) "git repo" else null,
                     selected = false,
                     onClick = { onBrowseInto(joinPath(b.cwd, d.name)) },
-                    icon = { Icon(Icons.Filled.Folder, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                    // a repository reads differently from a plain folder — an
+                    // icon, not the emoji that rendered as picture characters
+                    icon = {
+                        Icon(
+                            if (d.git) Icons.Filled.Source else Icons.Filled.Folder,
+                            null,
+                            Modifier.size(18.dp),
+                            tint = if (d.git) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
                 )
             }
             if (b != null && b.dirs.isEmpty()) {
@@ -249,7 +262,7 @@ private fun SelectRow(
                     Text(it, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
                 }
             }
-            if (selected) Text("✓", color = MaterialTheme.colorScheme.primary, fontSize = 16.sp)
+            if (selected) Icon(Icons.Filled.Check, "selected", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
         }
     }
 }
