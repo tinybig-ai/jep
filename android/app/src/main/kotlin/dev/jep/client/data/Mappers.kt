@@ -69,7 +69,21 @@ fun AskDto.toDomain() = Ask(
 fun PartDto.toDomain(): ChatPart? = when (kind) {
     "text" -> text?.let { ChatPart.Text(it) }
     "reasoning" -> text?.let { ChatPart.Reasoning(it, durationMs) }
-    "tool" -> ChatPart.Tool(id, name.orEmpty(), status?.let { runCatching { ToolStatus.valueOf(it.uppercase()) }.getOrNull() }, title, input?.toString(), output)
+    "tool" -> ChatPart.Tool(
+        id,
+        name.orEmpty(),
+        status?.let { runCatching { ToolStatus.valueOf(it.uppercase()) }.getOrNull() },
+        title,
+        input?.display(),
+        output?.display(),
+    )
     "file" -> filePath?.takeIf { it.isNotBlank() }?.let { ChatPart.File(it, fileName, mimeType) }
     else -> null
+}
+
+// A tool payload shown as text: a JSON string becomes its contents (no quotes
+// around captured stdout); anything else becomes its compact JSON form.
+private fun kotlinx.serialization.json.JsonElement.display(): String? {
+    val s = if (this is kotlinx.serialization.json.JsonPrimitive && isString) content else toString()
+    return s.takeIf { it.isNotBlank() && it != "{}" && it != "null" }
 }

@@ -53,9 +53,12 @@ data class PartDto(
     val fileName: String? = null,
     val mimeType: String? = null,
     // tool parts carry the call's input and captured output; without these the
-    // phone could only ever render "Ran a command" and nothing behind it
+    // phone could only ever render "Ran a command" and nothing behind it.
+    // Both are JsonElement, not String: opencode reports `output` as a string
+    // for most tools but as an object for others (a failed call reported
+    // `"output":{}`), and a String field throws the whole history decode.
     val input: JsonElement? = null,
-    val output: String? = null,
+    val output: JsonElement? = null,
     // reasoning carries its duration once finalized ("Thought for 12s")
     val durationMs: Long? = null,
     val nativeType: String? = null,
