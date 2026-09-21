@@ -1,5 +1,6 @@
 package dev.jep.client.presentation.newchat
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -55,6 +56,11 @@ fun NewChatScreen(
     onBrowseUp: () -> Unit,
     onCreate: () -> Unit,
 ) {
+    // System back unwinds this view the way its own back arrow does — out of
+    // the folder browser to the form, then out of the form to the list. Without
+    // it, back from here popped the whole activity (straight to the launcher).
+    BackHandler { if (state.browsing) onCloseBrowse() else onBack() }
+
     Scaffold(
         topBar = {
             TopAppBar(
