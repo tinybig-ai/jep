@@ -6,8 +6,7 @@
 // which stays in step with this file.
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
-import { existsSync } from "node:fs"
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises"
+import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join, resolve, sep } from "node:path"
 import type { HarnessAdapter } from "./core/ports.ts"
@@ -119,6 +118,34 @@ async function loadAgents(dataHome: string): Promise<Map<string, string>> {
 const saveAgents = async (dataHome: string, agents: Map<string, string>): Promise<void> => {
   await mkdir(dataHome, { recursive: true })
   await writeFile(join(dataHome, AGENTS_FILE), JSON.stringify(Object.fromEntries(agents), null, 1))
+}
+
+// A directory read can hang forever: a folder the launchd process can't reach
+// (macOS TCC — Downloads/Documents/Desktop, with no grant) or a stalled mount.
+// libuv's thread pool is small (4), so a few of those wedge every fs op and
+// even DNS in the daemon. A browse is therefore bounded, serialized, and
+// remembered — a folder that didn't answer is refused outright for a while
+// instead of leaking another thread.
+const BROWSE_TIMEOUT_MS = 4_000
+const BROWSE_STALL_TTL_MS = 10 * 60_000
+const stalledDirs = new Map<string, number>()
+let browseInFlight = 0
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | "timeout"> {
+  return Promise.race([p, new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), ms))])
+}
+
+async function listDirs(cwd: string): Promise<Array<{ name: string; git: boolean }>> {
+  const entries = await readdir(cwd, { withFileTypes: true })
+  const folders = entries.filter((e) => e.isDirectory() && !e.name.startsWith("."))
+  // async, per-entry bounded: a synchronous stat here could block the event loop
+  const out = await Promise.all(
+    folders.map(async (e) => ({
+      name: e.name,
+      git: (await withTimeout(stat(join(cwd, e.name, ".git")).then(() => true).catch(() => false), 1_000)) === true,
+    })),
+  )
+  return out.sort((a, b) => a.name.localeCompare(b.name))
 }
 
 /** keep a phone-supplied leaf filename from walking out of the uploads dir */
@@ -366,17 +393,27 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const asked = str("path")
         const cwd0 = asked ? resolve(asked) : root
         const cwd = cwd0 === root || cwd0.startsWith(root + sep) ? cwd0 : root
-        let dirs: Array<{ name: string; git: boolean }> = []
-        try {
-          dirs = (await readdir(cwd, { withFileTypes: true }))
-            .filter((e) => e.isDirectory() && !e.name.startsWith("."))
-            .map((e) => ({ name: e.name, git: existsSync(join(cwd, e.name, ".git")) }))
-            .sort((a, b) => a.name.localeCompare(b.name))
-        } catch (err) {
-          console.error(`[gw] browse ${cwd}: ${(err as Error)?.message ?? err}`)
-        }
         const parent = cwd === root ? null : dirname(cwd)
-        return json(res, 200, { cwd, root, parent, dirs })
+        const stalledAt = stalledDirs.get(cwd)
+        if (stalledAt && Date.now() - stalledAt < BROWSE_STALL_TTL_MS) {
+          return json(res, 504, { error: "that folder doesn't respond to the daemon (permission or a stalled mount)" })
+        }
+        if (browseInFlight > 0) return json(res, 429, { error: "another folder listing is still running" })
+        browseInFlight++
+        try {
+          const listed = await withTimeout(listDirs(cwd), BROWSE_TIMEOUT_MS)
+          if (listed === "timeout") {
+            stalledDirs.set(cwd, Date.now())
+            return json(res, 504, { error: "that folder didn't respond — it may be permission-protected or on a stalled mount" })
+          }
+          return json(res, 200, { cwd, root, parent, dirs: listed })
+        } catch (err) {
+          // unreadable (ENOENT/EACCES) is not a wedge: show it empty, as the bot does
+          console.error(`[gw] browse ${cwd}: ${(err as Error)?.message ?? err}`)
+          return json(res, 200, { cwd, root, parent, dirs: [] })
+        } finally {
+          browseInFlight--
+        }
       }
 
       if (path === "/new") {
