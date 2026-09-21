@@ -64,6 +64,11 @@ class ChatViewModel(
     // sends land optimistically and are reconciled by the next history read
     private val optimistic = mutableListOf<ChatMessage>()
 
+    // Identifies the turn whose callbacks may still write state. A reply that
+    // arrives after the turn was superseded — stopped, or replaced by a newer
+    // send — is stale and must not touch the state that replaced it.
+    private var turn = 0
+
     init {
         refresh()
         viewModelScope.launch {
@@ -90,7 +95,12 @@ class ChatViewModel(
                 st.copy(live = live)
             }
             is ChatEvent.Asked -> _state.update { it.copy(ask = evt.ask) }
-            is ChatEvent.Failed -> _state.update { it.copy(failure = evt.error, live = null, sending = false) }
+            // a harness-reported failure ends the turn: it must clear the live
+            // row too, or the spinner outlives the turn it belonged to. An
+            // abort is the user's own stop coming back around, not an error.
+            is ChatEvent.Failed -> _state.update {
+                it.copy(failure = if (evt.error.isAbort()) null else evt.error, live = null, sending = false)
+            }
             is ChatEvent.Quiet -> refresh()
             is ChatEvent.MessageSeen, is ChatEvent.Lost -> Unit
         }
@@ -151,17 +161,25 @@ class ChatViewModel(
             time = System.currentTimeMillis(),
             parts = listOf(ChatPart.Text(if (files.isEmpty()) trimmed else trimmed + "\n\n[attached: ${files.joinToString(", ") { it.name }}]")),
         )
+        val seq = ++turn
         optimistic.add(pending)
         _state.update { it.copy(messages = it.messages + pending, sending = true, live = null, failure = null, attachments = emptyList()) }
         viewModelScope.launch {
             runCatching { repo.prompt(sessionId, trimmed, files.map { it.id }) }
                 .onSuccess { final ->
+                    if (seq != turn) return@onSuccess
                     optimistic.removeAll { it.id == pending.id }
                     _state.update { it.copy(messages = it.messages + final, sending = false, live = null) }
                     refresh()
                 }
                 .onFailure { err ->
-                    _state.update { it.copy(sending = false, failure = err.message ?: "the turn failed") }
+                    if (seq != turn) return@onFailure
+                    // the live row is this turn's; an abort must clear it or it
+                    // dangles as a spinner forever — the "freak-out". A stop the
+                    // user asked for is not a failure to shout about, either.
+                    _state.update {
+                        it.copy(sending = false, live = null, failure = if (err.message.isAbort()) null else (err.message ?: "the turn failed"))
+                    }
                 }
         }
     }
@@ -202,8 +220,19 @@ class ChatViewModel(
     }
 
     fun stop() {
+        // Stop has to take effect on the screen at once. The turn is over the
+        // moment the user says so — waiting for the server's reply to clear the
+        // spinner and the Stop button is exactly what left the row dangling
+        // when the server had gone quiet (readTimeout is 0, so that reply may
+        // never come). Invalidate the turn so its late reply is ignored.
+        turn++
+        _state.update { it.copy(sending = false, live = null, failure = null) }
         viewModelScope.launch { runCatching { repo.stop(sessionId) } }
     }
+
+    // the gateway reports an aborted turn as a failure carrying the harness's
+    // own words ("prompt aborted"); it is a stop, not an error worth surfacing
+    private fun String?.isAbort(): Boolean = this?.contains("abort", ignoreCase = true) == true
 
     fun respond(askId: String, optionId: String) {
         viewModelScope.launch {
