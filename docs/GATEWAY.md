@@ -38,6 +38,9 @@ the stream, for plain clients).
 | `POST /setagent` | `{id,agent?}` | `{ok,agent}` — set (`"build"`/`"plan"`) or clear this conversation's primary agent; persisted in `<DATA_HOME>/gateway-agents.json`, applied to the next `/prompt` |
 | `POST /usage` | `{id}` | `{usage}` — tokens (in/out/thinking/cache) and reported cost summed over the conversation, plus turns and models (`core/usage.ts`) |
 | `POST /diff` | `{id}` | `{files[]}` — files this conversation changed (`{file,additions,deletions,status?}`) |
+| `POST /term` | — | `{authorized}` — whether *this* device token may open a shell (see below) |
+| `POST /term/unlock` | `{code}` | `{ok}` or 403 — prove the pairing code a second time to allow a terminal from this device |
+| `POST /term/lock` | — | `{ok}` — drop that grant |
 | `POST /skills` | `{id}` | `{skills[],toggleable}` — the SKILL.md dirs this harness loads (`{name,description,scope,path,disableModelInvocation}`) |
 | `POST /setskill` | `{id,path,disabled}` | `{ok}` — hide (or allow) a skill for the model; flips `disable-model-invocation` in its frontmatter |
 | `POST /mcp` | `{id}` | `{servers[]}` — the MCP servers this harness will start (`{name,kind,enabled,detail}`), read from its config |

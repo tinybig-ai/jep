@@ -46,7 +46,8 @@ fun JepApp(app: AppViewModel) {
                 gateway = app.pairing.baseUrl,
                 onBack = { app.back() },
                 onTheme = { app.setTheme(it) },
-                onTerminal = { app.setTerminalEnabled(it) },
+                onUnlockTerminal = { code, done -> app.enableTerminal(code, done) },
+                onDisableTerminal = { app.disableTerminal() },
             )
         }
         screen is Screen.Chat -> {

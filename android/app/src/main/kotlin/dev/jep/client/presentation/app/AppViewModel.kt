@@ -66,9 +66,26 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _prefs.value = _prefs.value.copy(theme = mode)
     }
 
-    fun setTerminalEnabled(on: Boolean) {
-        settings.setTerminalEnabled(on)
-        _prefs.value = _prefs.value.copy(terminalEnabled = on)
+    // The terminal is not a normal preference: turning it on proves the pairing
+    // code afresh, and only that unlocks a shell for this device on the daemon.
+    fun enableTerminal(code: String, onResult: (Boolean) -> Unit) {
+        val r = repo ?: connect()
+        viewModelScope.launch {
+            runCatching { r.unlockTerminal(code.trim()) }
+                .onSuccess {
+                    settings.setTerminalEnabled(true)
+                    _prefs.value = _prefs.value.copy(terminalEnabled = true)
+                    onResult(true)
+                }
+                .onFailure { onResult(false) }
+        }
+    }
+
+    fun disableTerminal() {
+        settings.setTerminalEnabled(false)
+        _prefs.value = _prefs.value.copy(terminalEnabled = false)
+        val r = repo ?: return
+        viewModelScope.launch { runCatching { r.lockTerminal() } }
     }
 
     fun openSettings() {

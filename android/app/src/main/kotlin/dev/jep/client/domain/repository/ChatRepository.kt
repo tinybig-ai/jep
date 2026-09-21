@@ -103,6 +103,10 @@ interface ChatRepository {
     suspend fun mcp(sessionId: String): List<McpServer>
     /** enable or disable an MCP server by name */
     suspend fun setMcp(sessionId: String, name: String, enabled: Boolean): Boolean
+    /** prove the pairing code again, unlocking a shell for this device token */
+    suspend fun unlockTerminal(code: String): Boolean
+    /** drop that grant for this device token */
+    suspend fun lockTerminal(): Boolean
     /** fetch the newest `limit` messages, or the newest `limit` older than `before` (ms) */
     suspend fun history(sessionId: String, limit: Int = 0, before: Long = 0): HistoryBatch
     suspend fun prompt(sessionId: String, text: String, files: List<String> = emptyList()): ChatMessage

@@ -45,6 +45,8 @@ class FakeChatRepository(
     override suspend fun setSkill(sessionId: String, path: String, disabled: Boolean) = true
     override suspend fun mcp(sessionId: String): List<McpServer> = emptyList()
     override suspend fun setMcp(sessionId: String, name: String, enabled: Boolean) = true
+    override suspend fun unlockTerminal(code: String) = true
+    override suspend fun lockTerminal() = true
     override suspend fun history(sessionId: String, limit: Int, before: Long) = HistoryBatch(messages, false)
     override suspend fun prompt(sessionId: String, text: String, files: List<String>) =
         ChatMessage("reply", Role.ASSISTANT, 1, listOf(ChatPart.Text("ok")))

@@ -157,6 +157,11 @@ class GatewayChatRepository(
     override suspend fun setMcp(sessionId: String, name: String, enabled: Boolean): Boolean =
         post("/setmcp", buildJsonObject { put("id", sessionId); put("name", name); put("enabled", enabled) }.toString()).first in 200..299
 
+    override suspend fun unlockTerminal(code: String): Boolean =
+        post("/term/unlock", payload("code" to code)).first in 200..299
+
+    override suspend fun lockTerminal(): Boolean = post("/term/lock", "{}").first in 200..299
+
     override suspend fun history(sessionId: String, limit: Int, before: Long): HistoryBatch =
         withContext(Dispatchers.Default) {
             val res = decode(

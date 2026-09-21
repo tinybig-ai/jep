@@ -9,12 +9,13 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.jep.client.device.ThemeMode
 import dev.jep.client.presentation.settings.SettingsScreen
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-// The app-wide settings view: appearance, the terminal feature toggle, and the
-// connection read-out.
+// The app-wide settings view: appearance, the coupon-gated terminal feature,
+// and the connection read-out.
 @RunWith(AndroidJUnit4::class)
 class SettingsScreenTest {
 
@@ -30,12 +31,19 @@ class SettingsScreenTest {
     }
 
     @Test
-    fun the_terminal_feature_is_toggleable_here() {
-        var enabled: Boolean? = null
-        show(theme = ThemeMode.SYSTEM, terminalEnabled = false, onTerminal = { enabled = it })
-        rule.onNodeWithText("In-chat terminal").assertExists()
-        rule.onNode(isToggleable()).performClick() // the only switch on this screen
-        assertEquals(true, enabled)
+    fun enabling_the_terminal_asks_for_the_pairing_code() {
+        show(theme = ThemeMode.SYSTEM, terminalEnabled = false)
+        rule.onNode(isToggleable()).performClick()
+        rule.onNodeWithText("Enable terminal").assertExists()
+        rule.onNodeWithText("Pairing code").assertExists()
+    }
+
+    @Test
+    fun turning_the_terminal_off_reports_it() {
+        var disabled = false
+        show(theme = ThemeMode.SYSTEM, terminalEnabled = true, onDisable = { disabled = true })
+        rule.onNode(isToggleable()).performClick()
+        assertTrue(disabled)
     }
 
     @Test
@@ -49,7 +57,8 @@ class SettingsScreenTest {
         terminalEnabled: Boolean = false,
         gateway: String? = null,
         onTheme: (ThemeMode) -> Unit = {},
-        onTerminal: (Boolean) -> Unit = {},
+        onUnlockTerminal: (String, (Boolean) -> Unit) -> Unit = { _, _ -> },
+        onDisable: () -> Unit = {},
     ) {
         rule.setContent {
             SettingsScreen(
@@ -58,7 +67,8 @@ class SettingsScreenTest {
                 gateway = gateway,
                 onBack = {},
                 onTheme = onTheme,
-                onTerminal = onTerminal,
+                onUnlockTerminal = onUnlockTerminal,
+                onDisableTerminal = onDisable,
             )
         }
     }

@@ -49,6 +49,7 @@ const TOKEN_FILE = "gateway-tokens.json"
 const TITLES_FILE = "gateway-titles.json"
 const MODELS_FILE = "gateway-models.json"
 const AGENTS_FILE = "gateway-agents.json"
+const TERMINAL_FILE = "gateway-terminal.json"
 const BODY_MAX = 1 << 20
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -120,6 +121,23 @@ async function loadAgents(dataHome: string): Promise<Map<string, string>> {
 const saveAgents = async (dataHome: string, agents: Map<string, string>): Promise<void> => {
   await mkdir(dataHome, { recursive: true })
   await writeFile(join(dataHome, AGENTS_FILE), JSON.stringify(Object.fromEntries(agents), null, 1))
+}
+
+// Tokens that proved the pairing code a second time and are therefore allowed
+// to open a shell. Kept apart from the plain paired tokens: holding a device
+// token is not enough to get a terminal, on purpose.
+async function loadTerminalTokens(dataHome: string): Promise<Set<string>> {
+  try {
+    const raw = JSON.parse(await readFile(join(dataHome, TERMINAL_FILE), "utf8")) as string[]
+    return new Set(raw)
+  } catch {
+    return new Set()
+  }
+}
+
+const saveTerminalTokens = async (dataHome: string, tokens: Set<string>): Promise<void> => {
+  await mkdir(dataHome, { recursive: true })
+  await writeFile(join(dataHome, TERMINAL_FILE), JSON.stringify([...tokens], null, 1))
 }
 
 // A directory read can hang forever: a folder the launchd process can't reach
@@ -216,6 +234,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   const titles = await loadTitles(deps.dataHome)
   const models = await loadModels(deps.dataHome)
   const agents = await loadAgents(deps.dataHome)
+  const terminalTokens = await loadTerminalTokens(deps.dataHome)
 
   // help-files the phone needs, resolved as events and commands arrive
   const sessionAdapters = new Map<string, HarnessAdapter>()
@@ -441,6 +460,27 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         } finally {
           browseInFlight--
         }
+      }
+
+      // Step-up auth for the one dangerous feature: proving the pairing code
+      // again unlocks a shell for *this* device token. Until then nothing about
+      // the terminal is reachable, so a leaked device token is not a shell.
+      if (path === "/term") {
+        return json(res, 200, { authorized: terminalTokens.has(token) })
+      }
+
+      if (path === "/term/unlock") {
+        const code = str("code")
+        if (!code || !same(code.trim(), pairCode)) return json(res, 403, { error: "wrong pairing code" })
+        terminalTokens.add(token)
+        await saveTerminalTokens(deps.dataHome, terminalTokens)
+        return json(res, 200, { ok: true })
+      }
+
+      if (path === "/term/lock") {
+        terminalTokens.delete(token)
+        await saveTerminalTokens(deps.dataHome, terminalTokens)
+        return json(res, 200, { ok: true })
       }
 
       if (path === "/new") {
