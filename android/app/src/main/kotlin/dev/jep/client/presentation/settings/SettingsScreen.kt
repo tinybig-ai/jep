@@ -55,9 +55,11 @@ fun SettingsScreen(
     onTheme: (ThemeMode) -> Unit,
     onUnlockTerminal: (String, (Boolean) -> Unit) -> Unit,
     onDisableTerminal: () -> Unit,
+    onReconnect: (String, String, (Boolean) -> Unit) -> Unit,
 ) {
     BackHandler { onBack() }
     var codeOpen by remember { mutableStateOf(false) }
+    var reconnectOpen by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -94,7 +96,11 @@ fun SettingsScreen(
 
             item { SectionTitle("CONNECTION", top = 18.dp) }
             item {
-                InfoRow("Gateway", gateway?.takeIf { it.isNotBlank() } ?: "not paired")
+                InfoRow(
+                    "Gateway",
+                    gateway?.takeIf { it.isNotBlank() } ?: "not paired — tap to set",
+                    onClick = { reconnectOpen = true },
+                )
             }
         }
     }
@@ -102,6 +108,66 @@ fun SettingsScreen(
     if (codeOpen) TerminalUnlockDialog(
         onDismiss = { codeOpen = false },
         onSubmit = onUnlockTerminal,
+    )
+    if (reconnectOpen) ReconnectDialog(
+        current = gateway,
+        onDismiss = { reconnectOpen = false },
+        onSubmit = onReconnect,
+    )
+}
+
+// Changing the gateway means pointing at a different machine, and a machine's
+// token is its own — so a reconnect always carries a fresh pairing code.
+@Composable
+private fun ReconnectDialog(
+    current: String?,
+    onDismiss: () -> Unit,
+    onSubmit: (String, String, (Boolean) -> Unit) -> Unit,
+) {
+    var address by remember { mutableStateOf(current ?: "") }
+    var code by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Change gateway") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "A different gateway is a different machine, so it needs its own pairing code — the one its daemon printed at start.",
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    value = address,
+                    onValueChange = { address = it; error = null },
+                    singleLine = true,
+                    label = { Text("host:port") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = code,
+                    onValueChange = { code = it; error = null },
+                    singleLine = true,
+                    label = { Text("Pairing code") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = address.isNotBlank() && code.isNotBlank() && !busy,
+                onClick = {
+                    busy = true
+                    onSubmit(address.trim(), code.trim()) { ok ->
+                        busy = false
+                        if (ok) onDismiss() else error = "couldn't reach or pair with that gateway"
+                    }
+                },
+            ) { Text(if (busy) "Connecting…" else "Connect") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
 
@@ -199,9 +265,11 @@ private fun SwitchRow(
 }
 
 @Composable
-private fun InfoRow(label: String, value: String) {
+private fun InfoRow(label: String, value: String, onClick: (() -> Unit)? = null) {
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp),
+        Modifier.fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 18.dp, vertical = 12.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {

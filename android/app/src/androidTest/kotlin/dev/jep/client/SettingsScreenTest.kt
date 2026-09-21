@@ -69,6 +69,7 @@ class SettingsScreenTest {
                 onTheme = onTheme,
                 onUnlockTerminal = onUnlockTerminal,
                 onDisableTerminal = onDisable,
+                onReconnect = { _, _, done -> done(false) },
             )
         }
     }

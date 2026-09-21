@@ -43,11 +43,12 @@ fun JepApp(app: AppViewModel) {
             dev.jep.client.presentation.settings.SettingsScreen(
                 theme = prefs.theme,
                 terminalEnabled = prefs.terminalEnabled,
-                gateway = app.pairing.baseUrl,
+                gateway = app.gateway.collectAsState().value,
                 onBack = { app.back() },
                 onTheme = { app.setTheme(it) },
                 onUnlockTerminal = { code, done -> app.enableTerminal(code, done) },
                 onDisableTerminal = { app.disableTerminal() },
+                onReconnect = { address, code, done -> app.reconnect(address, code, done) },
             )
         }
         screen is Screen.Chat -> {

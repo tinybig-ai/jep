@@ -61,6 +61,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _prefs = MutableStateFlow(Prefs(settings.theme, settings.terminalEnabled))
     val prefs = _prefs.asStateFlow()
 
+    // the gateway we're pointed at — changes when re-paired, and the Settings
+    // read-out must show the new one without a restart
+    private val _gateway = MutableStateFlow(pairing.baseUrl)
+    val gateway = _gateway.asStateFlow()
+
+    /** point at a different gateway: a new machine, so a new pairing code */
+    fun reconnect(address: String, code: String, onResult: (Boolean) -> Unit) {
+        pair(address, code) { ok, _ ->
+            if (ok) _gateway.value = pairing.baseUrl
+            onResult(ok)
+        }
+    }
+
     fun setTheme(mode: ThemeMode) {
         settings.setTheme(mode)
         _prefs.value = _prefs.value.copy(theme = mode)
@@ -265,6 +278,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun forgetPairing() {
         pairing.forget()
+        _gateway.value = null
         repo = null
         _paired.value = false
         _screen.value = Screen.Sessions

@@ -49,6 +49,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Image
@@ -101,6 +103,8 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.unit.sp
 import com.mikepenz.markdown.m3.Markdown
 import kotlinx.coroutines.flow.first
@@ -182,6 +186,8 @@ fun ChatScreen(
     var changesOpen by remember { mutableStateOf(false) }
     var infoMsg by remember { mutableStateOf<ChatMessage?>(null) }
     var replyTo by remember { mutableStateOf<ChatMessage?>(null) }
+    var skillsView by remember { mutableStateOf(false) }
+    var mcpView by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         TopAppBar(
@@ -354,7 +360,14 @@ fun ChatScreen(
         onConfirm = { forgetOpen = false; onForgetPairing() },
         onDismiss = { forgetOpen = false },
     )
-    if (settingsOpen) SettingsDialog(vm, onDismiss = { settingsOpen = false })
+    if (settingsOpen) SettingsDialog(
+        vm,
+        onDismiss = { settingsOpen = false },
+        onSkills = { settingsOpen = false; skillsView = true },
+        onMcp = { settingsOpen = false; mcpView = true },
+    )
+    if (skillsView) ManageScreen("Skills", onClose = { skillsView = false }) { SkillsBody(vm) }
+    if (mcpView) ManageScreen("MCP servers", onClose = { mcpView = false }) { McpBody(vm) }
     if (usageOpen) UsageDialog(vm, onDismiss = { usageOpen = false })
     if (changesOpen) ChangesDialog(vm, onDismiss = { changesOpen = false })
     infoMsg?.let { ResponseInfoDialog(it) { infoMsg = null } }
@@ -392,7 +405,12 @@ private fun ResponseInfoDialog(message: ChatMessage, onDismiss: () -> Unit) {
 // The list is fetched when the panel opens; a tap sets it on the gateway, which
 // remembers it for the next prompt.
 @Composable
-private fun SettingsDialog(vm: ChatViewModel, onDismiss: () -> Unit) {
+private fun SettingsDialog(
+    vm: ChatViewModel,
+    onDismiss: () -> Unit,
+    onSkills: () -> Unit,
+    onMcp: () -> Unit,
+) {
     val state by vm.state.collectAsState()
     LaunchedEffect(Unit) { vm.loadModels(); vm.loadAgent(); vm.loadSkills(); vm.loadMcp() }
     AlertDialog(
@@ -417,37 +435,23 @@ private fun SettingsDialog(vm: ChatViewModel, onDismiss: () -> Unit) {
                 SettingRow("Build", selected = state.agent == "build", subtitle = "executes tools", onPick = { vm.setAgent("build") }, leading = { SettingIcon(Icons.Filled.Build) })
                 SettingRow("Plan", selected = state.agent == "plan", subtitle = "read-only — no edits", onPick = { vm.setAgent("plan") }, leading = { SettingIcon(Icons.Filled.Description) })
 
-                val skills = state.skills
+                // managing these lives in its own view: the modal stays a summary
                 SectionLabel("SKILLS", top = 14.dp)
-                when {
-                    skills == null -> LoadingLine()
-                    skills.skills.isEmpty() -> EmptyLine("none found for this harness")
-                    else -> skills.skills.forEach { s ->
-                        ToggleRow(
-                            name = s.name,
-                            subtitle = s.scope + if (skills.toggleable) "" else " · fixed",
-                            checked = !s.disabled,
-                            enabled = skills.toggleable,
-                            onChange = { vm.setSkill(s.path, !it) },
-                        )
-                    }
-                }
-
-                val mcp = state.mcp
+                SettingRow(
+                    "Skills",
+                    selected = false,
+                    subtitle = state.skills?.let { "${it.skills.size} loaded" } ?: "loading…",
+                    onPick = onSkills,
+                    leading = { SettingIcon(Icons.Filled.Extension) },
+                )
                 SectionLabel("MCP SERVERS", top = 14.dp)
-                when {
-                    mcp == null -> LoadingLine()
-                    mcp.isEmpty() -> EmptyLine("none configured in this harness")
-                    else -> mcp.forEach { m ->
-                        ToggleRow(
-                            name = m.name,
-                            subtitle = listOf(m.kind, m.detail).filter { it.isNotBlank() }.joinToString(" · "),
-                            checked = m.enabled,
-                            enabled = true,
-                            onChange = { vm.setMcp(m.name, it) },
-                        )
-                    }
-                }
+                SettingRow(
+                    "MCP servers",
+                    selected = false,
+                    subtitle = state.mcp?.let { if (it.isEmpty()) "none configured" else "${it.size} configured" } ?: "loading…",
+                    onPick = onMcp,
+                    leading = { SettingIcon(Icons.Filled.Dns) },
+                )
             }
         },
         confirmButton = {
@@ -520,6 +524,69 @@ private fun SectionLabel(text: String, top: androidx.compose.ui.unit.Dp = 0.dp) 
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(top = top, bottom = 4.dp),
     )
+}
+
+// A full view for managing one thing, so the settings modal stays a summary.
+@Composable
+private fun ManageScreen(title: String, onClose: () -> Unit, content: @Composable () -> Unit) {
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            Column(Modifier.fillMaxSize()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 4.dp, top = 6.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "back") }
+                    Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(start = 4.dp))
+                }
+                content()
+            }
+        }
+    }
+}
+
+@Composable
+private fun SkillsBody(vm: ChatViewModel) {
+    val state by vm.state.collectAsState()
+    LaunchedEffect(Unit) { vm.loadSkills() }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp)) {
+        val s = state.skills
+        when {
+            s == null -> LoadingLine()
+            s.skills.isEmpty() -> EmptyLine("none found for this harness")
+            else -> s.skills.forEach { sk ->
+                ToggleRow(
+                    name = sk.name,
+                    subtitle = sk.scope + if (s.toggleable) "" else " · fixed",
+                    checked = !sk.disabled,
+                    enabled = s.toggleable,
+                    onChange = { vm.setSkill(sk.path, !it) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun McpBody(vm: ChatViewModel) {
+    val state by vm.state.collectAsState()
+    LaunchedEffect(Unit) { vm.loadMcp() }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp)) {
+        val m = state.mcp
+        when {
+            m == null -> LoadingLine()
+            m.isEmpty() -> EmptyLine("none configured in this harness")
+            else -> m.forEach { s ->
+                ToggleRow(
+                    name = s.name,
+                    subtitle = listOf(s.kind, s.detail).filter { it.isNotBlank() }.joinToString(" · "),
+                    checked = s.enabled,
+                    enabled = true,
+                    onChange = { vm.setMcp(s.name, it) },
+                )
+            }
+        }
+    }
 }
 
 @Composable
