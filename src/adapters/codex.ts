@@ -339,7 +339,12 @@ export class CodexAdapter implements HarnessAdapter {
         switch (payload.type) {
           case "message": {
             const text = contentText(payload.content)
-            if (text.trim()) push(payload.role === "user" ? "user" : "assistant", { kind: "text", text })
+            // codex writes its own environment_context (workspace roots,
+            // permission profile) into the rollout as a turn; it is harness
+            // bookkeeping, not something the person said
+            if (text.trim() && !isCodexInjectedContext(text)) {
+              push(payload.role === "user" ? "user" : "assistant", { kind: "text", text })
+            }
             break
           }
           case "reasoning": {
@@ -377,7 +382,9 @@ export class CodexAdapter implements HarnessAdapter {
 
       if (!hasResponseItems && row.type === "event_msg" && payload.type === "item_completed" && payload.item) {
         const part = mapItem(payload.item, this.workspace)
-        if (part) push(payload.item.type === "UserMessage" ? "user" : "assistant", part)
+        if (part && !(part.kind === "text" && isCodexInjectedContext(part.text))) {
+          push(payload.item.type === "UserMessage" ? "user" : "assistant", part)
+        }
       }
     }
     return out
@@ -448,6 +455,9 @@ export class CodexAdapter implements HarnessAdapter {
             if (evt.type === "item.completed" && evt.item) {
               const part = mapItem(evt.item, this.workspace)
               if (!part) continue
+              // codex's injected environment block arrives as an item too — it
+              // is not part of the answer
+              if (part.kind === "text" && isCodexInjectedContext(part.text)) continue
               parts.push(part)
               this.#emit({
                 type: "part.updated",
@@ -712,6 +722,14 @@ function firstUserLine(lines: string[]): string {
 
 // Responses-API content arrays: input_text on the way in, output_text on the
 // way out, and the same shape again for tool output.
+// codex injects a block of its own context into the rollout — the workspace
+// roots it may touch and the permission profile it runs under. It looks like a
+// user turn but nobody typed it, so it must never surface as a message. Kept
+// pure and exported so the rule is testable without a rollout.
+export function isCodexInjectedContext(text: string): boolean {
+  return /<environment_context|<workspace_roots|<permission_profile/i.test(text)
+}
+
 function contentText(content: any): string {
   if (typeof content === "string") return content
   if (!Array.isArray(content)) return ""
