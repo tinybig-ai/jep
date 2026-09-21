@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -29,6 +30,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Insets must reach Compose: without edge-to-edge the decor consumes the
+        // IME inset and the system no longer resizes for adjustResize (API 30+),
+        // so imePadding() was a no-op and the keyboard sat over the composer and
+        // the terminal. TopAppBar/Scaffold already handle the system bars.
+        enableEdgeToEdge()
         ensureNotificationPermission()
 
         // the socket outlives screens; the service is what keeps it alive

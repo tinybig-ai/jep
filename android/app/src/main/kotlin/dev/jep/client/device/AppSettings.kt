@@ -12,9 +12,12 @@ class AppSettings(private val prefs: SharedPreferences) {
         get() = runCatching { ThemeMode.valueOf(prefs.getString(KEY_THEME, null) ?: "") }
             .getOrDefault(ThemeMode.SYSTEM)
 
-    /** whether the in-conversation terminal is offered at all */
+    /** whether the in-conversation terminal is offered at all.
+     * Read via `all` and cast rather than getBoolean: a value of the wrong type
+     * (an old build, a hand-edited prefs file) makes getBoolean throw, and this
+     * is read while building the app-wide ViewModel — a crash on launch. */
     val terminalEnabled: Boolean
-        get() = prefs.getBoolean(KEY_TERMINAL, false)
+        get() = (prefs.all[KEY_TERMINAL] as? Boolean) ?: false
 
     fun setTheme(mode: ThemeMode) = prefs.edit().putString(KEY_THEME, mode.name).apply()
 

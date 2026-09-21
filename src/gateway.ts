@@ -633,10 +633,16 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const name = termName(id)
         try {
           if (path === "/term/open") {
+            // phone-shaped: a narrower, shorter pane wraps less and keeps the
+            // prompt within reach on a handset
+            const cols = String(Math.max(40, Math.min(120, Number(process.env.JEP_TERM_COLS) || 60)))
+            const rows = String(Math.max(12, Math.min(60, Number(process.env.JEP_TERM_ROWS) || 24)))
             const has = await run(TMUX_BIN, ["has-session", "-t", name]).then(() => true).catch(() => false)
             if (!has) {
-              // a wide, tall detached pane reads better on a phone than 80x24
-              await run(TMUX_BIN, ["new-session", "-d", "-s", name, "-c", adapter.workspace, "-x", "100", "-y", "30"])
+              await run(TMUX_BIN, ["new-session", "-d", "-s", name, "-c", adapter.workspace, "-x", cols, "-y", rows])
+            } else {
+              // an existing shell may have been created at another size
+              await run(TMUX_BIN, ["resize-window", "-t", name, "-x", cols, "-y", rows]).catch(() => {})
             }
             return json(res, 200, { ok: true, name })
           }

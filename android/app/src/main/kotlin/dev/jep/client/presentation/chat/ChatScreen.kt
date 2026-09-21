@@ -644,11 +644,18 @@ private fun TerminalBody(vm: ChatViewModel, modifier: Modifier = Modifier) {
             delay(700)
         }
     }
+    val scroll = rememberScrollState()
+    // keep the prompt (the last line) in view — the pane is taller than the
+    // screen, and the keyboard makes it shorter still, so a frame that opens at
+    // the top hides exactly the line you're typing at
+    LaunchedEffect(frame, scroll.maxValue) {
+        scroll.scrollTo(scroll.maxValue)
+    }
     Column(modifier.fillMaxWidth()) {
         Text(
             frame.trimEnd('\n'),
             Modifier.weight(1f).fillMaxWidth()
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(scroll)
                 .background(Color(0xFF0E0E0D))
                 .padding(10.dp)
                 .semantics { contentDescription = "terminal output" },
