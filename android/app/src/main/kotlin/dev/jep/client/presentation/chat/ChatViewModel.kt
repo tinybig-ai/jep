@@ -65,6 +65,8 @@ class ChatViewModel(
         val notice: String? = null,
         val hasMore: Boolean = false,
         val loadingOlder: Boolean = false,
+        /** the first page of history is still arriving */
+        val loadingHistory: Boolean = false,
         /** models this conversation may run on; null until Settings asks */
         val models: ModelChoices? = null,
         /** the primary agent (build/plan); null = harness default */
@@ -133,6 +135,8 @@ class ChatViewModel(
     // survive only until they show up there. History is paged: the newest
     // window only, then older pages on demand via loadOlder().
     fun refresh() {
+        // an empty screen while the first page loads looks broken; say we're busy
+        if (_state.value.messages.isEmpty()) _state.update { it.copy(loadingHistory = true) }
         viewModelScope.launch {
             runCatching { repo.history(sessionId, limit = WINDOW) }
                 .onSuccess { batch ->
@@ -143,9 +147,11 @@ class ChatViewModel(
                             messages = batch.messages + optimistic.toList(),
                             live = if (st.sending) st.live else null,
                             hasMore = batch.hasMore,
+                            loadingHistory = false,
                         )
                     }
                 }
+                .onFailure { _state.update { it.copy(loadingHistory = false) } }
         }
     }
 

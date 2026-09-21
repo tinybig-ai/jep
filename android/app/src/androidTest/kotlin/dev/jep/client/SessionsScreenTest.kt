@@ -3,6 +3,7 @@ package dev.jep.client
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.jep.client.domain.model.SessionSummary
 import dev.jep.client.presentation.sessions.SessionsScreen
@@ -27,5 +28,14 @@ class SessionsScreenTest {
         }
         rule.onNodeWithContentDescription("opencode").assertExists()
         rule.onNodeWithContentDescription("codex").assertExists()
+    }
+
+    @Test
+    fun the_title_names_the_app_and_a_cold_load_spins() {
+        rule.setContent {
+            SessionsScreen(emptyList(), busy = true, notice = null, onOpen = {}, onNew = {}, onRefresh = {})
+        }
+        rule.onNodeWithText("Jep").assertExists()
+        rule.onNodeWithContentDescription("loading conversations").assertExists()
     }
 }

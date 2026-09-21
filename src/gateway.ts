@@ -469,6 +469,20 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
             return json(res, 400, { error: String((err as Error)?.message ?? err) })
           }
         }
+        // a workspace we serve under a *different* harness, asked for a new
+        // one (jep+opencode exists, jep+claude asked): bring that harness up
+        // for the same directory rather than refusing — this is "test a new
+        // harness on an existing project", not an error
+        if (!picked && wantWorkspace && wantHarness && deps.addWorkspace) {
+          const dir = all.find((w) => w.name === wantWorkspace)?.adapter.workspace
+          if (dir) {
+            try {
+              picked = await deps.addWorkspace(dir, wantHarness)
+            } catch (err) {
+              return json(res, 400, { error: String((err as Error)?.message ?? err) })
+            }
+          }
+        }
         if (!picked) return json(res, 400, { error: "no such workspace or harness" })
         const s = await picked.adapter.createSession(title || undefined)
         sessionAdapters.set(s.id, picked.adapter)

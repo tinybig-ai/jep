@@ -55,7 +55,7 @@ fun NewChatScreen(
     onBack: () -> Unit,
     onTitle: (String) -> Unit,
     onHarness: (String) -> Unit,
-    onSelectWorkspace: (String) -> Unit,
+    onSelectWorkspace: (String, String) -> Unit,
     onSelectPath: (String) -> Unit,
     onOpenBrowse: () -> Unit,
     onCloseBrowse: () -> Unit,
@@ -98,7 +98,7 @@ private fun Form(
     state: NewChatState,
     onTitle: (String) -> Unit,
     onHarness: (String) -> Unit,
-    onSelectWorkspace: (String) -> Unit,
+    onSelectWorkspace: (String, String) -> Unit,
     onOpenBrowse: () -> Unit,
     onCreate: () -> Unit,
 ) {
@@ -138,7 +138,7 @@ private fun Form(
                     title = w.name,
                     subtitle = w.harness + (w.dir.takeIf { it.isNotBlank() }?.let { "  ·  $it" } ?: ""),
                     selected = selected,
-                    onClick = { onSelectWorkspace(w.name) },
+                    onClick = { onSelectWorkspace(w.name, w.harness) },
                 )
             }
             SelectRow(

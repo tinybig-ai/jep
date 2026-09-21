@@ -1,5 +1,6 @@
 package dev.jep.client.presentation.sessions
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -14,10 +15,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
@@ -31,6 +34,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import dev.jep.client.R
 import androidx.compose.ui.unit.dp
@@ -63,8 +68,24 @@ fun SessionsScreen(
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad)) {
             TopAppBar(
-                title = { Text("jep") },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Image(
+                            painterResource(R.mipmap.ic_launcher),
+                            null,
+                            Modifier.size(30.dp).clip(RoundedCornerShape(9.dp)),
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Text("Jep")
+                    }
+                },
                 actions = {
+                    if (busy) {
+                        CircularProgressIndicator(
+                            Modifier.size(18.dp).padding(end = 6.dp),
+                            strokeWidth = 2.dp,
+                        )
+                    }
                     IconButton(onClick = onRefresh) {
                         Icon(Icons.Filled.Refresh, "refresh", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
@@ -78,9 +99,18 @@ fun SessionsScreen(
                     fontSize = 14.sp,
                 )
             }
-            LazyColumn(Modifier.fillMaxSize()) {
-                items(sessions.size) { i ->
-                    SessionRow(sessions[i], onOpen)
+            if (sessions.isEmpty() && busy) {
+                Box(
+                    Modifier.fillMaxSize().semantics { contentDescription = "loading conversations" },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 3.dp)
+                }
+            } else {
+                LazyColumn(Modifier.fillMaxSize()) {
+                    items(sessions.size) { i ->
+                        SessionRow(sessions[i], onOpen)
+                    }
                 }
             }
         }

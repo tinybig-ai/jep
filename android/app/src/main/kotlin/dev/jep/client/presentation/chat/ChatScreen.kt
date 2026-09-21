@@ -150,8 +150,10 @@ fun ChatScreen(
         // Scroll to the end instantly. Item heights are only estimated at this
         // point, so a single request lands short; nudge it across a few frames
         // until the measurements settle on the true bottom.
-        repeat(5) {
-            listState.scrollToItem(rendered.size) // the trailing spacer = the end
+        // item heights are estimates until laid out, so a single jump lands a
+        // little short; re-issue it across a few frames until it settles
+        repeat(6) {
+            listState.scrollToItem(rendered.lastIndex)
             withFrameNanos { }
         }
         landed = true
@@ -286,7 +288,21 @@ fun ChatScreen(
         // there is content below the fold: one tap and you are back at the end
         val showJump by remember { derivedStateOf { listState.canScrollForward } }
         Box(Modifier.weight(1f)) {
-            LazyColumn(Modifier.fillMaxSize().testTag("chat-list"), state = listState) {
+            if (state.messages.isEmpty() && state.loadingHistory) {
+                Box(
+                    Modifier.fillMaxSize().semantics { contentDescription = "loading conversation" },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator(Modifier.size(30.dp), strokeWidth = 3.dp)
+                }
+            } else LazyColumn(
+                Modifier.fillMaxSize().testTag("chat-list"),
+                state = listState,
+                // bottom spacing as padding, not a trailing item: a trailing item
+                // left the list "scrollable" even at the end, so the jump button
+                // never hid
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 10.dp),
+            ) {
                 // reaching the top threshold pulls the previous page; say so while
                 // it is in flight, or the list just sits there looking stuck
                 if (state.loadingOlder) {
@@ -304,7 +320,6 @@ fun ChatScreen(
                 items(rendered.size, key = { rendered[it].id }) { i ->
                     MessageRow(rendered[i], onInfo = { infoMsg = it }, onReply = { replyTo = it })
                 }
-                item { Spacer8() }
             }
             if (showJump) {
                 FloatingActionButton(

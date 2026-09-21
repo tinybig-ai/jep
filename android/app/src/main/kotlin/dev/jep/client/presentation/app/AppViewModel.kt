@@ -163,7 +163,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setNewTitle(value: String) = _newChat.update { it.copy(title = value, error = null) }
     fun setNewHarness(id: String) = _newChat.update { it.copy(harness = id, error = null) }
-    fun selectWorkspace(name: String) = _newChat.update { it.copy(workspace = name, path = null, error = null) }
+    // a served workspace already names its harness — picking the row picks both,
+    // so the two selectors can never disagree
+    fun selectWorkspace(name: String, harness: String) =
+        _newChat.update { it.copy(workspace = name, path = null, harness = harness, error = null) }
     fun selectPath(path: String) = _newChat.update { it.copy(path = path, workspace = null, browsing = false, error = null) }
 
     fun openBrowse() {

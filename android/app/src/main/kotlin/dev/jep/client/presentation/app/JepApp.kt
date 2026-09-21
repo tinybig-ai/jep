@@ -29,7 +29,7 @@ fun JepApp(app: AppViewModel) {
                 onBack = { app.closeNewChat() },
                 onTitle = { app.setNewTitle(it) },
                 onHarness = { app.setNewHarness(it) },
-                onSelectWorkspace = { app.selectWorkspace(it) },
+                onSelectWorkspace = { name, harness -> app.selectWorkspace(name, harness) },
                 onSelectPath = { app.selectPath(it) },
                 onOpenBrowse = { app.openBrowse() },
                 onCloseBrowse = { app.closeBrowse() },

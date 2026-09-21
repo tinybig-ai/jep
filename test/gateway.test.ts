@@ -380,6 +380,37 @@ test("harnesses, a bounded directory browse, and /new spawning a workspace by pa
   }
 })
 
+test("/new asking for a second harness on a served workspace spawns it", async () => {
+  const a = fakeAdapter() // name "a-ws", harness "fake", dir /tmp/ws
+  let added: string | null = null
+  const g = await startGateway({
+    adapters: () => [{ name: "a-ws", adapter: a }],
+    addWorkspace: async (dir, harness) => {
+      added = `${dir}:${harness}`
+      return { name: "a-ws", adapter: a }
+    },
+    dataHome: mkdtempSync(join(tmpdir(), "gw-test-")),
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+  })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const token = await pair(base, "TESTCODE")
+    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" }
+    // a-ws is served by "fake"; asking for it under "other" must not 400
+    const res = await fetch(`${base}/new`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ workspace: "a-ws", harness: "other" }),
+    })
+    assert.equal(res.status, 200)
+    assert.equal(added, "/tmp/ws:other")
+  } finally {
+    await g.close()
+  }
+})
+
 test("the push feed carries harness events to every connected device", async () => {
   const { gw } = spawnGateway()
   const g = await gw
