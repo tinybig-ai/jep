@@ -287,6 +287,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun back() {
         _screen.value = Screen.Sessions
+        // a conversation can be renamed or deleted while it's open; the list
+        // must show that on the way back rather than needing a manual pull
+        refresh()
     }
 
     fun forgetPairing() {
