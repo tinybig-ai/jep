@@ -65,6 +65,7 @@ fun JepApp(app: AppViewModel) {
                 onForgetPairing = { app.forgetPairing() },
                 terminalEnabled = app.prefs.collectAsState().value.terminalEnabled,
                 onOpenSession = { app.open(it) },
+                subagentCount = app.sessions.collectAsState().value.firstOrNull { it.id == c.sessionId }?.subagents ?: 0,
             )
         }
         else -> SessionsScreen(

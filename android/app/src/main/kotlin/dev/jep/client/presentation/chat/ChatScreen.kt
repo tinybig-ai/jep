@@ -136,6 +136,7 @@ fun ChatScreen(
     onForgetPairing: () -> Unit,
     terminalEnabled: Boolean = false,
     onOpenSession: (SessionSummary) -> Unit = {},
+    subagentCount: Int = 0,
 ) {
     val state by vm.state.collectAsState()
 
@@ -252,8 +253,11 @@ fun ChatScreen(
                             )
                         }
                         DropdownMenuItem(
-                            text = { Text("Subagents") },
+                            // nothing to open when it spawned none — the row
+                            // says so instead of a dialog that would be empty
+                            text = { Text(if (subagentCount > 0) "Subagents ($subagentCount)" else "Subagents") },
                             leadingIcon = { Icon(Icons.Filled.AccountTree, null) },
+                            enabled = subagentCount > 0,
                             onClick = { menu = false; subsOpen = true },
                         )
                         DropdownMenuItem(
