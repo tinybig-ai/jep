@@ -4,8 +4,10 @@
 // HarnessAdapter port. It holds no chat-store state and touches no Telegram
 // surface. Every endpoint the phone can call is listed in docs/GATEWAY.md,
 // which stays in step with this file.
+import { execFile } from "node:child_process"
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
+import { promisify } from "node:util"
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join, resolve, sep } from "node:path"
@@ -146,6 +148,13 @@ const saveTerminalTokens = async (dataHome: string, tokens: Set<string>): Promis
 // even DNS in the daemon. A browse is therefore bounded, serialized, and
 // remembered — a folder that didn't answer is refused outright for a while
 // instead of leaking another thread.
+// The in-chat terminal is a tmux session per conversation, so it survives a
+// daemon restart and reattaches. jep drives it with send-keys and reads the
+// rendered screen with capture-pane — no pty library, no VT emulation.
+const run = promisify(execFile)
+const TMUX_BIN = process.env.JEP_TMUX ?? "tmux"
+const termName = (nativeId: string) => "jep-" + nativeId.replace(/[^A-Za-z0-9_-]/g, "").slice(-48)
+
 const BROWSE_TIMEOUT_MS = 4_000
 const BROWSE_STALL_TTL_MS = 10 * 60_000
 const stalledDirs = new Map<string, number>()
@@ -612,6 +621,45 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       if (path === "/diff") {
         const files = adapter.diff ? await adapter.diff(id).catch(() => []) : []
         return json(res, 200, { files })
+      }
+
+      // ── the in-chat terminal ────────────────────────────────────────────
+      // A shell in the conversation's own folder, backed by tmux so it
+      // survives restarts and reattaches. Only when the operator allows it AND
+      // this device proved the pairing code.
+      if (path.startsWith("/term/")) {
+        if (!terminalAllowed) return json(res, 403, { error: "this gateway does not allow a terminal" })
+        if (!terminalTokens.has(token)) return json(res, 403, { error: "terminal isn't unlocked for this device" })
+        const name = termName(id)
+        try {
+          if (path === "/term/open") {
+            const has = await run(TMUX_BIN, ["has-session", "-t", name]).then(() => true).catch(() => false)
+            if (!has) {
+              // a wide, tall detached pane reads better on a phone than 80x24
+              await run(TMUX_BIN, ["new-session", "-d", "-s", name, "-c", adapter.workspace, "-x", "100", "-y", "30"])
+            }
+            return json(res, 200, { ok: true, name })
+          }
+          if (path === "/term/frame") {
+            const { stdout } = await run(TMUX_BIN, ["capture-pane", "-p", "-t", name, "-S", "-200"])
+            return json(res, 200, { text: stdout })
+          }
+          if (path === "/term/input") {
+            const text = str("text")
+            const key = str("key")
+            if (key) await run(TMUX_BIN, ["send-keys", "-t", name, key])
+            else if (text != null) await run(TMUX_BIN, ["send-keys", "-t", name, "-l", text])
+            return json(res, 200, { ok: true })
+          }
+          if (path === "/term/close") {
+            await run(TMUX_BIN, ["kill-session", "-t", name]).catch(() => {})
+            return json(res, 200, { ok: true })
+          }
+        } catch (err) {
+          console.error(`[gw] ${path} failed: ${(err as Error)?.message ?? err}`)
+          return json(res, 500, { error: String((err as Error)?.message ?? err) })
+        }
+        return json(res, 404, { error: "no such terminal route" })
       }
 
       // the skills this conversation's harness loads, from the SKILL.md dirs

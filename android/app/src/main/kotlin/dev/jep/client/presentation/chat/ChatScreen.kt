@@ -9,6 +9,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -61,6 +62,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
@@ -108,6 +110,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.unit.sp
 import com.mikepenz.markdown.m3.Markdown
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
@@ -128,6 +131,7 @@ fun ChatScreen(
     onBack: () -> Unit,
     onNew: () -> Unit,
     onForgetPairing: () -> Unit,
+    terminalEnabled: Boolean = false,
 ) {
     val state by vm.state.collectAsState()
 
@@ -188,6 +192,7 @@ fun ChatScreen(
     var replyTo by remember { mutableStateOf<ChatMessage?>(null) }
     var skillsView by remember { mutableStateOf(false) }
     var mcpView by remember { mutableStateOf(false) }
+    var termVisible by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         TopAppBar(
@@ -233,6 +238,13 @@ fun ChatScreen(
                             leadingIcon = { Icon(Icons.Filled.List, null) },
                             onClick = { menu = false; changesOpen = true },
                         )
+                        if (terminalEnabled) {
+                            DropdownMenuItem(
+                                text = { Text("Terminal") },
+                                leadingIcon = { Icon(Icons.Filled.Terminal, null) },
+                                onClick = { menu = false; termVisible = true },
+                            )
+                        }
                         DropdownMenuItem(
                             text = { Text("Rename") },
                             leadingIcon = { Icon(Icons.Filled.Edit, null) },
@@ -368,6 +380,7 @@ fun ChatScreen(
     )
     if (skillsView) ManageScreen("Skills", onClose = { skillsView = false }) { SkillsBody(vm) }
     if (mcpView) ManageScreen("MCP servers", onClose = { mcpView = false }) { McpBody(vm) }
+    if (termVisible) ManageScreen("Terminal", onClose = { termVisible = false }) { TerminalBody(vm) }
     if (usageOpen) UsageDialog(vm, onDismiss = { usageOpen = false })
     if (changesOpen) ChangesDialog(vm, onDismiss = { changesOpen = false })
     infoMsg?.let { ResponseInfoDialog(it) { infoMsg = null } }
@@ -585,6 +598,67 @@ private fun McpBody(vm: ChatViewModel) {
                     onChange = { vm.setMcp(s.name, it) },
                 )
             }
+        }
+    }
+}
+
+// The conversation's shell: a tmux session on the machine, so it keeps running
+// when this view closes and reattaches when it reopens. Here we show its screen
+// and feed it keystrokes.
+@Composable
+private fun TerminalBody(vm: ChatViewModel) {
+    val scope = rememberCoroutineScope()
+    var frame by remember { mutableStateOf("") }
+    val draft = remember { mutableStateOf("") }
+    LaunchedEffect(Unit) {
+        vm.termOpen()
+        while (true) {
+            frame = vm.termFrame()
+            delay(700)
+        }
+    }
+    Column(Modifier.fillMaxSize()) {
+        Text(
+            frame.trimEnd('\n'),
+            Modifier.weight(1f).fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .background(Color(0xFF0E0E0D))
+                .padding(10.dp)
+                .semantics { contentDescription = "terminal output" },
+            fontFamily = FontFamily.Monospace,
+            fontSize = 11.sp,
+            lineHeight = 15.sp,
+            color = Color(0xFFD8D6CE),
+        )
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            listOf("C-c" to "Ctrl-C", "Tab" to "Tab", "Up" to "↑", "Down" to "↓", "Escape" to "Esc", "BSpace" to "⌫")
+                .forEach { (key, label) ->
+                    OutlinedButton(
+                        onClick = { scope.launch { vm.termKey(key) } },
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 2.dp),
+                    ) { Text(label, fontSize = 12.sp) }
+                }
+        }
+        Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = draft.value,
+                onValueChange = { draft.value = it },
+                modifier = Modifier.weight(1f),
+                placeholder = { Text("type a command", fontSize = 13.sp) },
+                textStyle = androidx.compose.ui.text.TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp),
+                maxLines = 3,
+            )
+            IconButton(onClick = {
+                val t = draft.value
+                draft.value = ""
+                scope.launch {
+                    if (t.isNotEmpty()) vm.termInput(t)
+                    vm.termKey("Enter")
+                }
+            }) { Icon(Icons.AutoMirrored.Filled.Send, "send", tint = MaterialTheme.colorScheme.primary) }
         }
     }
 }

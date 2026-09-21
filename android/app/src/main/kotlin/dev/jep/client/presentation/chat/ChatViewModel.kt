@@ -292,6 +292,26 @@ class ChatViewModel(
         }
     }
 
+    // the in-chat terminal: a tmux-backed shell in this conversation's folder,
+    // attached to the session so it reattaches across app and daemon restarts
+    suspend fun termOpen() {
+        runCatching { repo.termOpen(sessionId) }
+    }
+
+    suspend fun termFrame(): String = runCatching { repo.termFrame(sessionId) }.getOrDefault("")
+
+    suspend fun termInput(text: String) {
+        runCatching { repo.termInput(sessionId, text) }
+    }
+
+    suspend fun termKey(key: String) {
+        runCatching { repo.termKey(sessionId, key) }
+    }
+
+    suspend fun termClose() {
+        runCatching { repo.termClose(sessionId) }
+    }
+
     // Settings › skills / MCP: what the harness loads. Read from the harness's
     // own files, and toggled in place (frontmatter line / enabled flag).
     fun loadSkills() {

@@ -63,6 +63,7 @@ fun JepApp(app: AppViewModel) {
                 onBack = { app.back() },
                 onNew = { app.openNewChat() },
                 onForgetPairing = { app.forgetPairing() },
+                terminalEnabled = app.prefs.collectAsState().value.terminalEnabled,
             )
         }
         else -> SessionsScreen(

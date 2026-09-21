@@ -49,6 +49,11 @@ class FakeChatRepository(
     override suspend fun terminalStatus() = TerminalAccess(allowed = true, authorized = false)
     override suspend fun unlockTerminal(code: String) = true
     override suspend fun lockTerminal() = true
+    override suspend fun termOpen(sessionId: String) = true
+    override suspend fun termFrame(sessionId: String) = "fake terminal\n$ "
+    override suspend fun termInput(sessionId: String, text: String) = true
+    override suspend fun termKey(sessionId: String, key: String) = true
+    override suspend fun termClose(sessionId: String) = true
     override suspend fun history(sessionId: String, limit: Int, before: Long) = HistoryBatch(messages, false)
     override suspend fun prompt(sessionId: String, text: String, files: List<String>) =
         ChatMessage("reply", Role.ASSISTANT, 1, listOf(ChatPart.Text("ok")))

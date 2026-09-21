@@ -13,6 +13,7 @@ import dev.jep.client.data.dto.ModelsRes
 import dev.jep.client.data.dto.SkillsRes
 import dev.jep.client.data.dto.NewSessionRes
 import dev.jep.client.data.dto.PairRes
+import dev.jep.client.data.dto.TermFrameRes
 import dev.jep.client.data.dto.TermStatusRes
 import dev.jep.client.data.dto.SessionDto
 import dev.jep.client.data.dto.SessionsRes
@@ -168,6 +169,21 @@ class GatewayChatRepository(
         post("/term/unlock", payload("code" to code)).first in 200..299
 
     override suspend fun lockTerminal(): Boolean = post("/term/lock", "{}").first in 200..299
+
+    override suspend fun termOpen(sessionId: String): Boolean =
+        post("/term/open", payload("id" to sessionId)).first in 200..299
+
+    override suspend fun termFrame(sessionId: String): String =
+        decode("/term/frame", TermFrameRes.serializer(), payload("id" to sessionId)).text
+
+    override suspend fun termInput(sessionId: String, text: String): Boolean =
+        post("/term/input", payload("id" to sessionId, "text" to text)).first in 200..299
+
+    override suspend fun termKey(sessionId: String, key: String): Boolean =
+        post("/term/input", payload("id" to sessionId, "key" to key)).first in 200..299
+
+    override suspend fun termClose(sessionId: String): Boolean =
+        post("/term/close", payload("id" to sessionId)).first in 200..299
 
     override suspend fun history(sessionId: String, limit: Int, before: Long): HistoryBatch =
         withContext(Dispatchers.Default) {

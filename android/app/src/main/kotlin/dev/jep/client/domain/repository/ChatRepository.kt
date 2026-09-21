@@ -110,6 +110,16 @@ interface ChatRepository {
     suspend fun unlockTerminal(code: String): Boolean
     /** drop that grant for this device token */
     suspend fun lockTerminal(): Boolean
+    /** start (or reattach) the conversation's shell in its workspace */
+    suspend fun termOpen(sessionId: String): Boolean
+    /** the shell's current screen, as rendered text */
+    suspend fun termFrame(sessionId: String): String
+    /** type into the shell */
+    suspend fun termInput(sessionId: String, text: String): Boolean
+    /** press a named key: Enter, Tab, C-c, Up, … */
+    suspend fun termKey(sessionId: String, key: String): Boolean
+    /** kill the shell */
+    suspend fun termClose(sessionId: String): Boolean
     /** fetch the newest `limit` messages, or the newest `limit` older than `before` (ms) */
     suspend fun history(sessionId: String, limit: Int = 0, before: Long = 0): HistoryBatch
     suspend fun prompt(sessionId: String, text: String, files: List<String> = emptyList()): ChatMessage
