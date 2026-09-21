@@ -7,6 +7,8 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeRight
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
@@ -35,6 +37,39 @@ class ChatScreenTest {
         rule.runOnUiThread { rule.activity.onBackPressedDispatcher.onBackPressed() }
         rule.waitForIdle()
         assertEquals(1, backed)
+    }
+
+    @Test
+    fun swiping_a_message_arms_a_reply() {
+        val turn = ChatMessage("m1", Role.ASSISTANT, 1, listOf(ChatPart.Text("hello there")))
+        val vm = ChatViewModel(FakeChatRepository(messages = listOf(turn)), "s1", "T")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(5_000) {
+            rule.onAllNodesWithText("hello there", substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNodeWithText("hello there", substring = true).performTouchInput { swipeRight() }
+        rule.waitForIdle()
+        rule.waitUntil(3_000) {
+            rule.onAllNodesWithContentDescription("cancel reply").fetchSemanticsNodes().isNotEmpty()
+        }
+    }
+
+    @Test
+    fun a_reply_offers_info_and_copy() {
+        val turn = ChatMessage(
+            id = "m1",
+            role = Role.ASSISTANT,
+            time = 1,
+            parts = listOf(ChatPart.Text("hi")),
+            model = "opencode/big-pickle",
+        )
+        val vm = ChatViewModel(FakeChatRepository(messages = listOf(turn)), "s1", "T")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(5_000) {
+            rule.onAllNodesWithContentDescription("copy response").fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNodeWithContentDescription("copy response").assertExists()
+        rule.onNodeWithContentDescription("response info").assertExists()
     }
 
     @Test

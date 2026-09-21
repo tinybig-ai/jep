@@ -6,10 +6,13 @@ import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -31,7 +35,10 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowDropUp
 import androidx.compose.material.icons.filled.AttachFile
@@ -73,18 +80,22 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mikepenz.markdown.m3.Markdown
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 import dev.jep.client.domain.model.ChatMessage
@@ -139,6 +150,7 @@ fun ChatScreen(
     var usageOpen by remember { mutableStateOf(false) }
     var changesOpen by remember { mutableStateOf(false) }
     var infoMsg by remember { mutableStateOf<ChatMessage?>(null) }
+    var replyTo by remember { mutableStateOf<ChatMessage?>(null) }
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         TopAppBar(
@@ -243,12 +255,13 @@ fun ChatScreen(
         }
         LazyColumn(Modifier.weight(1f), state = listState) {
             items(rendered.size, key = { rendered[it].id }) { i ->
-                MessageRow(rendered[i], onInfo = { infoMsg = it })
+                MessageRow(rendered[i], onInfo = { infoMsg = it }, onReply = { replyTo = it })
             }
             item { Spacer8() }
         }
         state.ask?.let { ask -> AskBar(ask, vm) }
-        Composer(vm)
+        replyTo?.let { ReplyBanner(it) { replyTo = null } }
+        Composer(vm, replyTo) { replyTo = null }
     }
 
     if (renameOpen) RenameDialog(
@@ -586,12 +599,13 @@ private fun codeBlocks(text: String): List<String> {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MessageRow(message: ChatMessage, onInfo: (ChatMessage) -> Unit) {
+private fun MessageRow(message: ChatMessage, onInfo: (ChatMessage) -> Unit, onReply: (ChatMessage) -> Unit) {
     var menu by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
     val fullText = remember(message) { messageText(message) }
     val code = remember(message, fullText) { codeBlocks(fullText) }
 
+    SwipeToReply(onReply = { onReply(message) }) {
     Box(
         Modifier
             .fillMaxWidth()
@@ -617,6 +631,65 @@ private fun MessageRow(message: ChatMessage, onInfo: (ChatMessage) -> Unit) {
             }
         }
     }
+    }
+}
+
+// A rightward swipe on a row arms a reply: an affordance fades in behind it and
+// the row follows the finger, then springs back (and fires) past the threshold.
+@Composable
+private fun SwipeToReply(onReply: () -> Unit, content: @Composable () -> Unit) {
+    val offset = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    val threshold = 110f
+    Box(
+        Modifier.fillMaxWidth().pointerInput(Unit) {
+            detectHorizontalDragGestures(
+                onDragEnd = {
+                    val fire = offset.value >= threshold
+                    scope.launch { offset.animateTo(0f) }
+                    if (fire) onReply()
+                },
+                onDragCancel = { scope.launch { offset.animateTo(0f) } },
+                onHorizontalDrag = { change, drag ->
+                    change.consume()
+                    scope.launch { offset.snapTo((offset.value + drag).coerceIn(0f, threshold + 30f)) }
+                },
+            )
+        },
+    ) {
+        if (offset.value > 1f) {
+            Icon(
+                Icons.AutoMirrored.Filled.Reply,
+                "reply",
+                Modifier.align(Alignment.CenterStart).padding(start = 10.dp).size(18.dp),
+                tint = MaterialTheme.colorScheme.primary.copy(alpha = (offset.value / threshold).coerceIn(0f, 1f)),
+            )
+        }
+        Box(Modifier.offset { IntOffset(offset.value.roundToInt(), 0) }) { content() }
+    }
+}
+
+// the armed reply sits above the composer until sent or dismissed
+@Composable
+private fun ReplyBanner(message: ChatMessage, onCancel: () -> Unit) {
+    Surface(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surfaceContainer) {
+        Row(Modifier.padding(horizontal = 14.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.AutoMirrored.Filled.Reply, null, Modifier.size(15.dp), tint = MaterialTheme.colorScheme.primary)
+            Text(
+                messageText(message).replace("\n", " ").trim().take(90),
+                Modifier.weight(1f).padding(start = 8.dp),
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+            Icon(
+                Icons.Filled.Close,
+                "cancel reply",
+                Modifier.size(16.dp).clickable(onClick = onCancel),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
 }
 
 @Composable
@@ -640,9 +713,11 @@ private fun UserBubble(message: ChatMessage) {
 
 @Composable
 private fun AssistantBody(message: ChatMessage, onInfo: (ChatMessage) -> Unit) {
-    // the per-turn accounting lives behind this quiet "i", not printed under
-    // every reply: model, tokens, cost and context on demand
+    // the per-turn accounting lives behind a quiet hollow "i", not printed under
+    // every reply; a copy button sits beside it for the reply's own text
     val hasInfo = message.tokens != null || message.cost != null || message.model != null
+    val clipboard = LocalClipboardManager.current
+    val fullText = remember(message) { messageText(message) }
     Column(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         message.parts.forEachIndexed { idx, part ->
             val isLast = idx == message.parts.lastIndex
@@ -651,12 +726,21 @@ private fun AssistantBody(message: ChatMessage, onInfo: (ChatMessage) -> Unit) {
         message.error?.let {
             Text(it, color = MaterialTheme.colorScheme.error, fontSize = 14.sp)
         }
-        if (hasInfo) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (hasInfo) {
+                Icon(
+                    Icons.Outlined.Info,
+                    "response info",
+                    Modifier.size(15.dp).clickable { onInfo(message) },
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                )
+                Spacer(Modifier.size(16.dp))
+            }
             Icon(
-                Icons.Filled.Info,
-                "response info",
-                Modifier.size(16.dp).clickable { onInfo(message) },
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                Icons.Outlined.ContentCopy,
+                "copy response",
+                Modifier.size(15.dp).clickable { clipboard.setText(AnnotatedString(fullText)) },
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
             )
         }
     }
@@ -849,7 +933,7 @@ private fun AskBar(ask: dev.jep.client.domain.model.Ask, vm: ChatViewModel) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun Composer(vm: ChatViewModel) {
+private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: () -> Unit) {
     val state by vm.state.collectAsState()
     val draft = remember { mutableStateOf("") }
     val busy = state.sending || state.live != null
@@ -909,8 +993,13 @@ private fun Composer(vm: ChatViewModel) {
                 )
                 IconButton(onClick = {
                     if (busy) vm.stop() else {
-                        vm.send(draft.value)
+                        // a swipe-armed reply rides along as a quoted block
+                        val quote = replyTo?.let { m ->
+                            messageText(m).trim().lineSequence().take(6).joinToString("\n") { "> $it" } + "\n\n"
+                        } ?: ""
+                        vm.send(quote + draft.value)
                         draft.value = ""
+                        onCancelReply()
                     }
                 }) {
                     if (busy) {
