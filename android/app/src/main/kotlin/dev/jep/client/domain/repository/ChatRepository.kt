@@ -11,6 +11,7 @@ import dev.jep.client.domain.model.Model
 import dev.jep.client.domain.model.Role
 import dev.jep.client.domain.model.SessionSummary
 import dev.jep.client.domain.model.SkillSet
+import dev.jep.client.domain.model.TerminalAccess
 import dev.jep.client.domain.model.Usage
 import dev.jep.client.domain.model.Workspace
 import kotlinx.coroutines.flow.Flow
@@ -103,6 +104,8 @@ interface ChatRepository {
     suspend fun mcp(sessionId: String): List<McpServer>
     /** enable or disable an MCP server by name */
     suspend fun setMcp(sessionId: String, name: String, enabled: Boolean): Boolean
+    /** whether this gateway offers a terminal, and whether this device may use it */
+    suspend fun terminalStatus(): TerminalAccess
     /** prove the pairing code again, unlocking a shell for this device token */
     suspend fun unlockTerminal(code: String): Boolean
     /** drop that grant for this device token */

@@ -43,6 +43,7 @@ fun JepApp(app: AppViewModel) {
             dev.jep.client.presentation.settings.SettingsScreen(
                 theme = prefs.theme,
                 terminalEnabled = prefs.terminalEnabled,
+                terminalAccess = app.termAccess.collectAsState().value,
                 gateway = app.gateway.collectAsState().value,
                 onBack = { app.back() },
                 onTheme = { app.setTheme(it) },

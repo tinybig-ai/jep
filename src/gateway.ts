@@ -241,6 +241,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   const models = await loadModels(deps.dataHome)
   const agents = await loadAgents(deps.dataHome)
   const terminalTokens = await loadTerminalTokens(deps.dataHome)
+  // Whether this gateway offers a shell at all — an operator decision on the
+  // machine, not something a paired phone can turn on for itself.
+  const terminalAllowed = process.env.JEP_TERMINAL === "1" || process.env.JEP_TERMINAL === "true"
 
   // help-files the phone needs, resolved as events and commands arrive
   const sessionAdapters = new Map<string, HarnessAdapter>()
@@ -474,10 +477,16 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       // again unlocks a shell for *this* device token. Until then nothing about
       // the terminal is reachable, so a leaked device token is not a shell.
       if (path === "/term") {
-        return json(res, 200, { authorized: terminalTokens.has(token) })
+        return json(res, 200, {
+          allowed: terminalAllowed,
+          authorized: terminalAllowed && terminalTokens.has(token),
+        })
       }
 
       if (path === "/term/unlock") {
+        if (!terminalAllowed) {
+          return json(res, 403, { error: "this gateway does not allow a terminal (set JEP_TERMINAL=1 on the daemon)" })
+        }
         const code = str("code")
         if (!code || !same(code.trim(), pairCode)) return json(res, 403, { error: "wrong pairing code" })
         terminalTokens.add(token)

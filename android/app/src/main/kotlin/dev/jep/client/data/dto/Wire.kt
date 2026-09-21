@@ -152,6 +152,9 @@ data class McpDto(val name: String = "", val kind: String = "", val enabled: Boo
 data class McpRes(val servers: List<McpDto> = emptyList())
 
 @Serializable
+data class TermStatusRes(val allowed: Boolean = false, val authorized: Boolean = false)
+
+@Serializable
 data class UsageDto(
     val input: Long = 0,
     val output: Long = 0,

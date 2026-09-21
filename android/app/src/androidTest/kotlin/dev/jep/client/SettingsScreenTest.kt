@@ -7,6 +7,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.jep.client.device.ThemeMode
+import dev.jep.client.domain.model.TerminalAccess
 import dev.jep.client.presentation.settings.SettingsScreen
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -64,6 +65,7 @@ class SettingsScreenTest {
             SettingsScreen(
                 theme = theme,
                 terminalEnabled = terminalEnabled,
+                terminalAccess = TerminalAccess(allowed = true, authorized = false),
                 gateway = gateway,
                 onBack = {},
                 onTheme = onTheme,

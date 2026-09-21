@@ -9,6 +9,7 @@ import dev.jep.client.domain.model.McpServer
 import dev.jep.client.domain.model.Model
 import dev.jep.client.domain.model.Role
 import dev.jep.client.domain.model.SkillSet
+import dev.jep.client.domain.model.TerminalAccess
 import dev.jep.client.domain.model.SessionSummary
 import dev.jep.client.domain.model.Usage
 import dev.jep.client.domain.model.Workspace
@@ -45,6 +46,7 @@ class FakeChatRepository(
     override suspend fun setSkill(sessionId: String, path: String, disabled: Boolean) = true
     override suspend fun mcp(sessionId: String): List<McpServer> = emptyList()
     override suspend fun setMcp(sessionId: String, name: String, enabled: Boolean) = true
+    override suspend fun terminalStatus() = TerminalAccess(allowed = true, authorized = false)
     override suspend fun unlockTerminal(code: String) = true
     override suspend fun lockTerminal() = true
     override suspend fun history(sessionId: String, limit: Int, before: Long) = HistoryBatch(messages, false)

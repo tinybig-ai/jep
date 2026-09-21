@@ -13,6 +13,7 @@ import dev.jep.client.device.PairingStore
 import dev.jep.client.domain.repository.ChatRepository
 import dev.jep.client.domain.model.BrowseResult
 import dev.jep.client.domain.model.SessionSummary
+import dev.jep.client.domain.model.TerminalAccess
 import dev.jep.client.domain.model.Workspace
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -88,6 +89,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 .onSuccess {
                     settings.setTerminalEnabled(true)
                     _prefs.value = _prefs.value.copy(terminalEnabled = true)
+                    _termAccess.value = TerminalAccess(allowed = true, authorized = true)
                     onResult(true)
                 }
                 .onFailure { onResult(false) }
@@ -101,8 +103,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { runCatching { r.lockTerminal() } }
     }
 
+    // whether the *gateway* offers a terminal — an operator setting on the
+    // machine, which the phone can show but cannot grant itself
+    private val _termAccess = MutableStateFlow<TerminalAccess?>(null)
+    val termAccess = _termAccess.asStateFlow()
+
     fun openSettings() {
         _screen.value = Screen.Settings
+        refreshTerminalAccess()
+    }
+
+    fun refreshTerminalAccess() {
+        val r = repo ?: return
+        viewModelScope.launch { runCatching { r.terminalStatus() }.onSuccess { _termAccess.value = it } }
     }
 
     private val _screen = MutableStateFlow<Screen>(Screen.Sessions)

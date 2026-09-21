@@ -13,6 +13,7 @@ import dev.jep.client.data.dto.ModelsRes
 import dev.jep.client.data.dto.SkillsRes
 import dev.jep.client.data.dto.NewSessionRes
 import dev.jep.client.data.dto.PairRes
+import dev.jep.client.data.dto.TermStatusRes
 import dev.jep.client.data.dto.SessionDto
 import dev.jep.client.data.dto.SessionsRes
 import dev.jep.client.data.dto.UsageRes
@@ -27,6 +28,7 @@ import dev.jep.client.domain.model.Harnesses
 import dev.jep.client.domain.model.McpServer
 import dev.jep.client.domain.repository.ChatRepository
 import dev.jep.client.domain.model.SessionSummary
+import dev.jep.client.domain.model.TerminalAccess
 import dev.jep.client.domain.model.SkillSet
 import dev.jep.client.domain.model.Usage
 import dev.jep.client.domain.model.Workspace
@@ -156,6 +158,11 @@ class GatewayChatRepository(
 
     override suspend fun setMcp(sessionId: String, name: String, enabled: Boolean): Boolean =
         post("/setmcp", buildJsonObject { put("id", sessionId); put("name", name); put("enabled", enabled) }.toString()).first in 200..299
+
+    override suspend fun terminalStatus(): TerminalAccess {
+        val r = decode("/term", TermStatusRes.serializer(), "{}")
+        return TerminalAccess(r.allowed, r.authorized)
+    }
 
     override suspend fun unlockTerminal(code: String): Boolean =
         post("/term/unlock", payload("code" to code)).first in 200..299

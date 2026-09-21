@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, mkdirSync, copyFileSync } from "node:fs"
+import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync } from "node:fs"
 import { readdir } from "node:fs/promises"
 import { join, sep } from "node:path"
 import { mkdtempSync } from "node:fs"
@@ -15,6 +15,30 @@ import { ReminderStore } from "./telegram/reminders.ts"
 const FIXTURE = join(import.meta.dirname, "..", "fixture")
 const DEFAULT_WORKSPACES = ["workspace-alpha", "workspace-beta"].map((n) => join(FIXTURE, n))
 const DATA_HOME = process.env.JEP_DATA_HOME ?? mkdtempSync(join(tmpdir(), "jep-tg-"))
+
+// Workspaces the phone brought up (a second harness on an existing project)
+// are jep's own memory. Persisted with their harness so a restart restores the
+// session list instead of silently dropping every codex/claude conversation.
+const REMEMBERED_WS_FILE = "gateway-workspaces.json"
+type RememberedWs = { dir: string; harness: string }
+function loadRememberedWorkspaces(): RememberedWs[] {
+  try {
+    return JSON.parse(readFileSync(join(DATA_HOME, REMEMBERED_WS_FILE), "utf8")) as RememberedWs[]
+  } catch {
+    return []
+  }
+}
+function rememberWorkspace(dir: string, harness: string): void {
+  const list = loadRememberedWorkspaces()
+  if (list.some((w) => w.dir === dir && w.harness === harness)) return
+  list.push({ dir, harness })
+  try {
+    mkdirSync(DATA_HOME, { recursive: true })
+    writeFileSync(join(DATA_HOME, REMEMBERED_WS_FILE), JSON.stringify(list, null, 1))
+  } catch (err) {
+    console.error(`[ws] couldn't remember ${dir}: ${(err as Error)?.message ?? err}`)
+  }
+}
 const UPLOADS_DIR = join(DATA_HOME, "uploads")
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -289,6 +313,19 @@ async function main() {
     }
   }
 
+  // the phone's on-demand workspaces (e.g. codex on the jep repo): restore them
+  // too, or their conversations vanish from the list on every restart
+  for (const { dir, harness } of loadRememberedWorkspaces()) {
+    if (workspaces.some((w) => w.dir === dir && w.adapter.id === harness)) continue
+    if ((await probeDir(dir)) !== "ok") continue
+    try {
+      workspaces.push(await spawnWorkspace(dir, harness))
+      console.error(`[ws] restored ${harness} for ${dir}`)
+    } catch (err) {
+      console.error(`[ws] couldn't restore ${harness} for ${dir}: ${(err as Error)?.message ?? err}`)
+    }
+  }
+
   if (!workspaces.length) throw new Error(`no workspace could be started (tried: ${workspaceDirs.join(", ")})`)
   const activeWsName = workspaces[0]!.name
 
@@ -362,6 +399,7 @@ async function main() {
           workspaces.push(ws)
           store.addWorkspace(dir)
         }
+        rememberWorkspace(ws.dir, ws.adapter.id)
         return { name: ws.name, adapter: ws.adapter }
       },
       browseRoot: process.env.JEP_BROWSE_ROOT,

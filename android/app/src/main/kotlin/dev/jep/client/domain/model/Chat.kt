@@ -30,6 +30,9 @@ data class SkillSet(val skills: List<Skill>, val toggleable: Boolean)
 /** an MCP server the harness will start */
 data class McpServer(val name: String, val kind: String, val enabled: Boolean, val detail: String)
 
+/** whether this gateway offers a terminal at all, and whether this device may open one */
+data class TerminalAccess(val allowed: Boolean, val authorized: Boolean)
+
 /** one folder in the directory browser */
 data class DirEntry(val name: String, val git: Boolean)
 

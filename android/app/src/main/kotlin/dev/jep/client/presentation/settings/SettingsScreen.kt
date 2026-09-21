@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.ArrowDropUp
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.LightMode
@@ -41,6 +43,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.jep.client.device.ThemeMode
+import dev.jep.client.domain.model.TerminalAccess
 
 // App-wide settings — preferences that belong to the person, not to one
 // conversation (that's the in-chat Settings panel). Theme lives here; so does
@@ -53,6 +56,7 @@ fun SettingsScreen(
     gateway: String?,
     onBack: () -> Unit,
     onTheme: (ThemeMode) -> Unit,
+    terminalAccess: TerminalAccess?,
     onUnlockTerminal: (String, (Boolean) -> Unit) -> Unit,
     onDisableTerminal: () -> Unit,
     onReconnect: (String, String, (Boolean) -> Unit) -> Unit,
@@ -60,6 +64,7 @@ fun SettingsScreen(
     BackHandler { onBack() }
     var codeOpen by remember { mutableStateOf(false) }
     var reconnectOpen by remember { mutableStateOf(false) }
+    var howOpen by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -83,15 +88,52 @@ fun SettingsScreen(
             item {
                 SwitchRow(
                     name = "In-chat terminal",
-                    subtitle = if (terminalEnabled) {
-                        "a shell in the conversation's folder, attached to the chat"
-                    } else {
-                        "enabling asks for the pairing code again"
+                    subtitle = when {
+                        terminalAccess?.allowed == false -> "not offered by this gateway"
+                        terminalEnabled -> "a shell in the conversation's folder, attached to the chat"
+                        else -> "enabling asks for the pairing code again"
                     },
                     icon = Icons.Filled.Terminal,
                     checked = terminalEnabled,
+                    enabled = terminalAccess?.allowed != false,
                     onChange = { want -> if (want) codeOpen = true else onDisableTerminal() },
                 )
+            }
+            if (terminalAccess?.allowed == false) {
+                item {
+                    Column(Modifier.padding(horizontal = 18.dp, vertical = 4.dp)) {
+                        Text(
+                            "This gateway does not allow a terminal.",
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        Row(
+                            Modifier.fillMaxWidth().clickable { howOpen = !howOpen }.padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("How to enable", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+                            Icon(
+                                if (howOpen) Icons.Filled.ArrowDropUp else Icons.Filled.ArrowDropDown,
+                                "steps",
+                                Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                        if (howOpen) {
+                            Text(
+                                "On the machine running jep:\n" +
+                                    "1. put JEP_TERMINAL=1 in the daemon's EnvironmentVariables\n" +
+                                    "   (~/Library/LaunchAgents/com.jep.tg.plist)\n" +
+                                    "2. launchctl bootout gui/$(id -u)/com.jep.tg\n" +
+                                    "   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jep.tg.plist\n" +
+                                    "3. reopen Settings and enable it here.",
+                                fontSize = 12.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
             }
 
             item { SectionTitle("CONNECTION", top = 18.dp) }
@@ -247,6 +289,7 @@ private fun SwitchRow(
     subtitle: String?,
     icon: ImageVector,
     checked: Boolean,
+    enabled: Boolean = true,
     onChange: (Boolean) -> Unit,
 ) {
     Row(
@@ -260,7 +303,7 @@ private fun SwitchRow(
                 Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        Switch(checked = checked, onCheckedChange = onChange)
+        Switch(checked = checked, enabled = enabled, onCheckedChange = onChange)
     }
 }
 
