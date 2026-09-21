@@ -229,7 +229,13 @@ async function readRaw(req: IncomingMessage, cap: number): Promise<Buffer | null
 }
 
 export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
-  const pairCode = deps.pairCode ?? newPairCode()
+  // single-use, always: every successful pairing or terminal unlock spends the
+  // code and mints a fresh one, so a code seen once is never valid again
+  let pairCode = deps.pairCode ?? newPairCode()
+  const spendPairCode = (usedFor: string): void => {
+    pairCode = newPairCode()
+    console.error(`[gw] pairing code spent (${usedFor}) — new code: ${pairCode}`)
+  }
   let tokens = await loadTokens(deps.dataHome)
   const titles = await loadTitles(deps.dataHome)
   const models = await loadModels(deps.dataHome)
@@ -355,7 +361,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const token = randomBytes(24).toString("hex")
         tokens.set(token, Date.now())
         await saveTokens(deps.dataHome, tokens)
-        return json(res, 200, { token })
+        spendPairCode("device paired")
+        // hand back the next code: the one just used is spent
+        return json(res, 200, { token, nextCode: pairCode })
       }
 
       // everything below is token-gated
@@ -474,7 +482,8 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         if (!code || !same(code.trim(), pairCode)) return json(res, 403, { error: "wrong pairing code" })
         terminalTokens.add(token)
         await saveTerminalTokens(deps.dataHome, terminalTokens)
-        return json(res, 200, { ok: true })
+        spendPairCode("terminal unlocked")
+        return json(res, 200, { ok: true, nextCode: pairCode })
       }
 
       if (path === "/term/lock") {

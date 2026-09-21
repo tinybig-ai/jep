@@ -84,15 +84,20 @@ export class Pairing {
 
   authorize(id: number, code: string): "bad" | "paired" | "owner" {
     if (code.trim() !== this.#code) return "bad"
-    if (this.#owner === null) {
+    const becomingOwner = this.#owner === null
+    if (becomingOwner) {
       this.#owner = id
       this.#paired.delete(id)
-      this.#save()
-      return "owner"
+    } else {
+      this.#paired.add(id)
     }
-    this.#paired.add(id)
+    // single-use: the code is spent the moment it works, and a fresh one is
+    // minted — a code seen once is never accepted again
+    this.#code = newPairCode()
+    this.#failures = 0
+    this.#hits.clear()
     this.#save()
-    return "paired"
+    return becomingOwner ? "owner" : "paired"
   }
 
   // rate-limited authorize: caller must go through this for user-entered codes.

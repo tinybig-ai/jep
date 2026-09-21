@@ -1452,9 +1452,12 @@ export class TelegramBot {
       }
       return this.#say(chatID, "✗ Wrong pairing code.")
     }
+    // the code was single-use; say what the next one is so another device can
+    // still be paired
+    const next = `\n\nNext pairing code: \`${this.#pairing.code}\``
     if (res.pairing === "owner")
-      return this.#say(chatID, "🔐 Paired. You are the **owner** — the bot is now locked to you.")
-    return this.#say(chatID, "🔐 Paired. Welcome — you can use the agent now.")
+      return this.#say(chatID, "🔐 Paired. You are the **owner** — the bot is now locked to you." + next)
+    return this.#say(chatID, "🔐 Paired. Welcome — you can use the agent now." + next)
   }
 
   // drop whatever the next message was parked for — and, when that was a
