@@ -52,6 +52,7 @@ const TITLES_FILE = "gateway-titles.json"
 const MODELS_FILE = "gateway-models.json"
 const AGENTS_FILE = "gateway-agents.json"
 const TERMINAL_FILE = "gateway-terminal.json"
+const ARCHIVED_FILE = "gateway-archived.json"
 const BODY_MAX = 1 << 20
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -123,6 +124,22 @@ async function loadAgents(dataHome: string): Promise<Map<string, string>> {
 const saveAgents = async (dataHome: string, agents: Map<string, string>): Promise<void> => {
   await mkdir(dataHome, { recursive: true })
   await writeFile(join(dataHome, AGENTS_FILE), JSON.stringify(Object.fromEntries(agents), null, 1))
+}
+
+// Conversations the user filed away: hidden from the list, never deleted. Like
+// the titles, a client-side concern the gateway remembers for the phone.
+async function loadArchived(dataHome: string): Promise<Set<string>> {
+  try {
+    const raw = JSON.parse(await readFile(join(dataHome, ARCHIVED_FILE), "utf8")) as string[]
+    return new Set(raw)
+  } catch {
+    return new Set()
+  }
+}
+
+const saveArchived = async (dataHome: string, ids: Set<string>): Promise<void> => {
+  await mkdir(dataHome, { recursive: true })
+  await writeFile(join(dataHome, ARCHIVED_FILE), JSON.stringify([...ids], null, 1))
 }
 
 // Tokens that proved the pairing code a second time and are therefore allowed
@@ -247,6 +264,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   }
   let tokens = await loadTokens(deps.dataHome)
   const titles = await loadTitles(deps.dataHome)
+  const archived = await loadArchived(deps.dataHome)
   const models = await loadModels(deps.dataHome)
   const agents = await loadAgents(deps.dataHome)
   const terminalTokens = await loadTerminalTokens(deps.dataHome)
@@ -424,6 +442,8 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           const list = await adapter.listSessions().catch(() => [])
           for (const s of list) {
             sessionAdapters.set(s.id, adapter)
+            // archived conversations are filed away, not listed
+            if (archived.has(s.id)) continue
             const overridden = titles.get(s.id)
             // `adapter` is the workspace's friendly name; `harness` the engine
             // behind it (opencode/codex/claude). Both are display-only: a
@@ -569,6 +589,15 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         return json(res, 200, { ok: true })
       }
 
+      // archive hides a conversation from the list without touching the
+      // harness — the same filed-away idea as a mail client
+      if (path === "/archive" || path === "/unarchive") {
+        if (path === "/archive") archived.add(id)
+        else archived.delete(id)
+        await saveArchived(deps.dataHome, archived)
+        return json(res, 200, { ok: true, archived: archived.has(id) })
+      }
+
       if (path === "/delete") {
         sessionAdapters.delete(id)
         attachments.forEach((v, k) => {
@@ -576,6 +605,8 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         })
         titles.delete(id)
         await saveTitles(deps.dataHome, titles)
+        archived.delete(id)
+        await saveArchived(deps.dataHome, archived)
         const gone = await adapter.deleteSession(id).catch(() => false)
         return json(res, gone ? 200 : 404, gone ? { ok: true } : { error: "couldn't delete" })
       }

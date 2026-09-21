@@ -50,6 +50,8 @@ the stream, for plain clients).
 | `POST /mcp` | `{id}` | `{servers[]}` — the MCP servers this harness will start (`{name,kind,enabled,detail}`), read from its config |
 | `POST /setmcp` | `{id,name,enabled}` | `{ok}` — enable/disable an MCP server in the harness's own config |
 | `POST /rename` | `{id,title}` | `{ok}` — a client-side title override (Telegram-style chat rename), persisted in `<DATA_HOME>/gateway-titles.json`, overlaid on `/sessions` |
+| `POST /archive` | `{id}` | `{ok,archived}` — hide a conversation from `/sessions` without deleting it; persisted in `<DATA_HOME>/gateway-archived.json` |
+| `POST /unarchive` | `{id}` | `{ok,archived}` — put it back |
 | `POST /delete` | `{id}` | `{ok}` — removes the session from the harness |
 | `POST /attach` | raw octets, `?id=<session>&name=<name>` | `{id,name}` — buffers up to 32 MB under `<DATA_HOME>/attachments`; the id feeds the next `/prompt`'s `files` |
 | `GET /stream` | — | SSE, never ends |

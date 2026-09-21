@@ -46,6 +46,8 @@ class FakeChatRepository(
     override suspend fun setSkill(sessionId: String, path: String, disabled: Boolean) = true
     override suspend fun mcp(sessionId: String): List<McpServer> = emptyList()
     override suspend fun setMcp(sessionId: String, name: String, enabled: Boolean) = true
+    override suspend fun archiveSession(sessionId: String) = true
+    override suspend fun unarchiveSession(sessionId: String) = true
     override suspend fun terminalStatus() = TerminalAccess(allowed = true, authorized = false)
     override suspend fun unlockTerminal(code: String) = true
     override suspend fun lockTerminal() = true

@@ -30,7 +30,16 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.foundation.layout.offset
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.material.icons.filled.Archive
+import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.layout.offset
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -55,6 +64,7 @@ fun SessionsScreen(
     onNew: () -> Unit,
     onRefresh: () -> Unit,
     onSettings: () -> Unit,
+    onArchive: (SessionSummary) -> Unit,
 ) {
     Scaffold(
         floatingActionButton = {
@@ -114,11 +124,54 @@ fun SessionsScreen(
             } else {
                 LazyColumn(Modifier.fillMaxSize()) {
                     items(sessions.size) { i ->
-                        SessionRow(sessions[i], onOpen)
+                        SwipeToArchive(onArchive = { onArchive(sessions[i]) }) {
+                            SessionRow(sessions[i], onOpen)
+                        }
                     }
                 }
             }
         }
+    }
+}
+
+// Swipe a row left to file it away: it follows the finger, an Archive label
+// fades in behind it, and past the threshold it's archived (hidden, not
+// deleted). Springs back otherwise.
+@Composable
+private fun SwipeToArchive(onArchive: () -> Unit, content: @Composable () -> Unit) {
+    val offset = remember { androidx.compose.animation.core.Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    val threshold = -110f
+    Box(
+        Modifier.fillMaxWidth().pointerInput(Unit) {
+            detectHorizontalDragGestures(
+                onDragEnd = {
+                    val fire = offset.value <= threshold
+                    scope.launch { offset.animateTo(0f) }
+                    if (fire) onArchive()
+                },
+                onDragCancel = { scope.launch { offset.animateTo(0f) } },
+                onHorizontalDrag = { change, drag ->
+                    change.consume()
+                    scope.launch { offset.snapTo((offset.value + drag).coerceIn(threshold - 30f, 0f)) }
+                },
+            )
+        },
+    ) {
+        if (offset.value < -1f) {
+            Row(
+                Modifier.align(Alignment.CenterEnd).padding(end = 18.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Filled.Archive, "archive", tint = MaterialTheme.colorScheme.primary)
+                Text("Archive", Modifier.padding(start = 8.dp), fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+            }
+        }
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .offset { androidx.compose.ui.unit.IntOffset(offset.value.roundToInt(), 0) },
+        ) { content() }
     }
 }
 

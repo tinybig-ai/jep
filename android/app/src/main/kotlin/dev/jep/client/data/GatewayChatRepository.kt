@@ -160,6 +160,12 @@ class GatewayChatRepository(
     override suspend fun setMcp(sessionId: String, name: String, enabled: Boolean): Boolean =
         post("/setmcp", buildJsonObject { put("id", sessionId); put("name", name); put("enabled", enabled) }.toString()).first in 200..299
 
+    override suspend fun archiveSession(sessionId: String): Boolean =
+        post("/archive", payload("id" to sessionId)).first in 200..299
+
+    override suspend fun unarchiveSession(sessionId: String): Boolean =
+        post("/unarchive", payload("id" to sessionId)).first in 200..299
+
     override suspend fun terminalStatus(): TerminalAccess {
         val r = decode("/term", TermStatusRes.serializer(), "{}")
         return TerminalAccess(r.allowed, r.authorized)

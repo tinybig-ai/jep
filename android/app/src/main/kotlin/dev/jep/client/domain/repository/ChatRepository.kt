@@ -96,6 +96,10 @@ interface ChatRepository {
     suspend fun usage(sessionId: String): Usage
     /** files the conversation has changed */
     suspend fun diff(sessionId: String): List<FileDiff>
+    /** hide a conversation from the list without deleting it */
+    suspend fun archiveSession(sessionId: String): Boolean
+    /** put an archived conversation back in the list */
+    suspend fun unarchiveSession(sessionId: String): Boolean
     /** the skills this conversation's harness loads */
     suspend fun skills(sessionId: String): SkillSet
     /** hide (or allow) a skill for the model, by its SKILL.md path */

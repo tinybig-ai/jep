@@ -74,6 +74,7 @@ fun JepApp(app: AppViewModel) {
             onNew = { app.openNewChat() },
             onRefresh = { app.refresh() },
             onSettings = { app.openSettings() },
+            onArchive = { app.archive(it) },
         )
     }
 }

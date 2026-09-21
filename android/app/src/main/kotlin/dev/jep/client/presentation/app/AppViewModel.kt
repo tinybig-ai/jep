@@ -196,6 +196,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // swipe-to-archive: hide it from the list, leave the harness untouched
+    fun archive(session: SessionSummary) {
+        val r = repo ?: return
+        _sessions.value = _sessions.value.filterNot { it.id == session.id }
+        viewModelScope.launch {
+            runCatching { r.archiveSession(session.id) }
+                .onFailure { _notice.value = "couldn't archive: ${it.message}"; refresh() }
+        }
+    }
+
     fun open(session: SessionSummary) {
         // `adapter` is the workspace's friendly name; fall back to the folder
         // name of the path when an older listing didn't carry it
