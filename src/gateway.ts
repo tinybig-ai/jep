@@ -35,6 +35,7 @@ export interface GatewayHandle {
 
 const TOKEN_FILE = "gateway-tokens.json"
 const TITLES_FILE = "gateway-titles.json"
+const MODELS_FILE = "gateway-models.json"
 const BODY_MAX = 1 << 20
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -71,6 +72,24 @@ async function loadTitles(dataHome: string): Promise<Map<string, string>> {
 const saveTitles = async (dataHome: string, titles: Map<string, string>): Promise<void> => {
   await mkdir(dataHome, { recursive: true })
   await writeFile(join(dataHome, TITLES_FILE), JSON.stringify(Object.fromEntries(titles), null, 1))
+}
+
+// The model a conversation runs on is a client concern here too: the phone
+// picks one per session from Settings, and the gateway remembers it (persisted,
+// like the titles) so the choice survives the app closing and applies to the
+// next prompt. Default is no override — the harness's own model.
+async function loadModels(dataHome: string): Promise<Map<string, string>> {
+  try {
+    const raw = JSON.parse(await readFile(join(dataHome, MODELS_FILE), "utf8")) as Record<string, string>
+    return new Map(Object.entries(raw))
+  } catch {
+    return new Map()
+  }
+}
+
+const saveModels = async (dataHome: string, models: Map<string, string>): Promise<void> => {
+  await mkdir(dataHome, { recursive: true })
+  await writeFile(join(dataHome, MODELS_FILE), JSON.stringify(Object.fromEntries(models), null, 1))
 }
 
 /** keep a phone-supplied leaf filename from walking out of the uploads dir */
@@ -126,6 +145,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   const pairCode = deps.pairCode ?? newPairCode()
   let tokens = await loadTokens(deps.dataHome)
   const titles = await loadTitles(deps.dataHome)
+  const models = await loadModels(deps.dataHome)
 
   // help-files the phone needs, resolved as events and commands arrive
   const sessionAdapters = new Map<string, HarnessAdapter>()
@@ -289,12 +309,31 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         return json(res, 200, { items })
       }
 
+      // what the phone may create a conversation in: each served workspace and
+      // the harness behind it, so creation-time selection has a live list
+      if (path === "/workspaces") {
+        const items = deps.adapters().map(({ name, adapter }) => ({ name, harness: adapter.id }))
+        return json(res, 200, { items })
+      }
+
       if (path === "/new") {
-        const { adapter } = deps.adapters()[0] ?? {}
-        if (!adapter) return json(res, 503, { error: "no workspace is being served" })
         const title = str("title")
-        const s = await adapter.createSession(title || undefined)
-        sessionAdapters.set(s.id, adapter)
+        const wantWorkspace = str("workspace")
+        const wantHarness = str("harness")
+        const all = deps.adapters()
+        // creation-time selection: name a workspace (and/or a harness) and the
+        // conversation is created in it; with neither, the first served one,
+        // which is the pre-selection behaviour
+        const picked =
+          wantWorkspace || wantHarness
+            ? all.find(
+                ({ name, adapter }) =>
+                  (!wantWorkspace || name === wantWorkspace) && (!wantHarness || adapter.id === wantHarness),
+              )
+            : all[0]
+        if (!picked) return json(res, 400, { error: "no such workspace or harness" })
+        const s = await picked.adapter.createSession(title || undefined)
+        sessionAdapters.set(s.id, picked.adapter)
         return json(res, 200, { session: s })
       }
 
@@ -322,6 +361,24 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         return json(res, gone ? 200 : 404, gone ? { ok: true } : { error: "couldn't delete" })
       }
 
+      // the pickable models for this conversation's harness, plus the one it is
+      // currently set to (null = the harness default). Powers the phone's
+      // Settings screen, mirroring Telegram's model picker.
+      if (path === "/models") {
+        const list = adapter.models ? await adapter.models().catch(() => []) : []
+        return json(res, 200, { models: list, current: models.get(id) ?? null })
+      }
+
+      // set (or clear, with no model) this conversation's model. Persisted, and
+      // applied to the next prompt — the choice outlives the app.
+      if (path === "/setmodel") {
+        const ref = str("model")
+        if (ref) models.set(id, ref)
+        else models.delete(id)
+        await saveModels(deps.dataHome, models)
+        return json(res, 200, { ok: true, model: ref || null })
+      }
+
       if (path === "/history") {
         const limit = typeof b.limit === "number" ? Math.max(0, Math.floor(b.limit)) : 0
         const before = typeof b.before === "number" ? b.before : 0
@@ -341,9 +398,13 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         if (active.has(id)) return json(res, 409, { error: "busy" })
         const files: string[] = Array.isArray(b.files) ? b.files.filter((f): f is string => typeof f === "string") : []
         const filePaths = files.map((fid) => attachments.get(fid)?.path).filter((p): p is string => Boolean(p))
+        // this conversation's chosen model, if the phone set one in Settings
+        const ref = models.get(id)
+        const [providerID = "", modelID = ""] = ref ? ref.split("/") : []
+        const model = providerID && modelID ? { providerID, modelID } : undefined
         active.add(id)
         try {
-          const message = await adapter.prompt(id, text, { filePaths })
+          const message = await adapter.prompt(id, text, { filePaths, ...(model ? { model } : {}) })
           return json(res, 200, { message })
         } catch (err) {
           return json(res, 502, { error: String((err as Error)?.message ?? err) })

@@ -44,9 +44,6 @@ async prompt(_sessionID, text) {
     async messages() {
       return [{ id: "m0", sessionID: "s1", role: "user", time: 1, parts: [{ kind: "text", text: "hi" }] }]
     },
-    async deleteSession() {
-      return true
-    },
     async abort() {
       return true
     },
@@ -203,6 +200,67 @@ test("rename overlays a client-side title; delete removes; attach feeds the next
 
     const del = await fetch(`${base}/delete`, { method: "POST", headers, body: JSON.stringify({ id: "s1" }) })
     assert.equal(del.status, 200)
+  } finally {
+    await g.close()
+  }
+})
+
+test("workspaces list, /new selects the named one, and a set model flows into the prompt", async () => {
+  const a = fakeAdapter()
+  const b = fakeAdapter()
+  // give the second adapter its own identity so selection is observable
+  ;(b as { id: string }).id = "other"
+  let createdIn = ""
+  a.createSession = async () => {
+    createdIn = "a"
+    return { id: "sa", title: "", workspace: "a-ws", createdAt: 1, updatedAt: 1 }
+  }
+  b.createSession = async () => {
+    createdIn = "b"
+    return { id: "sb", title: "", workspace: "b-ws", createdAt: 1, updatedAt: 1 }
+  }
+  let promptedModel: { providerID: string; modelID: string } | undefined
+  b.prompt = async (_id, text, opts) => {
+    promptedModel = opts?.model
+    return { id: "m1", sessionID: "sb", role: "assistant", time: 1, parts: [{ kind: "text", text }] }
+  }
+  b.models = async () => [{ providerID: "open", modelID: "big" }]
+  const g = await startGateway({
+    adapters: () => [{ name: "a-ws", adapter: a }, { name: "b-ws", adapter: b }],
+    dataHome: mkdtempSync(join(tmpdir(), "gw-test-")),
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+  })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const token = await pair(base, "TESTCODE")
+    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" }
+
+    const ws = await fetch(`${base}/workspaces`, { method: "POST", headers })
+    const { items } = (await ws.json()) as { items: Array<{ name: string; harness: string }> }
+    assert.deepEqual(items, [
+      { name: "a-ws", harness: "fake" },
+      { name: "b-ws", harness: "other" },
+    ])
+
+    // creation-time selection: naming the workspace picks its adapter
+    const nw = await fetch(`${base}/new`, { method: "POST", headers, body: JSON.stringify({ workspace: "b-ws" }) })
+    const { session } = (await nw.json()) as { session: SessionSummary }
+    assert.equal(createdIn, "b")
+    assert.equal(session.id, "sb")
+
+    const models = await fetch(`${base}/models`, { method: "POST", headers, body: JSON.stringify({ id: "sb" }) })
+    const before = (await models.json()) as { models: Array<{ modelID: string }>; current: string | null }
+    assert.equal(before.current, null)
+    assert.equal(before.models[0]?.modelID, "big")
+
+    await fetch(`${base}/setmodel`, { method: "POST", headers, body: JSON.stringify({ id: "sb", model: "open/big" }) })
+    const after = await fetch(`${base}/models`, { method: "POST", headers, body: JSON.stringify({ id: "sb" }) })
+    assert.equal(((await after.json()) as { current: string | null }).current, "open/big")
+
+    await fetch(`${base}/prompt`, { method: "POST", headers, body: JSON.stringify({ id: "sb", text: "hi" }) })
+    assert.deepEqual(promptedModel, { providerID: "open", modelID: "big" })
   } finally {
     await g.close()
   }
