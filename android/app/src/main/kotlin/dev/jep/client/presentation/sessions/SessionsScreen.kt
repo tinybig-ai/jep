@@ -16,11 +16,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.DataObject
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SmartToy
-import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
@@ -33,7 +30,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
+import dev.jep.client.R
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.jep.client.domain.model.SessionSummary
@@ -90,57 +89,67 @@ fun SessionsScreen(
 
 @Composable
 private fun SessionRow(session: SessionSummary, onOpen: (SessionSummary) -> Unit) {
-    Column(
+    Row(
         Modifier.fillMaxWidth()
             .clickable { onOpen(session) }
             .padding(horizontal = 18.dp, vertical = 13.dp),
-        verticalArrangement = Arrangement.spacedBy(3.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        HarnessAvatar(session.harness)
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    session.title.ifEmpty { "Untitled" },
+                    Modifier.weight(1f),
+                    fontSize = 16.sp,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    maxLines = 1,
+                )
+                Text(
+                    ago(session.updatedAt),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Text(
-                session.title.ifEmpty { "Untitled" },
-                Modifier.weight(1f),
-                fontSize = 16.sp,
-                color = MaterialTheme.colorScheme.onBackground,
+                // the workspace's friendly name and its harness, not the raw path
+                listOfNotNull(session.adapter ?: session.workspace.substringAfterLast('/').ifBlank { null }, session.harness)
+                    .joinToString(" · "),
+                fontSize = 13.sp,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
             )
-            Text(
-                ago(session.updatedAt),
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.width(10.dp))
-            HarnessBadge(session.harness)
         }
-        Text(
-            // the workspace's friendly name and its harness, not the raw path
-            listOfNotNull(session.adapter ?: session.workspace.substringAfterLast('/').ifBlank { null }, session.harness)
-                .joinToString(" · "),
-            fontSize = 13.sp,
-            fontFamily = FontFamily.Monospace,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-        )
     }
 }
 
-// The avatar for a conversation is the harness behind it. A harness names its
-// own mark by id; unknown harnesses fall back to a generic one, so a new
-// adapter is never a blank row. (Until adapters can ship artwork, these are
-// glyphs the client owns.)
+// The conversation's avatar is the harness behind it: the real brand mark,
+// monochromised to one colour and tinted, so it sits quietly beside the title.
+// An unknown harness falls back to a generic glyph rather than a blank circle.
 @Composable
-private fun HarnessBadge(harness: String?) {
-    val icon = when (harness) {
-        "opencode" -> Icons.Filled.Terminal
-        "codex" -> Icons.Filled.DataObject
-        "claude" -> Icons.Filled.AutoAwesome
-        else -> Icons.Filled.SmartToy
+private fun HarnessAvatar(harness: String?) {
+    val mark = when (harness) {
+        "opencode" -> R.drawable.ic_harness_opencode
+        "codex" -> R.drawable.ic_harness_codex
+        "claude" -> R.drawable.ic_harness_claude
+        else -> null
     }
     Box(
-        Modifier.size(32.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceContainer),
+        Modifier.size(34.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceContainer),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, harness ?: "harness", Modifier.size(17.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (mark != null) {
+            Icon(
+                painterResource(mark),
+                harness ?: "harness",
+                Modifier.size(19.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            Icon(Icons.Filled.SmartToy, harness ?: "harness", Modifier.size(19.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 
