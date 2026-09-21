@@ -26,8 +26,10 @@ export function opencodeSessionImport(opts: { bin: string; from: string; into: s
       const out: ImportableSession[] = []
       try {
         const db = new DatabaseSync(dbPath(opts.from), { readOnly: true })
+        // parent_id IS NULL: a subagent's session is a child of the turn that
+        // spawned it, not a conversation you'd want to bring over
         const rows = db
-          .prepare("SELECT id, title, directory, time_updated FROM session ORDER BY time_updated DESC")
+          .prepare("SELECT id, title, directory, time_updated FROM session WHERE parent_id IS NULL ORDER BY time_updated DESC")
           .all() as Array<Record<string, unknown>>
         db.close()
         for (const r of rows) {

@@ -47,6 +47,7 @@ class FakeChatRepository(
     override suspend fun setSkill(sessionId: String, path: String, disabled: Boolean) = true
     override suspend fun mcp(sessionId: String): List<McpServer> = emptyList()
     override suspend fun setMcp(sessionId: String, name: String, enabled: Boolean) = true
+    override suspend fun subagents(sessionId: String): List<SessionSummary> = emptyList()
     override suspend fun importableSessions(): List<ImportableSession> = emptyList()
     override suspend fun importSession(sessionId: String) = true
     override suspend fun archiveSession(sessionId: String) = true

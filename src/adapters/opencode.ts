@@ -357,7 +357,27 @@ export class OpenCodeAdapter implements HarnessAdapter {
   // need to filter by directory itself to get that.
   async listSessions(): Promise<SessionSummary[]> {
     const sessions = await this.#json<any[]>("/session")
-    return sessions.map((s) => this.#toSummary(s))
+    // a session with a parent is a subagent the model spawned for a sub-task —
+    // an implementation detail of somebody else's turn, never something you
+    // meant to open, so it never lists (the codex adapter does the same). The
+    // parent still reports how many it has, and they're reachable from there.
+    const children = new Map<string, number>()
+    for (const s of sessions) {
+      const parent = s?.parentID ?? s?.parent_id
+      if (parent) children.set(String(parent), (children.get(String(parent)) ?? 0) + 1)
+    }
+    return sessions
+      .filter((s) => !(s?.parentID ?? s?.parent_id))
+      .map((s) => ({ ...this.#toSummary(s), subagents: children.get(String(s.id)) ?? 0 }))
+  }
+
+  async subagents(sessionID: string): Promise<SessionSummary[]> {
+    const native = toNativeId(sessionID)
+    const sessions = await this.#json<any[]>("/session")
+    return sessions
+      .filter((s) => String(s?.parentID ?? s?.parent_id ?? "") === native)
+      .sort((a, b) => (a?.time?.created ?? 0) - (b?.time?.created ?? 0))
+      .map((s) => this.#toSummary(s))
   }
 
   // GET /project: every project this data home knows of, regardless of

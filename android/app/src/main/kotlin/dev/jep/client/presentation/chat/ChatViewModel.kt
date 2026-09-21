@@ -13,6 +13,7 @@ import dev.jep.client.domain.repository.ChatRepository
 import dev.jep.client.domain.repository.ModelChoices
 import dev.jep.client.domain.model.FileDiff
 import dev.jep.client.domain.model.McpServer
+import dev.jep.client.domain.model.SessionSummary
 import dev.jep.client.domain.model.SkillSet
 import dev.jep.client.domain.model.Usage
 import dev.jep.client.domain.model.Role
@@ -75,6 +76,8 @@ class ChatViewModel(
         val usage: Usage? = null,
         /** loaded on demand for the Changes panel */
         val diffs: List<FileDiff>? = null,
+        /** subagent sessions of this conversation, loaded on demand */
+        val subagents: List<SessionSummary>? = null,
         /** loaded on demand for the Settings panel */
         val skills: SkillSet? = null,
         val mcp: List<McpServer>? = null,
@@ -310,6 +313,16 @@ class ChatViewModel(
 
     suspend fun termClose() {
         runCatching { repo.termClose(sessionId) }
+    }
+
+    // the subagent sessions this conversation spawned — reached from here, not
+    // listed on their own
+    fun loadSubagents() {
+        viewModelScope.launch {
+            runCatching { repo.subagents(sessionId) }
+                .onSuccess { subs -> _state.update { it.copy(subagents = subs) } }
+                .onFailure { err -> _state.update { it.copy(notice = "couldn't load subagents: ${err.message}") } }
+        }
     }
 
     // Settings › skills / MCP: what the harness loads. Read from the harness's

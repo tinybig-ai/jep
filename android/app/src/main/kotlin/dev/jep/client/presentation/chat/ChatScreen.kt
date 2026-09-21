@@ -43,6 +43,7 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowDropUp
+import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Build
@@ -118,6 +119,7 @@ import kotlin.math.roundToLong
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
 import dev.jep.client.domain.model.Role
+import dev.jep.client.domain.model.SessionSummary
 import dev.jep.client.domain.model.ToolStatus
 import dev.jep.client.domain.repository.ModelChoices
 
@@ -133,6 +135,7 @@ fun ChatScreen(
     onNew: () -> Unit,
     onForgetPairing: () -> Unit,
     terminalEnabled: Boolean = false,
+    onOpenSession: (SessionSummary) -> Unit = {},
 ) {
     val state by vm.state.collectAsState()
 
@@ -194,6 +197,7 @@ fun ChatScreen(
     var skillsView by remember { mutableStateOf(false) }
     var mcpView by remember { mutableStateOf(false) }
     var termVisible by remember { mutableStateOf(false) }
+    var subsOpen by remember { mutableStateOf(false) }
 
     Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
@@ -247,6 +251,11 @@ fun ChatScreen(
                                 onClick = { menu = false; termVisible = true },
                             )
                         }
+                        DropdownMenuItem(
+                            text = { Text("Subagents") },
+                            leadingIcon = { Icon(Icons.Filled.AccountTree, null) },
+                            onClick = { menu = false; subsOpen = true },
+                        )
                         DropdownMenuItem(
                             text = { Text("Rename") },
                             leadingIcon = { Icon(Icons.Filled.Edit, null) },
@@ -357,6 +366,7 @@ fun ChatScreen(
         Composer(vm, replyTo) { replyTo = null }
     }
     if (termVisible) TerminalOverlay(vm, onClose = { termVisible = false })
+    if (subsOpen) SubagentsDialog(vm, onOpen = { onOpenSession(it); subsOpen = false }, onDismiss = { subsOpen = false })
     }
 
     if (renameOpen) RenameDialog(
@@ -604,6 +614,40 @@ private fun McpBody(vm: ChatViewModel) {
             }
         }
     }
+}
+
+// The subagent sessions this conversation spawned: a subagent never lists on
+// its own, so this is the way to them — from the conversation that made them.
+@Composable
+private fun SubagentsDialog(vm: ChatViewModel, onOpen: (SessionSummary) -> Unit, onDismiss: () -> Unit) {
+    val state by vm.state.collectAsState()
+    LaunchedEffect(Unit) { vm.loadSubagents() }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Subagents") },
+        text = {
+            val subs = state.subagents
+            when {
+                subs == null -> LoadingLine()
+                subs.isEmpty() -> Text("No subagents — this conversation didn't spawn any.", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                else -> Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                    subs.forEach { s ->
+                        Column(Modifier.fillMaxWidth().clickable { onOpen(s) }.padding(vertical = 10.dp)) {
+                            Text(s.title.ifBlank { s.id }, fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
+                            Text(
+                                s.workspace.substringAfterLast('/'),
+                                fontSize = 12.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Done") } },
+    )
 }
 
 // The terminal fills this window rather than a Dialog — a Dialog is its own

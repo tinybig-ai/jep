@@ -162,6 +162,9 @@ class GatewayChatRepository(
     override suspend fun setMcp(sessionId: String, name: String, enabled: Boolean): Boolean =
         post("/setmcp", buildJsonObject { put("id", sessionId); put("name", name); put("enabled", enabled) }.toString()).first in 200..299
 
+    override suspend fun subagents(sessionId: String): List<SessionSummary> =
+        decode("/subagents", SessionsRes.serializer(), payload("id" to sessionId)).items.map { it.toDomain() }
+
     override suspend fun importableSessions(): List<ImportableSession> =
         decode("/importable", ImportableRes.serializer(), "{}").sessions.map { it.toDomain() }
 

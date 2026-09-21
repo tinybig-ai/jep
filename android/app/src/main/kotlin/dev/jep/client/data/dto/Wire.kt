@@ -14,6 +14,7 @@ data class PairRes(val token: String)
 data class SessionDto(
     val id: String,
     val title: String = "",
+    val subagents: Int = 0,
     val workspace: String = "",
     val createdAt: Long = 0,
     val updatedAt: Long = 0,

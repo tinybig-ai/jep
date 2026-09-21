@@ -8,6 +8,11 @@ export interface SessionSummary {
   // last activity, for "most recently active" ordering — falls back to
   // createdAt when the harness doesn't report it separately
   updatedAt: number
+  // subagent sessions this one spawned. They never list on their own (a
+  // subagent is an implementation detail, not something you meant to open),
+  // but the count is worth showing, and they're reachable from the
+  // conversation. Undefined/0 when the harness has no such notion.
+  subagents?: number
 }
 
 // a harness-level grouping sessions belong to (opencode: the enclosing git

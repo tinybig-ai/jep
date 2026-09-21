@@ -101,6 +101,8 @@ interface ChatRepository {
     suspend fun importableSessions(): List<ImportableSession>
     /** fork one of those into jep: export from their store, import into jep's */
     suspend fun importSession(sessionId: String): Boolean
+    /** the subagent sessions a conversation spawned, oldest first */
+    suspend fun subagents(sessionId: String): List<SessionSummary>
     /** hide a conversation from the list without deleting it */
     suspend fun archiveSession(sessionId: String): Boolean
     /** put an archived conversation back in the list */

@@ -12,6 +12,8 @@ data class SessionSummary(
     val adapter: String? = null,
     /** the engine behind it (opencode/codex/claude) — display-only */
     val harness: String? = null,
+    /** subagent sessions this one spawned (0 = none, or the harness has none) */
+    val subagents: Int = 0,
 )
 
 /** a workspace the gateway serves, the harness (opencode/codex/…) behind it,

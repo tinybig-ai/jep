@@ -674,6 +674,13 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         return json(res, 200, { usage: usageOf(await cachedMessages(adapter, id)) })
       }
 
+      // the subagent sessions this conversation spawned — reached from the
+      // conversation, never listed on their own
+      if (path === "/subagents") {
+        const sessions = adapter.subagents ? await adapter.subagents(id).catch(() => []) : []
+        return json(res, 200, { sessions })
+      }
+
       // the files this conversation has changed, so the phone can show them
       if (path === "/diff") {
         const files = adapter.diff ? await adapter.diff(id).catch(() => []) : []

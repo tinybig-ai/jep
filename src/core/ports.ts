@@ -36,6 +36,10 @@ export interface HarnessAdapter {
   createSession(title?: string): Promise<SessionSummary>
   getSession(id: string): Promise<SessionSummary | null>
   listSessions(): Promise<SessionSummary[]>
+  /** the subagent sessions a conversation spawned, when the harness has them.
+   * They are filtered out of listSessions (counted there instead) and reached
+   * from the conversation itself. */
+  subagents?(sessionID: string): Promise<SessionSummary[]>
   prompt(
     sessionID: string,
     text: string,

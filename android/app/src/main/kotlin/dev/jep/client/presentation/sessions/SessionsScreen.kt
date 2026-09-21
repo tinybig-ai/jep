@@ -280,9 +280,13 @@ private fun SessionRow(session: SessionSummary, onOpen: (SessionSummary) -> Unit
                 )
             }
             Text(
-                // the workspace's friendly name and its harness, not the raw path
-                listOfNotNull(session.adapter ?: session.workspace.substringAfterLast('/').ifBlank { null }, session.harness)
-                    .joinToString(" · "),
+                // workspace, harness, and — when it spawned any — how many
+                // subagents it has (they're reachable from the conversation)
+                (
+                    listOfNotNull(session.adapter ?: session.workspace.substringAfterLast('/').ifBlank { null }, session.harness)
+                        .joinToString(" · ") +
+                        if (session.subagents > 0) "  ·  ${session.subagents} subagent" + (if (session.subagents == 1) "" else "s") else ""
+                    ),
                 fontSize = 13.sp,
                 fontFamily = FontFamily.Monospace,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
