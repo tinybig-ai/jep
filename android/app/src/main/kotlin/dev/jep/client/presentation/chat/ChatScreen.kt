@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -611,7 +612,11 @@ private fun McpBody(vm: ChatViewModel) {
 @Composable
 private fun TerminalOverlay(vm: ChatViewModel, onClose: () -> Unit) {
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-        Column(Modifier.fillMaxSize().imePadding()) {
+        // statusBarsPadding: the row would sit under the clock otherwise.
+        // imePadding: the whole canvas shrinks for the keyboard, and because the
+        // terminal body is weighted it gives up its own height — the text stops
+        // falling behind the keyboard instead of keeping its size.
+        Column(Modifier.fillMaxSize().statusBarsPadding().imePadding()) {
             Row(
                 Modifier.fillMaxWidth().padding(start = 4.dp, top = 6.dp, bottom = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -619,7 +624,7 @@ private fun TerminalOverlay(vm: ChatViewModel, onClose: () -> Unit) {
                 IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "back") }
                 Text("Terminal", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(start = 4.dp))
             }
-            TerminalBody(vm)
+            TerminalBody(vm, Modifier.weight(1f))
         }
     }
 }
@@ -628,7 +633,7 @@ private fun TerminalOverlay(vm: ChatViewModel, onClose: () -> Unit) {
 // when this view closes and reattaches when it reopens. Here we show its screen
 // and feed it keystrokes.
 @Composable
-private fun TerminalBody(vm: ChatViewModel) {
+private fun TerminalBody(vm: ChatViewModel, modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
     var frame by remember { mutableStateOf("") }
     val draft = remember { mutableStateOf("") }
@@ -639,7 +644,7 @@ private fun TerminalBody(vm: ChatViewModel) {
             delay(700)
         }
     }
-    Column(Modifier.fillMaxSize()) {
+    Column(modifier.fillMaxWidth()) {
         Text(
             frame.trimEnd('\n'),
             Modifier.weight(1f).fillMaxWidth()
