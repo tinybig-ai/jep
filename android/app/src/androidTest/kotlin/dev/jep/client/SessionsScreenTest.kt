@@ -24,7 +24,7 @@ class SessionsScreenTest {
             SessionSummary("s2", "Other", "", 0, 0, "morsel", "codex"),
         )
         rule.setContent {
-            SessionsScreen(rows, busy = false, notice = null, onOpen = {}, onNew = {}, onRefresh = {}, onSettings = {}, onArchive = {})
+            SessionsScreen(rows, busy = false, notice = null, onOpen = {}, onNew = {}, onRefresh = {}, onSettings = {}, onArchive = {}, importable = emptyList(), onLoadImportable = {}, onImport = {})
         }
         rule.onNodeWithContentDescription("opencode").assertExists()
         rule.onNodeWithContentDescription("codex").assertExists()
@@ -33,7 +33,7 @@ class SessionsScreenTest {
     @Test
     fun the_title_names_the_app_and_a_cold_load_spins() {
         rule.setContent {
-            SessionsScreen(emptyList(), busy = true, notice = null, onOpen = {}, onNew = {}, onRefresh = {}, onSettings = {}, onArchive = {})
+            SessionsScreen(emptyList(), busy = true, notice = null, onOpen = {}, onNew = {}, onRefresh = {}, onSettings = {}, onArchive = {}, importable = emptyList(), onLoadImportable = {}, onImport = {})
         }
         rule.onNodeWithText("Jep").assertExists()
         rule.onNodeWithContentDescription("loading conversations").assertExists()

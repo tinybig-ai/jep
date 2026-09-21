@@ -74,6 +74,9 @@ fun JepApp(app: AppViewModel) {
             onNew = { app.openNewChat() },
             onRefresh = { app.refresh() },
             onSettings = { app.openSettings() },
+            importable = app.importable.collectAsState().value,
+            onLoadImportable = { app.loadImportable() },
+            onImport = { app.importSession(it.id) },
             onArchive = { app.archive(it) },
         )
     }

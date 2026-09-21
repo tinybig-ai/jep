@@ -5,6 +5,7 @@ import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
 import dev.jep.client.domain.model.FileDiff
 import dev.jep.client.domain.model.Harnesses
+import dev.jep.client.domain.model.ImportableSession
 import dev.jep.client.domain.model.McpServer
 import dev.jep.client.domain.model.Model
 import dev.jep.client.domain.model.Role
@@ -46,6 +47,8 @@ class FakeChatRepository(
     override suspend fun setSkill(sessionId: String, path: String, disabled: Boolean) = true
     override suspend fun mcp(sessionId: String): List<McpServer> = emptyList()
     override suspend fun setMcp(sessionId: String, name: String, enabled: Boolean) = true
+    override suspend fun importableSessions(): List<ImportableSession> = emptyList()
+    override suspend fun importSession(sessionId: String) = true
     override suspend fun archiveSession(sessionId: String) = true
     override suspend fun unarchiveSession(sessionId: String) = true
     override suspend fun terminalStatus() = TerminalAccess(allowed = true, authorized = false)

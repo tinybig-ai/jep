@@ -403,6 +403,18 @@ async function main() {
         return { name: ws.name, adapter: ws.adapter }
       },
       browseRoot: process.env.JEP_BROWSE_ROOT,
+      // an import lands in the store, but a running opencode server won't list
+      // it until it comes up again — so restart the one serving that directory
+      restartWorkspace: async (dir) => {
+        const i = workspaces.findIndex((w) => w.dir === dir)
+        if (i < 0) return
+        const old = workspaces[i]!
+        await old.adapter.close().catch(() => {})
+        const fresh = await spawnWorkspace(dir, old.adapter.id)
+        // keep the name the gateway/client already knows
+        workspaces[i] = { name: old.name, dir, adapter: fresh.adapter }
+        console.error(`[ws] restarted ${old.adapter.id} for ${dir} (import)`)
+      },
       dataHome: DATA_HOME,
       port: Number(process.env.JEP_GW_PORT),
       pairCode: process.env.JEP_GW_PAIR_CODE,

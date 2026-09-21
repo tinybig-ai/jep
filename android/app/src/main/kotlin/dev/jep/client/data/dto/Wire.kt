@@ -158,6 +158,17 @@ data class TermStatusRes(val allowed: Boolean = false, val authorized: Boolean =
 data class TermFrameRes(val text: String = "")
 
 @Serializable
+data class ImportableDto(
+    val id: String = "",
+    val title: String = "",
+    val directory: String = "",
+    val updated: Long = 0,
+)
+
+@Serializable
+data class ImportableRes(val sessions: List<ImportableDto> = emptyList())
+
+@Serializable
 data class UsageDto(
     val input: Long = 0,
     val output: Long = 0,

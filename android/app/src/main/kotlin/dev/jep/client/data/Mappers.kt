@@ -4,6 +4,7 @@ import dev.jep.client.data.dto.AskDto
 import dev.jep.client.data.dto.BrowseRes
 import dev.jep.client.data.dto.DirEntryDto
 import dev.jep.client.data.dto.FileDiffDto
+import dev.jep.client.data.dto.ImportableDto
 import dev.jep.client.data.dto.McpDto
 import dev.jep.client.data.dto.MessageDto
 import dev.jep.client.data.dto.ModelDto
@@ -21,6 +22,7 @@ import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
 import dev.jep.client.domain.model.DirEntry
 import dev.jep.client.domain.model.FileDiff
+import dev.jep.client.domain.model.ImportableSession
 import dev.jep.client.domain.model.McpServer
 import dev.jep.client.domain.model.Model
 import dev.jep.client.domain.model.Role
@@ -45,6 +47,8 @@ fun SkillDto.toDomain() = Skill(name, description, scope, path, disableModelInvo
 fun SkillsRes.toDomain() = SkillSet(skills.map { it.toDomain() }, toggleable)
 
 fun McpDto.toDomain() = McpServer(name, kind, enabled, detail)
+
+fun ImportableDto.toDomain() = ImportableSession(id, title, directory, updated)
 
 fun BrowseRes.toDomain() = BrowseResult(cwd, root, parent, dirs.map { it.toDomain() })
 

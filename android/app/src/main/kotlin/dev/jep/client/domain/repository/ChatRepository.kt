@@ -6,6 +6,7 @@ import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
 import dev.jep.client.domain.model.FileDiff
 import dev.jep.client.domain.model.Harnesses
+import dev.jep.client.domain.model.ImportableSession
 import dev.jep.client.domain.model.McpServer
 import dev.jep.client.domain.model.Model
 import dev.jep.client.domain.model.Role
@@ -96,6 +97,10 @@ interface ChatRepository {
     suspend fun usage(sessionId: String): Usage
     /** files the conversation has changed */
     suspend fun diff(sessionId: String): List<FileDiff>
+    /** sessions in the user's own opencode (served dirs) that jep doesn't have */
+    suspend fun importableSessions(): List<ImportableSession>
+    /** fork one of those into jep: export from their store, import into jep's */
+    suspend fun importSession(sessionId: String): Boolean
     /** hide a conversation from the list without deleting it */
     suspend fun archiveSession(sessionId: String): Boolean
     /** put an archived conversation back in the list */

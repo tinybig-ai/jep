@@ -37,7 +37,15 @@ import androidx.compose.material.icons.filled.Archive
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import dev.jep.client.domain.model.ImportableSession
 import androidx.compose.foundation.layout.offset
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -65,7 +73,12 @@ fun SessionsScreen(
     onRefresh: () -> Unit,
     onSettings: () -> Unit,
     onArchive: (SessionSummary) -> Unit,
+    importable: List<ImportableSession>?,
+    onLoadImportable: () -> Unit,
+    onImport: (ImportableSession) -> Unit,
 ) {
+    var importOpen by remember { mutableStateOf(false) }
+    var confirmImport by remember { mutableStateOf<ImportableSession?>(null) }
     Scaffold(
         floatingActionButton = {
             ExtendedFloatingActionButton(
@@ -97,6 +110,9 @@ fun SessionsScreen(
                             Modifier.size(18.dp).padding(end = 6.dp),
                             strokeWidth = 2.dp,
                         )
+                    }
+                    IconButton(onClick = { importOpen = true; onLoadImportable() }) {
+                        Icon(Icons.Filled.Link, "import a session", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     IconButton(onClick = onSettings) {
                         Icon(Icons.Filled.Settings, "settings", tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -132,6 +148,66 @@ fun SessionsScreen(
             }
         }
     }
+    if (importOpen) ImportDialog(
+        importable,
+        onPick = { confirmImport = it; importOpen = false },
+        onDismiss = { importOpen = false },
+    )
+    confirmImport?.let { sel ->
+        AlertDialog(
+            onDismissRequest = { confirmImport = null },
+            title = { Text("Fork to jep?") },
+            text = {
+                Text(
+                    "\"${sel.title.ifBlank { sel.id }}\" is copied into jep as its own conversation. " +
+                        "The original stays where it is, and the copy won't follow later changes there.",
+                    fontSize = 13.sp,
+                )
+            },
+            confirmButton = { TextButton(onClick = { onImport(sel); confirmImport = null }) { Text("Fork") } },
+            dismissButton = { TextButton(onClick = { confirmImport = null }) { Text("Cancel") } },
+        )
+    }
+}
+
+// The sessions your own opencode has (in a folder jep serves) that jep doesn't:
+// pick one to fork in.
+@Composable
+private fun ImportDialog(
+    sessions: List<ImportableSession>?,
+    onPick: (ImportableSession) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Import a session") },
+        text = {
+            when {
+                sessions == null -> Text("Looking…", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                sessions.isEmpty() -> Text(
+                    "Nothing to import — no sessions in your opencode that jep doesn't already have.",
+                    fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                else -> LazyColumn(Modifier.heightIn(max = 420.dp)) {
+                    items(sessions.size) { i ->
+                        val s = sessions[i]
+                        Column(Modifier.fillMaxWidth().clickable { onPick(s) }.padding(vertical = 10.dp)) {
+                            Text(s.title.ifBlank { s.id }, fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
+                            Text(
+                                s.directory.substringAfterLast('/'),
+                                fontSize = 12.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
 }
 
 // Swipe a row left to file it away: it follows the finger, an Archive label

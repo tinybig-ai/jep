@@ -7,6 +7,7 @@ import dev.jep.client.data.dto.DiffRes
 import dev.jep.client.data.dto.ErrorDto
 import dev.jep.client.data.dto.HarnessesRes
 import dev.jep.client.data.dto.HistoryRes
+import dev.jep.client.data.dto.ImportableRes
 import dev.jep.client.data.dto.McpRes
 import dev.jep.client.data.dto.MessageRes
 import dev.jep.client.data.dto.ModelsRes
@@ -26,6 +27,7 @@ import dev.jep.client.domain.model.BrowseResult
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.FileDiff
 import dev.jep.client.domain.model.Harnesses
+import dev.jep.client.domain.model.ImportableSession
 import dev.jep.client.domain.model.McpServer
 import dev.jep.client.domain.repository.ChatRepository
 import dev.jep.client.domain.model.SessionSummary
@@ -159,6 +161,12 @@ class GatewayChatRepository(
 
     override suspend fun setMcp(sessionId: String, name: String, enabled: Boolean): Boolean =
         post("/setmcp", buildJsonObject { put("id", sessionId); put("name", name); put("enabled", enabled) }.toString()).first in 200..299
+
+    override suspend fun importableSessions(): List<ImportableSession> =
+        decode("/importable", ImportableRes.serializer(), "{}").sessions.map { it.toDomain() }
+
+    override suspend fun importSession(sessionId: String): Boolean =
+        post("/import", payload("id" to sessionId)).first in 200..299
 
     override suspend fun archiveSession(sessionId: String): Boolean =
         post("/archive", payload("id" to sessionId)).first in 200..299

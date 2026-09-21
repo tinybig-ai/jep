@@ -4,9 +4,13 @@
 // HarnessAdapter port. It holds no chat-store state and touches no Telegram
 // surface. Every endpoint the phone can call is listed in docs/GATEWAY.md,
 // which stays in step with this file.
-import { execFile } from "node:child_process"
+import { execFile, spawn } from "node:child_process"
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
+import { closeSync, existsSync, openSync, readSync } from "node:fs"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
+import { tmpdir } from "node:os"
+import { unlink } from "node:fs/promises"
+import { DatabaseSync } from "node:sqlite"
 import { promisify } from "node:util"
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
@@ -30,6 +34,10 @@ export interface GatewayDeps {
   addWorkspace?(dir: string, harness?: string): Promise<{ name: string; adapter: HarnessAdapter }>
   /** the directory the browser may not climb above (default $HOME) */
   browseRoot?: string
+  /** restart the server serving a directory — an imported session is in the
+   * store but a running opencode server only lists sessions from its own boot,
+   * so it has to come up again to see it */
+  restartWorkspace?(dir: string): Promise<void>
   dataHome: string
   port: number
   /** pinned pairing code; generated fresh per boot when omitted */
@@ -170,6 +178,10 @@ const saveTerminalTokens = async (dataHome: string, tokens: Set<string>): Promis
 // rendered screen with capture-pane — no pty library, no VT emulation.
 const run = promisify(execFile)
 const TMUX_BIN = process.env.JEP_TMUX ?? "tmux"
+const OPENCODE_BIN = process.env.OPENCODE_BIN ?? "opencode"
+// The user's own opencode store (the CLI's), which jep deliberately doesn't
+// serve. Import reads from here; jep's own store is the target.
+const USER_DATA_HOME = process.env.JEP_IMPORT_FROM ?? process.env.XDG_DATA_HOME ?? join(homedir(), ".local", "share")
 const termName = (nativeId: string) => "jep-" + nativeId.replace(/[^A-Za-z0-9_-]/g, "").slice(-48)
 
 const BROWSE_TIMEOUT_MS = 4_000
@@ -576,6 +588,102 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         return json(res, 200, { session: { ...s, adapter: picked.name, harness: picked.adapter.id } })
       }
 
+      // ── importing a session from the user's own opencode ────────────────
+      // jep runs its own opencode store, so the conversations you have in the
+      // CLI aren't here. Import forks one in: export from the user's store,
+      // import into jep's. It's a copy — the original is untouched.
+      if (path === "/importable") {
+        // only sessions in a directory jep serves: anything else would land in
+        // the store but never show in a workspace's list
+        const dirs = new Set(deps.adapters().map((a) => a.adapter.workspace))
+        const dbPath = join(USER_DATA_HOME, "opencode", "opencode.db")
+        let rows: Array<{ id: string; title: string; directory: string; updated: number }> = []
+        try {
+          const db = new DatabaseSync(dbPath, { readOnly: true })
+          rows = (
+            db
+              .prepare("SELECT id, title, directory, time_updated FROM session ORDER BY time_updated DESC")
+              .all() as Array<Record<string, unknown>>
+          )
+            .filter((r) => dirs.has(String(r.directory)))
+            .map((r) => ({
+              id: String(r.id),
+              title: String(r.title ?? ""),
+              directory: String(r.directory),
+              updated: Number(r.time_updated ?? 0),
+            }))
+          db.close()
+        } catch (err) {
+          console.error(`[gw] importable: ${(err as Error)?.message ?? err}`)
+        }
+        // already here (an earlier import keeps the id)? don't offer it again
+        try {
+          const mine = new DatabaseSync(join(deps.dataHome, "opencode", "opencode.db"), { readOnly: true })
+          const have = new Set(
+            (mine.prepare("SELECT id FROM session").all() as Array<Record<string, unknown>>).map((r) => String(r.id)),
+          )
+          mine.close()
+          rows = rows.filter((r) => !have.has(r.id))
+        } catch {
+          /* jep's store may not exist yet — then nothing is imported */
+        }
+        return json(res, 200, { sessions: rows })
+      }
+
+      if (path === "/import") {
+        const sid = str("id")
+        if (!sid) return json(res, 400, { error: "id required" })
+        const file = join(tmpdir(), `jep-import-${Date.now()}-${randomBytes(4).toString("hex")}.json`)
+        try {
+          // a real fd, opened first — spawn rejects a WriteStream whose fd is
+          // still null. The export can be large (a long session is ~100 MB),
+          // so it goes straight to the file rather than through a buffer.
+          const fd = openSync(file, "w")
+          try {
+            await new Promise<void>((resolve, reject) => {
+              const child = spawn(OPENCODE_BIN, ["export", sid], {
+                env: { ...process.env, XDG_DATA_HOME: USER_DATA_HOME },
+                stdio: ["ignore", fd, "ignore"],
+              })
+              child.once("error", reject)
+              child.once("exit", (code) => (code === 0 ? resolve() : reject(new Error(`export exited ${code}`))))
+            })
+          } finally {
+            closeSync(fd)
+          }
+          // opencode derives the session's project from the *cwd* of `import`,
+          // not from the file — run it in the session's own directory, or the
+          // import lands under a "global" project no workspace lists
+          const buf = Buffer.alloc(8192)
+          const rfd = openSync(file, "r")
+          const n = readSync(rfd, buf, 0, buf.length, 0)
+          closeSync(rfd)
+          const into = /"directory"\s*:\s*"([^"]+)"/.exec(buf.subarray(0, n).toString("utf8"))?.[1]
+          const { stdout } = await run(OPENCODE_BIN, ["import", file], {
+            cwd: into && existsSync(into) ? into : undefined,
+            env: { ...process.env, XDG_DATA_HOME: deps.dataHome },
+            maxBuffer: 16 * 1024 * 1024,
+          })
+          msgCache.delete(sid) // a stale frame must not outlive the import
+          // the running server only lists sessions from when it booted; bring
+          // the one serving this directory back up so the import shows
+          let dir = ""
+          try {
+            const db = new DatabaseSync(join(deps.dataHome, "opencode", "opencode.db"), { readOnly: true })
+            dir = String((db.prepare("SELECT directory FROM session WHERE id = ?").get(sid) as { directory?: string } | undefined)?.directory ?? "")
+            db.close()
+          } catch {
+            /* leave it; a later refresh may still find it */
+          }
+          if (dir && deps.restartWorkspace) await deps.restartWorkspace(dir).catch(() => {})
+          return json(res, 200, { ok: true, id: sid, output: stdout.trim().slice(0, 200) })
+        } catch (err) {
+          return json(res, 500, { error: String((err as Error)?.message ?? err) })
+        } finally {
+          await unlink(file).catch(() => {})
+        }
+      }
+
       const id = str("id")
       if (!id) return json(res, 400, { error: "id required" })
       const adapter = await ensureListed(id)
@@ -698,6 +806,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         }
         return json(res, 404, { error: "no such terminal route" })
       }
+
 
       // the skills this conversation's harness loads, from the SKILL.md dirs
       if (path === "/skills") {

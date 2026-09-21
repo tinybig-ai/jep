@@ -12,6 +12,7 @@ import dev.jep.client.device.ThemeMode
 import dev.jep.client.device.PairingStore
 import dev.jep.client.domain.repository.ChatRepository
 import dev.jep.client.domain.model.BrowseResult
+import dev.jep.client.domain.model.ImportableSession
 import dev.jep.client.domain.model.SessionSummary
 import dev.jep.client.domain.model.TerminalAccess
 import dev.jep.client.domain.model.Workspace
@@ -203,6 +204,31 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             runCatching { r.archiveSession(session.id) }
                 .onFailure { _notice.value = "couldn't archive: ${it.message}"; refresh() }
+        }
+    }
+
+    // sessions in the user's own opencode (not jep's) that could be forked in
+    private val _importable = MutableStateFlow<List<ImportableSession>?>(null)
+    val importable = _importable.asStateFlow()
+
+    fun loadImportable() {
+        val r = repo ?: return
+        viewModelScope.launch {
+            runCatching { r.importableSessions() }
+                .onSuccess { _importable.value = it }
+                .onFailure { _notice.value = "couldn't list sessions to import: ${it.message}" }
+        }
+    }
+
+    fun importSession(id: String) {
+        val r = repo ?: return
+        viewModelScope.launch {
+            runCatching { r.importSession(id) }
+                .onSuccess {
+                    _importable.value = _importable.value?.filterNot { it.id == id }
+                    refresh()
+                }
+                .onFailure { _notice.value = "import failed: ${it.message}" }
         }
     }
 
