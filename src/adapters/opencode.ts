@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 import { Agent } from "undici"
 import type { HarnessAdapter, ModelRef, ModelCaps } from "../core/ports.ts"
 import type { AskOption, DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionSummary, SkillDirs } from "../core/types.ts"
+import { parseOpencodeLogError } from "./opencode-log.ts"
 const OPENCODE_BIN = process.env.OPENCODE_BIN ?? "opencode"
 const MODEL_REF = process.env.JEP_MODEL ?? "localfree-models-proxy/auto"
 const DEFAULT_TIMEOUT_MS = 180_000
@@ -179,11 +180,22 @@ export class OpenCodeAdapter implements HarnessAdapter {
   // remember each part's type from its message.part.updated event (which always
   // precedes the deltas) to tell reasoning apart from answer text.
   #partTypes = new Map<string, string>()
+  // provider failures (429 / usage cap / upstream 5xx) parsed out of opencode's
+  // own stderr, keyed by native session id. opencode logs these but never
+  // emits a session.error for them, so without this a rate-limited turn just
+  // goes silent and the watchdog can only say "no activity".
+  #providerErrors: Map<string, { message: string; at: number }>
 
-  constructor(child: ChildProcess, workspace: string, endpoint: string) {
+  constructor(
+    child: ChildProcess,
+    workspace: string,
+    endpoint: string,
+    providerErrors: Map<string, { message: string; at: number }> = new Map(),
+  ) {
     this.#child = child
     this.workspace = workspace
     this.endpoint = endpoint
+    this.#providerErrors = providerErrors
   }
 
   #url(path: string): string {
@@ -381,6 +393,9 @@ export class OpenCodeAdapter implements HarnessAdapter {
     opts?: { timeoutMs?: number; signal?: AbortSignal; model?: ModelRef; filePaths?: string[]; agent?: string },
   ): Promise<Message> {
     const timeout = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS
+    // a fresh turn invalidates the last turn's provider failure: whatever we
+    // recorded before is no longer this prompt's story
+    this.#providerErrors.delete(toNativeId(sessionID))
     const controller = new AbortController()
     const onAbort = () => {
       controller.abort()
@@ -444,6 +459,14 @@ export class OpenCodeAdapter implements HarnessAdapter {
 
   async abort(sessionID: string): Promise<boolean> {
     return this.#json(`/session/${encodeURIComponent(toNativeId(sessionID))}/abort`, { method: "POST" })
+  }
+
+  // The provider failure opencode named for this session but never surfaced as
+  // a session.error event (see opencode-log.ts). Cleared at the start of every
+  // turn, so a failure can only ever explain the turn it happened in — a stale
+  // 429 never gets blamed for an unrelated stall minutes later.
+  providerError(sessionID: string): string | null {
+    return this.#providerErrors.get(toNativeId(sessionID))?.message ?? null
   }
 
   // opencode's own three answers, passed straight through: "always" is a
@@ -602,9 +625,12 @@ export class OpenCodeAdapter implements HarnessAdapter {
           },
         }
       }
+      case "permission.asked":
       case "permission.updated": {
-        // the id was all jep used to pass on, so the prompt read "🔐 per_a1b2…"
-        // — the one thing about the request that tells you nothing. What is
+        // The runtime sends this as "permission.asked"; "permission.updated"
+        // is the same ask surfaced through the older event name. The id alone
+        // used to be all jep passed on, so the prompt read "🔐 per_a1b2…" —
+        // the one thing about the request that tells you nothing. What is
         // being asked for is `permission` (the tool) and `patterns` (what it
         // wants to touch), with the command itself down in metadata.
         const meta = (props.metadata ?? {}) as Record<string, unknown>
@@ -628,8 +654,21 @@ export class OpenCodeAdapter implements HarnessAdapter {
           },
         }
       }
-      case "session.error":
-        return { type: "session.error", sessionID: sessionID ?? "", message: props.error ?? "" }
+      case "session.error": {
+        // props.error is usually a string, but has been seen as a structured
+        // {name, message} object depending on what failed upstream (a raw
+        // provider SDK error vs. opencode's own wrapping) -- stringify
+        // defensively rather than let a template literal turn it into
+        // "[object Object]" in the log and in the chat.
+        const raw = props.error
+        const message =
+          typeof raw === "string"
+            ? raw
+            : raw && typeof raw === "object"
+              ? ((raw.message as string | undefined) ?? JSON.stringify(raw))
+              : String(raw ?? "unknown error")
+        return { type: "session.error", sessionID: sessionID ?? "", message }
+      }
       default:
         return { type: "other", eventType: type, sessionID, raw: data }
     }
@@ -665,11 +704,35 @@ function stripJsonc(source: string): string {
 }
 
 export async function startOpenCodeServer(workspace: string, opts?: { dataHome?: string }): Promise<OpenCodeAdapter> {
-  const child = spawn(OPENCODE_BIN, ["serve", "--hostname", "127.0.0.1", "--port", "0"], {
+  // --print-logs: opencode otherwise keeps its logs to its own file, and the
+  // one record that matters here — `message="stream error"` (a 429, a usage
+  // cap) — never becomes a session.error SSE event. On stderr it reaches the
+  // forwarder below, which is the only way a frontend ever learns the reason.
+  const child = spawn(OPENCODE_BIN, ["serve", "--hostname", "127.0.0.1", "--port", "0", "--print-logs"], {
     cwd: workspace,
     env: opts?.dataHome ? { ...process.env, XDG_DATA_HOME: opts.dataHome } : process.env,
     stdio: ["ignore", "pipe", "pipe"],
   })
+
+  // Only the startup phase (below) captured this into `out`, and nothing
+  // read it again after the "listening" line landed -- so anything the
+  // opencode binary itself printed once running (a provider SDK error that
+  // never made it into a session.error SSE event, an uncaught exception, a
+  // crash) was invisible. Forward it into our own log for the life of the
+  // process, tagged by workspace so parallel servers don't interleave blind.
+  const tag = path.basename(workspace)
+  // `--print-logs` puts every level on stderr, so forward only what's worth a
+  // line in our log (WARN/ERROR) and keep the provider failures on the side,
+  // where a stalled turn can ask for them by session id.
+  const providerErrors = new Map<string, { message: string; at: number }>()
+  const forwardLine = (chunk: Buffer) => {
+    for (const line of chunk.toString().split("\n")) {
+      if (!line.trim()) continue
+      const err = parseOpencodeLogError(line)
+      if (err) providerErrors.set(err.sessionID, { message: err.message, at: Date.now() })
+      if (err || /\blevel=(ERROR|WARN)\b/.test(line)) console.error(`[opencode:${tag}] ${line}`)
+    }
+  }
 
   let endpoint = ""
   const portPromise = new Promise<string>((resolve, reject) => {
@@ -681,6 +744,10 @@ export async function startOpenCodeServer(workspace: string, opts?: { dataHome?:
       if (m) {
         clearTimeout(timer)
         const port = m[2]
+        child.stdout?.off("data", onData)
+        child.stderr?.off("data", onData)
+        child.stdout?.on("data", forwardLine)
+        child.stderr?.on("data", forwardLine)
         resolve(`http://127.0.0.1:${port}`)
       }
     }
@@ -697,6 +764,6 @@ export async function startOpenCodeServer(workspace: string, opts?: { dataHome?:
   })
 
   endpoint = await portPromise
-  const adapter = new OpenCodeAdapter(child, workspace, endpoint)
+  const adapter = new OpenCodeAdapter(child, workspace, endpoint, providerErrors)
   return adapter
 }

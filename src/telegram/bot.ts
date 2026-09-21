@@ -198,6 +198,13 @@ const TURN_IDLE_MS = Number(process.env.JEP_TURN_IDLE_MS ?? "") || 5 * 60_000
 // generating model ever would. Silence behind a running tool is not a stall,
 // so it gets its own, much longer ceiling.
 const TOOL_IDLE_MS = Number(process.env.JEP_TOOL_IDLE_MS ?? "") || 20 * 60_000
+// The exception: a tool that has been `running` for this long WITHOUT emitting
+// anything at all is wedged, not working — e.g. opencode's bash tool hanging on
+// a launchctl subprocess (seen twice), or a git op stuck on a failed remote.
+// Streaming output keeps the idle clock reset, so a legit long tool never trips
+// this; only a tool that is both old and perfectly silent does. Lower than
+// TOOL_IDLE_MS so the failure fails fast, and it names the tool it killed.
+const TOOL_WILDERNESS_MS = Number(process.env.JEP_TOOL_WILDERNESS_MS ?? "") || 6 * 60_000
 // How long after the harness's "session.idle" to wait for the blocking prompt()
 // call to return before finalizing from the streamed parts. Idle means the turn
 // is done, so a hung request shouldn't get more than this to come back.
@@ -2113,7 +2120,7 @@ export class TelegramBot {
     }
 
     const mdl = this.#store.model(chatID, ws.adapter.id)
-    let model
+    let model: ModelRef | undefined
     if (mdl) {
       const sep = mdl.indexOf("/")
       model = { providerID: mdl.slice(0, sep), modelID: mdl.slice(sep + 1) }
@@ -2127,14 +2134,49 @@ export class TelegramBot {
     let lastActivity = Date.now()
     let idleAbort = false
     let stalledAfter = TURN_IDLE_MS
+    // set when the watchdog aborts a wilderness-stalled tool, so the abandon
+    // notice can name the wedged tool instead of a generic stall
+    let wildernessReason = ""
     const idleTimer = setInterval(() => {
+      // the provider failed in a way opencode never surfaced as an event — a
+      // 429, a usage cap — so the turn is not coming back. Name it now instead
+      // of waiting out the ceiling for a stall with no explanation. Cleared at
+      // the start of every prompt, so only this turn's failure is ever seen.
+      const pe = ws.adapter.providerError?.(sessionID)
+      if (pe) {
+        providerErrored = pe
+        console.error(`[watchdog] provider error (session ${sessionID}): ${pe}`)
+        ac.abort()
+        return
+      }
       // a pending permission ask means the turn is waiting on the human, not
       // stalled — no ceiling applies until it is answered
       if (c.pending.size > 0) return
-      const ceiling = liveParts.some((p) => p.kind === "tool" && p.status === "running") ? TOOL_IDLE_MS : TURN_IDLE_MS
-      if (Date.now() - lastActivity < ceiling) return
+      const toolRunning = liveParts.some((p) => p.kind === "tool" && p.status === "running")
+      let ceiling = toolRunning ? TOOL_IDLE_MS : TURN_IDLE_MS
+      const elapsed = Date.now() - lastActivity
+      // wilderness: a running tool that is both old and perfectly silent is
+      // wedged; failing fast names the culprit instead of burning TOOL_IDLE_MS
+      if (toolRunning) {
+        for (const p of liveParts) {
+          if (p.kind !== "tool" || p.status !== "running" || typeof p.startedAt !== "number") continue
+          const age = Date.now() - p.startedAt
+          if (age >= TOOL_WILDERNESS_MS && elapsed >= TOOL_WILDERNESS_MS) {
+            wildernessReason = `⚠️ tool ${p.name} ran ${Math.round(age / 60_000)}m with no progress — turn abandoned`
+            ceiling = Math.min(ceiling, TOOL_WILDERNESS_MS)
+            break
+          }
+        }
+      }
+      if (elapsed < ceiling) return
       stalledAfter = ceiling
       idleAbort = true
+      // this only fires when NOTHING came back from the event stream for the
+      // whole ceiling -- not even a session.error -- so it's worth knowing
+      // exactly what the watchdog saw when it pulled the plug.
+      console.error(
+        `[watchdog] turn stalled ${Math.round(elapsed / 1000)}s (ceiling ${Math.round(ceiling / 1000)}s, toolRunning=${toolRunning}, session ${sessionID}, model ${model ? `${model.providerID}/${model.modelID}` : "default"})`,
+      )
       ac.abort()
     }, 15_000)
     let lastEdit = 0
@@ -2167,6 +2209,18 @@ export class TelegramBot {
     // same, when this turn ended at a step boundary to hand the queue to the
     // harness — the steering message's own turn is the visible outcome
     let steered = false
+    // the harness told us the turn failed via its event stream (a
+    // session.error, e.g. the free-models proxy exhausting every candidate)
+    // rather than by the blocking prompt() call rejecting or returning an
+    // error field. Left unhandled, prompt() just never resolves and the only
+    // thing that ever ends the turn is the unrelated idle watchdog, minutes
+    // later, misreporting a known, already-diagnosed failure as a generic
+    // stall. Capture it here so the abort branch below can say what actually
+    // happened.
+    let providerErrored: string | null = null
+    // event types this turn hasn't seen before, logged once each rather than
+    // once per event so a chatty-but-harmless type doesn't flood the log
+    const loggedOtherTypes = new Set<string>()
     // parts assembled live from the event stream, keyed by partID so updates
     // replace rather than duplicate; mirrors the final `reply.parts` order
     const liveParts: Part[] = []
@@ -2560,6 +2614,26 @@ export class TelegramBot {
                 ac.abort()
               }, IDLE_GRACE_MS)
             }
+          } else if (evt.type === "session.error") {
+            // The harness's own account of a failed turn, delivered async on
+            // this stream rather than through prompt()'s return value — the
+            // free-models proxy exhausting every candidate model surfaces
+            // here as e.g. "every candidate model failed". Without this
+            // branch it vanished silently and the turn just sat until the
+            // idle watchdog killed it minutes later with no real reason given.
+            console.error(`[turn] session.error (session ${sessionID}, model ${model ? `${model.providerID}/${model.modelID}` : "default"}): ${evt.message}`)
+            if (!providerErrored) providerErrored = evt.message || "provider reported an error"
+            if (!finished) {
+              ac.abort()
+              void ws.adapter.abort(sessionID).catch(logFail("abort"))
+            }
+          } else if (evt.type === "other" && !loggedOtherTypes.has(evt.eventType)) {
+            // Anything the adapter doesn't map to a known domain event. This
+            // is exactly how session.error went unnoticed for as long as it
+            // did -- log new-to-this-turn types instead of dropping them, so
+            // the next unhandled kind shows up in the log on day one.
+            loggedOtherTypes.add(evt.eventType)
+            console.error(`[stream] unhandled event type "${evt.eventType}" (session ${sessionID}): ${JSON.stringify(evt.raw).slice(0, 500)}`)
           }
         }
       } catch (err) {
@@ -2649,7 +2723,18 @@ export class TelegramBot {
         // render whatever we streamed so far (partial details included)
         if (segmentFlushInFlight) await segmentFlushInFlight
         const shown = await presentParts(dropFlushed(liveParts), internals)
-        if (finishedViaIdle) {
+        // a silent stall (the idle watchdog fired) can still be explained: the
+        // harness may have named a provider failure — a 429, a usage cap —
+        // that never arrived as a session.error event. Prefer that over
+        // "no activity for Nm", which tells the user nothing they can act on.
+        if (!providerErrored && idleAbort) providerErrored = ws.adapter.providerError?.(sessionID) ?? null
+        if (providerErrored) {
+          // A real, named failure beats a generic "stalled" message every
+          // time -- this is the case the idle watchdog used to paper over.
+          const text = `⚠️ ${providerErrored}`.slice(0, MAX_MSG)
+          if (!shown && !questionAsked && !steered) await presentBody(text)
+          else if (!questionAsked && !steered) await this.#tg.sendMessage({ chatID, text })
+        } else if (finishedViaIdle) {
           // The turn genuinely finished — the harness said "session.idle" and the
           // answer is fully streamed; only the blocking prompt() call never came
           // back. `shown` is the answer, so don't stamp it with a stall warning.
@@ -2659,7 +2744,7 @@ export class TelegramBot {
         } else {
           // a stall is not a stop: say so, or it looks like the turn was
           // cancelled deliberately and the silence goes unexplained
-          const stalled = `⚠️ no activity for ${Math.round(stalledAfter / 60_000)}m — turn abandoned`
+          const stalled = wildernessReason || `⚠️ no activity for ${Math.round(stalledAfter / 60_000)}m — turn abandoned`
           if (!shown && !questionAsked && !steered) await presentBody(idleAbort ? stalled : "(stopped)")
           else if (idleAbort && !questionAsked && !steered) await this.#tg.sendMessage({ chatID, text: stalled })
         }
