@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -96,6 +97,11 @@ fun ChatScreen(
         state.messages.filterNot { it.id == liveId } + listOfNotNull(liveAsMessage(state.live))
     }
     val listState = rememberLazyListState()
+    // system back should pop the conversation, not the whole activity; the
+    // phone's back gesture currently drops straight to the launcher because
+    // nothing here intercepted it.
+    BackHandler { onBack() }
+
     LaunchedEffect(rendered.size, rendered.lastOrNull()?.id, state.live) {
         if (rendered.isNotEmpty()) listState.animateScrollToItem(rendered.size - 1)
     }
