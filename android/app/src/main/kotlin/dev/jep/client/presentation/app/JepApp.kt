@@ -8,6 +8,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import dev.jep.client.presentation.chat.ChatScreen
 import dev.jep.client.presentation.chat.ChatViewModel
+import dev.jep.client.presentation.newchat.NewChatScreen
 import dev.jep.client.presentation.sessions.SessionsScreen
 
 @Composable
@@ -21,6 +22,22 @@ fun JepApp(app: AppViewModel) {
         !paired -> dev.jep.client.presentation.pair.PairScreen(busy) { address, code, done ->
             app.pair(address, code, done)
         }
+        screen is Screen.NewChat -> {
+            val ns by app.newChat.collectAsState()
+            NewChatScreen(
+                state = ns,
+                onBack = { app.closeNewChat() },
+                onTitle = { app.setNewTitle(it) },
+                onHarness = { app.setNewHarness(it) },
+                onSelectWorkspace = { app.selectWorkspace(it) },
+                onSelectPath = { app.selectPath(it) },
+                onOpenBrowse = { app.openBrowse() },
+                onCloseBrowse = { app.closeBrowse() },
+                onBrowseInto = { app.browseInto(it) },
+                onBrowseUp = { app.browseUp() },
+                onCreate = { app.createConversation() },
+            )
+        }
         screen is Screen.Chat -> {
             val c = screen as Screen.Chat
             val vm: ChatViewModel = viewModel(
@@ -30,17 +47,16 @@ fun JepApp(app: AppViewModel) {
             ChatScreen(
                 vm,
                 onBack = { app.back() },
-                onNew = { app.newSession() },
+                onNew = { app.openNewChat() },
                 onForgetPairing = { app.forgetPairing() },
             )
         }
         else -> SessionsScreen(
             app.sessions.collectAsState().value,
-            app.workspaces.collectAsState().value,
             busy,
             notice,
             onOpen = { app.open(it) },
-            onNew = { workspace -> app.newSession(workspace) },
+            onNew = { app.openNewChat() },
             onRefresh = { app.refresh() },
         )
     }

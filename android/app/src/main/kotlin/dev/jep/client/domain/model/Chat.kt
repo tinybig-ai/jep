@@ -14,8 +14,24 @@ data class SessionSummary(
     val harness: String? = null,
 )
 
-/** a workspace the gateway serves, and the harness (opencode/codex/…) behind it */
-data class Workspace(val name: String, val harness: String)
+/** a workspace the gateway serves, the harness (opencode/codex/…) behind it,
+ * and the directory it reads */
+data class Workspace(val name: String, val harness: String, val dir: String = "")
+
+/** the harnesses installed on the machine, and the default */
+data class Harnesses(val ids: List<String>, val default: String?)
+
+/** one folder in the directory browser */
+data class DirEntry(val name: String, val git: Boolean)
+
+/** where the directory browser stands: `cwd`, the root it may not leave, the
+ * parent (null at the root), and the folders inside `cwd` */
+data class BrowseResult(
+    val cwd: String,
+    val root: String,
+    val parent: String?,
+    val dirs: List<DirEntry>,
+)
 
 /** one model the conversation's harness can run on */
 data class Model(

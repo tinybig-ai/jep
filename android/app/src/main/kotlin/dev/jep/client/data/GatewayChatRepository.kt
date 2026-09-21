@@ -2,8 +2,10 @@ package dev.jep.client.data
 
 import dev.jep.client.data.dto.AgentRes
 import dev.jep.client.data.dto.AttachRes
+import dev.jep.client.data.dto.BrowseRes
 import dev.jep.client.data.dto.DiffRes
 import dev.jep.client.data.dto.ErrorDto
+import dev.jep.client.data.dto.HarnessesRes
 import dev.jep.client.data.dto.HistoryRes
 import dev.jep.client.data.dto.MessageRes
 import dev.jep.client.data.dto.ModelsRes
@@ -16,8 +18,10 @@ import dev.jep.client.data.dto.WorkspacesRes
 import dev.jep.client.domain.repository.ChatEvent
 import dev.jep.client.domain.repository.HistoryBatch
 import dev.jep.client.domain.repository.ModelChoices
+import dev.jep.client.domain.model.BrowseResult
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.FileDiff
+import dev.jep.client.domain.model.Harnesses
 import dev.jep.client.domain.repository.ChatRepository
 import dev.jep.client.domain.model.SessionSummary
 import dev.jep.client.domain.model.Usage
@@ -95,10 +99,24 @@ class GatewayChatRepository(
     override suspend fun workspaces(): List<Workspace> =
         decode("/workspaces", WorkspacesRes.serializer()).items.map { it.toDomain() }
 
-    override suspend fun newSession(title: String?, workspace: String?): SessionSummary {
+    override suspend fun harnesses(): Harnesses {
+        val res = decode("/harnesses", HarnessesRes.serializer(), "{}")
+        return Harnesses(res.harnesses, res.default)
+    }
+
+    override suspend fun browse(path: String?): BrowseResult =
+        decode(
+            "/browse",
+            BrowseRes.serializer(),
+            buildJsonObject { path?.let { put("path", it) } }.toString(),
+        ).toDomain()
+
+    override suspend fun newSession(title: String?, workspace: String?, path: String?, harness: String?): SessionSummary {
         val body = buildJsonObject {
             title?.let { put("title", it) }
             workspace?.let { put("workspace", it) }
+            path?.let { put("path", it) }
+            harness?.let { put("harness", it) }
         }.toString()
         return decode("/new", NewSessionRes.serializer(), body).session.toDomain()
     }

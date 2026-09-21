@@ -9,17 +9,42 @@ import dev.jep.client.data.GatewayChatRepository
 import dev.jep.client.device.JepHttp
 import dev.jep.client.device.PairingStore
 import dev.jep.client.domain.repository.ChatRepository
+import dev.jep.client.domain.model.BrowseResult
 import dev.jep.client.domain.model.SessionSummary
 import dev.jep.client.domain.model.Workspace
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 // Which screen is up, and the one object every screen builds its data from.
 // Navigation is deliberately a single enum: two content screens and the gate.
 sealed interface Screen {
     data object Sessions : Screen
+    data object NewChat : Screen
     data class Chat(val sessionId: String, val title: String, val workspace: String, val harness: String?) : Screen
+}
+
+// The New Conversation form's state. A conversation is born with a directory
+// (a served workspace, or any path under the browse root) and a harness — both
+// the user's to choose here, and not changeable afterwards.
+data class NewChatState(
+    val title: String = "",
+    val harness: String? = null,
+    /** selected served workspace name, when picking one of those */
+    val workspace: String? = null,
+    /** selected absolute directory, when browsing — wins over `workspace` */
+    val path: String? = null,
+    val harnesses: List<String> = emptyList(),
+    val defaultHarness: String? = null,
+    val workspaces: List<Workspace> = emptyList(),
+    val browse: BrowseResult? = null,
+    val browsing: Boolean = false,
+    val creating: Boolean = false,
+    val error: String? = null,
+) {
+    /** what the form would create in, for the summary line */
+    val target: String? get() = path ?: workspace
 }
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
@@ -37,6 +62,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     // workspaces a conversation can be created in, for the creation picker
     private val _workspaces = MutableStateFlow<List<Workspace>>(emptyList())
     val workspaces = _workspaces.asStateFlow()
+
+    private val _newChat = MutableStateFlow(NewChatState())
+    val newChat = _newChat.asStateFlow()
 
     private val _notice = MutableStateFlow<String?>(null)
     val notice = _notice.asStateFlow()
@@ -111,17 +139,66 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    // creation-time selection: the workspace (and so the harness) is chosen
-    // here, not after the fact — null means the gateway's default
-    fun newSession(workspace: String? = null) {
+    // ---- New conversation (a full view, not a modal) ----------------------
+
+    fun openNewChat() {
         val r = repo ?: connect()
+        _newChat.value = NewChatState(workspaces = _workspaces.value)
+        _screen.value = Screen.NewChat
         viewModelScope.launch {
-            runCatching { r.newSession(null, workspace) }
+            runCatching { r.harnesses() }.onSuccess { h ->
+                _newChat.update { it.copy(harnesses = h.ids, harness = it.harness ?: h.default, defaultHarness = h.default) }
+            }
+            runCatching { r.workspaces() }.onSuccess { w ->
+                _workspaces.value = w
+                _newChat.update { it.copy(workspaces = w) }
+            }
+        }
+    }
+
+    fun closeNewChat() {
+        _screen.value = Screen.Sessions
+    }
+
+    fun setNewTitle(value: String) = _newChat.update { it.copy(title = value, error = null) }
+    fun setNewHarness(id: String) = _newChat.update { it.copy(harness = id, error = null) }
+    fun selectWorkspace(name: String) = _newChat.update { it.copy(workspace = name, path = null, error = null) }
+    fun selectPath(path: String) = _newChat.update { it.copy(path = path, workspace = null, browsing = false, error = null) }
+
+    fun openBrowse() {
+        _newChat.update { it.copy(browsing = true, error = null) }
+        loadBrowse(_newChat.value.path)
+    }
+
+    fun closeBrowse() = _newChat.update { it.copy(browsing = false) }
+    fun browseInto(path: String) = loadBrowse(path)
+    fun browseUp() = loadBrowse(_newChat.value.browse?.parent)
+
+    private fun loadBrowse(path: String?) {
+        val r = repo ?: return
+        viewModelScope.launch {
+            runCatching { r.browse(path) }
+                .onSuccess { b -> _newChat.update { it.copy(browse = b) } }
+                .onFailure { e -> _newChat.update { it.copy(error = "couldn't read that folder: ${e.message}") } }
+        }
+    }
+
+    fun createConversation() {
+        val r = repo ?: connect()
+        val st = _newChat.value
+        if (st.creating) return
+        if (st.target == null) {
+            _newChat.update { it.copy(error = "pick a workspace or a folder first") }
+            return
+        }
+        _newChat.update { it.copy(creating = true, error = null) }
+        viewModelScope.launch {
+            runCatching { r.newSession(st.title.ifBlank { null }, st.workspace, st.path, st.harness) }
                 .onSuccess {
                     refresh()
                     open(it)
                 }
-                .onFailure { _notice.value = "couldn't start a conversation: ${it.message}" }
+                .onFailure { e -> _newChat.update { it.copy(creating = false, error = "couldn't start it: ${e.message}") } }
         }
     }
 

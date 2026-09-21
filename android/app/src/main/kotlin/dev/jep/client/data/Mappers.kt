@@ -1,6 +1,8 @@
 package dev.jep.client.data
 
 import dev.jep.client.data.dto.AskDto
+import dev.jep.client.data.dto.BrowseRes
+import dev.jep.client.data.dto.DirEntryDto
 import dev.jep.client.data.dto.FileDiffDto
 import dev.jep.client.data.dto.MessageDto
 import dev.jep.client.data.dto.ModelDto
@@ -11,8 +13,10 @@ import dev.jep.client.data.dto.UsageDto
 import dev.jep.client.data.dto.WorkspaceDto
 import dev.jep.client.domain.model.Ask
 import dev.jep.client.domain.model.AskOption
+import dev.jep.client.domain.model.BrowseResult
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
+import dev.jep.client.domain.model.DirEntry
 import dev.jep.client.domain.model.FileDiff
 import dev.jep.client.domain.model.Model
 import dev.jep.client.domain.model.Role
@@ -26,7 +30,11 @@ import dev.jep.client.domain.model.Workspace
 // inert renderings here, once, instead of leaking harness vocabulary upward.
 fun SessionDto.toDomain() = SessionSummary(id, title, workspace, createdAt, updatedAt, adapter, harness)
 
-fun WorkspaceDto.toDomain() = Workspace(name, harness)
+fun WorkspaceDto.toDomain() = Workspace(name, harness, dir)
+
+fun DirEntryDto.toDomain() = DirEntry(name, git)
+
+fun BrowseRes.toDomain() = BrowseResult(cwd, root, parent, dirs.map { it.toDomain() })
 
 fun ModelDto.toDomain() = Model(providerID, modelID, image, attachment, contextLimit)
 

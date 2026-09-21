@@ -89,10 +89,24 @@ data class HistoryRes(val messages: List<MessageDto> = emptyList(), val hasMore:
 data class NewSessionRes(val session: SessionDto)
 
 @Serializable
-data class WorkspaceDto(val name: String = "", val harness: String = "")
+data class WorkspaceDto(val name: String = "", val harness: String = "", val dir: String = "")
 
 @Serializable
 data class WorkspacesRes(val items: List<WorkspaceDto> = emptyList())
+
+@Serializable
+data class HarnessesRes(val harnesses: List<String> = emptyList(), val default: String? = null)
+
+@Serializable
+data class DirEntryDto(val name: String = "", val git: Boolean = false)
+
+@Serializable
+data class BrowseRes(
+    val cwd: String = "",
+    val root: String = "",
+    val parent: String? = null,
+    val dirs: List<DirEntryDto> = emptyList(),
+)
 
 @Serializable
 data class ModelDto(

@@ -1,9 +1,11 @@
 package dev.jep.client.domain.repository
 
 import dev.jep.client.domain.model.Ask
+import dev.jep.client.domain.model.BrowseResult
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
 import dev.jep.client.domain.model.FileDiff
+import dev.jep.client.domain.model.Harnesses
 import dev.jep.client.domain.model.Model
 import dev.jep.client.domain.model.Role
 import dev.jep.client.domain.model.SessionSummary
@@ -67,7 +69,18 @@ interface ChatRepository {
     suspend fun sessions(): List<SessionSummary>
     /** the workspaces (and harnesses) a conversation may be created in */
     suspend fun workspaces(): List<Workspace>
-    suspend fun newSession(title: String? = null, workspace: String? = null): SessionSummary
+    /** the harnesses installed on the machine, and the default */
+    suspend fun harnesses(): Harnesses
+    /** folders under `path` (or the browse root when null), bounded by the root */
+    suspend fun browse(path: String?): BrowseResult
+    /** create a conversation in a named workspace and/or at an absolute path,
+     * under a harness — the path is spawned as a workspace if not served yet */
+    suspend fun newSession(
+        title: String? = null,
+        workspace: String? = null,
+        path: String? = null,
+        harness: String? = null,
+    ): SessionSummary
     /** the models available to a conversation, and its current choice */
     suspend fun models(sessionId: String): ModelChoices
     /** set (or clear, with null) the conversation's model */

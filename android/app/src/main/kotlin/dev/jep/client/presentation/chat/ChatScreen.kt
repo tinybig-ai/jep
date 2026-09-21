@@ -83,6 +83,7 @@ import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
 import dev.jep.client.domain.model.Role
 import dev.jep.client.domain.model.ToolStatus
+import dev.jep.client.domain.repository.ModelChoices
 
 // The conversation. Reads like the reference: the harness speaks in marked-up
 // paragraphs, tool calls collapse to one quiet row each, the person answers
@@ -286,26 +287,8 @@ private fun SettingsDialog(vm: ChatViewModel, onDismiss: () -> Unit) {
                     onPick = {},
                     checkable = false,
                 )
-                val choices = state.models
                 SectionLabel("MODEL", top = 12.dp)
-                if (choices == null) {
-                    Text("Loading…", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } else {
-                    SettingRow(
-                        choices.default?.let { "Default · ${it.substringAfterLast('/')}" } ?: "Default (harness)",
-                        selected = choices.current == null,
-                        subtitle = null,
-                        onPick = { vm.setModel(null) },
-                    )
-                    choices.all.forEach { m ->
-                        SettingRow(
-                            (if (m.image) "🖼 " else "") + m.modelID,
-                            selected = choices.current == m.ref,
-                            subtitle = m.providerID + if (m.contextLimit > 0) "  ·  ${fmtTokens(m.contextLimit)} ctx" else "",
-                            onPick = { vm.setModel(m.ref) },
-                        )
-                    }
-                }
+                ModelDropdown(state.models) { vm.setModel(it) }
                 SectionLabel("AGENT", top = 12.dp)
                 SettingRow("Default (harness)", selected = state.agent == null, subtitle = null, onPick = { vm.setAgent(null) })
                 SettingRow("🔨 Build", selected = state.agent == "build", subtitle = "executes tools", onPick = { vm.setAgent("build") })
@@ -316,6 +299,55 @@ private fun SettingsDialog(vm: ChatViewModel, onDismiss: () -> Unit) {
             androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Done") }
         },
     )
+}
+
+// The model picker, collapsed to one row: the list was an endless scroll inside
+// Settings. Tap to open the choices, ✓ marks the active one, 🖼 a vision model,
+// and the context limit rides along.
+@Composable
+private fun ModelDropdown(choices: ModelChoices?, onPick: (String?) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    val current = choices?.current
+    val label = when {
+        choices == null -> "Loading…"
+        current != null -> current.substringAfterLast('/')
+        choices.default != null -> "Default · ${choices.default.substringAfterLast('/')}"
+        else -> "Default (harness)"
+    }
+    Box {
+        Surface(
+            Modifier.fillMaxWidth().clickable(enabled = choices != null) { open = true },
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            shape = RoundedCornerShape(12.dp),
+        ) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(label, Modifier.weight(1f), fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
+                Icon(Icons.Filled.ArrowDropDown, "choose model", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(
+                text = { Text(choices?.default?.let { "Default · ${it.substringAfterLast('/')}" } ?: "Default (harness)") },
+                trailingIcon = { if (current == null) Text("✓", color = MaterialTheme.colorScheme.primary) },
+                onClick = { open = false; onPick(null) },
+            )
+            choices?.all?.forEach { m ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            (if (m.image) "🖼 " else "") + m.modelID +
+                                if (m.contextLimit > 0) "  ·  ${fmtTokens(m.contextLimit)}" else "",
+                        )
+                    },
+                    trailingIcon = { if (current == m.ref) Text("✓", color = MaterialTheme.colorScheme.primary) },
+                    onClick = { open = false; onPick(m.ref) },
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -601,8 +633,11 @@ private fun ToolRow(part: ChatPart.Tool) {
     // the body — command output, a diff, a file's contents, or the arguments —
     // is what the collapsed row is hiding; a tap reveals it, like Telegram's
     // collapsible tool blocks. A running tool auto-opens so progress is visible.
-    val body = remember(part) { toolBody(part) }
-    var open by remember(part) { mutableStateOf(false) }
+    // The body is recomputed each composition (a running tool's output fills
+    // in), but `open` is remembered by the part's stable id: keying it on the
+    // whole part collapsed the row again the moment the part was re-emitted.
+    val body = toolBody(part)
+    var open by remember(part.id) { mutableStateOf(false) }
     val expanded = open || (running && body != null)
     Surface(
         Modifier.fillMaxWidth(),
