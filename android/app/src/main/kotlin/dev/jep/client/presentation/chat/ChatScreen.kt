@@ -194,6 +194,7 @@ fun ChatScreen(
     var mcpView by remember { mutableStateOf(false) }
     var termVisible by remember { mutableStateOf(false) }
 
+    Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         TopAppBar(
             title = {
@@ -354,6 +355,8 @@ fun ChatScreen(
         replyTo?.let { ReplyBanner(it) { replyTo = null } }
         Composer(vm, replyTo) { replyTo = null }
     }
+    if (termVisible) TerminalOverlay(vm, onClose = { termVisible = false })
+    }
 
     if (renameOpen) RenameDialog(
         vm.title,
@@ -380,7 +383,7 @@ fun ChatScreen(
     )
     if (skillsView) ManageScreen("Skills", onClose = { skillsView = false }) { SkillsBody(vm) }
     if (mcpView) ManageScreen("MCP servers", onClose = { mcpView = false }) { McpBody(vm) }
-    if (termVisible) ManageScreen("Terminal", onClose = { termVisible = false }) { TerminalBody(vm) }
+
     if (usageOpen) UsageDialog(vm, onDismiss = { usageOpen = false })
     if (changesOpen) ChangesDialog(vm, onDismiss = { changesOpen = false })
     infoMsg?.let { ResponseInfoDialog(it) { infoMsg = null } }
@@ -598,6 +601,25 @@ private fun McpBody(vm: ChatViewModel) {
                     onChange = { vm.setMcp(s.name, it) },
                 )
             }
+        }
+    }
+}
+
+// The terminal fills this window rather than a Dialog — a Dialog is its own
+// window, which the soft keyboard covers without resizing — and pads for the
+// IME so the command line stays above the keyboard.
+@Composable
+private fun TerminalOverlay(vm: ChatViewModel, onClose: () -> Unit) {
+    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        Column(Modifier.fillMaxSize().imePadding()) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 4.dp, top = 6.dp, bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "back") }
+                Text("Terminal", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(start = 4.dp))
+            }
+            TerminalBody(vm)
         }
     }
 }
