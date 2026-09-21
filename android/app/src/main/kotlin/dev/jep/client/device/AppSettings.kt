@@ -1,0 +1,27 @@
+package dev.jep.client.device
+
+import android.content.SharedPreferences
+
+// The user's app-wide preferences — not the per-conversation settings, which
+// live on the session. Device-layer concern: the rest of the app sees values.
+enum class ThemeMode { SYSTEM, LIGHT, DARK }
+
+class AppSettings(private val prefs: SharedPreferences) {
+
+    val theme: ThemeMode
+        get() = runCatching { ThemeMode.valueOf(prefs.getString(KEY_THEME, null) ?: "") }
+            .getOrDefault(ThemeMode.SYSTEM)
+
+    /** whether the in-conversation terminal is offered at all */
+    val terminalEnabled: Boolean
+        get() = prefs.getBoolean(KEY_TERMINAL, false)
+
+    fun setTheme(mode: ThemeMode) = prefs.edit().putString(KEY_THEME, mode.name).apply()
+
+    fun setTerminalEnabled(enabled: Boolean) = prefs.edit().putBoolean(KEY_TERMINAL, enabled).apply()
+
+    private companion object {
+        const val KEY_THEME = "app_theme"
+        const val KEY_TERMINAL = "app_terminal_enabled"
+    }
+}

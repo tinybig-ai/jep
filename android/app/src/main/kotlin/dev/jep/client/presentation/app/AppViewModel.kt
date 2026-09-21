@@ -6,7 +6,9 @@ import android.content.SharedPreferences
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.jep.client.data.GatewayChatRepository
+import dev.jep.client.device.AppSettings
 import dev.jep.client.device.JepHttp
+import dev.jep.client.device.ThemeMode
 import dev.jep.client.device.PairingStore
 import dev.jep.client.domain.repository.ChatRepository
 import dev.jep.client.domain.model.BrowseResult
@@ -22,6 +24,7 @@ import kotlinx.coroutines.launch
 sealed interface Screen {
     data object Sessions : Screen
     data object NewChat : Screen
+    data object Settings : Screen
     data class Chat(val sessionId: String, val title: String, val workspace: String, val harness: String?) : Screen
 }
 
@@ -48,8 +51,29 @@ data class NewChatState(
     val target: String? get() = path ?: workspace
 }
 
+// app-wide preferences, mirrored into a flow so the theme can react
+data class Prefs(val theme: ThemeMode, val terminalEnabled: Boolean)
+
 class AppViewModel(application: Application) : AndroidViewModel(application) {
     val pairing = PairingStore(application.getSharedPreferences("jep", Context.MODE_PRIVATE))
+    private val settings = AppSettings(application.getSharedPreferences("jep", Context.MODE_PRIVATE))
+
+    private val _prefs = MutableStateFlow(Prefs(settings.theme, settings.terminalEnabled))
+    val prefs = _prefs.asStateFlow()
+
+    fun setTheme(mode: ThemeMode) {
+        settings.setTheme(mode)
+        _prefs.value = _prefs.value.copy(theme = mode)
+    }
+
+    fun setTerminalEnabled(on: Boolean) {
+        settings.setTerminalEnabled(on)
+        _prefs.value = _prefs.value.copy(terminalEnabled = on)
+    }
+
+    fun openSettings() {
+        _screen.value = Screen.Settings
+    }
 
     private val _screen = MutableStateFlow<Screen>(Screen.Sessions)
     val screen = _screen.asStateFlow()

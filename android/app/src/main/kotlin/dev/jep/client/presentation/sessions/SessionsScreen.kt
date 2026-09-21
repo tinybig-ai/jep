@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -53,6 +54,7 @@ fun SessionsScreen(
     onOpen: (SessionSummary) -> Unit,
     onNew: () -> Unit,
     onRefresh: () -> Unit,
+    onSettings: () -> Unit,
 ) {
     Scaffold(
         floatingActionButton = {
@@ -85,6 +87,9 @@ fun SessionsScreen(
                             Modifier.size(18.dp).padding(end = 6.dp),
                             strokeWidth = 2.dp,
                         )
+                    }
+                    IconButton(onClick = onSettings) {
+                        Icon(Icons.Filled.Settings, "settings", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     IconButton(onClick = onRefresh) {
                         Icon(Icons.Filled.Refresh, "refresh", tint = MaterialTheme.colorScheme.onSurfaceVariant)

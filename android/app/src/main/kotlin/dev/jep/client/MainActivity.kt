@@ -9,8 +9,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.lifecycle.viewmodel.compose.viewModel
+import dev.jep.client.device.ThemeMode
 import dev.jep.client.device.StreamService
 import dev.jep.client.presentation.app.AppViewModel
 import dev.jep.client.presentation.app.JepApp
@@ -30,11 +34,16 @@ class MainActivity : ComponentActivity() {
         // the socket outlives screens; the service is what keeps it alive
         ContextCompat.startForegroundService(this, Intent(this, StreamService::class.java))
         setContent {
-            JepTheme {
-                Surface {
-                    val app: AppViewModel = viewModel()
-                    JepApp(app)
-                }
+            val app: AppViewModel = viewModel()
+            val prefs by app.prefs.collectAsState()
+            JepTheme(
+                darkTheme = when (prefs.theme) {
+                    ThemeMode.DARK -> true
+                    ThemeMode.LIGHT -> false
+                    ThemeMode.SYSTEM -> isSystemInDarkTheme()
+                },
+            ) {
+                Surface { JepApp(app) }
             }
         }
     }

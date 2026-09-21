@@ -38,6 +38,17 @@ fun JepApp(app: AppViewModel) {
                 onCreate = { app.createConversation() },
             )
         }
+        screen is Screen.Settings -> {
+            val prefs by app.prefs.collectAsState()
+            dev.jep.client.presentation.settings.SettingsScreen(
+                theme = prefs.theme,
+                terminalEnabled = prefs.terminalEnabled,
+                gateway = app.pairing.baseUrl,
+                onBack = { app.back() },
+                onTheme = { app.setTheme(it) },
+                onTerminal = { app.setTerminalEnabled(it) },
+            )
+        }
         screen is Screen.Chat -> {
             val c = screen as Screen.Chat
             val vm: ChatViewModel = viewModel(
@@ -58,6 +69,7 @@ fun JepApp(app: AppViewModel) {
             onOpen = { app.open(it) },
             onNew = { app.openNewChat() },
             onRefresh = { app.refresh() },
+            onSettings = { app.openSettings() },
         )
     }
 }

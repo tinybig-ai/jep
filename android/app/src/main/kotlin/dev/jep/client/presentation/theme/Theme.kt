@@ -40,9 +40,9 @@ private val light = lightColorScheme(
 )
 
 @Composable
-fun JepTheme(content: @Composable () -> Unit) {
+fun JepTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
     MaterialTheme(
-        colorScheme = if (isSystemInDarkTheme()) dark else light,
+        colorScheme = if (darkTheme) dark else light,
         content = content,
     )
 }
