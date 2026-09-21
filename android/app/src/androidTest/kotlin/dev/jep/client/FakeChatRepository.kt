@@ -1,0 +1,54 @@
+package dev.jep.client
+
+import dev.jep.client.domain.model.BrowseResult
+import dev.jep.client.domain.model.ChatMessage
+import dev.jep.client.domain.model.ChatPart
+import dev.jep.client.domain.model.FileDiff
+import dev.jep.client.domain.model.Harnesses
+import dev.jep.client.domain.model.Model
+import dev.jep.client.domain.model.Role
+import dev.jep.client.domain.model.SessionSummary
+import dev.jep.client.domain.model.Usage
+import dev.jep.client.domain.model.Workspace
+import dev.jep.client.domain.repository.ChatEvent
+import dev.jep.client.domain.repository.ChatRepository
+import dev.jep.client.domain.repository.HistoryBatch
+import dev.jep.client.domain.repository.ModelChoices
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+
+// Hand-rolled in-memory port: the UI tests drive the real screens and the real
+// ViewModels, and only the transport is faked. No emulator network, no gateway.
+class FakeChatRepository(
+    private val messages: List<ChatMessage> = emptyList(),
+    private val choices: ModelChoices? = null,
+    private val browseAnswer: (String?) -> BrowseResult = { p ->
+        BrowseResult(p ?: "/root", "/root", null, emptyList())
+    },
+) : ChatRepository {
+    override suspend fun pair(baseUrl: String, code: String) = "token"
+    override suspend fun sessions(): List<SessionSummary> = emptyList()
+    override suspend fun workspaces(): List<Workspace> = emptyList()
+    override suspend fun harnesses() = Harnesses(listOf("opencode"), "opencode")
+    override suspend fun browse(path: String?): BrowseResult = browseAnswer(path)
+    override suspend fun newSession(title: String?, workspace: String?, path: String?, harness: String?) =
+        SessionSummary("new-session", title ?: "new", workspace ?: "", 0, 0, workspace, harness)
+    override suspend fun models(sessionId: String) = choices ?: ModelChoices(emptyList(), null)
+    override suspend fun setModel(sessionId: String, ref: String?) = true
+    override suspend fun agent(sessionId: String): String? = null
+    override suspend fun setAgent(sessionId: String, agent: String?) = true
+    override suspend fun usage(sessionId: String) = Usage()
+    override suspend fun diff(sessionId: String) = emptyList<FileDiff>()
+    override suspend fun history(sessionId: String, limit: Int, before: Long) = HistoryBatch(messages, false)
+    override suspend fun prompt(sessionId: String, text: String, files: List<String>) =
+        ChatMessage("reply", Role.ASSISTANT, 1, listOf(ChatPart.Text("ok")))
+    override suspend fun stop(sessionId: String) = true
+    override suspend fun respond(askId: String, optionId: String) = true
+    override suspend fun rename(sessionId: String, title: String) = true
+    override suspend fun delete(sessionId: String) = true
+    override suspend fun attach(sessionId: String, filename: String, bytes: ByteArray) = "attachment"
+    override fun events(): Flow<ChatEvent> = flow { }
+}
+
+/** a small helpers so tests can name model rows */
+fun model(id: String, image: Boolean = false, ctx: Long = 0) = Model("opencode", id, image = image, contextLimit = ctx)
