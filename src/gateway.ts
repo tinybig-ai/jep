@@ -12,7 +12,7 @@ import { dirname, join, resolve, sep } from "node:path"
 import type { HarnessAdapter } from "./core/ports.ts"
 import { readClaudeMcp, readCodexMcp, readOpencodeMcp, writeClaudeProjectEnabled, writeCodexMcpEnabled, writeOpencodeMcpEnabled } from "./core/mcpconfig.ts"
 import { listSkills, skillDirsFor, writeSkillModelInvocation } from "./core/skills.ts"
-import type { DomainEvent } from "./core/types.ts"
+import type { DomainEvent, Message } from "./core/types.ts"
 import { usageOf } from "./core/usage.ts"
 import { newPairCode } from "./telegram/pair.ts"
 
@@ -294,6 +294,20 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   // the harness serializes anyway, but a clean 409 beats a hung phone
   const active = new Set<string>()
 
+  // The harness hands back a conversation's *entire* message list — megabytes
+  // for a long one — and the phone pages it 30 at a time. Without this, every
+  // scroll-up refetched and re-mapped the whole session. A short-lived cache
+  // makes paging cheap; a turn's own writes invalidate only by age.
+  const MSG_TTL_MS = 4_000
+  const msgCache = new Map<string, { at: number; rows: Message[] }>()
+  const cachedMessages = async (a: HarnessAdapter, sid: string): Promise<Message[]> => {
+    const hit = msgCache.get(sid)
+    if (hit && Date.now() - hit.at < MSG_TTL_MS) return hit.rows
+    const rows = await a.messages(sid).catch(() => [] as Message[])
+    msgCache.set(sid, { at: Date.now(), rows })
+    return rows
+  }
+
   const tokenOf = (req: IncomingMessage, url: URL): string | null => {
     const head = req.headers.authorization ?? ""
     if (head.startsWith("Bearer ")) return head.slice(7).trim()
@@ -519,8 +533,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       // what this conversation has spent — tokens and reported cost, summed
       // from the harness's own record (cost is reported, never computed)
       if (path === "/usage") {
-        const msgs = await adapter.messages(id).catch(() => [])
-        return json(res, 200, { usage: usageOf(msgs) })
+        return json(res, 200, { usage: usageOf(await cachedMessages(adapter, id)) })
       }
 
       // the files this conversation has changed, so the phone can show them
@@ -592,7 +605,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const before = typeof b.before === "number" ? b.before : 0
         // the harness gives us the whole scroll; the phone asks for a window —
         // the newest `limit` messages, or everything older than `before`
-        const window = (await adapter.messages(id).catch(() => []))
+        const window = (await cachedMessages(adapter, id))
           .filter((m) => !before || m.time < before)
           .sort((a, b) => a.time - b.time)
         const hasMore = limit > 0 && window.length > limit

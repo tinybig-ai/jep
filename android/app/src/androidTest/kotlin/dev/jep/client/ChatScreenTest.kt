@@ -89,8 +89,9 @@ class ChatScreenTest {
             rule.onAllNodesWithContentDescription("response info").fetchSemanticsNodes().isNotEmpty()
         }
         rule.onNodeWithContentDescription("response info").performClick()
-        rule.onNodeWithText("Response").assertExists()
+        rule.onNodeWithText("This reply").assertExists()
         rule.onNodeWithText("big-pickle").assertExists()
+        rule.onNodeWithText("Generated").assertExists()
     }
 
     @Test

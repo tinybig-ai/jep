@@ -29,7 +29,7 @@ import kotlinx.coroutines.launch
 // come on demand when the user scrolls to the top. A whole conversation can be
 // hundreds of messages long, so an unbounded initial fetch made loading slow
 // and handing megabytes of JSON to the UI thread crashed the app.
-const val WINDOW = 120
+const val WINDOW = 30
 
 class ChatViewModel(
     private val repo: ChatRepository,

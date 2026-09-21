@@ -293,18 +293,19 @@ fun ChatScreen(
 private fun ResponseInfoDialog(message: ChatMessage, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Response") },
+        title = { Text("This reply") },
         text = {
+            // this turn's own numbers, not the conversation's running totals:
+            // what it generated, what it was shown, and what that cost
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 message.model?.takeIf { it.isNotBlank() }?.let { StatRow("Model", it.substringAfterLast('/')) }
                 message.tokens?.let { tk ->
-                    StatRow("Input", fmtTokens(tk.input))
-                    StatRow("Output", fmtTokens(tk.output))
+                    StatRow("Generated", fmtTokens(tk.output))
                     if (tk.reasoning > 0) StatRow("Thinking", fmtTokens(tk.reasoning))
+                    StatRow("Prompt", fmtTokens(tk.input + tk.cacheRead + tk.cacheWrite))
                     if (tk.cacheRead + tk.cacheWrite > 0) {
                         StatRow("Cache", "${fmtTokens(tk.cacheRead)} read · ${fmtTokens(tk.cacheWrite)} write")
                     }
-                    StatRow("Context held", fmtTokens(tk.context))
                 }
                 message.cost?.let { StatRow("Cost", if (it > 0) fmtMoney(it) else "—") }
             }
@@ -587,8 +588,27 @@ private fun liveAsMessage(live: ChatViewModel.LiveTurn?): ChatMessage? {
     return ChatMessage(live.messageId, Role.ASSISTANT, 0, parts)
 }
 
+// what the copy button takes: the answer as the user saw it — no thinking, no
+// tool calls, no file noise
 private fun messageText(message: ChatMessage): String =
     message.parts.filterIsInstance<ChatPart.Text>().joinToString("\n") { it.text }
+
+// what a long-press copies: the whole turn, tool calls and thinking included
+private fun fullTurnText(message: ChatMessage): String =
+    message.parts.joinToString("\n\n") { p ->
+        when (p) {
+            is ChatPart.Text -> p.text
+            is ChatPart.Reasoning -> "[thinking]\n${p.text}"
+            is ChatPart.Tool ->
+                buildString {
+                    append("[tool: ${p.name}]")
+                    p.title?.takeIf { it.isNotBlank() }?.let { append(" $it") }
+                    p.output?.takeIf { it.isNotBlank() }?.let { append("\n$it") }
+                }
+            is ChatPart.File -> "[file] ${p.name ?: p.path}"
+            is ChatPart.Unsupported -> ""
+        }
+    }.trim()
 
 private fun codeBlocks(text: String): List<String> {
     val fence = Regex("(?s)```(?:[\\w.+-]+)?\\n?(.*?)```")
@@ -602,8 +622,9 @@ private fun codeBlocks(text: String): List<String> {
 private fun MessageRow(message: ChatMessage, onInfo: (ChatMessage) -> Unit, onReply: (ChatMessage) -> Unit) {
     var menu by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
-    val fullText = remember(message) { messageText(message) }
-    val code = remember(message, fullText) { codeBlocks(fullText) }
+    val fullText = remember(message) { fullTurnText(message) }
+    val visibleText = remember(message) { messageText(message) }
+    val code = remember(message, visibleText) { codeBlocks(visibleText) }
 
     SwipeToReply(onReply = { onReply(message) }) {
     Box(
@@ -804,13 +825,23 @@ private fun ReasoningRow(part: ChatPart.Reasoning) {
             )
         }
         AnimatedVisibility(open) {
-            Text(
-                part.text,
-                fontSize = 14.sp,
-                lineHeight = 20.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodySmall,
-            )
+            Column {
+                Text(
+                    part.text,
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                // the thinking section copies itself, here inside the fold
+                val clipboard = LocalClipboardManager.current
+                Icon(
+                    Icons.Outlined.ContentCopy,
+                    "copy thinking",
+                    Modifier.size(15.dp).clickable { clipboard.setText(AnnotatedString(part.text)) },
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                )
+            }
         }
     }
 }
@@ -871,16 +902,26 @@ private fun ToolRow(part: ChatPart.Tool) {
                 }
             }
             AnimatedVisibility(expanded && body != null) {
-                Text(
-                    body.orEmpty(),
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(top = 6.dp),
-                    fontSize = 12.sp,
-                    lineHeight = 17.sp,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Column {
+                    Text(
+                        body.orEmpty(),
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(top = 6.dp),
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    // the tool's own output copies from here, inside the fold
+                    val clipboard = LocalClipboardManager.current
+                    Icon(
+                        Icons.Outlined.ContentCopy,
+                        "copy tool output",
+                        Modifier.size(15.dp).padding(top = 4.dp).clickable { clipboard.setText(AnnotatedString(body.orEmpty())) },
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    )
+                }
             }
         }
     }
