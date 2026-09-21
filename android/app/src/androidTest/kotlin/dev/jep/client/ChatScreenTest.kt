@@ -2,12 +2,16 @@ package dev.jep.client
 
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.swipeRight
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.jep.client.domain.model.ChatMessage
@@ -37,6 +41,36 @@ class ChatScreenTest {
         rule.runOnUiThread { rule.activity.onBackPressedDispatcher.onBackPressed() }
         rule.waitForIdle()
         assertEquals(1, backed)
+    }
+
+    private fun manyMessages(n: Int) = (1..n).map {
+        ChatMessage("m$it", Role.ASSISTANT, it.toLong(), listOf(ChatPart.Text("message number $it")))
+    }
+
+    @Test
+    fun opening_a_conversation_lands_on_the_latest_message() {
+        val vm = ChatViewModel(FakeChatRepository(messages = manyMessages(30)), "s1", "T")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(10_000) {
+            rule.onAllNodesWithText("message number 30").fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNodeWithText("message number 30").assertIsDisplayed()
+    }
+
+    @Test
+    fun a_jump_to_latest_button_appears_once_scrolled_up() {
+        val vm = ChatViewModel(FakeChatRepository(messages = manyMessages(30)), "s1", "T")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(10_000) {
+            rule.onAllNodesWithText("message number 30").fetchSemanticsNodes().isNotEmpty()
+        }
+        // at the bottom there is nothing to jump to
+        rule.onAllNodesWithContentDescription("jump to latest").assertCountEquals(0)
+        repeat(4) { rule.onNodeWithTag("chat-list").performTouchInput { swipeDown() } }
+        rule.waitForIdle()
+        rule.waitUntil(5_000) {
+            rule.onAllNodesWithContentDescription("jump to latest").fetchSemanticsNodes().isNotEmpty()
+        }
     }
 
     @Test

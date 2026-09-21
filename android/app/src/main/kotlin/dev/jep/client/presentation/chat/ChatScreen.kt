@@ -41,6 +41,7 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowDropUp
+import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
@@ -62,7 +63,9 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -78,15 +81,20 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
@@ -95,6 +103,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mikepenz.markdown.m3.Markdown
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
@@ -131,8 +140,28 @@ fun ChatScreen(
     // nothing here intercepted it.
     BackHandler { onBack() }
 
-    LaunchedEffect(rendered.size, rendered.lastOrNull()?.id, state.live) {
-        if (rendered.isNotEmpty()) listState.animateScrollToItem(rendered.size - 1)
+    // Land at the bottom once, as soon as the list is actually laid out —
+    // instantly, not an animated fly-through of the whole conversation.
+    // Land at the bottom once content arrives — instantly. Keyed on the message
+    // count, not on layout inspection, so it cannot fire before anything exists.
+    var landed by remember { mutableStateOf(false) }
+    LaunchedEffect(rendered.size) {
+        if (landed || rendered.isEmpty()) return@LaunchedEffect
+        // Scroll to the end instantly. Item heights are only estimated at this
+        // point, so a single request lands short; nudge it across a few frames
+        // until the measurements settle on the true bottom.
+        repeat(5) {
+            listState.scrollToItem(rendered.size) // the trailing spacer = the end
+            withFrameNanos { }
+        }
+        landed = true
+    }
+    // Then follow new output (or the live turn) only while already near the
+    // bottom; never get yanked down when older pages are prepended above.
+    LaunchedEffect(rendered.lastOrNull()?.id, state.live) {
+        if (rendered.isEmpty()) return@LaunchedEffect
+        val last = rendered.lastIndex
+        if (listState.firstVisibleItemIndex >= last - 3) listState.animateScrollToItem(last)
     }
 
     // approaching the top of a long conversation pulls the previous page
@@ -253,11 +282,40 @@ fun ChatScreen(
                 )
             }
         }
-        LazyColumn(Modifier.weight(1f), state = listState) {
-            items(rendered.size, key = { rendered[it].id }) { i ->
-                MessageRow(rendered[i], onInfo = { infoMsg = it }, onReply = { replyTo = it })
+        val scope = rememberCoroutineScope()
+        // there is content below the fold: one tap and you are back at the end
+        val showJump by remember { derivedStateOf { listState.canScrollForward } }
+        Box(Modifier.weight(1f)) {
+            LazyColumn(Modifier.fillMaxSize().testTag("chat-list"), state = listState) {
+                // reaching the top threshold pulls the previous page; say so while
+                // it is in flight, or the list just sits there looking stuck
+                if (state.loadingOlder) {
+                    item(key = "loading-older") {
+                        Box(
+                            Modifier.fillMaxWidth()
+                                .padding(vertical = 12.dp)
+                                .semantics { contentDescription = "loading earlier messages" },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                        }
+                    }
+                }
+                items(rendered.size, key = { rendered[it].id }) { i ->
+                    MessageRow(rendered[i], onInfo = { infoMsg = it }, onReply = { replyTo = it })
+                }
+                item { Spacer8() }
             }
-            item { Spacer8() }
+            if (showJump) {
+                FloatingActionButton(
+                    onClick = { scope.launch { listState.animateScrollToItem(rendered.size) } },
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 12.dp).size(44.dp),
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                ) {
+                    Icon(Icons.Filled.ArrowDownward, "jump to latest", Modifier.size(22.dp))
+                }
+            }
         }
         state.ask?.let { ask -> AskBar(ask, vm) }
         replyTo?.let { ReplyBanner(it) { replyTo = null } }
