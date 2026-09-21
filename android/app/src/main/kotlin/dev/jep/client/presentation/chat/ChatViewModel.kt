@@ -10,6 +10,7 @@ import dev.jep.client.domain.repository.ChatEvent
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
 import dev.jep.client.domain.repository.ChatRepository
+import dev.jep.client.domain.repository.ModelChoices
 import dev.jep.client.domain.model.Role
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -56,6 +57,8 @@ class ChatViewModel(
         val notice: String? = null,
         val hasMore: Boolean = false,
         val loadingOlder: Boolean = false,
+        /** models this conversation may run on; null until Settings asks */
+        val models: ModelChoices? = null,
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -215,6 +218,27 @@ class ChatViewModel(
                 .onFailure { err ->
                     _state.update { it.copy(notice = "couldn't delete: ${err.message}") }
                     onDone(false)
+                }
+        }
+    }
+
+    // Settings › model: the pickable models for this conversation and the one
+    // it is set to. Loaded on demand when the panel opens, like Telegram's.
+    fun loadModels() {
+        viewModelScope.launch {
+            runCatching { repo.models(sessionId) }
+                .onSuccess { m -> _state.update { it.copy(models = m) } }
+                .onFailure { err -> _state.update { it.copy(notice = "couldn't load models: ${err.message}") } }
+        }
+    }
+
+    fun setModel(ref: String?) {
+        val before = _state.value.models ?: return
+        _state.update { it.copy(models = before.copy(current = ref)) }
+        viewModelScope.launch {
+            runCatching { repo.setModel(sessionId, ref) }
+                .onFailure { err ->
+                    _state.update { it.copy(models = before, notice = "couldn't set the model: ${err.message}") }
                 }
         }
     }

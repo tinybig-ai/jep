@@ -56,6 +56,21 @@ data class HistoryRes(val messages: List<MessageDto> = emptyList(), val hasMore:
 data class NewSessionRes(val session: SessionDto)
 
 @Serializable
+data class WorkspaceDto(val name: String = "", val harness: String = "")
+
+@Serializable
+data class WorkspacesRes(val items: List<WorkspaceDto> = emptyList())
+
+@Serializable
+data class ModelDto(val providerID: String = "", val modelID: String = "")
+
+@Serializable
+data class ModelsRes(val models: List<ModelDto> = emptyList(), val current: String? = null)
+
+@Serializable
+data class SetModelRes(val ok: Boolean = false, val model: String? = null)
+
+@Serializable
 data class AttachRes(val id: String, val name: String = "")
 
 @Serializable

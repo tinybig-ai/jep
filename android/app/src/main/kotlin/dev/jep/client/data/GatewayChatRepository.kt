@@ -4,15 +4,19 @@ import dev.jep.client.data.dto.AttachRes
 import dev.jep.client.data.dto.ErrorDto
 import dev.jep.client.data.dto.HistoryRes
 import dev.jep.client.data.dto.MessageRes
+import dev.jep.client.data.dto.ModelsRes
 import dev.jep.client.data.dto.NewSessionRes
 import dev.jep.client.data.dto.PairRes
 import dev.jep.client.data.dto.SessionDto
 import dev.jep.client.data.dto.SessionsRes
+import dev.jep.client.data.dto.WorkspacesRes
 import dev.jep.client.domain.repository.ChatEvent
 import dev.jep.client.domain.repository.HistoryBatch
+import dev.jep.client.domain.repository.ModelChoices
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.repository.ChatRepository
 import dev.jep.client.domain.model.SessionSummary
+import dev.jep.client.domain.model.Workspace
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -83,7 +87,24 @@ class GatewayChatRepository(
     override suspend fun sessions(): List<SessionSummary> =
         decode("/sessions", SessionsRes.serializer()).items.map { it.toDomain() }
 
-    override suspend fun newSession(title: String?): SessionSummary = (if (title == null) decode("/new", NewSessionRes.serializer()) else decode("/new", NewSessionRes.serializer(), payload("title" to title))).session.toDomain()
+    override suspend fun workspaces(): List<Workspace> =
+        decode("/workspaces", WorkspacesRes.serializer()).items.map { it.toDomain() }
+
+    override suspend fun newSession(title: String?, workspace: String?): SessionSummary {
+        val body = buildJsonObject {
+            title?.let { put("title", it) }
+            workspace?.let { put("workspace", it) }
+        }.toString()
+        return decode("/new", NewSessionRes.serializer(), body).session.toDomain()
+    }
+
+    override suspend fun models(sessionId: String): ModelChoices {
+        val res = decode("/models", ModelsRes.serializer(), payload("id" to sessionId))
+        return ModelChoices(res.models.map { it.toDomain() }, res.current)
+    }
+
+    override suspend fun setModel(sessionId: String, ref: String?): Boolean =
+        post("/setmodel", payload("id" to sessionId, "model" to (ref ?: ""))).first in 200..299
 
     override suspend fun history(sessionId: String, limit: Int, before: Long): HistoryBatch =
         withContext(Dispatchers.Default) {

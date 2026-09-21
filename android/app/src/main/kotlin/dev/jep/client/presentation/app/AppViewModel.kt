@@ -10,6 +10,7 @@ import dev.jep.client.device.JepHttp
 import dev.jep.client.device.PairingStore
 import dev.jep.client.domain.repository.ChatRepository
 import dev.jep.client.domain.model.SessionSummary
+import dev.jep.client.domain.model.Workspace
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -32,6 +33,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _busy = MutableStateFlow(false)
     val busy = _busy.asStateFlow()
+
+    // workspaces a conversation can be created in, for the creation picker
+    private val _workspaces = MutableStateFlow<List<Workspace>>(emptyList())
+    val workspaces = _workspaces.asStateFlow()
 
     private val _notice = MutableStateFlow<String?>(null)
     val notice = _notice.asStateFlow()
@@ -69,6 +74,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             runCatching { r.sessions() }
                 .onSuccess { _sessions.value = it; _notice.value = null }
                 .onFailure { _notice.value = "gateway unreachable: ${it.message}" }
+            // the creation picker lists the same served workspaces; keep them
+            // fresh with the session list so "New conversation" is never empty
+            runCatching { r.workspaces() }.onSuccess { _workspaces.value = it }
             _busy.value = false
         }
     }
@@ -96,10 +104,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _screen.value = Screen.Chat(session.id, session.title)
     }
 
-    fun newSession() {
+    // creation-time selection: the workspace (and so the harness) is chosen
+    // here, not after the fact — null means the gateway's default
+    fun newSession(workspace: String? = null) {
         val r = repo ?: connect()
         viewModelScope.launch {
-            runCatching { r.newSession(null) }
+            runCatching { r.newSession(null, workspace) }
                 .onSuccess {
                     refresh()
                     open(it)

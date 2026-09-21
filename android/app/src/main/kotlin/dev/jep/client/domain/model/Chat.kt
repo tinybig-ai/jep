@@ -11,6 +11,14 @@ data class SessionSummary(
     val adapter: String? = null,
 )
 
+/** a workspace the gateway serves, and the harness (opencode/codex/…) behind it */
+data class Workspace(val name: String, val harness: String)
+
+/** one model the conversation's harness can run on */
+data class Model(val providerID: String, val modelID: String) {
+    val ref: String get() = "$providerID/$modelID"
+}
+
 sealed interface ChatPart {
     data class Text(val text: String) : ChatPart
     data class Tool(val id: String?, val name: String, val status: ToolStatus?, val title: String?) : ChatPart

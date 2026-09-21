@@ -3,18 +3,26 @@ package dev.jep.client.data
 import dev.jep.client.data.dto.AskDto
 import dev.jep.client.data.dto.MessageDto
 import dev.jep.client.data.dto.PartDto
+import dev.jep.client.data.dto.ModelDto
 import dev.jep.client.data.dto.SessionDto
+import dev.jep.client.data.dto.WorkspaceDto
 import dev.jep.client.domain.model.Ask
 import dev.jep.client.domain.model.AskOption
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
+import dev.jep.client.domain.model.Model
 import dev.jep.client.domain.model.Role
 import dev.jep.client.domain.model.SessionSummary
 import dev.jep.client.domain.model.ToolStatus
+import dev.jep.client.domain.model.Workspace
 
 // the JSON→domain boundary. Unknown part kinds and statuses degrade to
 // inert renderings here, once, instead of leaking harness vocabulary upward.
 fun SessionDto.toDomain() = SessionSummary(id, title, workspace, createdAt, updatedAt, adapter)
+
+fun WorkspaceDto.toDomain() = Workspace(name, harness)
+
+fun ModelDto.toDomain() = Model(providerID, modelID)
 
 fun MessageDto.toDomain() = ChatMessage(
     id = id,

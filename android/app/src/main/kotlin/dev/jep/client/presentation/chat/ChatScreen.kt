@@ -8,6 +8,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,10 +18,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -36,6 +40,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -117,6 +122,7 @@ fun ChatScreen(
     var renameOpen by remember { mutableStateOf(false) }
     var deleteOpen by remember { mutableStateOf(false) }
     var forgetOpen by remember { mutableStateOf(false) }
+    var settingsOpen by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         TopAppBar(
@@ -143,6 +149,11 @@ fun ChatScreen(
                         Icon(Icons.Filled.MoreVert, "chat menu")
                     }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Settings") },
+                            leadingIcon = { Icon(Icons.Filled.Settings, null) },
+                            onClick = { menu = false; settingsOpen = true },
+                        )
                         DropdownMenuItem(
                             text = { Text("Rename") },
                             leadingIcon = { Icon(Icons.Filled.Edit, null) },
@@ -212,6 +223,68 @@ fun ChatScreen(
         onConfirm = { forgetOpen = false; onForgetPairing() },
         onDismiss = { forgetOpen = false },
     )
+    if (settingsOpen) SettingsDialog(vm, onDismiss = { settingsOpen = false })
+}
+
+// Settings, opened from the top-right menu. Scoped to what a phone can act on
+// today: the model this conversation runs on (mirroring Telegram's picker).
+// The list is fetched when the panel opens; a tap sets it on the gateway, which
+// remembers it for the next prompt.
+@Composable
+private fun SettingsDialog(vm: ChatViewModel, onDismiss: () -> Unit) {
+    val state by vm.state.collectAsState()
+    LaunchedEffect(Unit) { vm.loadModels() }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Settings") },
+        text = {
+            val choices = state.models
+            Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                Text(
+                    "MODEL",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
+                if (choices == null) {
+                    Text("Loading…", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    SettingRow("Default (harness)", choices.current == null, null) { vm.setModel(null) }
+                    choices.all.forEach { m ->
+                        SettingRow(m.modelID, choices.current == m.ref, m.providerID) { vm.setModel(m.ref) }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Done") }
+        },
+    )
+}
+
+@Composable
+private fun SettingRow(label: String, selected: Boolean, subtitle: String?, onPick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onPick).padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                label,
+                fontSize = 15.sp,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+            )
+            subtitle?.let {
+                Text(
+                    it,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        if (selected) Text("✓", color = MaterialTheme.colorScheme.primary, fontSize = 16.sp)
+    }
 }
 
 private fun liveAsMessage(live: ChatViewModel.LiveTurn?): ChatMessage? {

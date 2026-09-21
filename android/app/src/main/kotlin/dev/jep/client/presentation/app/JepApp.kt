@@ -36,10 +36,11 @@ fun JepApp(app: AppViewModel) {
         }
         else -> SessionsScreen(
             app.sessions.collectAsState().value,
+            app.workspaces.collectAsState().value,
             busy,
             notice,
             onOpen = { app.open(it) },
-            onNew = { app.newSession() },
+            onNew = { workspace -> app.newSession(workspace) },
             onRefresh = { app.refresh() },
         )
     }
