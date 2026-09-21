@@ -4,14 +4,12 @@
 // HarnessAdapter port. It holds no chat-store state and touches no Telegram
 // surface. Every endpoint the phone can call is listed in docs/GATEWAY.md,
 // which stays in step with this file.
-import { execFile } from "node:child_process"
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
-import { promisify } from "node:util"
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join, resolve, sep } from "node:path"
-import type { HarnessAdapter, SessionImport } from "./core/ports.ts"
+import type { HarnessAdapter, SessionImport, Terminal } from "./core/ports.ts"
 import { readClaudeMcp, readCodexMcp, readOpencodeMcp, writeClaudeProjectEnabled, writeCodexMcpEnabled, writeOpencodeMcpEnabled } from "./core/mcpconfig.ts"
 import { listSkills, skillDirsFor, writeSkillModelInvocation } from "./core/skills.ts"
 import type { DomainEvent, Message } from "./core/types.ts"
@@ -37,6 +35,9 @@ export interface GatewayDeps {
   /** the harness whose separate store can be imported from (opencode), when
    * one exists — the gateway knows only this port, never the storage */
   import?: SessionImport
+  /** a shell per conversation, when the operator allows terminals — the port
+   * owns how it runs (tmux today), the gateway owns only the policy */
+  terminal?: Terminal
   dataHome: string
   port: number
   /** pinned pairing code; generated fresh per boot when omitted */
@@ -172,12 +173,6 @@ const saveTerminalTokens = async (dataHome: string, tokens: Set<string>): Promis
 // even DNS in the daemon. A browse is therefore bounded, serialized, and
 // remembered — a folder that didn't answer is refused outright for a while
 // instead of leaking another thread.
-// The in-chat terminal is a tmux session per conversation, so it survives a
-// daemon restart and reattaches. jep drives it with send-keys and reads the
-// rendered screen with capture-pane — no pty library, no VT emulation.
-const run = promisify(execFile)
-const TMUX_BIN = process.env.JEP_TMUX ?? "tmux"
-const termName = (nativeId: string) => "jep-" + nativeId.replace(/[^A-Za-z0-9_-]/g, "").slice(-48)
 
 const BROWSE_TIMEOUT_MS = 4_000
 const BROWSE_STALL_TTL_MS = 10 * 60_000
@@ -686,41 +681,30 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       }
 
       // ── the in-chat terminal ────────────────────────────────────────────
-      // A shell in the conversation's own folder, backed by tmux so it
-      // survives restarts and reattaches. Only when the operator allows it AND
-      // this device proved the pairing code.
+      // A shell in the conversation's own folder. Only when the operator
+      // allows it AND this device proved the pairing code. How the shell is
+      // run (tmux, a pty, anything) is the Terminal port's business; this is
+      // only the policy and the wire shape.
       if (path.startsWith("/term/")) {
         if (!terminalAllowed) return json(res, 403, { error: "this gateway does not allow a terminal" })
         if (!terminalTokens.has(token)) return json(res, 403, { error: "terminal isn't unlocked for this device" })
-        const name = termName(id)
+        if (!deps.terminal) return json(res, 503, { error: "no terminal is available" })
         try {
           if (path === "/term/open") {
-            // phone-shaped: a narrower, shorter pane wraps less and keeps the
-            // prompt within reach on a handset
-            const cols = String(Math.max(40, Math.min(120, Number(process.env.JEP_TERM_COLS) || 60)))
-            const rows = String(Math.max(12, Math.min(60, Number(process.env.JEP_TERM_ROWS) || 24)))
-            const has = await run(TMUX_BIN, ["has-session", "-t", name]).then(() => true).catch(() => false)
-            if (!has) {
-              await run(TMUX_BIN, ["new-session", "-d", "-s", name, "-c", adapter.workspace, "-x", cols, "-y", rows])
-            } else {
-              // an existing shell may have been created at another size
-              await run(TMUX_BIN, ["resize-window", "-t", name, "-x", cols, "-y", rows]).catch(() => {})
-            }
-            return json(res, 200, { ok: true, name })
+            await deps.terminal.open(id, adapter.workspace)
+            return json(res, 200, { ok: true })
           }
           if (path === "/term/frame") {
-            const { stdout } = await run(TMUX_BIN, ["capture-pane", "-p", "-t", name, "-S", "-200"])
-            return json(res, 200, { text: stdout })
+            return json(res, 200, { text: await deps.terminal.frame(id) })
           }
           if (path === "/term/input") {
             const text = str("text")
             const key = str("key")
-            if (key) await run(TMUX_BIN, ["send-keys", "-t", name, key])
-            else if (text != null) await run(TMUX_BIN, ["send-keys", "-t", name, "-l", text])
+            await deps.terminal.send(id, { ...(key ? { key } : {}), ...(text != null ? { text } : {}) })
             return json(res, 200, { ok: true })
           }
           if (path === "/term/close") {
-            await run(TMUX_BIN, ["kill-session", "-t", name]).catch(() => {})
+            await deps.terminal.close(id)
             return json(res, 200, { ok: true })
           }
         } catch (err) {

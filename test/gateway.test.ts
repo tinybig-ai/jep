@@ -448,6 +448,56 @@ test("import goes through the port, and only offers sessions in served dirs", as
   }
 })
 
+test("the terminal goes through the port (policy stays in the gateway)", async () => {
+  const a = fakeAdapter() // workspace /tmp/ws
+  const calls: string[] = []
+  const prev = process.env.JEP_TERMINAL
+  process.env.JEP_TERMINAL = "1"
+  const g = await startGateway({
+    adapters: () => [{ name: "a-ws", adapter: a }],
+    terminal: {
+      open: async (_id, dir) => {
+        calls.push(`open:${dir}`)
+      },
+      frame: async () => "screen-here",
+      send: async (_id, input) => {
+        calls.push(`send:${input.key ?? input.text}`)
+      },
+      close: async () => {
+        calls.push("close")
+      },
+    },
+    dataHome: mkdtempSync(join(tmpdir(), "gw-test-")),
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+  })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    // pairing spends the code, so capture the fresh one for the unlock
+    const paired = await fetch(`${base}/pair`, { method: "POST", body: JSON.stringify({ code: "TESTCODE" }) })
+    const { token, nextCode } = (await paired.json()) as { token: string; nextCode: string }
+    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" }
+    // gated: a device token alone can't open a shell
+    const locked = await fetch(`${base}/term/open`, { method: "POST", headers, body: JSON.stringify({ id: "s1" }) })
+    assert.equal(locked.status, 403)
+    await fetch(`${base}/term/unlock`, { method: "POST", headers, body: JSON.stringify({ code: nextCode }) })
+    const open = await fetch(`${base}/term/open`, { method: "POST", headers, body: JSON.stringify({ id: "s1" }) })
+    assert.equal(open.status, 200)
+    const framed = (await (
+      await fetch(`${base}/term/frame`, { method: "POST", headers, body: JSON.stringify({ id: "s1" }) })
+    ).json()) as { text: string }
+    assert.equal(framed.text, "screen-here")
+    await fetch(`${base}/term/input`, { method: "POST", headers, body: JSON.stringify({ id: "s1", key: "Enter" }) })
+    assert.ok(calls.some((c) => c.startsWith("open:")), `open not called: ${calls}`)
+    assert.ok(calls.includes("send:Enter"), `send not called: ${calls}`)
+  } finally {
+    await g.close()
+    if (prev === undefined) delete process.env.JEP_TERMINAL
+    else process.env.JEP_TERMINAL = prev
+  }
+})
+
 test("the push feed carries harness events to every connected device", async () => {
   const { gw } = spawnGateway()
   const g = await gw

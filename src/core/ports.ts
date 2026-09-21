@@ -98,6 +98,22 @@ export interface HarnessSupervisor {
   start(workspace: string): Promise<HarnessAdapter>
 }
 
+/**
+ * One conversation's shell, run in its workspace. The frontend names the
+ * session; how the shell is spawned, read and kept alive is the
+ * implementation's business — the same way a harness hides its transport.
+ */
+export interface Terminal {
+  /** start the shell for this session, or reattach to the one already running */
+  open(sessionID: string, dir: string): Promise<void>
+  /** the shell's current screen, as rendered text */
+  frame(sessionID: string): Promise<string>
+  /** type into it, or press a named key (Enter, Tab, C-c, …) */
+  send(sessionID: string, input: { text?: string; key?: string }): Promise<void>
+  /** stop it */
+  close(sessionID: string): Promise<void>
+}
+
 /** A conversation in a harness's *other* store — the one jep doesn't run. */
 export interface ImportableSession {
   harness: string

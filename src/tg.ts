@@ -5,6 +5,7 @@ import { mkdtempSync } from "node:fs"
 import { tmpdir, homedir } from "node:os"
 import { buildHarnesses, DEFAULT_HARNESS } from "./core/harnesses.ts"
 import { opencodeSessionImport } from "./importers/opencode.ts"
+import { tmuxTerminal } from "./terminals/tmux.ts"
 import { assertAdapterImplements } from "./core/compliance.ts"
 import type { HarnessAdapter } from "./core/ports.ts"
 import { TelegramBot } from "./telegram/bot.ts"
@@ -411,6 +412,11 @@ async function main() {
         bin: process.env.OPENCODE_BIN ?? "opencode",
         from: process.env.JEP_IMPORT_FROM ?? process.env.XDG_DATA_HOME ?? join(process.env.HOME ?? "", ".local", "share"),
         into: DATA_HOME,
+      }),
+      terminal: tmuxTerminal({
+        bin: process.env.JEP_TMUX ?? "tmux",
+        cols: Math.max(40, Math.min(120, Number(process.env.JEP_TERM_COLS) || 60)),
+        rows: Math.max(12, Math.min(60, Number(process.env.JEP_TERM_ROWS) || 24)),
       }),
       // an import lands in the store, but a running opencode server won't list
       // it until it comes up again — so restart the one serving that directory

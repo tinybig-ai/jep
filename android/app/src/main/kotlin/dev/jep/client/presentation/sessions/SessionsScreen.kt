@@ -180,7 +180,7 @@ private fun ImportDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Import a session") },
+        title = { Text("Import external session") },
         text = {
             when {
                 sessions == null -> Text("Looking…", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -195,7 +195,10 @@ private fun ImportDialog(
                         Column(Modifier.fillMaxWidth().clickable { onPick(s) }.padding(vertical = 10.dp)) {
                             Text(s.title.ifBlank { s.id }, fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
                             Text(
-                                (if (s.harness.isNotBlank()) "${s.harness} · " else "") + s.directory.substringAfterLast('/'),
+                                // harness and where it lives — the two things
+                                // that tell two same-titled sessions apart
+                                (if (s.harness.isNotBlank()) "${s.harness} · " else "") +
+                                    s.directory.trimEnd('/').split('/').takeLast(2).joinToString("/"),
                                 fontSize = 12.sp,
                                 fontFamily = FontFamily.Monospace,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
