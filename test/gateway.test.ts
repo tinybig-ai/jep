@@ -240,8 +240,8 @@ test("workspaces list, /new selects the named one, and a set model flows into th
     const ws = await fetch(`${base}/workspaces`, { method: "POST", headers })
     const { items } = (await ws.json()) as { items: Array<{ name: string; harness: string }> }
     assert.deepEqual(items, [
-      { name: "a-ws", harness: "fake" },
-      { name: "b-ws", harness: "other" },
+      { name: "a-ws", harness: "fake", dir: "/tmp/ws" },
+      { name: "b-ws", harness: "other", dir: "/tmp/ws" },
     ])
 
     // creation-time selection: naming the workspace picks its adapter
@@ -331,6 +331,50 @@ test("agent, usage, diff and model capabilities ride the gateway", async () => {
       await fetch(`${base}/diff`, { method: "POST", headers, body: JSON.stringify({ id: "s1" }) })
     ).json()) as { files: Array<{ file: string }> }
     assert.equal(diff.files[0]?.file, "src/a.ts")
+  } finally {
+    await g.close()
+  }
+})
+
+test("harnesses, a bounded directory browse, and /new spawning a workspace by path", async () => {
+  const a = fakeAdapter()
+  let added: string | null = null
+  const g = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter: a }],
+    harnesses: () => ({ ids: ["fake", "other"], default: "fake" }),
+    addWorkspace: async (dir, harness) => {
+      added = `${dir}:${harness}`
+      return { name: "added", adapter: a }
+    },
+    browseRoot: "/tmp",
+    dataHome: mkdtempSync(join(tmpdir(), "gw-test-")),
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+  })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const token = await pair(base, "TESTCODE")
+    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" }
+
+    const hs = (await (
+      await fetch(`${base}/harnesses`, { method: "POST", headers, body: "{}" })
+    ).json()) as { harnesses: string[]; default: string }
+    assert.deepEqual(hs.harnesses, ["fake", "other"])
+    assert.equal(hs.default, "fake")
+
+    // "/etc" is above the /tmp root, so it is clamped — the browser can't wander
+    const br = (await (
+      await fetch(`${base}/browse`, { method: "POST", headers, body: JSON.stringify({ path: "/etc" }) })
+    ).json()) as { cwd: string; root: string; dirs: unknown[] }
+    assert.equal(br.cwd, "/tmp")
+    assert.ok(Array.isArray(br.dirs))
+
+    const nw = (await (
+      await fetch(`${base}/new`, { method: "POST", headers, body: JSON.stringify({ path: "/tmp/newdir", harness: "other" }) })
+    ).json()) as { session: SessionSummary }
+    assert.equal(added, "/tmp/newdir:other")
+    assert.equal(nw.session.id, "s1")
   } finally {
     await g.close()
   }

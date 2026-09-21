@@ -6,8 +6,10 @@
 // which stays in step with this file.
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
-import { mkdir, readFile, writeFile } from "node:fs/promises"
-import { join } from "node:path"
+import { existsSync } from "node:fs"
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises"
+import { homedir } from "node:os"
+import { dirname, join, resolve, sep } from "node:path"
 import type { HarnessAdapter } from "./core/ports.ts"
 import type { DomainEvent } from "./core/types.ts"
 import { usageOf } from "./core/usage.ts"
@@ -17,6 +19,14 @@ export interface GatewayDeps {
   // called lazily and repeatedly: the Telegram bot can spawn more workspace
   // servers at any time (project discovery), and the gateway must pick up
   adapters(): Array<{ name: string; adapter: HarnessAdapter }>
+  /** the harnesses installed here, and the default — what a conversation may
+   * be created under, independent of any one workspace */
+  harnesses?(): { ids: string[]; default: string }
+  /** bring a directory up as a workspace under a harness, the way the bot's
+   * "Add project" does; the gateway holds no spawn logic of its own */
+  addWorkspace?(dir: string, harness?: string): Promise<{ name: string; adapter: HarnessAdapter }>
+  /** the directory the browser may not climb above (default $HOME) */
+  browseRoot?: string
   dataHome: string
   port: number
   /** pinned pairing code; generated fresh per boot when omitted */
@@ -332,28 +342,69 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         return json(res, 200, { items })
       }
 
-      // what the phone may create a conversation in: each served workspace and
-      // the harness behind it, so creation-time selection has a live list
+      // what the phone may create a conversation in: each served workspace, the
+      // harness behind it, and its directory — for creation-time selection
       if (path === "/workspaces") {
-        const items = deps.adapters().map(({ name, adapter }) => ({ name, harness: adapter.id }))
+        const items = deps.adapters().map(({ name, adapter }) => ({ name, harness: adapter.id, dir: adapter.workspace }))
         return json(res, 200, { items })
+      }
+
+      // the harnesses installed here (opencode/codex/claude), and the default
+      if (path === "/harnesses") {
+        const h = deps.harnesses?.() ?? {
+          ids: [...new Set(deps.adapters().map((a) => a.adapter.id))],
+          default: deps.adapters()[0]?.adapter.id ?? "",
+        }
+        return json(res, 200, { harnesses: h.ids, default: h.default })
+      }
+
+      // 📂 directory browser, bounded to one root so a tap can't wander into
+      // /etc and "up" has somewhere to stop — the same rule the bot's picker
+      // uses. Folders only, dotfiles hidden.
+      if (path === "/browse") {
+        const root = resolve(deps.browseRoot ?? homedir())
+        const asked = str("path")
+        const cwd0 = asked ? resolve(asked) : root
+        const cwd = cwd0 === root || cwd0.startsWith(root + sep) ? cwd0 : root
+        let dirs: Array<{ name: string; git: boolean }> = []
+        try {
+          dirs = (await readdir(cwd, { withFileTypes: true }))
+            .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+            .map((e) => ({ name: e.name, git: existsSync(join(cwd, e.name, ".git")) }))
+            .sort((a, b) => a.name.localeCompare(b.name))
+        } catch (err) {
+          console.error(`[gw] browse ${cwd}: ${(err as Error)?.message ?? err}`)
+        }
+        const parent = cwd === root ? null : dirname(cwd)
+        return json(res, 200, { cwd, root, parent, dirs })
       }
 
       if (path === "/new") {
         const title = str("title")
-        const wantWorkspace = str("workspace")
+        const wantWorkspace = str("workspace") // a served workspace's name
+        const wantPath = str("path") // …or an absolute directory to serve
         const wantHarness = str("harness")
         const all = deps.adapters()
-        // creation-time selection: name a workspace (and/or a harness) and the
-        // conversation is created in it; with neither, the first served one,
-        // which is the pre-selection behaviour
-        const picked =
-          wantWorkspace || wantHarness
+        // creation-time selection: name a workspace and/or a harness, or hand
+        // over a directory. With nothing, the first served one (the old default).
+        let picked =
+          wantWorkspace || wantPath || wantHarness
             ? all.find(
                 ({ name, adapter }) =>
-                  (!wantWorkspace || name === wantWorkspace) && (!wantHarness || adapter.id === wantHarness),
+                  (!wantWorkspace || name === wantWorkspace) &&
+                  (!wantPath || adapter.workspace === wantPath) &&
+                  (!wantHarness || adapter.id === wantHarness),
               )
             : all[0]
+        // a directory we don't serve yet: bring it up under the harness, the
+        // same spawn the bot's "Add project" performs
+        if (!picked && wantPath && deps.addWorkspace) {
+          try {
+            picked = await deps.addWorkspace(wantPath, wantHarness || undefined)
+          } catch (err) {
+            return json(res, 400, { error: String((err as Error)?.message ?? err) })
+          }
+        }
         if (!picked) return json(res, 400, { error: "no such workspace or harness" })
         const s = await picked.adapter.createSession(title || undefined)
         sessionAdapters.set(s.id, picked.adapter)

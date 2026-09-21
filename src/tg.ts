@@ -352,6 +352,19 @@ async function main() {
     const { startGateway } = await import("./gateway.ts")
     const gw = await startGateway({
       adapters: () => workspaces.map((w) => ({ name: w.name, adapter: w.adapter })),
+      harnesses: () => ({ ids: available.map((h) => h.id), default: DEFAULT_HARNESS }),
+      // the phone's "Add project": bring a directory up as a workspace under a
+      // harness, exactly as the bot's workspace picker does
+      addWorkspace: async (dir, harnessID) => {
+        const existing = workspaces.find((w) => w.dir === dir && (!harnessID || w.adapter.id === harnessID))
+        const ws = existing ?? (await spawnWorkspace(dir, harnessID))
+        if (!existing) {
+          workspaces.push(ws)
+          store.addWorkspace(dir)
+        }
+        return { name: ws.name, adapter: ws.adapter }
+      },
+      browseRoot: process.env.JEP_BROWSE_ROOT,
       dataHome: DATA_HOME,
       port: Number(process.env.JEP_GW_PORT),
       pairCode: process.env.JEP_GW_PAIR_CODE,

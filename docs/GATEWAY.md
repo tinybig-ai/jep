@@ -24,8 +24,10 @@ the stream, for plain clients).
 | `POST /pair` | `{code}` | `{token}` — 5 tries / 60 s |
 | `GET /health` | — | `{ok,paired}` |
 | `POST /sessions` | — | `{items[]}` all sessions, every adapter merged, client renames applied; each carries `adapter` (workspace name) and `harness` (engine id) for display |
-| `POST /workspaces` | — | `{items[]}` of `{name,harness}` — what a conversation may be created in, for creation-time selection |
-| `POST /new` | `{title?,workspace?,harness?}` | `{session}` — created in the named workspace (and/or harness); with neither, the first served workspace. The returned session carries `adapter`+`harness` |
+| `POST /workspaces` | — | `{items[]}` of `{name,harness,dir}` — what a conversation may be created in, for creation-time selection |
+| `POST /harnesses` | — | `{harnesses[],default}` — the harnesses installed here |
+| `POST /browse` | `{path?}` | `{cwd,root,parent,dirs[]}` — folders under `cwd` (`{name,git}`), bounded to `JEP_BROWSE_ROOT` (default `$HOME`); `parent` is null at the root |
+| `POST /new` | `{title?,workspace?,path?,harness?}` | `{session}` — created in a named workspace, at an absolute `path` (spawning that workspace under `harness` if it isn't served yet), and/or under a harness; with none, the first served workspace. The returned session carries `adapter`+`harness` |
 | `POST /history` | `{id,limit?,before?}` | `{messages[],hasMore}` — newest `limit` messages (or, when `before` is a time, the newest `limit` older than it); `hasMore` says older pages exist |
 | `POST /prompt` | `{id,text,files?}` | `{message}` resolves when the turn ends; `files` are `attach` ids sent to the harness as `filePaths`; runs on the session's model if one was set |
 | `POST /respond` | `{askID,optionID}` | `{ok}` |
