@@ -12,6 +12,8 @@ import dev.jep.client.domain.model.ChatPart
 import dev.jep.client.domain.repository.ChatRepository
 import dev.jep.client.domain.repository.ModelChoices
 import dev.jep.client.domain.model.FileDiff
+import dev.jep.client.domain.model.McpServer
+import dev.jep.client.domain.model.SkillSet
 import dev.jep.client.domain.model.Usage
 import dev.jep.client.domain.model.Role
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -71,6 +73,9 @@ class ChatViewModel(
         val usage: Usage? = null,
         /** loaded on demand for the Changes panel */
         val diffs: List<FileDiff>? = null,
+        /** loaded on demand for the Settings panel */
+        val skills: SkillSet? = null,
+        val mcp: List<McpServer>? = null,
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -86,6 +91,9 @@ class ChatViewModel(
 
     init {
         refresh()
+        // the banner needs the model's name and context window up front, not
+        // only when Settings is opened
+        loadModels()
         viewModelScope.launch {
             repo.events().collect { evt ->
                 when (evt) {
@@ -275,6 +283,44 @@ class ChatViewModel(
             runCatching { repo.diff(sessionId) }
                 .onSuccess { d -> _state.update { it.copy(diffs = d) } }
                 .onFailure { err -> _state.update { it.copy(notice = "couldn't load changes: ${err.message}") } }
+        }
+    }
+
+    // Settings › skills / MCP: what the harness loads. Read from the harness's
+    // own files, and toggled in place (frontmatter line / enabled flag).
+    fun loadSkills() {
+        viewModelScope.launch {
+            runCatching { repo.skills(sessionId) }
+                .onSuccess { s -> _state.update { it.copy(skills = s) } }
+                .onFailure { err -> _state.update { it.copy(notice = "couldn't load skills: ${err.message}") } }
+        }
+    }
+
+    fun setSkill(path: String, disabled: Boolean) {
+        val before = _state.value.skills ?: return
+        _state.update { st ->
+            st.copy(skills = before.copy(skills = before.skills.map { if (it.path == path) it.copy(disabled = disabled) else it }))
+        }
+        viewModelScope.launch {
+            runCatching { repo.setSkill(sessionId, path, disabled) }
+                .onFailure { err -> _state.update { it.copy(skills = before, notice = "couldn't change the skill: ${err.message}") } }
+        }
+    }
+
+    fun loadMcp() {
+        viewModelScope.launch {
+            runCatching { repo.mcp(sessionId) }
+                .onSuccess { s -> _state.update { it.copy(mcp = s) } }
+                .onFailure { err -> _state.update { it.copy(notice = "couldn't load MCP servers: ${err.message}") } }
+        }
+    }
+
+    fun setMcp(name: String, enabled: Boolean) {
+        val before = _state.value.mcp ?: return
+        _state.update { st -> st.copy(mcp = before.map { if (it.name == name) it.copy(enabled = enabled) else it }) }
+        viewModelScope.launch {
+            runCatching { repo.setMcp(sessionId, name, enabled) }
+                .onFailure { err -> _state.update { it.copy(mcp = before, notice = "couldn't change the server: ${err.message}") } }
         }
     }
 

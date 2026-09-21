@@ -21,6 +21,15 @@ data class Workspace(val name: String, val harness: String, val dir: String = ""
 /** the harnesses installed on the machine, and the default */
 data class Harnesses(val ids: List<String>, val default: String?)
 
+/** a SKILL.md the harness loads; `disabled` hides it from the model */
+data class Skill(val name: String, val description: String, val scope: String, val path: String, val disabled: Boolean)
+
+/** the skills the harness loads, and whether they can be hidden from the model */
+data class SkillSet(val skills: List<Skill>, val toggleable: Boolean)
+
+/** an MCP server the harness will start */
+data class McpServer(val name: String, val kind: String, val enabled: Boolean, val detail: String)
+
 /** one folder in the directory browser */
 data class DirEntry(val name: String, val git: Boolean)
 

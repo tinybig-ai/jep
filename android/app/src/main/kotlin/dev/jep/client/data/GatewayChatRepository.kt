@@ -7,8 +7,10 @@ import dev.jep.client.data.dto.DiffRes
 import dev.jep.client.data.dto.ErrorDto
 import dev.jep.client.data.dto.HarnessesRes
 import dev.jep.client.data.dto.HistoryRes
+import dev.jep.client.data.dto.McpRes
 import dev.jep.client.data.dto.MessageRes
 import dev.jep.client.data.dto.ModelsRes
+import dev.jep.client.data.dto.SkillsRes
 import dev.jep.client.data.dto.NewSessionRes
 import dev.jep.client.data.dto.PairRes
 import dev.jep.client.data.dto.SessionDto
@@ -22,8 +24,10 @@ import dev.jep.client.domain.model.BrowseResult
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.FileDiff
 import dev.jep.client.domain.model.Harnesses
+import dev.jep.client.domain.model.McpServer
 import dev.jep.client.domain.repository.ChatRepository
 import dev.jep.client.domain.model.SessionSummary
+import dev.jep.client.domain.model.SkillSet
 import dev.jep.client.domain.model.Usage
 import dev.jep.client.domain.model.Workspace
 import kotlinx.coroutines.Dispatchers
@@ -140,6 +144,18 @@ class GatewayChatRepository(
 
     override suspend fun diff(sessionId: String): List<FileDiff> =
         decode("/diff", DiffRes.serializer(), payload("id" to sessionId)).files.map { it.toDomain() }
+
+    override suspend fun skills(sessionId: String): SkillSet =
+        decode("/skills", SkillsRes.serializer(), payload("id" to sessionId)).toDomain()
+
+    override suspend fun setSkill(sessionId: String, path: String, disabled: Boolean): Boolean =
+        post("/setskill", buildJsonObject { put("id", sessionId); put("path", path); put("disabled", disabled) }.toString()).first in 200..299
+
+    override suspend fun mcp(sessionId: String): List<McpServer> =
+        decode("/mcp", McpRes.serializer(), payload("id" to sessionId)).servers.map { it.toDomain() }
+
+    override suspend fun setMcp(sessionId: String, name: String, enabled: Boolean): Boolean =
+        post("/setmcp", buildJsonObject { put("id", sessionId); put("name", name); put("enabled", enabled) }.toString()).first in 200..299
 
     override suspend fun history(sessionId: String, limit: Int, before: Long): HistoryBatch =
         withContext(Dispatchers.Default) {

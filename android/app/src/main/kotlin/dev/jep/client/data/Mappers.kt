@@ -4,10 +4,13 @@ import dev.jep.client.data.dto.AskDto
 import dev.jep.client.data.dto.BrowseRes
 import dev.jep.client.data.dto.DirEntryDto
 import dev.jep.client.data.dto.FileDiffDto
+import dev.jep.client.data.dto.McpDto
 import dev.jep.client.data.dto.MessageDto
 import dev.jep.client.data.dto.ModelDto
 import dev.jep.client.data.dto.PartDto
 import dev.jep.client.data.dto.SessionDto
+import dev.jep.client.data.dto.SkillDto
+import dev.jep.client.data.dto.SkillsRes
 import dev.jep.client.data.dto.TokensDto
 import dev.jep.client.data.dto.UsageDto
 import dev.jep.client.data.dto.WorkspaceDto
@@ -18,8 +21,11 @@ import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
 import dev.jep.client.domain.model.DirEntry
 import dev.jep.client.domain.model.FileDiff
+import dev.jep.client.domain.model.McpServer
 import dev.jep.client.domain.model.Model
 import dev.jep.client.domain.model.Role
+import dev.jep.client.domain.model.Skill
+import dev.jep.client.domain.model.SkillSet
 import dev.jep.client.domain.model.SessionSummary
 import dev.jep.client.domain.model.TokenUsage
 import dev.jep.client.domain.model.ToolStatus
@@ -33,6 +39,12 @@ fun SessionDto.toDomain() = SessionSummary(id, title, workspace, createdAt, upda
 fun WorkspaceDto.toDomain() = Workspace(name, harness, dir)
 
 fun DirEntryDto.toDomain() = DirEntry(name, git)
+
+fun SkillDto.toDomain() = Skill(name, description, scope, path, disableModelInvocation)
+
+fun SkillsRes.toDomain() = SkillSet(skills.map { it.toDomain() }, toggleable)
+
+fun McpDto.toDomain() = McpServer(name, kind, enabled, detail)
 
 fun BrowseRes.toDomain() = BrowseResult(cwd, root, parent, dirs.map { it.toDomain() })
 

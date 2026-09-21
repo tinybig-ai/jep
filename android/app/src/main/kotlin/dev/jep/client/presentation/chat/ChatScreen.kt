@@ -64,6 +64,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -84,6 +85,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mikepenz.markdown.m3.Markdown
+import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
@@ -136,6 +138,7 @@ fun ChatScreen(
     var settingsOpen by remember { mutableStateOf(false) }
     var usageOpen by remember { mutableStateOf(false) }
     var changesOpen by remember { mutableStateOf(false) }
+    var infoMsg by remember { mutableStateOf<ChatMessage?>(null) }
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         TopAppBar(
@@ -240,7 +243,7 @@ fun ChatScreen(
         }
         LazyColumn(Modifier.weight(1f), state = listState) {
             items(rendered.size, key = { rendered[it].id }) { i ->
-                MessageRow(rendered[i])
+                MessageRow(rendered[i], onInfo = { infoMsg = it })
             }
             item { Spacer8() }
         }
@@ -268,6 +271,33 @@ fun ChatScreen(
     if (settingsOpen) SettingsDialog(vm, onDismiss = { settingsOpen = false })
     if (usageOpen) UsageDialog(vm, onDismiss = { usageOpen = false })
     if (changesOpen) ChangesDialog(vm, onDismiss = { changesOpen = false })
+    infoMsg?.let { ResponseInfoDialog(it) { infoMsg = null } }
+}
+
+// What a single reply reported: the model, the token breakdown, the context it
+// held, and what it cost — the detail the old footer crammed into one grey line.
+@Composable
+private fun ResponseInfoDialog(message: ChatMessage, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Response") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                message.model?.takeIf { it.isNotBlank() }?.let { StatRow("Model", it.substringAfterLast('/')) }
+                message.tokens?.let { tk ->
+                    StatRow("Input", fmtTokens(tk.input))
+                    StatRow("Output", fmtTokens(tk.output))
+                    if (tk.reasoning > 0) StatRow("Thinking", fmtTokens(tk.reasoning))
+                    if (tk.cacheRead + tk.cacheWrite > 0) {
+                        StatRow("Cache", "${fmtTokens(tk.cacheRead)} read · ${fmtTokens(tk.cacheWrite)} write")
+                    }
+                    StatRow("Context held", fmtTokens(tk.context))
+                }
+                message.cost?.let { StatRow("Cost", if (it > 0) fmtMoney(it) else "—") }
+            }
+        },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Done") } },
+    )
 }
 
 // Settings, opened from the top-right menu. Scoped to what a phone can act on
@@ -277,7 +307,7 @@ fun ChatScreen(
 @Composable
 private fun SettingsDialog(vm: ChatViewModel, onDismiss: () -> Unit) {
     val state by vm.state.collectAsState()
-    LaunchedEffect(Unit) { vm.loadModels(); vm.loadAgent() }
+    LaunchedEffect(Unit) { vm.loadModels(); vm.loadAgent(); vm.loadSkills(); vm.loadMcp() }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Settings") },
@@ -299,6 +329,38 @@ private fun SettingsDialog(vm: ChatViewModel, onDismiss: () -> Unit) {
                 SettingRow("Default (harness)", selected = state.agent == null, subtitle = null, onPick = { vm.setAgent(null) }, leading = { SettingIcon(Icons.Filled.Star) })
                 SettingRow("Build", selected = state.agent == "build", subtitle = "executes tools", onPick = { vm.setAgent("build") }, leading = { SettingIcon(Icons.Filled.Build) })
                 SettingRow("Plan", selected = state.agent == "plan", subtitle = "read-only — no edits", onPick = { vm.setAgent("plan") }, leading = { SettingIcon(Icons.Filled.Description) })
+
+                val skills = state.skills
+                SectionLabel("SKILLS", top = 14.dp)
+                when {
+                    skills == null -> LoadingLine()
+                    skills.skills.isEmpty() -> EmptyLine("none found for this harness")
+                    else -> skills.skills.forEach { s ->
+                        ToggleRow(
+                            name = s.name,
+                            subtitle = s.scope + if (skills.toggleable) "" else " · fixed",
+                            checked = !s.disabled,
+                            enabled = skills.toggleable,
+                            onChange = { vm.setSkill(s.path, !it) },
+                        )
+                    }
+                }
+
+                val mcp = state.mcp
+                SectionLabel("MCP SERVERS", top = 14.dp)
+                when {
+                    mcp == null -> LoadingLine()
+                    mcp.isEmpty() -> EmptyLine("none configured in this harness")
+                    else -> mcp.forEach { m ->
+                        ToggleRow(
+                            name = m.name,
+                            subtitle = listOf(m.kind, m.detail).filter { it.isNotBlank() }.joinToString(" · "),
+                            checked = m.enabled,
+                            enabled = true,
+                            onChange = { vm.setMcp(m.name, it) },
+                        )
+                    }
+                }
             }
         },
         confirmButton = {
@@ -371,6 +433,33 @@ private fun SectionLabel(text: String, top: androidx.compose.ui.unit.Dp = 0.dp) 
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(top = top, bottom = 4.dp),
     )
+}
+
+@Composable
+private fun LoadingLine() {
+    Text("Loading…", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 4.dp))
+}
+
+@Composable
+private fun EmptyLine(text: String) {
+    Text(text, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 4.dp))
+}
+
+// a skills / MCP row: name and a one-line subtitle, with a switch to flip it
+@Composable
+private fun ToggleRow(name: String, subtitle: String?, checked: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(name, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
+            subtitle?.takeIf { it.isNotBlank() }?.let {
+                Text(it, fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+            }
+        }
+        Switch(checked = checked, enabled = enabled, onCheckedChange = onChange)
+    }
 }
 
 @Composable
@@ -497,7 +586,7 @@ private fun codeBlocks(text: String): List<String> {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MessageRow(message: ChatMessage) {
+private fun MessageRow(message: ChatMessage, onInfo: (ChatMessage) -> Unit) {
     var menu by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
     val fullText = remember(message) { messageText(message) }
@@ -511,7 +600,7 @@ private fun MessageRow(message: ChatMessage) {
     ) {
         when (message.role) {
             Role.USER -> UserBubble(message)
-            Role.ASSISTANT -> AssistantBody(message)
+            Role.ASSISTANT -> AssistantBody(message, onInfo)
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
             DropdownMenuItem(
@@ -550,7 +639,10 @@ private fun UserBubble(message: ChatMessage) {
 }
 
 @Composable
-private fun AssistantBody(message: ChatMessage) {
+private fun AssistantBody(message: ChatMessage, onInfo: (ChatMessage) -> Unit) {
+    // the per-turn accounting lives behind this quiet "i", not printed under
+    // every reply: model, tokens, cost and context on demand
+    val hasInfo = message.tokens != null || message.cost != null || message.model != null
     Column(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         message.parts.forEachIndexed { idx, part ->
             val isLast = idx == message.parts.lastIndex
@@ -559,26 +651,15 @@ private fun AssistantBody(message: ChatMessage) {
         message.error?.let {
             Text(it, color = MaterialTheme.colorScheme.error, fontSize = 14.sp)
         }
-        // which model answered this turn, what it produced, what it cost — the
-        // per-turn accounting the harness reported and the phone used to drop
-        turnMeta(message)?.let {
-            Text(
-                it,
-                fontSize = 11.sp,
-                fontFamily = FontFamily.Monospace,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+        if (hasInfo) {
+            Icon(
+                Icons.Filled.Info,
+                "response info",
+                Modifier.size(16.dp).clickable { onInfo(message) },
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
-}
-
-private fun turnMeta(m: ChatMessage): String? {
-    if (m.tokens == null && m.cost == null && m.model == null) return null
-    val out = mutableListOf<String>()
-    m.model?.substringAfterLast('/')?.takeIf { it.isNotBlank() }?.let { out += it }
-    m.tokens?.let { out += "${fmtTokens(it.output)} out" }
-    m.cost?.let { if (it > 0) out += fmtMoney(it) }
-    return out.takeIf { it.isNotEmpty() }?.joinToString("  ·  ")
 }
 
 @Composable
@@ -900,10 +981,22 @@ private fun Spacer8() {
 private fun statusText(state: ChatViewModel.UiState): String {
     val turns = state.messages.filter { it.role == Role.ASSISTANT }
     val last = turns.lastOrNull { it.tokens != null }
-    val model = last?.model?.substringAfterLast('/') ?: state.models?.current?.substringAfterLast('/')
     val out = mutableListOf<String>()
+    // the model in use, up here by name rather than under every reply
+    val model = last?.model?.substringAfterLast('/')
+        ?: state.models?.current?.substringAfterLast('/')
+        ?: state.models?.default?.substringAfterLast('/')
     if (!model.isNullOrBlank()) out += model
-    last?.tokens?.let { out += "${fmtTokens(it.context)} tok" }
+    // fill: how much of the model's context window the last turn held
+    val used = last?.tokens?.context ?: 0
+    val limit = state.models?.let { c ->
+        val ref = c.current ?: c.default
+        c.all.firstOrNull { it.ref == ref }?.contextLimit ?: 0L
+    } ?: 0L
+    when {
+        used > 0 && limit > 0 -> out += "${fmtTokens(used)}/${fmtTokens(limit)}  ${(100.0 * used / limit).roundToInt()}%"
+        used > 0 -> out += "${fmtTokens(used)} tok"
+    }
     val spend = turns.mapNotNull { it.cost }.sum()
     val unpriced = turns.count { it.cost == null && it.tokens != null }
     if (spend > 0) out += fmtMoney(spend) else if (unpriced > 0) out += "$?"

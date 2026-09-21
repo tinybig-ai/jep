@@ -6,9 +6,11 @@ import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
 import dev.jep.client.domain.model.FileDiff
 import dev.jep.client.domain.model.Harnesses
+import dev.jep.client.domain.model.McpServer
 import dev.jep.client.domain.model.Model
 import dev.jep.client.domain.model.Role
 import dev.jep.client.domain.model.SessionSummary
+import dev.jep.client.domain.model.SkillSet
 import dev.jep.client.domain.model.Usage
 import dev.jep.client.domain.model.Workspace
 import kotlinx.coroutines.flow.Flow
@@ -93,6 +95,14 @@ interface ChatRepository {
     suspend fun usage(sessionId: String): Usage
     /** files the conversation has changed */
     suspend fun diff(sessionId: String): List<FileDiff>
+    /** the skills this conversation's harness loads */
+    suspend fun skills(sessionId: String): SkillSet
+    /** hide (or allow) a skill for the model, by its SKILL.md path */
+    suspend fun setSkill(sessionId: String, path: String, disabled: Boolean): Boolean
+    /** the MCP servers this conversation's harness will start */
+    suspend fun mcp(sessionId: String): List<McpServer>
+    /** enable or disable an MCP server by name */
+    suspend fun setMcp(sessionId: String, name: String, enabled: Boolean): Boolean
     /** fetch the newest `limit` messages, or the newest `limit` older than `before` (ms) */
     suspend fun history(sessionId: String, limit: Int = 0, before: Long = 0): HistoryBatch
     suspend fun prompt(sessionId: String, text: String, files: List<String> = emptyList()): ChatMessage

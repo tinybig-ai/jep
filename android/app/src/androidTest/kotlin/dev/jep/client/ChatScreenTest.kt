@@ -2,13 +2,16 @@ package dev.jep.client
 
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
 import dev.jep.client.domain.model.Role
+import dev.jep.client.domain.model.TokenUsage
 import dev.jep.client.domain.model.ToolStatus
 import dev.jep.client.presentation.chat.ChatScreen
 import dev.jep.client.presentation.chat.ChatViewModel
@@ -32,6 +35,27 @@ class ChatScreenTest {
         rule.runOnUiThread { rule.activity.onBackPressedDispatcher.onBackPressed() }
         rule.waitForIdle()
         assertEquals(1, backed)
+    }
+
+    @Test
+    fun a_response_info_button_opens_the_detail_dialog() {
+        val turn = ChatMessage(
+            id = "m1",
+            role = Role.ASSISTANT,
+            time = 1,
+            parts = listOf(ChatPart.Text("hi")),
+            model = "opencode/big-pickle",
+            cost = 0.01,
+            tokens = TokenUsage(input = 10, output = 5, reasoning = 2, cacheRead = 1, cacheWrite = 0),
+        )
+        val vm = ChatViewModel(FakeChatRepository(messages = listOf(turn)), "s1", "T")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(5_000) {
+            rule.onAllNodesWithContentDescription("response info").fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNodeWithContentDescription("response info").performClick()
+        rule.onNodeWithText("Response").assertExists()
+        rule.onNodeWithText("big-pickle").assertExists()
     }
 
     @Test

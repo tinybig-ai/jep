@@ -38,6 +38,10 @@ the stream, for plain clients).
 | `POST /setagent` | `{id,agent?}` | `{ok,agent}` — set (`"build"`/`"plan"`) or clear this conversation's primary agent; persisted in `<DATA_HOME>/gateway-agents.json`, applied to the next `/prompt` |
 | `POST /usage` | `{id}` | `{usage}` — tokens (in/out/thinking/cache) and reported cost summed over the conversation, plus turns and models (`core/usage.ts`) |
 | `POST /diff` | `{id}` | `{files[]}` — files this conversation changed (`{file,additions,deletions,status?}`) |
+| `POST /skills` | `{id}` | `{skills[],toggleable}` — the SKILL.md dirs this harness loads (`{name,description,scope,path,disableModelInvocation}`) |
+| `POST /setskill` | `{id,path,disabled}` | `{ok}` — hide (or allow) a skill for the model; flips `disable-model-invocation` in its frontmatter |
+| `POST /mcp` | `{id}` | `{servers[]}` — the MCP servers this harness will start (`{name,kind,enabled,detail}`), read from its config |
+| `POST /setmcp` | `{id,name,enabled}` | `{ok}` — enable/disable an MCP server in the harness's own config |
 | `POST /rename` | `{id,title}` | `{ok}` — a client-side title override (Telegram-style chat rename), persisted in `<DATA_HOME>/gateway-titles.json`, overlaid on `/sessions` |
 | `POST /delete` | `{id}` | `{ok}` — removes the session from the harness |
 | `POST /attach` | raw octets, `?id=<session>&name=<name>` | `{id,name}` — buffers up to 32 MB under `<DATA_HOME>/attachments`; the id feeds the next `/prompt`'s `files` |

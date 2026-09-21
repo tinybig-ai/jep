@@ -5,8 +5,10 @@ import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
 import dev.jep.client.domain.model.FileDiff
 import dev.jep.client.domain.model.Harnesses
+import dev.jep.client.domain.model.McpServer
 import dev.jep.client.domain.model.Model
 import dev.jep.client.domain.model.Role
+import dev.jep.client.domain.model.SkillSet
 import dev.jep.client.domain.model.SessionSummary
 import dev.jep.client.domain.model.Usage
 import dev.jep.client.domain.model.Workspace
@@ -39,6 +41,10 @@ class FakeChatRepository(
     override suspend fun setAgent(sessionId: String, agent: String?) = true
     override suspend fun usage(sessionId: String) = Usage()
     override suspend fun diff(sessionId: String) = emptyList<FileDiff>()
+    override suspend fun skills(sessionId: String) = SkillSet(emptyList(), true)
+    override suspend fun setSkill(sessionId: String, path: String, disabled: Boolean) = true
+    override suspend fun mcp(sessionId: String): List<McpServer> = emptyList()
+    override suspend fun setMcp(sessionId: String, name: String, enabled: Boolean) = true
     override suspend fun history(sessionId: String, limit: Int, before: Long) = HistoryBatch(messages, false)
     override suspend fun prompt(sessionId: String, text: String, files: List<String>) =
         ChatMessage("reply", Role.ASSISTANT, 1, listOf(ChatPart.Text("ok")))

@@ -10,6 +10,8 @@ import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join, resolve, sep } from "node:path"
 import type { HarnessAdapter } from "./core/ports.ts"
+import { readClaudeMcp, readCodexMcp, readOpencodeMcp, writeClaudeProjectEnabled, writeCodexMcpEnabled, writeOpencodeMcpEnabled } from "./core/mcpconfig.ts"
+import { listSkills, skillDirsFor, writeSkillModelInvocation } from "./core/skills.ts"
 import type { DomainEvent } from "./core/types.ts"
 import { usageOf } from "./core/usage.ts"
 import { newPairCode } from "./telegram/pair.ts"
@@ -146,6 +148,17 @@ async function listDirs(cwd: string): Promise<Array<{ name: string; git: boolean
     })),
   )
   return out.sort((a, b) => a.name.localeCompare(b.name))
+}
+
+// where each harness keeps its MCP config, so the phone can list and toggle
+// servers the way the bot does — read straight from the file, zero turns
+function mcpPaths(): { opencode: string; codex: string; claude: string } {
+  const xdg = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config")
+  return {
+    opencode: join(xdg, "opencode", "opencode.json"),
+    codex: join(homedir(), ".codex", "config.toml"),
+    claude: join(homedir(), ".claude.json"),
+  }
 }
 
 /** keep a phone-supplied leaf filename from walking out of the uploads dir */
@@ -514,6 +527,54 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       if (path === "/diff") {
         const files = adapter.diff ? await adapter.diff(id).catch(() => []) : []
         return json(res, 200, { files })
+      }
+
+      // the skills this conversation's harness loads, from the SKILL.md dirs
+      if (path === "/skills") {
+        const dirs = adapter.skillDirs?.() ?? skillDirsFor(adapter.id, adapter.workspace)
+        let skills: unknown[] = []
+        try {
+          skills = await listSkills(dirs.userDirs, dirs.projectDirs)
+        } catch (err) {
+          console.error(`[gw] skills: ${(err as Error)?.message ?? err}`)
+        }
+        return json(res, 200, { skills, toggleable: dirs.toggleable })
+      }
+
+      // hide / allow a skill for the model — one frontmatter line in its SKILL.md
+      if (path === "/setskill") {
+        const skillPath = str("path")
+        if (!skillPath) return json(res, 400, { error: "path required" })
+        await writeSkillModelInvocation(skillPath, b.disabled === true)
+        return json(res, 200, { ok: true })
+      }
+
+      // the MCP servers this harness will start, and whether each is enabled
+      if (path === "/mcp") {
+        const paths = mcpPaths()
+        let servers: unknown[] = []
+        try {
+          if (adapter.id === "opencode") servers = await readOpencodeMcp(paths.opencode)
+          else if (adapter.id === "codex") servers = await readCodexMcp(paths.codex)
+          else if (adapter.id === "claude") {
+            const c = await readClaudeMcp(paths.claude, adapter.workspace)
+            servers = [...c.user, ...c.project]
+          }
+        } catch (err) {
+          console.error(`[gw] mcp: ${(err as Error)?.message ?? err}`)
+        }
+        return json(res, 200, { servers })
+      }
+
+      if (path === "/setmcp") {
+        const name = str("name")
+        if (!name) return json(res, 400, { error: "name required" })
+        const enabled = b.enabled === true
+        const paths = mcpPaths()
+        if (adapter.id === "opencode") await writeOpencodeMcpEnabled(paths.opencode, name, enabled)
+        else if (adapter.id === "codex") await writeCodexMcpEnabled(paths.codex, name, enabled)
+        else if (adapter.id === "claude") await writeClaudeProjectEnabled(paths.claude, adapter.workspace, name, enabled)
+        return json(res, 200, { ok: true })
       }
 
       // set (or clear, with no model) this conversation's model. Persisted, and

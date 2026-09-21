@@ -134,6 +134,24 @@ data class SetModelRes(val ok: Boolean = false, val model: String? = null)
 data class AgentRes(val current: String? = null)
 
 @Serializable
+data class SkillDto(
+    val name: String = "",
+    val description: String = "",
+    val scope: String = "",
+    val path: String = "",
+    val disableModelInvocation: Boolean = false,
+)
+
+@Serializable
+data class SkillsRes(val skills: List<SkillDto> = emptyList(), val toggleable: Boolean = false)
+
+@Serializable
+data class McpDto(val name: String = "", val kind: String = "", val enabled: Boolean = false, val detail: String = "")
+
+@Serializable
+data class McpRes(val servers: List<McpDto> = emptyList())
+
+@Serializable
 data class UsageDto(
     val input: Long = 0,
     val output: Long = 0,
