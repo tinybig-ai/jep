@@ -266,6 +266,76 @@ test("workspaces list, /new selects the named one, and a set model flows into th
   }
 })
 
+test("agent, usage, diff and model capabilities ride the gateway", async () => {
+  const a = fakeAdapter()
+  a.models = async () => [
+    { providerID: "open", modelID: "vision" },
+    { providerID: "open", modelID: "plain" },
+  ]
+  a.capabilities = async () =>
+    new Map([["open/vision", { image: true, attachment: true, contextLimit: 200_000 }]])
+  a.defaultModel = async () => "open/vision"
+  a.diff = async () => [{ file: "src/a.ts", additions: 3, deletions: 1, status: "modified" as const }]
+  a.messages = async () => [
+    {
+      id: "m1",
+      sessionID: "s1",
+      role: "assistant",
+      time: 1,
+      parts: [],
+      tokens: { input: 10, output: 5, reasoning: 2, cache: { read: 1, write: 0 } },
+      cost: 0.02,
+      model: "open/vision",
+    },
+  ]
+  let promptedAgent: string | undefined
+  a.prompt = async (_id, text, opts) => {
+    promptedAgent = opts?.agent
+    return { id: "m1", sessionID: "s1", role: "assistant", time: 1, parts: [{ kind: "text", text }] }
+  }
+  const g = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter: a }],
+    dataHome: mkdtempSync(join(tmpdir(), "gw-test-")),
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+  })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const token = await pair(base, "TESTCODE")
+    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" }
+
+    type Models = { models: Array<{ modelID: string; image: boolean; contextLimit: number }>; default: string | null }
+    const md = (await (
+      await fetch(`${base}/models`, { method: "POST", headers, body: JSON.stringify({ id: "s1" }) })
+    ).json()) as Models
+    assert.equal(md.default, "open/vision")
+    assert.equal(md.models.find((m) => m.modelID === "vision")?.image, true)
+    assert.equal(md.models.find((m) => m.modelID === "vision")?.contextLimit, 200_000)
+    assert.equal(md.models.find((m) => m.modelID === "plain")?.image, false)
+
+    await fetch(`${base}/setagent`, { method: "POST", headers, body: JSON.stringify({ id: "s1", agent: "plan" }) })
+    const ag = (await (await fetch(`${base}/agent`, { method: "POST", headers, body: JSON.stringify({ id: "s1" }) })).json()) as { current: string | null }
+    assert.equal(ag.current, "plan")
+    await fetch(`${base}/prompt`, { method: "POST", headers, body: JSON.stringify({ id: "s1", text: "hi" }) })
+    assert.equal(promptedAgent, "plan")
+
+    const usage = (await (
+      await fetch(`${base}/usage`, { method: "POST", headers, body: JSON.stringify({ id: "s1" }) })
+    ).json()) as { usage: { turns: number; input: number; cost: number } }
+    assert.equal(usage.usage.turns, 1)
+    assert.equal(usage.usage.input, 10)
+    assert.equal(usage.usage.cost, 0.02)
+
+    const diff = (await (
+      await fetch(`${base}/diff`, { method: "POST", headers, body: JSON.stringify({ id: "s1" }) })
+    ).json()) as { files: Array<{ file: string }> }
+    assert.equal(diff.files[0]?.file, "src/a.ts")
+  } finally {
+    await g.close()
+  }
+})
+
 test("the push feed carries harness events to every connected device", async () => {
   const { gw } = spawnGateway()
   const g = await gw

@@ -10,6 +10,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { HarnessAdapter } from "./core/ports.ts"
 import type { DomainEvent } from "./core/types.ts"
+import { usageOf } from "./core/usage.ts"
 import { newPairCode } from "./telegram/pair.ts"
 
 export interface GatewayDeps {
@@ -36,6 +37,7 @@ export interface GatewayHandle {
 const TOKEN_FILE = "gateway-tokens.json"
 const TITLES_FILE = "gateway-titles.json"
 const MODELS_FILE = "gateway-models.json"
+const AGENTS_FILE = "gateway-agents.json"
 const BODY_MAX = 1 << 20
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -92,6 +94,23 @@ const saveModels = async (dataHome: string, models: Map<string, string>): Promis
   await writeFile(join(dataHome, MODELS_FILE), JSON.stringify(Object.fromEntries(models), null, 1))
 }
 
+// The primary agent (opencode's "build" / "plan") a conversation runs under,
+// remembered per session exactly like the model. Not a harness — a harness is
+// fixed for the life of a conversation.
+async function loadAgents(dataHome: string): Promise<Map<string, string>> {
+  try {
+    const raw = JSON.parse(await readFile(join(dataHome, AGENTS_FILE), "utf8")) as Record<string, string>
+    return new Map(Object.entries(raw))
+  } catch {
+    return new Map()
+  }
+}
+
+const saveAgents = async (dataHome: string, agents: Map<string, string>): Promise<void> => {
+  await mkdir(dataHome, { recursive: true })
+  await writeFile(join(dataHome, AGENTS_FILE), JSON.stringify(Object.fromEntries(agents), null, 1))
+}
+
 /** keep a phone-supplied leaf filename from walking out of the uploads dir */
 function leafName(name: string): string {
   const base = name.split(/[\\/]/).pop() ?? "file"
@@ -146,6 +165,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   let tokens = await loadTokens(deps.dataHome)
   const titles = await loadTitles(deps.dataHome)
   const models = await loadModels(deps.dataHome)
+  const agents = await loadAgents(deps.dataHome)
 
   // help-files the phone needs, resolved as events and commands arrive
   const sessionAdapters = new Map<string, HarnessAdapter>()
@@ -302,7 +322,10 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           for (const s of list) {
             sessionAdapters.set(s.id, adapter)
             const overridden = titles.get(s.id)
-            items.push({ ...s, title: overridden ?? s.title, adapter: name })
+            // `adapter` is the workspace's friendly name; `harness` the engine
+            // behind it (opencode/codex/claude). Both are display-only: a
+            // conversation cannot move between harnesses after it exists.
+            items.push({ ...s, title: overridden ?? s.title, adapter: name, harness: adapter.id })
           }
         }
         items.sort((x, y) => y.updatedAt - x.updatedAt)
@@ -334,7 +357,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         if (!picked) return json(res, 400, { error: "no such workspace or harness" })
         const s = await picked.adapter.createSession(title || undefined)
         sessionAdapters.set(s.id, picked.adapter)
-        return json(res, 200, { session: s })
+        return json(res, 200, { session: { ...s, adapter: picked.name, harness: picked.adapter.id } })
       }
 
       const id = str("id")
@@ -366,7 +389,43 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       // Settings screen, mirroring Telegram's model picker.
       if (path === "/models") {
         const list = adapter.models ? await adapter.models().catch(() => []) : []
-        return json(res, 200, { models: list, current: models.get(id) ?? null })
+        // capabilities ride along so the phone can badge vision/attachment
+        // models and show a context limit — the same data Telegram's picker
+        // uses for its 🖼 marker and the image-model suggestion.
+        const caps = adapter.capabilities ? await adapter.capabilities().catch(() => new Map()) : new Map()
+        const enriched = list.map((m) => {
+          const c = caps.get(`${m.providerID}/${m.modelID}`)
+          return { ...m, image: c?.image ?? false, attachment: c?.attachment ?? false, contextLimit: c?.contextLimit ?? 0 }
+        })
+        const resolvedDefault = adapter.defaultModel ? await adapter.defaultModel().catch(() => null) : null
+        return json(res, 200, { models: enriched, current: models.get(id) ?? null, default: resolvedDefault })
+      }
+
+      // the primary agent a conversation runs under (build executes tools,
+      // plan is read-only) — a per-conversation choice like the model
+      if (path === "/agent") {
+        return json(res, 200, { current: agents.get(id) ?? null })
+      }
+
+      if (path === "/setagent") {
+        const agent = str("agent")
+        if (agent) agents.set(id, agent)
+        else agents.delete(id)
+        await saveAgents(deps.dataHome, agents)
+        return json(res, 200, { ok: true, agent: agent || null })
+      }
+
+      // what this conversation has spent — tokens and reported cost, summed
+      // from the harness's own record (cost is reported, never computed)
+      if (path === "/usage") {
+        const msgs = await adapter.messages(id).catch(() => [])
+        return json(res, 200, { usage: usageOf(msgs) })
+      }
+
+      // the files this conversation has changed, so the phone can show them
+      if (path === "/diff") {
+        const files = adapter.diff ? await adapter.diff(id).catch(() => []) : []
+        return json(res, 200, { files })
       }
 
       // set (or clear, with no model) this conversation's model. Persisted, and
@@ -402,9 +461,14 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const ref = models.get(id)
         const [providerID = "", modelID = ""] = ref ? ref.split("/") : []
         const model = providerID && modelID ? { providerID, modelID } : undefined
+        const agent = agents.get(id)
         active.add(id)
         try {
-          const message = await adapter.prompt(id, text, { filePaths, ...(model ? { model } : {}) })
+          const message = await adapter.prompt(id, text, {
+            filePaths,
+            ...(model ? { model } : {}),
+            ...(agent ? { agent } : {}),
+          })
           return json(res, 200, { message })
         } catch (err) {
           return json(res, 502, { error: String((err as Error)?.message ?? err) })

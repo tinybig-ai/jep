@@ -23,15 +23,19 @@ the stream, for plain clients).
 |---|---|---|
 | `POST /pair` | `{code}` | `{token}` — 5 tries / 60 s |
 | `GET /health` | — | `{ok,paired}` |
-| `POST /sessions` | — | `{items[]}` all sessions, every adapter merged, client renames applied |
+| `POST /sessions` | — | `{items[]}` all sessions, every adapter merged, client renames applied; each carries `adapter` (workspace name) and `harness` (engine id) for display |
 | `POST /workspaces` | — | `{items[]}` of `{name,harness}` — what a conversation may be created in, for creation-time selection |
-| `POST /new` | `{title?,workspace?,harness?}` | `{session}` — created in the named workspace (and/or harness); with neither, the first served workspace |
+| `POST /new` | `{title?,workspace?,harness?}` | `{session}` — created in the named workspace (and/or harness); with neither, the first served workspace. The returned session carries `adapter`+`harness` |
 | `POST /history` | `{id,limit?,before?}` | `{messages[],hasMore}` — newest `limit` messages (or, when `before` is a time, the newest `limit` older than it); `hasMore` says older pages exist |
 | `POST /prompt` | `{id,text,files?}` | `{message}` resolves when the turn ends; `files` are `attach` ids sent to the harness as `filePaths`; runs on the session's model if one was set |
 | `POST /respond` | `{askID,optionID}` | `{ok}` |
 | `POST /stop` | `{id}` | `{stopped}` |
-| `POST /models` | `{id}` | `{models[],current}` — the models this conversation's harness can run on, and the one it is set to (`current` is null for the harness default) |
+| `POST /models` | `{id}` | `{models[],current,default}` — the models this conversation's harness can run on, each with `image`/`attachment`/`contextLimit`; `current` is the set one (null = harness default); `default` is what "default" resolves to |
 | `POST /setmodel` | `{id,model?}` | `{ok,model}` — set (`"provider/model"`) or clear (omit) this conversation's model; persisted in `<DATA_HOME>/gateway-models.json`, applied to the next `/prompt` |
+| `POST /agent` | `{id}` | `{current}` — the primary agent set for this conversation (null = harness default) |
+| `POST /setagent` | `{id,agent?}` | `{ok,agent}` — set (`"build"`/`"plan"`) or clear this conversation's primary agent; persisted in `<DATA_HOME>/gateway-agents.json`, applied to the next `/prompt` |
+| `POST /usage` | `{id}` | `{usage}` — tokens (in/out/thinking/cache) and reported cost summed over the conversation, plus turns and models (`core/usage.ts`) |
+| `POST /diff` | `{id}` | `{files[]}` — files this conversation changed (`{file,additions,deletions,status?}`) |
 | `POST /rename` | `{id,title}` | `{ok}` — a client-side title override (Telegram-style chat rename), persisted in `<DATA_HOME>/gateway-titles.json`, overlaid on `/sessions` |
 | `POST /delete` | `{id}` | `{ok}` — removes the session from the harness |
 | `POST /attach` | raw octets, `?id=<session>&name=<name>` | `{id,name}` — buffers up to 32 MB under `<DATA_HOME>/attachments`; the id feeds the next `/prompt`'s `files` |
