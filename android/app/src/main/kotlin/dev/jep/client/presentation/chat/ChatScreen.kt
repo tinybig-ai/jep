@@ -33,12 +33,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.ArrowDropUp
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExitToApp
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
@@ -75,6 +78,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mikepenz.markdown.m3.Markdown
+import kotlin.math.roundToLong
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
 import dev.jep.client.domain.model.Role
@@ -123,16 +127,22 @@ fun ChatScreen(
     var deleteOpen by remember { mutableStateOf(false) }
     var forgetOpen by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
+    var usageOpen by remember { mutableStateOf(false) }
+    var changesOpen by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         TopAppBar(
             title = {
                 Column {
-                    Text(vm.title, style = MaterialTheme.typography.titleMedium)
+                    Text(vm.title, style = MaterialTheme.typography.titleMedium, maxLines = 1)
                     Text(
-                        "remote · ${if (state.lost) "reconnecting…" else "connected"}",
+                        // the workspace and the harness it runs under, always
+                        // visible: the harness is fixed for the conversation
+                        listOfNotNull(vm.workspace.ifBlank { "workspace" }, vm.harness).joinToString(" · ") +
+                            if (state.lost) " · reconnecting…" else "",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
                     )
                 }
             },
@@ -153,6 +163,16 @@ fun ChatScreen(
                             text = { Text("Settings") },
                             leadingIcon = { Icon(Icons.Filled.Settings, null) },
                             onClick = { menu = false; settingsOpen = true },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Usage") },
+                            leadingIcon = { Icon(Icons.Filled.Info, null) },
+                            onClick = { menu = false; usageOpen = true },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Changes") },
+                            leadingIcon = { Icon(Icons.Filled.List, null) },
+                            onClick = { menu = false; changesOpen = true },
                         )
                         DropdownMenuItem(
                             text = { Text("Rename") },
@@ -186,6 +206,21 @@ fun ChatScreen(
                 }
             },
         )
+        // the ambient status line: model in use, tokens it held, spend so far —
+        // the phone's answer to Telegram's pinned status. Silent when there is
+        // nothing yet to say.
+        statusText(state).takeIf { it.isNotEmpty() }?.let { s ->
+            Surface(color = MaterialTheme.colorScheme.surface) {
+                Text(
+                    s,
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 3.dp),
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
+        }
         AnimatedVisibility(state.failure != null || state.notice != null) {
             Surface(color = MaterialTheme.colorScheme.surfaceVariant) {
                 Text(
@@ -224,6 +259,8 @@ fun ChatScreen(
         onDismiss = { forgetOpen = false },
     )
     if (settingsOpen) SettingsDialog(vm, onDismiss = { settingsOpen = false })
+    if (usageOpen) UsageDialog(vm, onDismiss = { usageOpen = false })
+    if (changesOpen) ChangesDialog(vm, onDismiss = { changesOpen = false })
 }
 
 // Settings, opened from the top-right menu. Scoped to what a phone can act on
@@ -233,27 +270,46 @@ fun ChatScreen(
 @Composable
 private fun SettingsDialog(vm: ChatViewModel, onDismiss: () -> Unit) {
     val state by vm.state.collectAsState()
-    LaunchedEffect(Unit) { vm.loadModels() }
+    LaunchedEffect(Unit) { vm.loadModels(); vm.loadAgent() }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Settings") },
         text = {
-            val choices = state.models
-            Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
-                Text(
-                    "MODEL",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(bottom = 4.dp),
+            Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState())) {
+                SectionLabel("HARNESS")
+                // fixed for the life of the conversation: a chat cannot move
+                // between harnesses, so this is shown, never offered
+                SettingRow(
+                    listOfNotNull(vm.workspace.ifBlank { null }, vm.harness).joinToString(" · ").ifBlank { "—" },
+                    selected = false,
+                    subtitle = "fixed for this conversation",
+                    onPick = {},
+                    checkable = false,
                 )
+                val choices = state.models
+                SectionLabel("MODEL", top = 12.dp)
                 if (choices == null) {
                     Text("Loading…", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } else {
-                    SettingRow("Default (harness)", choices.current == null, null) { vm.setModel(null) }
+                    SettingRow(
+                        choices.default?.let { "Default · ${it.substringAfterLast('/')}" } ?: "Default (harness)",
+                        selected = choices.current == null,
+                        subtitle = null,
+                        onPick = { vm.setModel(null) },
+                    )
                     choices.all.forEach { m ->
-                        SettingRow(m.modelID, choices.current == m.ref, m.providerID) { vm.setModel(m.ref) }
+                        SettingRow(
+                            (if (m.image) "🖼 " else "") + m.modelID,
+                            selected = choices.current == m.ref,
+                            subtitle = m.providerID + if (m.contextLimit > 0) "  ·  ${fmtTokens(m.contextLimit)} ctx" else "",
+                            onPick = { vm.setModel(m.ref) },
+                        )
                     }
                 }
+                SectionLabel("AGENT", top = 12.dp)
+                SettingRow("Default (harness)", selected = state.agent == null, subtitle = null, onPick = { vm.setAgent(null) })
+                SettingRow("🔨 Build", selected = state.agent == "build", subtitle = "executes tools", onPick = { vm.setAgent("build") })
+                SettingRow("📝 Plan", selected = state.agent == "plan", subtitle = "read-only — no edits", onPick = { vm.setAgent("plan") })
             }
         },
         confirmButton = {
@@ -263,9 +319,27 @@ private fun SettingsDialog(vm: ChatViewModel, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun SettingRow(label: String, selected: Boolean, subtitle: String?, onPick: () -> Unit) {
+private fun SectionLabel(text: String, top: androidx.compose.ui.unit.Dp = 0.dp) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = top, bottom = 4.dp),
+    )
+}
+
+@Composable
+private fun SettingRow(
+    label: String,
+    selected: Boolean,
+    subtitle: String?,
+    onPick: () -> Unit,
+    checkable: Boolean = true,
+) {
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onPick).padding(vertical = 10.dp),
+        Modifier.fillMaxWidth()
+            .then(if (checkable) Modifier.clickable(onClick = onPick) else Modifier)
+            .padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
@@ -274,17 +348,78 @@ private fun SettingRow(label: String, selected: Boolean, subtitle: String?, onPi
                 fontSize = 15.sp,
                 color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
             )
-            subtitle?.let {
-                Text(
-                    it,
-                    fontSize = 12.sp,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            subtitle?.takeIf { it.isNotBlank() }?.let {
+                Text(it, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        if (selected) Text("✓", color = MaterialTheme.colorScheme.primary, fontSize = 16.sp)
+        if (selected && checkable) Text("✓", color = MaterialTheme.colorScheme.primary, fontSize = 16.sp)
     }
+}
+
+// what the conversation has spent — the phone's /usage, from the same numbers
+// the pinned status sums (tokens and *reported* cost; unpriced ≠ free)
+@Composable
+private fun UsageDialog(vm: ChatViewModel, onDismiss: () -> Unit) {
+    val state by vm.state.collectAsState()
+    LaunchedEffect(Unit) { vm.loadUsage() }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Usage") },
+        text = {
+            val u = state.usage
+            if (u == null) {
+                Text("Loading…", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    StatRow("Turns", u.turns.toString())
+                    StatRow("Input", fmtTokens(u.input))
+                    StatRow("Output", fmtTokens(u.output))
+                    StatRow("Thinking", fmtTokens(u.reasoning))
+                    StatRow("Cache", "${fmtTokens(u.cacheRead)} read · ${fmtTokens(u.cacheWrite)} write")
+                    StatRow("Total tokens", fmtTokens(u.total))
+                    StatRow("Spend", if (u.cost > 0) fmtMoney(u.cost) else if (u.unpriced > 0) "unpriced (${u.unpriced})" else "$0")
+                    if (u.models.isNotEmpty()) StatRow("Models", u.models.joinToString(", ") { it.substringAfterLast('/') })
+                }
+            }
+        },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Done") } },
+    )
+}
+
+@Composable
+private fun StatRow(label: String, value: String) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, fontSize = 13.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurface)
+    }
+}
+
+// the files this conversation changed (adapter.diff via the gateway)
+@Composable
+private fun ChangesDialog(vm: ChatViewModel, onDismiss: () -> Unit) {
+    val state by vm.state.collectAsState()
+    LaunchedEffect(Unit) { vm.loadDiff() }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Changes") },
+        text = {
+            val files = state.diffs
+            when {
+                files == null -> Text("Loading…", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                files.isEmpty() -> Text("No file changes in this conversation.", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                else -> Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                    files.forEach { f ->
+                        Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(f.file.substringAfterLast('/'), Modifier.weight(1f), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
+                            Text("+${f.additions}", fontSize = 12.sp, color = Color(0xFF4CAF50))
+                            Text(" −${f.deletions}", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Done") } },
+    )
 }
 
 private fun liveAsMessage(live: ChatViewModel.LiveTurn?): ChatMessage? {
@@ -368,7 +503,26 @@ private fun AssistantBody(message: ChatMessage) {
         message.error?.let {
             Text(it, color = MaterialTheme.colorScheme.error, fontSize = 14.sp)
         }
+        // which model answered this turn, what it produced, what it cost — the
+        // per-turn accounting the harness reported and the phone used to drop
+        turnMeta(message)?.let {
+            Text(
+                it,
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
+}
+
+private fun turnMeta(m: ChatMessage): String? {
+    if (m.tokens == null && m.cost == null && m.model == null) return null
+    val out = mutableListOf<String>()
+    m.model?.substringAfterLast('/')?.takeIf { it.isNotBlank() }?.let { out += it }
+    m.tokens?.let { out += "${fmtTokens(it.output)} out" }
+    m.cost?.let { if (it > 0) out += fmtMoney(it) }
+    return out.takeIf { it.isNotEmpty() }?.joinToString("  ·  ")
 }
 
 @Composable
@@ -377,7 +531,34 @@ private fun PartView(part: ChatPart, streaming: Boolean) {
         is ChatPart.Text -> Markdown(part.text + if (streaming) " ▍" else "")
         is ChatPart.Reasoning -> ReasoningRow(part)
         is ChatPart.Tool -> ToolRow(part)
+        is ChatPart.File -> FileRow(part)
         is ChatPart.Unsupported -> Unit
+    }
+}
+
+// A file the agent produced or touched. Images aren't fetched (no image
+// dependency wired) — the row names it so it is at least visible in the turn.
+@Composable
+private fun FileRow(part: ChatPart.File) {
+    Surface(
+        Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(10.dp),
+    ) {
+        Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("📎", fontSize = 14.sp)
+            Column(Modifier.padding(start = 8.dp)) {
+                Text(
+                    part.name ?: part.path.substringAfterLast('/'),
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                )
+                part.mimeType?.let {
+                    Text(it, fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
     }
 }
 
@@ -390,7 +571,7 @@ private fun ReasoningRow(part: ChatPart.Reasoning) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                "Thought",
+                if (part.durationMs != null) "Thought for ${maxOf(1, part.durationMs / 1000)}s" else "Thought",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -417,12 +598,23 @@ private fun ReasoningRow(part: ChatPart.Reasoning) {
 private fun ToolRow(part: ChatPart.Tool) {
     val running = part.status == ToolStatus.RUNNING || part.status == ToolStatus.PENDING
     val failed = part.status == ToolStatus.ERROR
+    // the body — command output, a diff, a file's contents, or the arguments —
+    // is what the collapsed row is hiding; a tap reveals it, like Telegram's
+    // collapsible tool blocks. A running tool auto-opens so progress is visible.
+    val body = remember(part) { toolBody(part) }
+    var open by remember(part) { mutableStateOf(false) }
+    val expanded = open || (running && body != null)
     Surface(
         Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surfaceContainer,
         shape = RoundedCornerShape(10.dp),
     ) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clickable(enabled = body != null) { open = !open }
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+        ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     when (part.name.lowercase()) {
@@ -434,12 +626,14 @@ private fun ToolRow(part: ChatPart.Tool) {
                     style = MaterialTheme.typography.labelMedium,
                     color = if (running) MaterialTheme.colorScheme.primary else if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Icon(
-                    Icons.Filled.ArrowDropDown,
-                    null,
-                    Modifier.size(16.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                if (body != null) {
+                    Icon(
+                        if (expanded) Icons.Filled.ArrowDropUp else Icons.Filled.ArrowDropDown,
+                        "expand",
+                        Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             part.title?.let { t ->
                 if (part.name.lowercase() in setOf("bash", "run")) {
@@ -448,12 +642,33 @@ private fun ToolRow(part: ChatPart.Tool) {
                         fontSize = 12.sp,
                         fontFamily = FontFamily.Monospace,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
+                        maxLines = if (expanded) 4 else 1,
                     )
                 }
             }
+            AnimatedVisibility(expanded && body != null) {
+                Text(
+                    body.orEmpty(),
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = 6.dp),
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
+}
+
+// The most useful single payload of a tool call, in the order a reader wants
+// it: what it produced (stdout / diff / file), then what it was told.
+private fun toolBody(part: ChatPart.Tool): String? {
+    val out = part.output?.takeIf { it.isNotBlank() }
+    val input = part.input?.takeIf { it.isNotBlank() && it != "{}" && it != "null" }
+    val text = out ?: input ?: return null
+    return if (text.length > 4000) text.take(4000) + "\n… (${text.length - 4000} more chars)" else text
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -618,4 +833,33 @@ private fun displayName(context: Context, uri: Uri): String? =
 @Composable
 private fun Spacer8() {
     androidx.compose.foundation.layout.Spacer(Modifier.size(8.dp))
+}
+
+// model · tokens · spend, from what the client already holds: the newest
+// assistant turn's model and token count, and the summed cost of priced turns
+// (an unpriced turn shows as "$?" — absent is not free).
+private fun statusText(state: ChatViewModel.UiState): String {
+    val turns = state.messages.filter { it.role == Role.ASSISTANT }
+    val last = turns.lastOrNull { it.tokens != null }
+    val model = last?.model?.substringAfterLast('/') ?: state.models?.current?.substringAfterLast('/')
+    val out = mutableListOf<String>()
+    if (!model.isNullOrBlank()) out += model
+    last?.tokens?.let { out += "${fmtTokens(it.context)} tok" }
+    val spend = turns.mapNotNull { it.cost }.sum()
+    val unpriced = turns.count { it.cost == null && it.tokens != null }
+    if (spend > 0) out += fmtMoney(spend) else if (unpriced > 0) out += "$?"
+    return out.joinToString("  ·  ")
+}
+
+private fun fmtTokens(n: Long): String = when {
+    n >= 1_000_000 -> String.format(java.util.Locale.US, "%.1fM", n / 1_000_000.0)
+    n >= 1_000 -> String.format(java.util.Locale.US, "%.1fK", n / 1_000.0)
+    else -> n.toString()
+}
+
+private fun fmtMoney(usd: Double): String = when {
+    usd <= 0 -> ""
+    usd < 0.01 -> String.format(java.util.Locale.US, "$%.4f", usd)
+    usd < 100 -> String.format(java.util.Locale.US, "$%.2f", usd)
+    else -> "$" + usd.roundToLong()
 }

@@ -1,6 +1,7 @@
 package dev.jep.client.data.dto
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 
 // Flat, tolerant DTOs mirroring the gateway JSON (docs/GATEWAY.md). Every field
 // optional-padded so an unknown variant can ride through without breaking the
@@ -16,7 +17,11 @@ data class SessionDto(
     val workspace: String = "",
     val createdAt: Long = 0,
     val updatedAt: Long = 0,
+    // workspace's friendly name (display) …
     val adapter: String? = null,
+    // … and the engine behind it (opencode/codex/claude); display-only, a
+    // conversation never changes harness.
+    val harness: String? = null,
 )
 
 @Serializable
@@ -24,6 +29,17 @@ data class SessionsRes(val items: List<SessionDto> = emptyList())
 
 @Serializable
 data class ErrorDto(val name: String? = null, val message: String? = null)
+
+@Serializable
+data class CacheDto(val read: Long = 0, val write: Long = 0)
+
+@Serializable
+data class TokensDto(
+    val input: Long = 0,
+    val output: Long = 0,
+    val reasoning: Long = 0,
+    val cache: CacheDto = CacheDto(),
+)
 
 @Serializable
 data class PartDto(
@@ -34,6 +50,15 @@ data class PartDto(
     val status: String? = null,
     val title: String? = null,
     val filePath: String? = null,
+    val fileName: String? = null,
+    val mimeType: String? = null,
+    // tool parts carry the call's input and captured output; without these the
+    // phone could only ever render "Ran a command" and nothing behind it
+    val input: JsonElement? = null,
+    val output: String? = null,
+    // reasoning carries its duration once finalized ("Thought for 12s")
+    val durationMs: Long? = null,
+    val nativeType: String? = null,
 )
 
 @Serializable
@@ -44,6 +69,11 @@ data class MessageDto(
     val time: Long = 0,
     val parts: List<PartDto> = emptyList(),
     val error: ErrorDto? = null,
+    // usage the harness reported for this turn: which model answered, what it
+    // cost, and the token breakdown
+    val model: String? = null,
+    val cost: Double? = null,
+    val tokens: TokensDto? = null,
 )
 
 @Serializable
@@ -62,13 +92,55 @@ data class WorkspaceDto(val name: String = "", val harness: String = "")
 data class WorkspacesRes(val items: List<WorkspaceDto> = emptyList())
 
 @Serializable
-data class ModelDto(val providerID: String = "", val modelID: String = "")
+data class ModelDto(
+    val providerID: String = "",
+    val modelID: String = "",
+    val image: Boolean = false,
+    val attachment: Boolean = false,
+    val contextLimit: Long = 0,
+)
 
 @Serializable
-data class ModelsRes(val models: List<ModelDto> = emptyList(), val current: String? = null)
+data class ModelsRes(
+    val models: List<ModelDto> = emptyList(),
+    val current: String? = null,
+    val default: String? = null,
+)
 
 @Serializable
 data class SetModelRes(val ok: Boolean = false, val model: String? = null)
+
+@Serializable
+data class AgentRes(val current: String? = null)
+
+@Serializable
+data class UsageDto(
+    val input: Long = 0,
+    val output: Long = 0,
+    val reasoning: Long = 0,
+    val cacheRead: Long = 0,
+    val cacheWrite: Long = 0,
+    val total: Long = 0,
+    val cost: Double = 0.0,
+    val priced: Int = 0,
+    val unpriced: Int = 0,
+    val turns: Int = 0,
+    val models: List<String> = emptyList(),
+)
+
+@Serializable
+data class UsageRes(val usage: UsageDto = UsageDto())
+
+@Serializable
+data class FileDiffDto(
+    val file: String = "",
+    val additions: Int = 0,
+    val deletions: Int = 0,
+    val status: String? = null,
+)
+
+@Serializable
+data class DiffRes(val files: List<FileDiffDto> = emptyList())
 
 @Serializable
 data class AttachRes(val id: String, val name: String = "")

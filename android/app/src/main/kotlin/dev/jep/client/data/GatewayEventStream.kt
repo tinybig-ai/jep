@@ -66,7 +66,7 @@ class GatewayEventStream(
             "part.updated" -> {
                 val mid = messageID ?: return null
                 val dto = part ?: return null
-                ChatEvent.PartChanged(sid, mid, partID ?: dto.id, dto.toPart())
+                ChatEvent.PartChanged(sid, mid, partID ?: dto.id, dto.toDomain() ?: dev.jep.client.domain.model.ChatPart.Unsupported(dto.kind))
             }
             "message.created", "message.updated" -> {
                 val mid = messageID ?: return null
@@ -78,11 +78,4 @@ class GatewayEventStream(
             else -> null
         }
     }
-}
-
-private fun dev.jep.client.data.dto.PartDto.toPart() = when (kind) {
-    "text" -> dev.jep.client.domain.model.ChatPart.Text(text.orEmpty())
-    "reasoning" -> dev.jep.client.domain.model.ChatPart.Reasoning(text.orEmpty())
-    "tool" -> dev.jep.client.domain.model.ChatPart.Tool(id, name.orEmpty(), status?.let { runCatching { dev.jep.client.domain.model.ToolStatus.valueOf(it.uppercase()) }.getOrNull() }, title)
-    else -> dev.jep.client.domain.model.ChatPart.Unsupported(kind)
 }

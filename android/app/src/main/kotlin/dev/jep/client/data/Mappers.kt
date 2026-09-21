@@ -1,28 +1,52 @@
 package dev.jep.client.data
 
 import dev.jep.client.data.dto.AskDto
+import dev.jep.client.data.dto.FileDiffDto
 import dev.jep.client.data.dto.MessageDto
-import dev.jep.client.data.dto.PartDto
 import dev.jep.client.data.dto.ModelDto
+import dev.jep.client.data.dto.PartDto
 import dev.jep.client.data.dto.SessionDto
+import dev.jep.client.data.dto.TokensDto
+import dev.jep.client.data.dto.UsageDto
 import dev.jep.client.data.dto.WorkspaceDto
 import dev.jep.client.domain.model.Ask
 import dev.jep.client.domain.model.AskOption
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
+import dev.jep.client.domain.model.FileDiff
 import dev.jep.client.domain.model.Model
 import dev.jep.client.domain.model.Role
 import dev.jep.client.domain.model.SessionSummary
+import dev.jep.client.domain.model.TokenUsage
 import dev.jep.client.domain.model.ToolStatus
+import dev.jep.client.domain.model.Usage
 import dev.jep.client.domain.model.Workspace
 
 // the JSON→domain boundary. Unknown part kinds and statuses degrade to
 // inert renderings here, once, instead of leaking harness vocabulary upward.
-fun SessionDto.toDomain() = SessionSummary(id, title, workspace, createdAt, updatedAt, adapter)
+fun SessionDto.toDomain() = SessionSummary(id, title, workspace, createdAt, updatedAt, adapter, harness)
 
 fun WorkspaceDto.toDomain() = Workspace(name, harness)
 
-fun ModelDto.toDomain() = Model(providerID, modelID)
+fun ModelDto.toDomain() = Model(providerID, modelID, image, attachment, contextLimit)
+
+fun TokensDto.toDomain() = TokenUsage(input, output, reasoning, cache.read, cache.write)
+
+fun UsageDto.toDomain() = Usage(
+    input = input,
+    output = output,
+    reasoning = reasoning,
+    cacheRead = cacheRead,
+    cacheWrite = cacheWrite,
+    total = total,
+    cost = cost,
+    priced = priced,
+    unpriced = unpriced,
+    turns = turns,
+    models = models,
+)
+
+fun FileDiffDto.toDomain() = FileDiff(file, additions, deletions, status)
 
 fun MessageDto.toDomain() = ChatMessage(
     id = id,
@@ -30,6 +54,9 @@ fun MessageDto.toDomain() = ChatMessage(
     time = time,
     parts = parts.mapNotNull { it.toDomain() },
     error = error?.message,
+    model = model,
+    cost = cost,
+    tokens = tokens?.toDomain(),
 )
 
 fun AskDto.toDomain() = Ask(
@@ -39,9 +66,10 @@ fun AskDto.toDomain() = Ask(
     options = options.map { AskOption(it.id, it.label, it.style == "danger") },
 )
 
-private fun PartDto.toDomain(): ChatPart? = when (kind) {
+fun PartDto.toDomain(): ChatPart? = when (kind) {
     "text" -> text?.let { ChatPart.Text(it) }
-    "reasoning" -> text?.let { ChatPart.Reasoning(it) }
-    "tool" -> ChatPart.Tool(id, name.orEmpty(), status?.let { runCatching { ToolStatus.valueOf(it.uppercase()) }.getOrNull() }, title)
+    "reasoning" -> text?.let { ChatPart.Reasoning(it, durationMs) }
+    "tool" -> ChatPart.Tool(id, name.orEmpty(), status?.let { runCatching { ToolStatus.valueOf(it.uppercase()) }.getOrNull() }, title, input?.toString(), output)
+    "file" -> filePath?.takeIf { it.isNotBlank() }?.let { ChatPart.File(it, fileName, mimeType) }
     else -> null
 }

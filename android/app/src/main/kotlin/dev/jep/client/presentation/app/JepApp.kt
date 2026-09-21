@@ -25,7 +25,7 @@ fun JepApp(app: AppViewModel) {
             val c = screen as Screen.Chat
             val vm: ChatViewModel = viewModel(
                 key = c.sessionId,
-                factory = viewModelFactory { initializer { ChatViewModel(app.chat(), c.sessionId, c.title) } },
+                factory = viewModelFactory { initializer { ChatViewModel(app.chat(), c.sessionId, c.title, c.workspace, c.harness) } },
             )
             ChatScreen(
                 vm,

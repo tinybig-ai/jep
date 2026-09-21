@@ -19,7 +19,7 @@ import kotlinx.coroutines.launch
 // Navigation is deliberately a single enum: two content screens and the gate.
 sealed interface Screen {
     data object Sessions : Screen
-    data class Chat(val sessionId: String, val title: String) : Screen
+    data class Chat(val sessionId: String, val title: String, val workspace: String, val harness: String?) : Screen
 }
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
@@ -101,7 +101,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun open(session: SessionSummary) {
-        _screen.value = Screen.Chat(session.id, session.title)
+        // `adapter` is the workspace's friendly name; fall back to the folder
+        // name of the path when an older listing didn't carry it
+        _screen.value = Screen.Chat(
+            session.id,
+            session.title,
+            session.adapter ?: session.workspace.substringAfterLast('/'),
+            session.harness,
+        )
     }
 
     // creation-time selection: the workspace (and so the harness) is chosen

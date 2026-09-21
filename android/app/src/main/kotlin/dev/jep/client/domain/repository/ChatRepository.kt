@@ -3,9 +3,11 @@ package dev.jep.client.domain.repository
 import dev.jep.client.domain.model.Ask
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
+import dev.jep.client.domain.model.FileDiff
 import dev.jep.client.domain.model.Model
 import dev.jep.client.domain.model.Role
 import dev.jep.client.domain.model.SessionSummary
+import dev.jep.client.domain.model.Usage
 import dev.jep.client.domain.model.Workspace
 import kotlinx.coroutines.flow.Flow
 
@@ -15,11 +17,12 @@ data class HistoryBatch(
     val hasMore: Boolean,
 )
 
-/** the models a conversation may run on, and the one it is set to (null =
- * the harness default) */
+/** the models a conversation may run on, the one it is set to (null = the
+ * harness default), and what "default" actually resolves to */
 data class ModelChoices(
     val all: List<Model>,
     val current: String?,
+    val default: String? = null,
 )
 
 // Events the push feed forwards, translated out of the wire's vocabulary.
@@ -69,6 +72,14 @@ interface ChatRepository {
     suspend fun models(sessionId: String): ModelChoices
     /** set (or clear, with null) the conversation's model */
     suspend fun setModel(sessionId: String, ref: String?): Boolean
+    /** the conversation's primary agent (null = harness default) */
+    suspend fun agent(sessionId: String): String?
+    /** set (or clear) the conversation's primary agent */
+    suspend fun setAgent(sessionId: String, agent: String?): Boolean
+    /** what the conversation has spent */
+    suspend fun usage(sessionId: String): Usage
+    /** files the conversation has changed */
+    suspend fun diff(sessionId: String): List<FileDiff>
     /** fetch the newest `limit` messages, or the newest `limit` older than `before` (ms) */
     suspend fun history(sessionId: String, limit: Int = 0, before: Long = 0): HistoryBatch
     suspend fun prompt(sessionId: String, text: String, files: List<String> = emptyList()): ChatMessage

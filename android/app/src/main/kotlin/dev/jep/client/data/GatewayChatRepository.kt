@@ -1,6 +1,8 @@
 package dev.jep.client.data
 
+import dev.jep.client.data.dto.AgentRes
 import dev.jep.client.data.dto.AttachRes
+import dev.jep.client.data.dto.DiffRes
 import dev.jep.client.data.dto.ErrorDto
 import dev.jep.client.data.dto.HistoryRes
 import dev.jep.client.data.dto.MessageRes
@@ -9,13 +11,16 @@ import dev.jep.client.data.dto.NewSessionRes
 import dev.jep.client.data.dto.PairRes
 import dev.jep.client.data.dto.SessionDto
 import dev.jep.client.data.dto.SessionsRes
+import dev.jep.client.data.dto.UsageRes
 import dev.jep.client.data.dto.WorkspacesRes
 import dev.jep.client.domain.repository.ChatEvent
 import dev.jep.client.domain.repository.HistoryBatch
 import dev.jep.client.domain.repository.ModelChoices
 import dev.jep.client.domain.model.ChatMessage
+import dev.jep.client.domain.model.FileDiff
 import dev.jep.client.domain.repository.ChatRepository
 import dev.jep.client.domain.model.SessionSummary
+import dev.jep.client.domain.model.Usage
 import dev.jep.client.domain.model.Workspace
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -100,11 +105,23 @@ class GatewayChatRepository(
 
     override suspend fun models(sessionId: String): ModelChoices {
         val res = decode("/models", ModelsRes.serializer(), payload("id" to sessionId))
-        return ModelChoices(res.models.map { it.toDomain() }, res.current)
+        return ModelChoices(res.models.map { it.toDomain() }, res.current, res.default)
     }
 
     override suspend fun setModel(sessionId: String, ref: String?): Boolean =
         post("/setmodel", payload("id" to sessionId, "model" to (ref ?: ""))).first in 200..299
+
+    override suspend fun agent(sessionId: String): String? =
+        decode("/agent", AgentRes.serializer(), payload("id" to sessionId)).current
+
+    override suspend fun setAgent(sessionId: String, agent: String?): Boolean =
+        post("/setagent", payload("id" to sessionId, "agent" to (agent ?: ""))).first in 200..299
+
+    override suspend fun usage(sessionId: String): Usage =
+        decode("/usage", UsageRes.serializer(), payload("id" to sessionId)).usage.toDomain()
+
+    override suspend fun diff(sessionId: String): List<FileDiff> =
+        decode("/diff", DiffRes.serializer(), payload("id" to sessionId)).files.map { it.toDomain() }
 
     override suspend fun history(sessionId: String, limit: Int, before: Long): HistoryBatch =
         withContext(Dispatchers.Default) {

@@ -11,6 +11,8 @@ import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
 import dev.jep.client.domain.repository.ChatRepository
 import dev.jep.client.domain.repository.ModelChoices
+import dev.jep.client.domain.model.FileDiff
+import dev.jep.client.domain.model.Usage
 import dev.jep.client.domain.model.Role
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -31,6 +33,10 @@ class ChatViewModel(
     private val repo: ChatRepository,
     val sessionId: String,
     initialTitle: String,
+    // the workspace's friendly name and the harness behind it — shown in the
+    // header, never changed: a conversation cannot move between harnesses
+    val workspace: String = "",
+    val harness: String? = null,
 ) : ViewModel() {
 
     // a chat the user renamed no longer matches the sessions-list title
@@ -59,6 +65,12 @@ class ChatViewModel(
         val loadingOlder: Boolean = false,
         /** models this conversation may run on; null until Settings asks */
         val models: ModelChoices? = null,
+        /** the primary agent (build/plan); null = harness default */
+        val agent: String? = null,
+        /** loaded on demand for the Usage panel */
+        val usage: Usage? = null,
+        /** loaded on demand for the Changes panel */
+        val diffs: List<FileDiff>? = null,
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -222,13 +234,47 @@ class ChatViewModel(
         }
     }
 
-    // Settings › model: the pickable models for this conversation and the one
-    // it is set to. Loaded on demand when the panel opens, like Telegram's.
+    // Settings: the pickable models and the current agent, loaded on demand
+    // when the panel opens, like Telegram's.
     fun loadModels() {
         viewModelScope.launch {
             runCatching { repo.models(sessionId) }
                 .onSuccess { m -> _state.update { it.copy(models = m) } }
                 .onFailure { err -> _state.update { it.copy(notice = "couldn't load models: ${err.message}") } }
+        }
+    }
+
+    fun loadAgent() {
+        viewModelScope.launch {
+            runCatching { repo.agent(sessionId) }
+                .onSuccess { a -> _state.update { it.copy(agent = a) } }
+        }
+    }
+
+    fun setAgent(agent: String?) {
+        val before = _state.value.agent
+        _state.update { it.copy(agent = agent) }
+        viewModelScope.launch {
+            runCatching { repo.setAgent(sessionId, agent) }
+                .onFailure { err ->
+                    _state.update { it.copy(agent = before, notice = "couldn't set the agent: ${err.message}") }
+                }
+        }
+    }
+
+    fun loadUsage() {
+        viewModelScope.launch {
+            runCatching { repo.usage(sessionId) }
+                .onSuccess { u -> _state.update { it.copy(usage = u) } }
+                .onFailure { err -> _state.update { it.copy(notice = "couldn't load usage: ${err.message}") } }
+        }
+    }
+
+    fun loadDiff() {
+        viewModelScope.launch {
+            runCatching { repo.diff(sessionId) }
+                .onSuccess { d -> _state.update { it.copy(diffs = d) } }
+                .onFailure { err -> _state.update { it.copy(notice = "couldn't load changes: ${err.message}") } }
         }
     }
 
