@@ -159,6 +159,7 @@ data class TermFrameRes(val text: String = "")
 
 @Serializable
 data class ImportableDto(
+    val harness: String = "",
     val id: String = "",
     val title: String = "",
     val directory: String = "",

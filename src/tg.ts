@@ -4,6 +4,7 @@ import { join, sep } from "node:path"
 import { mkdtempSync } from "node:fs"
 import { tmpdir, homedir } from "node:os"
 import { buildHarnesses, DEFAULT_HARNESS } from "./core/harnesses.ts"
+import { opencodeSessionImport } from "./importers/opencode.ts"
 import { assertAdapterImplements } from "./core/compliance.ts"
 import type { HarnessAdapter } from "./core/ports.ts"
 import { TelegramBot } from "./telegram/bot.ts"
@@ -403,6 +404,14 @@ async function main() {
         return { name: ws.name, adapter: ws.adapter }
       },
       browseRoot: process.env.JEP_BROWSE_ROOT,
+      // jep keeps its own opencode store, so your CLI's conversations aren't
+      // here. Only opencode needs this: codex and claude are read from their
+      // shared stores already.
+      import: opencodeSessionImport({
+        bin: process.env.OPENCODE_BIN ?? "opencode",
+        from: process.env.JEP_IMPORT_FROM ?? process.env.XDG_DATA_HOME ?? join(process.env.HOME ?? "", ".local", "share"),
+        into: DATA_HOME,
+      }),
       // an import lands in the store, but a running opencode server won't list
       // it until it comes up again — so restart the one serving that directory
       restartWorkspace: async (dir) => {

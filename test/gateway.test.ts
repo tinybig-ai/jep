@@ -411,6 +411,43 @@ test("/new asking for a second harness on a served workspace spawns it", async (
   }
 })
 
+test("import goes through the port, and only offers sessions in served dirs", async () => {
+  const a = fakeAdapter() // workspace /tmp/ws
+  let forked: string | null = null
+  const g = await startGateway({
+    adapters: () => [{ name: "a-ws", adapter: a }],
+    import: {
+      harness: "opencode",
+      list: async () => [
+        { harness: "opencode", id: "keep", title: "Keep", dir: "/tmp/ws", updatedAt: 2 },
+        { harness: "opencode", id: "drop", title: "Drop", dir: "/elsewhere", updatedAt: 1 },
+      ],
+      fork: async (id) => {
+        forked = id
+        return { ok: true, dir: "/tmp/ws" }
+      },
+    },
+    dataHome: mkdtempSync(join(tmpdir(), "gw-test-")),
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+  })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const token = await pair(base, "TESTCODE")
+    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" }
+    const list = await fetch(`${base}/importable`, { method: "POST", headers, body: "{}" })
+    const { sessions } = (await list.json()) as { sessions: Array<{ id: string; harness: string }> }
+    assert.deepEqual(sessions.map((s) => s.id), ["keep"])
+    assert.equal(sessions[0]?.harness, "opencode")
+    const res = await fetch(`${base}/import`, { method: "POST", headers, body: JSON.stringify({ id: "keep" }) })
+    assert.equal(res.status, 200)
+    assert.equal(forked, "keep")
+  } finally {
+    await g.close()
+  }
+})
+
 test("the push feed carries harness events to every connected device", async () => {
   const { gw } = spawnGateway()
   const g = await gw

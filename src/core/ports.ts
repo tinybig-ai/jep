@@ -97,3 +97,26 @@ export interface HarnessAdapter {
 export interface HarnessSupervisor {
   start(workspace: string): Promise<HarnessAdapter>
 }
+
+/** A conversation in a harness's *other* store — the one jep doesn't run. */
+export interface ImportableSession {
+  harness: string
+  id: string
+  title: string
+  dir: string
+  updatedAt: number
+}
+
+/**
+ * Driven port: bring a conversation over from the same harness's other store.
+ * Only a harness jep keeps its own store for needs one (opencode); the ones
+ * whose store jep reads in place (codex, claude) already list your sessions,
+ * so there is nothing to import.
+ */
+export interface SessionImport {
+  readonly harness: string
+  /** what could come over, newest first, minus anything jep already has */
+  list(): Promise<ImportableSession[]>
+  /** fork one across; `dir` names the workspace it belongs to, if it worked */
+  fork(id: string): Promise<{ ok: boolean; dir?: string }>
+}

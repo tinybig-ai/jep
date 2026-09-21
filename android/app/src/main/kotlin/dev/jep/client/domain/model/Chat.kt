@@ -34,7 +34,7 @@ data class McpServer(val name: String, val kind: String, val enabled: Boolean, v
 data class TerminalAccess(val allowed: Boolean, val authorized: Boolean)
 
 /** a session in the user's own opencode that jep doesn't serve, offered to fork in */
-data class ImportableSession(val id: String, val title: String, val directory: String, val updatedAt: Long)
+data class ImportableSession(val id: String, val title: String, val directory: String, val updatedAt: Long, val harness: String = "")
 
 /** one folder in the directory browser */
 data class DirEntry(val name: String, val git: Boolean)

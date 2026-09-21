@@ -48,7 +48,7 @@ fun SkillsRes.toDomain() = SkillSet(skills.map { it.toDomain() }, toggleable)
 
 fun McpDto.toDomain() = McpServer(name, kind, enabled, detail)
 
-fun ImportableDto.toDomain() = ImportableSession(id, title, directory, updated)
+fun ImportableDto.toDomain() = ImportableSession(id, title, directory, updated, harness)
 
 fun BrowseRes.toDomain() = BrowseResult(cwd, root, parent, dirs.map { it.toDomain() })
 

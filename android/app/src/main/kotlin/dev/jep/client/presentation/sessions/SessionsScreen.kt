@@ -195,7 +195,7 @@ private fun ImportDialog(
                         Column(Modifier.fillMaxWidth().clickable { onPick(s) }.padding(vertical = 10.dp)) {
                             Text(s.title.ifBlank { s.id }, fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
                             Text(
-                                s.directory.substringAfterLast('/'),
+                                (if (s.harness.isNotBlank()) "${s.harness} · " else "") + s.directory.substringAfterLast('/'),
                                 fontSize = 12.sp,
                                 fontFamily = FontFamily.Monospace,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
