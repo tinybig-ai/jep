@@ -22,7 +22,9 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Source
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -36,6 +38,8 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -173,58 +177,96 @@ private fun Browser(
 ) {
     val b = state.browse
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
-        Text(
-            b?.cwd ?: "…",
+        Row(
             Modifier.fillMaxWidth().padding(vertical = 8.dp),
-            fontSize = 13.sp,
-            fontFamily = FontFamily.Monospace,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 2,
-        )
-        LazyColumn(Modifier.weight(1f)) {
-            if (b?.parent != null) {
-                item {
-                    SelectRow(
-                        title = "Up",
-                        subtitle = b.parent,
-                        selected = false,
-                        onClick = onBrowseUp,
-                        icon = { Icon(Icons.Filled.ArrowUpward, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                b?.cwd ?: "…",
+                Modifier.weight(1f),
+                fontSize = 13.sp,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+            )
+            // a listing can take seconds — especially a folder the daemon has to
+            // time out on — so the header spins instead of looking frozen
+            if (state.loadingBrowse) {
+                CircularProgressIndicator(
+                    Modifier.size(16.dp).semantics { contentDescription = "loading folders" },
+                    strokeWidth = 2.dp,
+                )
+            }
+        }
+        if (b == null) {
+            // first open: nothing to show until the root listing lands
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 3.dp)
+                    Text(
+                        if (state.loadingBrowse) "Opening…" else "Pick a folder to start",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
-            items(b?.dirs?.size ?: 0) { i ->
-                val d = b!!.dirs[i]
-                SelectRow(
-                    title = d.name,
-                    subtitle = if (d.git) "git repo" else null,
-                    selected = false,
-                    onClick = { onBrowseInto(joinPath(b.cwd, d.name)) },
-                    // a repository reads differently from a plain folder — an
-                    // icon, not the emoji that rendered as picture characters
-                    icon = {
-                        Icon(
-                            if (d.git) Icons.Filled.Source else Icons.Filled.Folder,
-                            null,
-                            Modifier.size(18.dp),
-                            tint = if (d.git) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+        } else {
+            LazyColumn(Modifier.weight(1f)) {
+                if (b.parent != null) {
+                    item {
+                        SelectRow(
+                            title = "Up",
+                            subtitle = b.parent,
+                            selected = false,
+                            onClick = onBrowseUp,
+                            icon = { Icon(Icons.Filled.ArrowUpward, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) },
                         )
-                    },
-                )
-            }
-            if (b != null && b.dirs.isEmpty()) {
-                item {
-                    Text("(no sub-folders here)", Modifier.padding(16.dp), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                items(b.dirs.size) { i ->
+                    val d = b.dirs[i]
+                    SelectRow(
+                        title = d.name,
+                        subtitle = if (d.git) "git repo" else null,
+                        selected = false,
+                        onClick = { onBrowseInto(joinPath(b.cwd, d.name)) },
+                        // a repository reads differently from a plain folder — an
+                        // icon, not the emoji that rendered as picture characters
+                        icon = {
+                            Icon(
+                                if (d.git) Icons.Filled.Source else Icons.Filled.Folder,
+                                null,
+                                Modifier.size(18.dp),
+                                tint = if (d.git) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        },
+                    )
+                }
+                if (b.dirs.isEmpty()) {
+                    item {
+                        Text("(no sub-folders here)", Modifier.padding(16.dp), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
         }
+
+        // a folder the daemon can't read is named in place, not left as silence
         state.error?.let {
-            Text(it, Modifier.padding(vertical = 6.dp), color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+            Surface(
+                Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                color = MaterialTheme.colorScheme.errorContainer,
+                shape = RoundedCornerShape(10.dp),
+            ) {
+                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.Warning, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onErrorContainer)
+                    Text(it, Modifier.padding(start = 8.dp), fontSize = 13.sp, color = MaterialTheme.colorScheme.onErrorContainer)
+                }
+            }
         }
         Button(
             onClick = { b?.let { onSelectPath(it.cwd) } },
             modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
-            enabled = b != null,
+            enabled = b != null && !state.loadingBrowse,
         ) {
             Text("Use this folder")
         }

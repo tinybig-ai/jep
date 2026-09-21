@@ -40,6 +40,7 @@ data class NewChatState(
     val workspaces: List<Workspace> = emptyList(),
     val browse: BrowseResult? = null,
     val browsing: Boolean = false,
+    val loadingBrowse: Boolean = false,
     val creating: Boolean = false,
     val error: String? = null,
 ) {
@@ -176,11 +177,23 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun loadBrowse(path: String?) {
         val r = repo ?: return
+        // a listing can take seconds (and, for a folder the daemon can't reach,
+        // a fixed timeout) — say so, or a tap looks like nothing happened
+        _newChat.update { it.copy(loadingBrowse = true, error = null) }
         viewModelScope.launch {
             runCatching { r.browse(path) }
-                .onSuccess { b -> _newChat.update { it.copy(browse = b) } }
-                .onFailure { e -> _newChat.update { it.copy(error = "couldn't read that folder: ${e.message}") } }
+                .onSuccess { b -> _newChat.update { it.copy(browse = b, loadingBrowse = false) } }
+                .onFailure { e -> _newChat.update { it.copy(loadingBrowse = false, error = browseError(e)) } }
         }
+    }
+
+    // the gateway 504s a folder it can't read (macOS TCC — Downloads/Documents/
+    // Desktop — or a stalled mount); name that instead of leaking the wire text
+    private fun browseError(e: Throwable): String {
+        val m = e.message.orEmpty()
+        return if (m.contains("respond", ignoreCase = true))
+            "jep can't read that folder. On macOS give the daemon Full Disk Access (System Settings › Privacy & Security), or pick another folder."
+        else "couldn't read that folder: $m"
     }
 
     fun createConversation() {

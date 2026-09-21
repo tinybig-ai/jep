@@ -72,7 +72,7 @@ class GatewayChatRepository(
         val (code, text) = post(path, body)
         if (code !in 200..299) {
             val err = runCatching { json.decodeFromString(ErrorDto.serializer(), text) }.getOrNull()
-            throw ApiFailure(code, err?.message ?: "gateway said $code")
+            throw ApiFailure(code, err?.message ?: err?.error ?: "gateway said $code")
         }
         // a whole conversation can be megabytes; never decode it on the UI thread
         return withContext(Dispatchers.Default) { json.decodeFromString(serializer, text) }
@@ -82,7 +82,7 @@ class GatewayChatRepository(
         val (code_, text) = postUnauthed("$baseUrl/pair", payload("code" to code))
         if (code_ != 200) {
             val err = runCatching { json.decodeFromString(ErrorDto.serializer(), text) }.getOrNull()
-            throw ApiFailure(code_, err?.message ?: "pairing failed")
+            throw ApiFailure(code_, err?.message ?: err?.error ?: "pairing failed")
         }
         return json.decodeFromString(PairRes.serializer(), text).token
     }
@@ -181,7 +181,7 @@ class GatewayChatRepository(
         }
         if (res.first !in 200..299) {
             val err = runCatching { json.decodeFromString(ErrorDto.serializer(), res.second) }.getOrNull()
-            throw ApiFailure(res.first, err?.message ?: "gateway said ${res.first}")
+            throw ApiFailure(res.first, err?.message ?: err?.error ?: "gateway said ${res.first}")
         }
         return json.decodeFromString(AttachRes.serializer(), res.second).id
     }

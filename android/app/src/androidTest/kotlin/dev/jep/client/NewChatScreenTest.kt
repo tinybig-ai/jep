@@ -2,6 +2,7 @@ package dev.jep.client
 
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -63,8 +64,29 @@ class NewChatScreenTest {
         rule.onNodeWithText("jep").assertExists()
     }
 
+    @Test
+    fun a_slow_first_listing_shows_a_spinner() {
+        show(browsing = true, browse = null, loading = true)
+        rule.onNodeWithText("Opening…").assertExists()
+    }
+
+    @Test
+    fun descending_into_a_folder_shows_a_spinner_in_the_header() {
+        show(browsing = true, browse = root, loading = true)
+        rule.onNodeWithContentDescription("loading folders").assertExists()
+    }
+
+    @Test
+    fun an_unreadable_folder_is_named_in_place() {
+        show(browsing = true, error = "jep can't read that folder. On macOS give the daemon Full Disk Access.")
+        rule.onNodeWithText("jep can't read that folder", substring = true).assertExists()
+    }
+
     private fun show(
         browsing: Boolean,
+        browse: BrowseResult? = if (browsing) root else null,
+        loading: Boolean = false,
+        error: String? = null,
         onBack: () -> Unit = {},
         onCloseBrowse: () -> Unit = {},
         onBrowseInto: (String) -> Unit = {},
@@ -74,8 +96,10 @@ class NewChatScreenTest {
             defaultHarness = "opencode",
             harnesses = listOf("opencode", "codex"),
             workspaces = listOf(Workspace("jep", "opencode", "/home/me/jep")),
-            browse = if (browsing) root else null,
+            browse = browse,
             browsing = browsing,
+            loadingBrowse = loading,
+            error = error,
         )
         rule.setContent {
             NewChatScreen(

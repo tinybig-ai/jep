@@ -27,8 +27,11 @@ data class SessionDto(
 @Serializable
 data class SessionsRes(val items: List<SessionDto> = emptyList())
 
+// the gateway answers a failure with {error:"…"}; the harness adapters phrase
+// their own as {name,message}. Keep both, so the phone shows the real reason
+// instead of only the status code.
 @Serializable
-data class ErrorDto(val name: String? = null, val message: String? = null)
+data class ErrorDto(val name: String? = null, val message: String? = null, val error: String? = null)
 
 @Serializable
 data class CacheDto(val read: Long = 0, val write: Long = 0)
