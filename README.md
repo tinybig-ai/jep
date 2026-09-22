@@ -24,6 +24,14 @@ with any client possible behind the gateway. Your code stays on your machine.
 
 </div>
 
+<div align="center">
+
+<img src="docs/images/architecture.png" alt="jep architecture: clients (Telegram, Android, gateway) on the left, a hexagonal core wrapping the HarnessAdapter port in the middle, and harnesses (opencode, Claude Code, Codex) on the right" width="820" />
+
+<sub>Clients on one side, harnesses on the other, the hexagonal core in between.</sub>
+
+</div>
+
 <!--
 HERO IMAGE: the single most important asset. A screenshot that captures the
 whole promise in ~5 seconds. Drop real captures from a client here:
@@ -130,6 +138,12 @@ Each client has its own setup and command surface:
   HTTP + SSE door that any client (web dashboard, Slack bot, desktop widget)
   can speak to.
 
+Telegram reaches you from anywhere, since the daemon polls out and nothing is
+exposed. The **Android app** and every **gateway** client instead talk *to* your
+machine, so they need a network path to it: **Tailscale**, another VPN, or the
+LAN. The gateway has no TLS of its own, so it rides the network's encryption
+(WireGuard), like SSH.
+
 Client setup lives in those READMEs so the top of this file stays the same
 whichever client you choose.
 
@@ -174,13 +188,8 @@ flowchart LR
 ```
 
 <!--
-ARCHITECTURE IMAGE: optional. The Mermaid diagram above always renders; supply
-a polished image if you want something more brandable.
-
-docs/images/architecture.png, a three-column rendering of the same graph:
-[Client adapters: Telegram bot · Gateway (HTTP+SSE) · Android app] → [Hexagonal
-core · ports + compliance] → [Harness adapters: opencode · codex · claude].
-Keep the exact node labels from the Mermaid graph.
+The rendered version of this graph lives near the top of the README as
+docs/images/architecture.png; the Mermaid diagram below always renders.
 -->
 
 ### The hexagon in practice
