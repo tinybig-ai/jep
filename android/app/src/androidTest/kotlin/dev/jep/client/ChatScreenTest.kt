@@ -8,6 +8,8 @@ import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.printToLog
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
@@ -118,6 +120,34 @@ class ChatScreenTest {
         rule.runOnUiThread { repo.emitEvent(ChatEvent.TextDelta("s1", "a1", "p1", "text", "thinking about it")) }
         rule.waitUntil(5_000) { rule.onAllNodesWithText("responding…").fetchSemanticsNodes().isNotEmpty() }
         rule.onNodeWithText("responding…").assertExists()
+    }
+
+    @Test
+    fun a_reasoning_block_says_thinking_and_counts_while_it_is_still_going() {
+        val repo = FakeChatRepository()
+        val vm = ChatViewModel(repo, "s1", "T", "jep", "opencode")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitForIdle()
+        rule.runOnUiThread { repo.emitEvent(ChatEvent.TextDelta("s1", "a1", "p1", "reasoning", "weighing the options")) }
+        // present tense while it is going, with the counter (the seconds are
+        // driven by an animation, so their advance is not clock-testable here;
+        // what matters is that it does not read as finished)
+        rule.waitUntil(10_000) {
+            rule.onAllNodesWithText("thinking ·", substring = true, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+        }
+    }
+
+    @Test
+    fun a_finished_reasoning_block_reads_as_thought() {
+        val vm = ChatViewModel(
+            FakeChatRepository(
+                messages = listOf(ChatMessage("a1", Role.ASSISTANT, 5, listOf(ChatPart.Reasoning("weighed it", 2_000)))),
+            ),
+            "s1", "T", "jep", "opencode",
+        )
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(6_000) { rule.onAllNodesWithText("Thought for 2s").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("Thought for 2s").assertExists()
     }
 
     @Test

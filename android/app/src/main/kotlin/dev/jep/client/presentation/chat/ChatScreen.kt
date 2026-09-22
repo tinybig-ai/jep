@@ -7,6 +7,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
@@ -1139,7 +1144,7 @@ private fun AssistantBody(message: ChatMessage, onInfo: (ChatMessage) -> Unit, r
 private fun PartView(part: ChatPart, streaming: Boolean) {
     when (part) {
         is ChatPart.Text -> Markdown(part.text + if (streaming) " ▍" else "")
-        is ChatPart.Reasoning -> ReasoningRow(part)
+        is ChatPart.Reasoning -> ReasoningRow(part, active = streaming)
         is ChatPart.Tool -> ToolRow(part)
         is ChatPart.File -> FileRow(part)
         is ChatPart.Unsupported -> Unit
@@ -1173,15 +1178,32 @@ private fun FileRow(part: ChatPart.File) {
 }
 
 @Composable
-private fun ReasoningRow(part: ChatPart.Reasoning) {
+private fun ReasoningRow(part: ChatPart.Reasoning, active: Boolean = false) {
     var open by remember { mutableStateOf(false) }
+    // While it is still thinking the seconds must tick, or a frozen "1s" reads
+    // as stuck. Driven by an infinite animation rather than a delay loop in the
+    // composition: a loop there keeps the screen "busy" forever, which also
+    // makes it untestable. One unit per second, so elapsed reads as seconds.
+    val transition = rememberInfiniteTransition(label = "thinking")
+    val elapsed by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 3_600f,
+        animationSpec = infiniteRepeatable(tween(3_600_000, easing = LinearEasing)),
+        label = "seconds",
+    )
+    val secs = elapsed.toInt()
     Column {
         Row(
             Modifier.fillMaxWidth().combinedClickable(onClick = { open = !open }, onLongClick = {}),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                if (part.durationMs != null) "Thought for ${maxOf(1, part.durationMs / 1000)}s" else "Thought",
+                when {
+                    // still going: present tense, and counting
+                    active -> "thinking · ${maxOf(0, secs)}s"
+                    part.durationMs != null -> "Thought for ${maxOf(1, part.durationMs / 1000)}s"
+                    else -> "Thought"
+                },
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
