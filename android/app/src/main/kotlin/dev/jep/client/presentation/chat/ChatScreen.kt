@@ -145,8 +145,19 @@ fun ChatScreen(
     // growing as the turn is polled — so it wins the moment it has the message,
     // and the live row only fills the gap before that. Keys stay unique.
     val rendered = remember(state) {
-        val served = state.messages.mapTo(mutableSetOf()) { it.id }
-        state.messages + listOfNotNull(liveAsMessage(state.live)?.takeIf { it.id !in served })
+        val live = liveAsMessage(state.live)
+        when {
+            // A turn in flight: the live row is fed by the harness's delta
+            // stream, so it grows smoothly, while history arrives only in
+            // polling-sized jumps. The live copy wins and the served one is
+            // dropped — otherwise the answer appeared to land after it was
+            // written, in chunks.
+            live != null && state.sending -> state.messages.filterNot { it.id == live.id } + live
+            // once the turn is over the record is authoritative; the live row
+            // only fills a gap before the harness has the message
+            live != null && state.messages.none { it.id == live.id } -> state.messages + live
+            else -> state.messages
+        }
     }
     val listState = rememberLazyListState()
     // system back should pop the conversation, not the whole activity; the
@@ -387,8 +398,17 @@ fun ChatScreen(
                         }
                     }
                 }
+                val busy = state.sending || state.live != null
                 items(rendered.size, key = { rendered[it].id }) { i ->
-                    MessageRow(rendered[i], onInfo = { infoMsg = it }, onReply = { replyTo = it })
+                    MessageRow(
+                        rendered[i],
+                        onInfo = { infoMsg = it },
+                        onReply = { replyTo = it },
+                        // the last reply carries the "still working" mark: a
+                        // pause between parts (thinking, a tool call) must not
+                        // read as finished
+                        responding = busy && i == rendered.lastIndex && rendered[i].role == Role.ASSISTANT,
+                    )
                 }
             }
             if (showJump) {
@@ -953,7 +973,12 @@ private fun codeBlocks(text: String): List<String> {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MessageRow(message: ChatMessage, onInfo: (ChatMessage) -> Unit, onReply: (ChatMessage) -> Unit) {
+private fun MessageRow(
+    message: ChatMessage,
+    onInfo: (ChatMessage) -> Unit,
+    onReply: (ChatMessage) -> Unit,
+    responding: Boolean = false,
+) {
     var menu by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
     val fullText = remember(message) { fullTurnText(message) }
@@ -969,7 +994,7 @@ private fun MessageRow(message: ChatMessage, onInfo: (ChatMessage) -> Unit, onRe
     ) {
         when (message.role) {
             Role.USER -> UserBubble(message)
-            Role.ASSISTANT -> AssistantBody(message, onInfo)
+            Role.ASSISTANT -> AssistantBody(message, onInfo, responding)
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
             DropdownMenuItem(
@@ -1067,7 +1092,7 @@ private fun UserBubble(message: ChatMessage) {
 }
 
 @Composable
-private fun AssistantBody(message: ChatMessage, onInfo: (ChatMessage) -> Unit) {
+private fun AssistantBody(message: ChatMessage, onInfo: (ChatMessage) -> Unit, responding: Boolean = false) {
     // the per-turn accounting lives behind a quiet hollow "i", not printed under
     // every reply; a copy button sits beside it for the reply's own text
     val hasInfo = message.tokens != null || message.cost != null || message.model != null
@@ -1077,6 +1102,15 @@ private fun AssistantBody(message: ChatMessage, onInfo: (ChatMessage) -> Unit) {
         message.parts.forEachIndexed { idx, part ->
             val isLast = idx == message.parts.lastIndex
             PartView(part, streaming = isLast && message.time == 0L)
+        }
+        // still working: a quiet spinner at the end of the reply, so a pause
+        // between parts (thinking, a tool call) never looks like an ending
+        if (responding) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(Modifier.size(13.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.size(8.dp))
+                Text("responding…", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
         message.error?.let {
             Text(it, color = MaterialTheme.colorScheme.error, fontSize = 14.sp)

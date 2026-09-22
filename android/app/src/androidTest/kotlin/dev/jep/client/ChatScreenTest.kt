@@ -108,6 +108,19 @@ class ChatScreenTest {
     }
 
     @Test
+    fun a_reply_says_it_is_still_responding() {
+        // a pause between parts (thinking, a tool call) must not read as an
+        // ending, so the live reply carries a spinner and a word
+        val repo = FakeChatRepository()
+        val vm = ChatViewModel(repo, "s1", "T", "jep", "opencode")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitForIdle()
+        rule.runOnUiThread { repo.emitEvent(ChatEvent.TextDelta("s1", "a1", "p1", "text", "thinking about it")) }
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("responding…").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("responding…").assertExists()
+    }
+
+    @Test
     fun a_jump_to_latest_button_appears_once_scrolled_up() {
         val vm = ChatViewModel(FakeChatRepository(messages = manyMessages(30)), "s1", "T")
         rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
