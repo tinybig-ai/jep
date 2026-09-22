@@ -115,6 +115,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -1305,14 +1306,7 @@ private fun ToolRow(part: ChatPart.Tool) {
                     modifier = Modifier.padding(start = 4.dp),
                 )
             }
-            if (diff != null) {
-                Icon(
-                    Icons.Filled.Visibility,
-                    "view changes",
-                    Modifier.size(16.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            } else if (body != null) {
+            if (diff == null && body != null) {
                 Icon(
                     if (expanded) Icons.Filled.ArrowDropUp else Icons.Filled.ArrowDropDown,
                     "expand",
@@ -1360,6 +1354,52 @@ private fun ToolRow(part: ChatPart.Tool) {
     }
 }
 
+// A small, dependency-free highlighter: enough for a diff to read like code —
+// comments, strings, numbers, keywords, which is where the eye goes first. Per
+// line, so a construct spanning lines just falls back to plain text.
+private val CodeKeywords = setOf(
+    "def", "class", "return", "if", "elif", "else", "for", "while", "in", "not", "and", "or",
+    "import", "from", "as", "with", "try", "except", "finally", "raise", "yield", "lambda",
+    "pass", "break", "continue", "global", "assert", "del", "async", "await", "self", "None",
+    "True", "False", "function", "const", "let", "var", "export", "default", "new", "this",
+    "typeof", "null", "undefined", "true", "false", "public", "private", "static", "void",
+    "int", "float", "double", "string", "bool", "struct", "interface", "type", "func",
+    "package", "range", "map", "chan", "go", "defer", "match", "impl", "fn", "mut", "pub",
+    "use", "mod", "enum", "trait", "val", "fun", "object", "when", "data", "sealed",
+    "override", "suspend", "lateinit",
+)
+private val CodeToken = Regex(
+    "([#].*$|//.*$)" +                       // a comment to end of line
+        "|('''[\\s\\S]*?'''|\"\"\"[\\s\\S]*?\"\"\"|'[^']*'|\"[^\"]*\"|`[^`]*`)" + // a string
+        "|(\\b\\d[\\d_]*(?:\\.\\d+)?\\b)" +  // a number
+        "|([A-Za-z_][A-Za-z0-9_]*)",         // an identifier
+)
+private val CodeKeyword = Color(0xFF7C4DFF)
+private val CodeString = Color(0xFFC25E00)
+private val CodeNumber = Color(0xFF1976D2)
+
+private fun highlight(line: String, base: Color, comment: Color): AnnotatedString {
+    val out = AnnotatedString.Builder()
+    var last = 0
+    for (m in CodeToken.findAll(line)) {
+        if (m.range.first > last) out.append(line.substring(last, m.range.first))
+        val text = m.value
+        val color = when {
+            m.groupValues[1].isNotEmpty() -> comment
+            m.groupValues[2].isNotEmpty() -> CodeString
+            m.groupValues[3].isNotEmpty() -> CodeNumber
+            m.groupValues[4].isNotEmpty() && text in CodeKeywords -> CodeKeyword
+            else -> base
+        }
+        out.pushStyle(SpanStyle(color = color))
+        out.append(text)
+        out.pop()
+        last = m.range.last + 1
+    }
+    if (last < line.length) out.append(line.substring(last))
+    return out.toAnnotatedString()
+}
+
 // A file's change, GitHub-style but single column: the path, then the hunk, with
 // what came out in red and what went in in green. A bottom sheet, so it starts
 // as a peek and pulls up to fullscreen — a diff wants the whole screen.
@@ -1385,22 +1425,27 @@ private fun DiffSheet(path: String?, diff: String, onDismiss: () -> Unit) {
                 )
             }
             HorizontalDivider(Modifier.padding(top = 8.dp))
+            val onSurface = MaterialTheme.colorScheme.onSurface
+            val faded = MaterialTheme.colorScheme.onSurfaceVariant
             LazyColumn(Modifier.fillMaxWidth()) {
                 items(diff.split("\n")) { line ->
-                    val color = when {
-                        line.startsWith("+") -> LineAdded
-                        line.startsWith("-") -> LineRemoved
-                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    // the red/green is the line's background, the way a diff reads
+                    val added = line.startsWith("+")
+                    val removed = line.startsWith("-")
+                    val bg = when {
+                        added -> LineAdded.copy(alpha = 0.18f)
+                        removed -> LineRemoved.copy(alpha = 0.18f)
+                        else -> Color.Transparent
                     }
                     Text(
-                        line,
+                        highlight(line, onSurface, faded),
                         Modifier
                             .fillMaxWidth()
+                            .background(bg)
                             .padding(horizontal = 14.dp, vertical = 1.dp),
                         fontSize = 12.sp,
                         lineHeight = 17.sp,
                         fontFamily = FontFamily.Monospace,
-                        color = color,
                     )
                 }
             }
