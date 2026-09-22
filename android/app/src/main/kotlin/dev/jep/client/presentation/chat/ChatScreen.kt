@@ -1658,8 +1658,9 @@ private fun statusText(state: ChatViewModel.UiState): String {
         used > 0 -> out += "${fmtTokens(used)} tok"
     }
     val spend = turns.mapNotNull { it.cost }.sum()
-    val unpriced = turns.count { it.cost == null && it.tokens != null }
-    if (spend > 0) out += fmtMoney(spend) else if (unpriced > 0) out += "$?"
+    // a harness that prices nothing (claude) simply says nothing: "$?" was a
+    // stand-in for "unpriced turns exist" and read as a bug
+    if (spend > 0) out += fmtMoney(spend)
     return out.joinToString("  ·  ")
 }
 
