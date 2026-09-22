@@ -164,7 +164,9 @@ export class ClaudeAdapter implements HarnessAdapter {
       if (!meta && d.cwd && d.sessionId) {
         meta = { id: String(d.sessionId), cwd: String(d.cwd), title: "", createdAt: ts || Date.now(), updatedAt: ts || Date.now(), file }
       }
-      if (!firstUser && d.type === "user" && !d.isSidechain) firstUser = clip(contentText(d.message?.content))
+      if (!firstUser && d.type === "user" && !d.isSidechain && !d.isMeta && !isLocalCommandWrapper(d.message?.content)) {
+        firstUser = clip(contentText(d.message?.content))
+      }
     }
     if (meta) {
       meta.title = title || firstUser
@@ -257,6 +259,9 @@ export class ClaudeAdapter implements HarnessAdapter {
       if (d.type !== "user" && d.type !== "assistant") continue
       // sidechains are Task-tool subagents: somebody else's turn, not yours
       if (d.isSidechain) continue
+      // and neither is Claude Code talking to itself — the local-command
+      // caveat, a slash command's name/args, its stdout
+      if (d.isMeta || isLocalCommandWrapper(d.message?.content)) continue
       const parts = contentParts(d.message?.content)
       if (!parts.length) continue
       out.push({
@@ -766,6 +771,24 @@ function contentParts(content: any): Part[] {
     }
   }
   return out
+}
+
+// Claude Code writes its own bookkeeping into the transcript as user turns:
+// the caveat it prefixes, the slash command's name/message/args, and that
+// command's stdout. None of it is conversation, and rendered as a purple
+// bubble it reads as if the user typed it. A real prompt may quote these
+// tags, so only drop a message that is *entirely* wrappers.
+const LOCAL_COMMAND_TAGS = "local-command-caveat|command-name|command-message|command-args|local-command-stdout"
+const LOCAL_COMMAND_ANY = new RegExp(`<(?:${LOCAL_COMMAND_TAGS})>`)
+const LOCAL_COMMAND_ELEMENT = new RegExp(`<(?:${LOCAL_COMMAND_TAGS})>[\\s\\S]*?</(?:${LOCAL_COMMAND_TAGS})>`, "g")
+const LOCAL_COMMAND_TAG = new RegExp(`</?(?:${LOCAL_COMMAND_TAGS})>`, "g")
+
+export function isLocalCommandWrapper(content: any): boolean {
+  const text = contentText(content)
+  if (!LOCAL_COMMAND_ANY.test(text)) return false
+  // every character must lie inside a wrapper — the caveat and the command
+  // stdout carry prose inside their tags, so stripping tags alone is not enough
+  return text.replace(LOCAL_COMMAND_ELEMENT, "").replace(LOCAL_COMMAND_TAG, "").trim() === ""
 }
 
 function contentText(content: any): string {

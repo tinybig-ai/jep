@@ -322,29 +322,62 @@ export class CodexAdapter implements HarnessAdapter {
     // custom_tool_call_output arrives as its own line; fold it back into the
     // call it belongs to rather than emitting a part with no context
     const toolByCallID = new Map<string, Part & { kind: "tool" }>()
+    // the external-agent bridge gives a result no id either, so it folds onto
+    // whichever call came last
+    let lastTool: (Part & { kind: "tool" }) | undefined
+    // token_count events carry the usage of the turn just recorded
+    let lastAssistant: Message | undefined
 
     for (const { row, payload } of rows) {
       const time = Date.parse(row.timestamp ?? "") || Date.now()
       const push = (role: "user" | "assistant", part: Part) => {
-        out.push({
+        const msg: Message = {
           id: toInternalId(`${native}:${payload.id ?? out.length}`),
           sessionID: toInternalId(native),
           role,
           time,
           parts: [part],
-        })
+        }
+        out.push(msg)
+        if (role === "assistant") lastAssistant = msg
+      }
+
+      // codex's own per-turn usage: the rollout's token_count event, carrying
+      // the same numbers turn.completed does live. Without it a codex
+      // conversation shows a model and nothing else.
+      if (row.type === "event_msg" && payload.type === "token_count") {
+        if (lastAssistant) lastAssistant.tokens = rolloutUsage(payload.info?.last_token_usage)
+        continue
       }
 
       if (hasResponseItems && row.type === "response_item") {
         switch (payload.type) {
           case "message": {
             const text = contentText(payload.content)
-            // codex writes its own environment_context (workspace roots,
-            // permission profile) into the rollout as a turn; it is harness
-            // bookkeeping, not something the person said
-            if (text.trim() && !isCodexInjectedContext(text)) {
-              push(payload.role === "user" ? "user" : "assistant", { kind: "text", text })
+            if (!text.trim() || isCodexInjectedContext(text)) break
+            // driven by another agent, codex records its tool calls and their
+            // results as assistant text. They are tools: rendered as prose they
+            // bury the answer under a wall of commands.
+            const call = externalAgentCall(text)
+            if (call) {
+              const part: Part & { kind: "tool" } = {
+                kind: "tool",
+                id: toInternalId(`${native}:${payload.id ?? out.length}`),
+                name: call.name,
+                input: call.input,
+                output: "",
+                status: "completed",
+              }
+              lastTool = part
+              push("assistant", part)
+              break
             }
+            const result = externalAgentResult(text)
+            if (result !== null) {
+              if (lastTool) lastTool.output = result
+              break
+            }
+            push(payload.role === "user" ? "user" : "assistant", { kind: "text", text })
             break
           }
           case "reasoning": {
@@ -458,6 +491,23 @@ export class CodexAdapter implements HarnessAdapter {
               // codex's injected environment block arrives as an item too — it
               // is not part of the answer
               if (part.kind === "text" && isCodexInjectedContext(part.text)) continue
+              // a tool result folds onto the call it belongs to, which is the
+              // only place the id-less bridge result can be matched
+              if (part.kind === "tool" && part.name === "result") {
+                const call = [...parts].reverse().find((p): p is Part & { kind: "tool" } => p.kind === "tool" && !p.output)
+                if (call) {
+                  call.output = part.output
+                  this.#emit({
+                    type: "part.updated",
+                    sessionID: toInternalId(threadID),
+                    messageID: toInternalId(threadID),
+                    partID: call.id,
+                    partType: "tool",
+                    part: call,
+                  })
+                  continue
+                }
+              }
               parts.push(part)
               this.#emit({
                 type: "part.updated",
@@ -470,13 +520,7 @@ export class CodexAdapter implements HarnessAdapter {
               continue
             }
             if (evt.type === "turn.completed") {
-              const u = evt.usage ?? {}
-              tokens = {
-                input: u.input_tokens ?? 0,
-                output: u.output_tokens ?? 0,
-                reasoning: u.reasoning_output_tokens ?? 0,
-                cache: { read: u.cached_input_tokens ?? 0, write: u.cache_write_input_tokens ?? 0 },
-              }
+              tokens = rolloutUsage(evt.usage)
               this.#emit({ type: "session.idle", sessionID: toInternalId(threadID) })
               continue
             }
@@ -646,8 +690,16 @@ function mapItem(item: any, workspace: string): Part | null {
   const type = String(item?.type ?? "")
   switch (type) {
     case "agent_message":
-    case "AgentMessage":
-      return { kind: "text", text: textOf(item) }
+    case "AgentMessage": {
+      const text = textOf(item)
+      // the external-agent bridge's tool call/result blocks, live. A call is a
+      // tool; a result is folded onto it by the caller, which has the parts.
+      const call = externalAgentCall(text)
+      if (call) return { kind: "tool", id: String(item.id ?? ""), name: call.name, input: call.input, output: "", status: "completed" }
+      const result = externalAgentResult(text)
+      if (result !== null) return { kind: "tool", id: String(item.id ?? ""), name: "result", input: {}, output: result, status: "completed" }
+      return { kind: "text", text }
+    }
     case "UserMessage":
       return { kind: "text", text: textOf(item) }
     case "reasoning":
@@ -728,6 +780,52 @@ function firstUserLine(lines: string[]): string {
 // pure and exported so the rule is testable without a rollout.
 export function isCodexInjectedContext(text: string): boolean {
   return /<environment_context|<workspace_roots|<permission_profile/i.test(text)
+}
+
+// codex's own token accounting, whether it arrives live on turn.completed or
+// recorded in the rollout as a token_count event
+function rolloutUsage(u: any): Message["tokens"] {
+  return {
+    input: u?.input_tokens ?? 0,
+    output: u?.output_tokens ?? 0,
+    reasoning: u?.reasoning_output_tokens ?? 0,
+    cache: { read: u?.cached_input_tokens ?? 0, write: u?.cache_write_input_tokens ?? 0 },
+  }
+}
+
+// When another agent drives codex, codex records the tool calls it makes on
+// its behalf as assistant *text*:
+//
+//   [external_agent_tool_call: Bash]
+//   description: Search for draftMode usage in bot.ts
+//   command: grep -n "draftMode" src/telegram/bot.ts
+//   [/external_agent_tool_call]
+//
+// followed by the matching
+//
+//   [external_agent_tool_result]
+//   …output…
+//   [/external_agent_tool_result]
+//
+// They are tools, not prose — rendered as prose they bury the answer under
+// pages of commands. Recognised here and turned into tool parts.
+const EXTERNAL_CALL = /^\[external_agent_tool_call:\s*([^\]]+)\]\s*([\s\S]*?)\s*\[\/external_agent_tool_call\]\s*$/
+const EXTERNAL_RESULT = /^\[external_agent_tool_result\]\s*([\s\S]*?)\s*(?:\[\/external_agent_tool_result\])?\s*$/
+
+export function externalAgentCall(text: string): { name: string; input: Record<string, string> } | null {
+  const m = EXTERNAL_CALL.exec(text.trim())
+  if (!m) return null
+  const input: Record<string, string> = {}
+  for (const line of (m[2] ?? "").split("\n")) {
+    const at = line.indexOf(": ")
+    if (at > 0) input[line.slice(0, at).trim()] = line.slice(at + 2).trim()
+  }
+  return { name: m[1]!.trim(), input }
+}
+
+export function externalAgentResult(text: string): string | null {
+  const m = EXTERNAL_RESULT.exec(text.trim())
+  return m ? (m[1] ?? "").trim() : null
 }
 
 function contentText(content: any): string {
