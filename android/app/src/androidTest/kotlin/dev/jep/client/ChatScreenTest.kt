@@ -158,6 +158,26 @@ class ChatScreenTest {
     }
 
     @Test
+    fun an_edit_shows_its_line_counts_without_opening_it() {
+        val vm = ChatViewModel(
+            FakeChatRepository(
+                messages = listOf(
+                    ChatMessage(
+                        "a1", Role.ASSISTANT, 5,
+                        listOf(ChatPart.Tool("t1", "write", ToolStatus.COMPLETED, "/tmp/fib.py", added = 12, removed = 3)),
+                    ),
+                ),
+            ),
+            "s1", "T", "jep", "opencode",
+        )
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(6_000) { rule.onAllNodesWithText("+12").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("+12").assertExists()
+        rule.onNodeWithText("-3").assertExists()
+        rule.onNodeWithText("Edited fib.py").assertExists()
+    }
+
+    @Test
     fun a_reasoning_block_says_thinking_and_counts_while_it_is_still_going() {
         val repo = FakeChatRepository()
         val vm = ChatViewModel(repo, "s1", "T", "jep", "opencode")

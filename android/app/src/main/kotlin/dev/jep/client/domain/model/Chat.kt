@@ -85,6 +85,10 @@ sealed interface ChatPart {
         val input: String? = null,
         /** captured stdout / diff / result — what the collapsed row hides */
         val output: String? = null,
+        /** lines this call added / removed, when it edited a file — the size of
+         * a change at a glance, without opening the row */
+        val added: Int? = null,
+        val removed: Int? = null,
     ) : ChatPart
 
     data class Reasoning(val text: String, val durationMs: Long? = null) : ChatPart

@@ -1210,82 +1210,102 @@ private fun ReasoningRow(part: ChatPart.Reasoning, active: Boolean = false) {
     }
 }
 
+// the diff colours: green for what a change added, red for what it took away
+private val LineAdded = Color(0xFF4CAF50)
+private val LineRemoved = Color(0xFFEF5350)
+
 @Composable
 private fun ToolRow(part: ChatPart.Tool) {
     val running = part.status == ToolStatus.RUNNING || part.status == ToolStatus.PENDING
     val failed = part.status == ToolStatus.ERROR
-    // the body — command output, a diff, a file's contents, or the arguments —
-    // is what the collapsed row is hiding; a tap reveals it, like Telegram's
-    // collapsible tool blocks. A running tool auto-opens so progress is visible.
-    // The body is recomputed each composition (a running tool's output fills
-    // in), but `open` is remembered by the part's stable id: keying it on the
-    // whole part collapsed the row again the moment the part was re-emitted.
+    // The body — command output, a diff, a file's contents, the arguments — is
+    // what the collapsed row hides; a tap reveals it. A running tool auto-opens
+    // so progress is visible. `open` is remembered by the part's stable id:
+    // keying it on the whole part collapsed the row whenever it was re-emitted.
     val body = toolBody(part)
     var open by remember(part.id) { mutableStateOf(false) }
     val expanded = open || (running && body != null)
-    Surface(
-        Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        shape = RoundedCornerShape(10.dp),
-    ) {
-        Column(
+    val added = part.added ?: 0
+    val removed = part.removed ?: 0
+    // The same visual language as a thinking block: a quiet line with a chevron
+    // that opens. A tool call is not a different kind of thing to read — it is
+    // the same "the agent did something here" note.
+    Column(Modifier.fillMaxWidth()) {
+        Row(
             Modifier
                 .fillMaxWidth()
-                .clickable(enabled = body != null) { open = !open }
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .clickable(enabled = body != null) { open = !open },
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                when (part.name.lowercase()) {
+                    "write", "edit", "multi-edit" -> "Edited " + (part.title?.substringAfterLast('/') ?: "file")
+                    "read" -> "Read " + (part.title?.substringAfterLast('/') ?: "file")
+                    "bash", "run" -> "Ran a command"
+                    else -> "Used ${part.name.ifEmpty { "tool" }}"
+                },
+                style = MaterialTheme.typography.labelMedium,
+                color = if (running) MaterialTheme.colorScheme.primary else if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            // how big the change was, readable without opening the row
+            if (added > 0) {
                 Text(
-                    when (part.name.lowercase()) {
-                        "write", "edit", "multi-edit" -> "Edited " + (part.title?.substringAfterLast('/') ?: "file")
-                        "read" -> "Read " + (part.title?.substringAfterLast('/') ?: "file")
-                        "bash", "run" -> "Ran a command"
-                        else -> "Used ${part.name.ifEmpty { "tool" }}"
-                    },
+                    "+$added",
                     style = MaterialTheme.typography.labelMedium,
-                    color = if (running) MaterialTheme.colorScheme.primary else if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontFamily = FontFamily.Monospace,
+                    color = LineAdded,
+                    modifier = Modifier.padding(start = 6.dp),
                 )
-                if (body != null) {
-                    Icon(
-                        if (expanded) Icons.Filled.ArrowDropUp else Icons.Filled.ArrowDropDown,
-                        "expand",
-                        Modifier.size(16.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
             }
-            part.title?.let { t ->
-                if (part.name.lowercase() in setOf("bash", "run")) {
-                    Text(
-                        t,
-                        fontSize = 12.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = if (expanded) 4 else 1,
-                    )
-                }
+            if (removed > 0) {
+                Text(
+                    "-$removed",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontFamily = FontFamily.Monospace,
+                    color = LineRemoved,
+                    modifier = Modifier.padding(start = 4.dp),
+                )
             }
-            AnimatedVisibility(expanded && body != null) {
-                Column {
-                    Text(
-                        body.orEmpty(),
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(top = 6.dp),
-                        fontSize = 12.sp,
-                        lineHeight = 17.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    // the tool's own output copies from here, inside the fold
-                    val clipboard = LocalClipboardManager.current
-                    Icon(
-                        Icons.Outlined.ContentCopy,
-                        "copy tool output",
-                        Modifier.size(15.dp).padding(top = 4.dp).clickable { clipboard.setText(AnnotatedString(body.orEmpty())) },
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                    )
-                }
+            if (body != null) {
+                Icon(
+                    if (expanded) Icons.Filled.ArrowDropUp else Icons.Filled.ArrowDropDown,
+                    "expand",
+                    Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        part.title?.let { t ->
+            if (part.name.lowercase() in setOf("bash", "run")) {
+                Text(
+                    t,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = if (expanded) 4 else 1,
+                )
+            }
+        }
+        AnimatedVisibility(expanded && body != null) {
+            Column {
+                Text(
+                    body.orEmpty(),
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = 6.dp),
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                // the tool's own output copies from here, inside the fold
+                val clipboard = LocalClipboardManager.current
+                Icon(
+                    Icons.Outlined.ContentCopy,
+                    "copy tool output",
+                    Modifier.size(15.dp).padding(top = 4.dp).clickable { clipboard.setText(AnnotatedString(body.orEmpty())) },
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                )
             }
         }
     }

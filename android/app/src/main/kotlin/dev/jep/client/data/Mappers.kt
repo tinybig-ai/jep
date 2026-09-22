@@ -1,5 +1,10 @@
 package dev.jep.client.data
 
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import dev.jep.client.data.dto.AskDto
 import dev.jep.client.data.dto.BrowseRes
 import dev.jep.client.data.dto.DirEntryDto
@@ -90,17 +95,49 @@ fun AskDto.toDomain() = Ask(
     options = options.map { AskOption(it.id, it.label, it.style == "danger") },
 )
 
+// What an edit changed, counted from the call's own arguments. opencode hands
+// back no diff for a write (its metadata carries only the path), and its edit
+// args are the literal old/new strings — which is exactly what a line count
+// needs, and it is available for every harness.
+private fun JsonElement.lineChange(tool: String): Pair<Int, Int>? {
+    val obj = this as? JsonObject ?: return null
+    fun lines(v: JsonElement?): Int =
+        (v as? JsonPrimitive)?.contentOrNull?.let { if (it.isEmpty()) 0 else it.count { c -> c == '\n' } + 1 } ?: 0
+    fun str(k: String): JsonElement? = obj[k]
+    return when (tool.lowercase()) {
+        "write" -> str("content")?.let { lines(it) to 0 }
+        "edit" -> if (str("oldString") != null || str("newString") != null) lines(str("oldString")) to lines(str("newString")) else null
+        "multi-edit", "multiedit" -> {
+            val edits = str("edits") as? JsonArray ?: return null
+            var add = 0
+            var del = 0
+            edits.forEach { e ->
+                val o = e as? JsonObject ?: return@forEach
+                del += lines(o["oldString"])
+                add += lines(o["newString"])
+            }
+            add to del
+        }
+        else -> null
+    }
+}
+
 fun PartDto.toDomain(): ChatPart? = when (kind) {
     "text" -> text?.let { ChatPart.Text(it) }
     "reasoning" -> text?.let { ChatPart.Reasoning(it, durationMs) }
-    "tool" -> ChatPart.Tool(
-        id,
-        name.orEmpty(),
-        status?.let { runCatching { ToolStatus.valueOf(it.uppercase()) }.getOrNull() },
-        title,
-        input?.display(),
-        output?.display(),
-    )
+    "tool" -> {
+        val change = input?.lineChange(name.orEmpty())
+        ChatPart.Tool(
+            id,
+            name.orEmpty(),
+            status?.let { runCatching { ToolStatus.valueOf(it.uppercase()) }.getOrNull() },
+            title,
+            input?.display(),
+            output?.display(),
+            change?.first,
+            change?.second,
+        )
+    }
     "file" -> filePath?.takeIf { it.isNotBlank() }?.let { ChatPart.File(it, fileName, mimeType) }
     else -> null
 }
