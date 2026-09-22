@@ -3,11 +3,10 @@
   "version": "0.1.0",
   "type": "module",
   "private": true,
-  "description": "Hexagonal integration layer + phone-first frontend for coding agents (opencode first)",
+  "description": "One interface for every coding agent: a hexagonal core with Telegram, Android and gateway clients (opencode, codex, claude)",
   "scripts": {
     "probe": "node --experimental-strip-types src/probe.ts",
     "probe:harness": "node --experimental-strip-types src/probe-harness.ts",
-    "cli": "node --experimental-strip-types src/cli.ts",
     "tg": "node --experimental-strip-types src/tg.ts",
     "tg:mock": "JEP_TG_PAIR_CODE=TESTCODE JEP_TG_MOCK=1 node --experimental-strip-types src/tg.ts < fixture/telegram-mock.jsonl",
     "typecheck": "tsc",

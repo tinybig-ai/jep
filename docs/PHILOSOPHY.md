@@ -1,16 +1,16 @@
-# jep — Philosophy
+# jep: Philosophy
 
 The design principles that keep this project safe to iterate on. Separation of
 concerns is the core: every module has one job, one seam, and one way to test
 it.
 
-## 1. Hexagonal core — the adapter seam
+## 1. Hexagonal core (the adapter seam)
 
 `src/core/ports.ts` defines the one surface every harness normalizes to:
 `HarnessAdapter` (id, endpoint, health, session CRUD, prompt, messages, abort,
 approvals, events, optional `models()`, close). `src/adapters/opencode.ts` is
 currently the only real adapter, but the bot (`bot.ts`) only ever sees the
-port type — never `opencode serve` specifics.
+port type, never `opencode serve` specifics.
 
 - The **Telegram front end does not know about opencode**. It knows `model =
   "provider/model"` string, `ModelRef {providerID, modelID}`.
@@ -83,7 +83,7 @@ the code comment and must not be relaxed.
 The bot's opencode serve runs with its **own** `XDG_DATA_HOME`
 (`JEP_DATA_HOME`) so the user's CLI store and session list are never touched.
 But that isolation would hide the user's auth, making the picker list models
-that can never run — so `syncOpenCodeAuth` **mirrors** `auth.json` into the
+that can never run, so `syncOpenCodeAuth` **mirrors** `auth.json` into the
 isolated store at boot.
 
 The line is deliberate: **session state is isolated, credentials are shared.**
@@ -116,7 +116,7 @@ dump.
   in the picker but never selected implicitly. Presence in the picker ≠ use.
 - Restarts keep ownership and history; deleting a conversation (the 🗑 next
   to it in `/ls`, with a confirm step) is explicit and destructive on
-  purpose — nothing is ever cleared implicitly.
+  purpose: nothing is ever cleared implicitly.
 
 ## 10. Small, coherent verbs; a command does exactly one thing
 
@@ -124,7 +124,7 @@ dump.
 and nothing else, `/abort` stops the turn. Destructive actions stay narrowly
 scoped to what they name; nothing a user does should ever reach further into
 persistent state than it promises. Clearing a chat's visible history
-is Telegram's own job now (its native "Clear History") — jep doesn't
+is Telegram's own job now (its native "Clear History"); jep doesn't
 duplicate platform features it doesn't need to own.
 State lives in one place (`ChatState` + `store.json`); pickers keep a snapshot
 so navigating never mutates the thing being chosen.
@@ -132,5 +132,5 @@ so navigating never mutates the thing being chosen.
 ## 11. Shipping rule
 
 Per change: syntax check → mock proof → live restart → user confirms → done.
-No commit unless asked. No "great, done" silently — the bot that runs on the
+No commit unless asked. No "great, done" silently; the bot that runs on the
 user's phone is source of truth, and the live log is the heartbeat.
