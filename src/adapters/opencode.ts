@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 import { Agent } from "undici"
 import type { HarnessAdapter, ModelRef, ModelCaps } from "../core/ports.ts"
 import type { AskOption, DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionSummary, SkillDirs } from "../core/types.ts"
+import { TurnAbortedError } from "../core/types.ts"
 import { parseOpencodeLogError } from "./opencode-log.ts"
 const OPENCODE_BIN = process.env.OPENCODE_BIN ?? "opencode"
 const MODEL_REF = process.env.JEP_MODEL ?? "localfree-models-proxy/auto"
@@ -40,6 +41,17 @@ const MIME_BY_EXT: Record<string, string> = {
   ".gif": "image/gif",
   ".svg": "image/svg+xml",
   ".pdf": "application/pdf",
+}
+
+// opencode spells a stop as an error: MessageAbortedError, or a plain
+// "Aborted" message depending on where it was raised. Only this adapter needs
+// to know that — it becomes turn.aborted for everyone else.
+export function isAbortPayload(raw: unknown): boolean {
+  if (raw && typeof raw === "object") {
+    const { name, message } = raw as { name?: unknown; message?: unknown }
+    return /abort/i.test(String(name ?? "")) || /abort/i.test(String(message ?? ""))
+  }
+  return /abort/i.test(String(raw ?? ""))
 }
 
 function mimeFor(filePath: string): string {
@@ -450,7 +462,9 @@ export class OpenCodeAdapter implements HarnessAdapter {
       return mapMessage(data.info ?? {}, data.parts ?? [], this.workspace)
     } catch (err) {
       if ((err as Error)?.name === "AbortError") {
-        throw new Error(opts?.signal?.aborted ? "prompt aborted" : `prompt timed out after ${timeout}ms`)
+        // a stop and a timeout are both AbortErrors; only the first is a stop
+        if (opts?.signal?.aborted) throw new TurnAbortedError()
+        throw new Error(`prompt timed out after ${timeout}ms`)
       }
       // "fetch failed" is Node's generic "the connection dropped" message, and
       // it reads like a mystery. Name what actually happened — the local
@@ -478,6 +492,9 @@ export class OpenCodeAdapter implements HarnessAdapter {
   }
 
   async abort(sessionID: string): Promise<boolean> {
+    // opencode answers a stop with its own session.error (MessageAbortedError),
+    // which events() translates to turn.aborted — so every watcher, not just
+    // the caller who asked, learns how the turn ended
     return this.#json(`/session/${encodeURIComponent(toNativeId(sessionID))}/abort`, { method: "POST" })
   }
 
@@ -675,12 +692,17 @@ export class OpenCodeAdapter implements HarnessAdapter {
         }
       }
       case "session.error": {
+        const raw = props.error
+        // a stop is reported as an error (MessageAbortedError / "Aborted") but
+        // it is not a failure — it is how the turn ended. Translated here, in
+        // the one place that knows opencode's spelling, so no client has to
+        // read the prose.
+        if (isAbortPayload(raw)) return { type: "turn.aborted", sessionID: sessionID ?? "" }
         // props.error is usually a string, but has been seen as a structured
         // {name, message} object depending on what failed upstream (a raw
         // provider SDK error vs. opencode's own wrapping) -- stringify
         // defensively rather than let a template literal turn it into
         // "[object Object]" in the log and in the chat.
-        const raw = props.error
         const message =
           typeof raw === "string"
             ? raw

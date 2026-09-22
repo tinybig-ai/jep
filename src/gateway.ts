@@ -13,6 +13,7 @@ import type { HarnessAdapter, SessionImport, Terminal } from "./core/ports.ts"
 import { readClaudeMcp, readCodexMcp, readOpencodeMcp, writeClaudeProjectEnabled, writeCodexMcpEnabled, writeOpencodeMcpEnabled } from "./core/mcpconfig.ts"
 import { listSkills, skillDirsFor, writeSkillModelInvocation } from "./core/skills.ts"
 import type { DomainEvent, Message } from "./core/types.ts"
+import { isAborted } from "./core/types.ts"
 import { usageOf } from "./core/usage.ts"
 import { newPairCode } from "./telegram/pair.ts"
 
@@ -338,7 +339,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           if (evt.type === "ask.requested") askSessions.set(evt.ask.id, evt.ask.sessionID)
           // the turn is over and the record is settled: drop the snapshot so the
           // next read is the finished one
-          if (evt.type === "session.idle") msgCache.delete(evt.sessionID)
+          if (evt.type === "session.idle" || evt.type === "turn.aborted") msgCache.delete(evt.sessionID)
           broadcast(evt)
         }
       } catch {
@@ -831,6 +832,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           })
           return json(res, 200, { message })
         } catch (err) {
+          // a stop is not a server failure: the turn ended because somebody
+          // asked it to, and the client should read it as exactly that
+          if (isAborted(err)) return json(res, 200, { aborted: true })
           return json(res, 502, { error: String((err as Error)?.message ?? err) })
         } finally {
           active.delete(id)

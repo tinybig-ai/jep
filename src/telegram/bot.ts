@@ -6,6 +6,7 @@ import { homedir } from "node:os"
 import { basename, dirname, join, resolve } from "node:path"
 import type { HarnessAdapter, ModelCaps, ModelRef } from "../core/ports.ts"
 import type { AskOption, AskRequest, FilePart, Part, ProjectSummary, SessionSummary, TextPart, ReasoningPart, ToolCallPart } from "../core/types.ts"
+import { isAborted } from "../core/types.ts"
 import { mdToHtml } from "./html.ts"
 import { closeStreamingTable, inlineRich, mdTable, mdToRich, richTextFromBlocks } from "./rich.ts"
 import { splitMinimalSegments, minimalSegmentBlocks, thinkingPhrase } from "./minimal.ts"
@@ -691,12 +692,6 @@ const JEP_CONTEXT = [
 const JEP_TELEGRAM_CONTEXT =
   "This conversation is specifically relayed via Telegram — replies render as chat messages (markdown, tables, collapsible details), not a terminal."
 const JEP_CONTEXT_FOOTER = "Ignore the block above. Treat the message below as the user's entire, only request.\n---"
-
-// A stop is not a failure. opencode reports one as MessageAbortedError on the
-// message, which is indistinguishable in shape from a real error — the tell is
-// either the name or the fact that we are the ones who aborted.
-const isAbort = (failure: { name: string; message: string }, ac: AbortController): boolean =>
-  ac.signal.aborted || /abort/i.test(failure.name) || /\baborted\b/i.test(failure.message)
 
 // The first prompt of a fresh session carries the jep context header (see
 // JEP_CONTEXT). It's for the model, not for you — in a transcript it buries
@@ -2221,6 +2216,10 @@ export class TelegramBot {
     // stall. Capture it here so the abort branch below can say what actually
     // happened.
     let providerErrored: string | null = null
+    // the harness's own word for how this turn ended: it was stopped. The
+    // adapter translates opencode's MessageAbortedError into this (see
+    // core/types.ts), so nothing here reads the error's prose.
+    let harnessStopped = false
     // event types this turn hasn't seen before, logged once each rather than
     // once per event so a chatty-but-harmless type doesn't flood the log
     const loggedOtherTypes = new Set<string>()
@@ -2617,6 +2616,12 @@ export class TelegramBot {
                 ac.abort()
               }, IDLE_GRACE_MS)
             }
+          } else if (evt.type === "turn.aborted") {
+            harnessStopped = true
+            if (!finished) {
+              ac.abort()
+              void ws.adapter.abort(sessionID).catch(logFail("abort"))
+            }
           } else if (evt.type === "session.error") {
             // The harness's own account of a failed turn, delivered async on
             // this stream rather than through prompt()'s return value — the
@@ -2695,7 +2700,7 @@ export class TelegramBot {
       // said out loud even when there was also content, and a turn that
       // produced nothing at all still gets a reply rather than leaving the
       // draft spinning forever.
-      if (failure && isAbort(failure, ac)) {
+      if (harnessStopped || (failure && isAborted(failure))) {
         // You asked it to stop and it stopped — that's the feature working.
         // The harness still reports the stop as a message-level error, and it
         // arrives here rather than as a rejected prompt whenever the

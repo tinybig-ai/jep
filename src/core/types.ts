@@ -184,7 +184,32 @@ export type DomainEvent =
   | { type: "session.idle"; sessionID: string }
   | { type: "ask.requested"; sessionID: string; ask: AskRequest }
   | { type: "session.error"; sessionID: string; message: string }
+  // The turn ended because somebody stopped it. A harness reports that as an
+  // error, but it is not a failure, and every client was reading the error's
+  // prose to tell the two apart. It is its own fact instead.
+  | { type: "turn.aborted"; sessionID: string }
   | { type: "other"; eventType: string; sessionID?: string; raw: unknown }
+
+// Raised by an adapter whose turn was stopped on request. The name is the
+// harness's own ("AbortError", "MessageAbortedError", …) — the driven adapter
+// is the only place that knows, and it translates to this.
+export class TurnAbortedError extends Error {
+  readonly aborted = true
+  constructor(message = "aborted") {
+    super(message)
+    this.name = "TurnAbortedError"
+  }
+}
+
+// The single place that decides whether a failure is really a stop. Adapters
+// raise TurnAbortedError; this also forgives a harness's own abort error, so a
+// caller that forgot to translate still gets it right.
+export const isAborted = (err: unknown): boolean => {
+  if (err instanceof TurnAbortedError) return true
+  const e = err as { aborted?: unknown; name?: unknown } | null | undefined
+  if (e?.aborted === true) return true
+  return /abort/i.test(String(e?.name ?? ""))
+}
 
 // `server.connected` is the one event that belongs to no session, and only
 // some of the rest name a message. Reading either field straight off a
