@@ -480,8 +480,11 @@ export class OpenCodeAdapter implements HarnessAdapter {
     }
   }
 
-  async messages(sessionID: string): Promise<Message[]> {
-    const rows = await this.#json<any[]>(`/session/${encodeURIComponent(toNativeId(sessionID))}/message`)
+  async messages(sessionID: string, opts?: { limit?: number }): Promise<Message[]> {
+    // opencode pages by `limit` (newest N); its `before` rejects every value we
+    // tried, so walking back is done by asking for a bigger newest-N instead
+    const q = opts?.limit && opts.limit > 0 ? `?limit=${Math.floor(opts.limit)}` : ""
+    const rows = await this.#json<any[]>(`/session/${encodeURIComponent(toNativeId(sessionID))}/message${q}`)
     return rows
       .map((r) => mapMessage(r?.info ?? {}, r?.parts ?? [], this.workspace))
       .sort((a, b) => a.time - b.time)

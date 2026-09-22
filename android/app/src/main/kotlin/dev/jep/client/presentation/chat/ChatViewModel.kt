@@ -274,7 +274,9 @@ class ChatViewModel(
         val oldest = st.messages.minOfOrNull { it.time } ?: return
         _state.update { it.copy(loadingOlder = true) }
         viewModelScope.launch {
-            runCatching { repo.history(sessionId, limit = WINDOW, before = oldest) }
+            // tell the daemon how much is already held: it asks the harness for
+            // one window instead of the whole conversation (a long fork is 199 MB)
+            runCatching { repo.history(sessionId, limit = WINDOW, before = oldest, have = st.messages.size) }
                 .onSuccess { batch ->
                     _state.update { prev ->
                         val priorIds = prev.messages.map { it.id }.toSet()

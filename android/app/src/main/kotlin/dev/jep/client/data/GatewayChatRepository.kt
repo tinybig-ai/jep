@@ -226,7 +226,7 @@ class GatewayChatRepository(
     override suspend fun termClose(sessionId: String): Boolean =
         post("/term/close", payload("id" to sessionId)).first in 200..299
 
-    override suspend fun history(sessionId: String, limit: Int, before: Long): HistoryBatch =
+    override suspend fun history(sessionId: String, limit: Int, before: Long, have: Int): HistoryBatch =
         withContext(Dispatchers.Default) {
             val res = decode(
                 "/history",
@@ -235,6 +235,7 @@ class GatewayChatRepository(
                     put("id", sessionId)
                     if (limit > 0) put("limit", limit)
                     if (before > 0) put("before", before)
+                    if (have > 0) put("have", have)
                 }.toString(),
             )
             HistoryBatch(res.messages.map { it.toDomain() }, res.hasMore)

@@ -10,6 +10,7 @@ import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join, resolve, sep } from "node:path"
 import type { HarnessAdapter, SessionImport, Terminal } from "./core/ports.ts"
+import { pushFor, UnregisteredToken, type PushNotifier } from "./core/push.ts"
 import { readClaudeMcp, readCodexMcp, readOpencodeMcp, writeClaudeProjectEnabled, writeCodexMcpEnabled, writeOpencodeMcpEnabled } from "./core/mcpconfig.ts"
 import { listSkills, skillDirsFor, writeSkillModelInvocation } from "./core/skills.ts"
 import type { DomainEvent, Message } from "./core/types.ts"
@@ -39,6 +40,9 @@ export interface GatewayDeps {
   /** a shell per conversation, when the operator allows terminals — the port
    * owns how it runs (tmux today), the gateway owns only the policy */
   terminal?: Terminal
+  /** how a sleeping phone is woken. Absent = no push configured, and the
+   * device falls back to its own connection */
+  push?: PushNotifier
   dataHome: string
   port: number
   /** pinned pairing code; generated fresh per boot when omitted */
@@ -62,6 +66,7 @@ const MODELS_FILE = "gateway-models.json"
 const AGENTS_FILE = "gateway-agents.json"
 const TERMINAL_FILE = "gateway-terminal.json"
 const ARCHIVED_FILE = "gateway-archived.json"
+const PUSH_FILE = "gateway-push.json"
 const BODY_MAX = 1 << 20
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -168,6 +173,21 @@ const saveTerminalTokens = async (dataHome: string, tokens: Set<string>): Promis
   await writeFile(join(dataHome, TERMINAL_FILE), JSON.stringify([...tokens], null, 1))
 }
 
+// Device tokens for push. One per installation; a phone that reinstalls
+// registers a new one, and the old one is pruned when FCM says it is dead.
+async function loadPushTokens(dataHome: string): Promise<Set<string>> {
+  try {
+    return new Set(JSON.parse(await readFile(join(dataHome, PUSH_FILE), "utf8")) as string[])
+  } catch {
+    return new Set()
+  }
+}
+
+const savePushTokens = async (dataHome: string, tokens: Set<string>): Promise<void> => {
+  await mkdir(dataHome, { recursive: true })
+  await writeFile(join(dataHome, PUSH_FILE), JSON.stringify([...tokens], null, 1))
+}
+
 // A directory read can hang forever: a folder the launchd process can't reach
 // (macOS TCC — Downloads/Documents/Desktop, with no grant) or a stalled mount.
 // libuv's thread pool is small (4), so a few of those wedge every fs op and
@@ -271,6 +291,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   const models = await loadModels(deps.dataHome)
   const agents = await loadAgents(deps.dataHome)
   const terminalTokens = await loadTerminalTokens(deps.dataHome)
+  const pushTokens = await loadPushTokens(deps.dataHome)
   // Whether this gateway offers a shell at all — an operator decision on the
   // machine, not something a paired phone can turn on for itself.
   const terminalAllowed = process.env.JEP_TERMINAL === "1" || process.env.JEP_TERMINAL === "true"
@@ -328,6 +349,26 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   // connected device. A device decides what an event means to it: play it
   // into an open chat, or raise a notification for one it has in the
   // background.
+  // A push is fire-and-forget: the feed must never stall on FCM, and a token
+  // the service reports as dead is pruned rather than retried forever.
+  const wake = async (evt: DomainEvent): Promise<void> => {
+    const message = deps.push ? pushFor(evt) : null
+    if (!deps.push || !message) return
+    for (const token of [...pushTokens]) {
+      try {
+        await deps.push.send(token, message)
+      } catch (err) {
+        if (err instanceof UnregisteredToken) {
+          pushTokens.delete(token)
+          await savePushTokens(deps.dataHome, pushTokens).catch(() => {})
+          console.error("[gw] dropped a push token the service says is gone")
+          continue
+        }
+        console.error(`[gw] push failed: ${(err as Error)?.message ?? err}`)
+      }
+    }
+  }
+
   const pumps = new Map<HarnessAdapter, AbortController>()
   async function pump(adapter: HarnessAdapter, signal: AbortSignal): Promise<void> {
     let backoff = 2_000
@@ -341,6 +382,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           // next read is the finished one
           if (evt.type === "session.idle" || evt.type === "turn.aborted") msgCache.delete(evt.sessionID)
           broadcast(evt)
+          void wake(evt)
         }
       } catch {
         /* feed died — resubscribe below */
@@ -646,6 +688,18 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         }
       }
 
+      // A device registers the token FCM gave it. Not an id route: it is
+      // about this device, not about a conversation.
+      if (path === "/push/register" || path === "/push/unregister") {
+        if (!deps.push) return json(res, 503, { error: "this gateway has no push configured" })
+        const deviceToken = (str("token") ?? "").trim()
+        if (!deviceToken) return json(res, 400, { error: "token required" })
+        if (path === "/push/register") pushTokens.add(deviceToken)
+        else pushTokens.delete(deviceToken)
+        await savePushTokens(deps.dataHome, pushTokens)
+        return json(res, 200, { ok: true, devices: pushTokens.size })
+      }
+
       const id = str("id")
       if (!id) return json(res, 400, { error: "id required" })
       const adapter = await ensureListed(id)
@@ -828,9 +882,17 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       if (path === "/history") {
         const limit = typeof b.limit === "number" ? Math.max(0, Math.floor(b.limit)) : 0
         const before = typeof b.before === "number" ? b.before : 0
-        // the harness gives us the whole scroll; the phone asks for a window —
-        // the newest `limit` messages, or everything older than `before`
-        const window = (await cachedMessages(adapter, id))
+        // how many messages the phone already holds, so an older page can be
+        // asked for as one bounded window instead of the whole conversation
+        const have = typeof b.have === "number" ? Math.max(0, Math.floor(b.have)) : 0
+        // Ask the harness for a window, never the scroll. One of the user's
+        // conversations is 3151 messages — 199 MB — and fetching, parsing and
+        // mapping all of it to serve 30 messages, once per page, is what kept
+        // taking the daemon down. `before` is unusable on opencode, so an older
+        // page is "the window plus what the phone holds", then sliced here.
+        const want = limit > 0 ? limit + have + 1 : 0
+        const rows = want > 0 ? await adapter.messages(id, { limit: want }) : await adapter.messages(id)
+        const window = rows
           .filter((m) => !before || m.time < before)
           .sort((a, b) => a.time - b.time)
         const hasMore = limit > 0 && window.length > limit

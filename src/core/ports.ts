@@ -54,7 +54,9 @@ export interface HarnessAdapter {
       agent?: string
     },
   ): Promise<Message>
-  messages(sessionID: string): Promise<Message[]>
+  /** @param opts.limit ask the harness for only the newest N, when it can
+   * page. A long conversation is otherwise megabytes for a 30-message window. */
+  messages(sessionID: string, opts?: { limit?: number }): Promise<Message[]>
   deleteSession(id: string): Promise<boolean>
   abort(sessionID: string): Promise<boolean>
   /** answer a pending ask with one of its own option ids. False when the ask

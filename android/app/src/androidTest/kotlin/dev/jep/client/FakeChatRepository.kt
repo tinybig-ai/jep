@@ -74,7 +74,7 @@ class FakeChatRepository(
     override suspend fun termInput(sessionId: String, text: String) = true
     override suspend fun termKey(sessionId: String, key: String) = true
     override suspend fun termClose(sessionId: String) = true
-    override suspend fun history(sessionId: String, limit: Int, before: Long) = HistoryBatch(messages, false)
+    override suspend fun history(sessionId: String, limit: Int, before: Long, have: Int) = HistoryBatch(messages, false)
     override suspend fun prompt(sessionId: String, text: String, files: List<String>) =
         ChatMessage("reply", Role.ASSISTANT, 1, listOf(ChatPart.Text("ok")))
     override suspend fun stop(sessionId: String) = true

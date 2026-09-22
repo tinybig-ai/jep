@@ -418,6 +418,21 @@ async function main() {
         cols: Math.max(40, Math.min(120, Number(process.env.JEP_TERM_COLS) || 60)),
         rows: Math.max(12, Math.min(60, Number(process.env.JEP_TERM_ROWS) || 24)),
       }),
+      // Push, so a sleeping phone can be told a turn finished without the app
+      // holding a foreground service (and its standing notification) open.
+      // Off unless an operator points at a service account key: no key, no
+      // push, and the device falls back to its own connection.
+      ...(process.env.JEP_FCM_KEY
+        ? await (async () => {
+            const { FcmNotifier } = await import("./adapters/fcm.ts")
+            const notifier = await FcmNotifier.fromFile(process.env.JEP_FCM_KEY!)
+            console.error(`[gw] push enabled (fcm project ${notifier.projectID})`)
+            return { push: notifier }
+          })().catch((err) => {
+            console.error(`[gw] push disabled — ${(err as Error)?.message ?? err}`)
+            return {}
+          })
+        : {}),
       // an import lands in the store, but a running opencode server won't list
       // it until it comes up again — so restart the one serving that directory
       restartWorkspace: async (dir) => {

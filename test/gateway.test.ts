@@ -425,6 +425,41 @@ test("harnesses, a bounded directory browse, and /new spawning a workspace by pa
   }
 })
 
+test("history asks the harness for a window, never the whole conversation", async () => {
+  // A forked conversation of 3151 messages is 199 MB, and fetching, parsing and
+  // mapping all of it to serve 30 messages is what kept taking the daemon down.
+  const asked: Array<number | undefined> = []
+  const inner = fakeAdapter()
+  const a: HarnessAdapter = {
+    ...inner,
+    async messages(id: string, opts?: { limit?: number }) {
+      asked.push(opts?.limit)
+      return inner.messages(id)
+    },
+  }
+  const g = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter: a }],
+    dataHome: mkdtempSync(join(tmpdir(), "gw-test-")),
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+  })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const token = await pair(base, "TESTCODE")
+    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" }
+    const hist = (body: Record<string, unknown>) =>
+      fetch(`${base}/history`, { method: "POST", headers, body: JSON.stringify(body) })
+
+    await hist({ id: "s1", limit: 30 })
+    // an older page says how much the phone already holds: one window, not all
+    await hist({ id: "s1", limit: 30, before: 1, have: 30 })
+    assert.deepEqual(asked, [31, 61])
+  } finally {
+    await g.close()
+  }
+})
+
 test("/mkdir creates a folder under the browse root, and only there", async () => {
   const root = mkdtempSync(join(tmpdir(), "gw-mkdir-"))
   const g = await startGateway({

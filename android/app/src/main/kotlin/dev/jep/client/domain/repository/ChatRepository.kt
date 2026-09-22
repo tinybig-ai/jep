@@ -145,8 +145,10 @@ interface ChatRepository {
     suspend fun termKey(sessionId: String, key: String): Boolean
     /** kill the shell */
     suspend fun termClose(sessionId: String): Boolean
-    /** fetch the newest `limit` messages, or the newest `limit` older than `before` (ms) */
-    suspend fun history(sessionId: String, limit: Int = 0, before: Long = 0): HistoryBatch
+    /** fetch the newest `limit` messages, or the newest `limit` older than
+     * `before` (ms). `have` is how many are already held, so the daemon can ask
+     * the harness for one bounded window instead of the whole conversation. */
+    suspend fun history(sessionId: String, limit: Int = 0, before: Long = 0, have: Int = 0): HistoryBatch
     suspend fun prompt(sessionId: String, text: String, files: List<String> = emptyList()): ChatMessage
     suspend fun stop(sessionId: String): Boolean
     suspend fun respond(askId: String, optionId: String): Boolean
