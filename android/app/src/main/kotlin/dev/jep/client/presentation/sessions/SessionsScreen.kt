@@ -98,9 +98,9 @@ fun SessionsScreen(
                         Image(
                             painterResource(R.mipmap.ic_launcher),
                             null,
-                            Modifier.size(30.dp).clip(RoundedCornerShape(9.dp)),
+                            Modifier.size(60.dp).clip(RoundedCornerShape(18.dp)),
                         )
-                        Spacer(Modifier.width(10.dp))
+                        Spacer(Modifier.width(12.dp))
                         Text("Jep")
                     }
                 },

@@ -161,10 +161,16 @@ fun ChatScreen(
             when {
                 // not in the record yet: the live row fills the gap
                 twin == null -> served + live
-                // the record has caught up: it is authoritative (it also carries
-                // the tool/file parts and the settled thinking duration)
+                // While the turn is open the live row is the ONLY source for this
+                // message. Comparing the two and taking whichever is longer made
+                // the display flip between them as the poll and the deltas traded
+                // the lead — and each flip re-renders the whole reply (different
+                // parts, the caret gone), which is the flicker.
+                state.sending -> served.map { if (it.id == live.id) live else it }
+                // the turn is over: hand over to the record, but only once it has
+                // caught up (it also carries the tool/file parts and the settled
+                // thinking duration). Handing over early rewound the text.
                 messageText(twin).length >= messageText(live).length -> served
-                // the record lags the live row: keep the live row in place
                 else -> served.map { if (it.id == live.id) live else it }
             }
         }
