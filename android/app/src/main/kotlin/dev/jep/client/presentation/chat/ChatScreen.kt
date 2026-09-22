@@ -1406,7 +1406,11 @@ private fun highlight(line: String, base: Color, comment: Color): AnnotatedStrin
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DiffSheet(path: String?, diff: String, onDismiss: () -> Unit) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+    // Open at the content's own height, clamped to the screen — not at the
+    // half-height anchor, which clipped a diff that would have fitted whole.
+    // A long one opens fullscreen and scrolls; either way the first position
+    // shows as much as there is.
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(Modifier.fillMaxWidth().padding(bottom = 20.dp)) {
             Text(
