@@ -175,6 +175,26 @@ fun ChatScreen(
             }
         }
     }
+    // A turn is one user message and however many assistant messages it takes to
+    // answer (opencode emits one per step: the tool call, then the text). Only
+    // the message that ENDS a turn carries the info/copy row — otherwise the
+    // buttons appear at every intermediate step.
+    val busy = state.sending || state.live != null
+    val actionIds = remember(rendered, busy) {
+        val ids = mutableSetOf<String>()
+        rendered.forEachIndexed { idx, m ->
+            if (m.role != Role.ASSISTANT) return@forEachIndexed
+            val last = idx == rendered.lastIndex
+            // ends the turn if a user message follows, or nothing does — and a
+            // turn still in flight has no end yet
+            if (last) {
+                if (!busy) ids += m.id
+            } else if (rendered[idx + 1].role == Role.USER) {
+                ids += m.id
+            }
+        }
+        ids
+    }
     val listState = rememberLazyListState()
     // system back should pop the conversation, not the whole activity; the
     // phone's back gesture currently drops straight to the launcher because
@@ -387,6 +407,7 @@ fun ChatScreen(
                         // pause between parts (thinking, a tool call) must not
                         // read as finished. Index 0 is the newest, at the bottom.
                         responding = busy && i == 0 && ordered[i].role == Role.ASSISTANT,
+                        showActions = ordered[i].id in actionIds,
                     )
                 }
             }
@@ -957,6 +978,7 @@ private fun MessageRow(
     onInfo: (ChatMessage) -> Unit,
     onReply: (ChatMessage) -> Unit,
     responding: Boolean = false,
+    showActions: Boolean = true,
 ) {
     var menu by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
@@ -973,7 +995,7 @@ private fun MessageRow(
     ) {
         when (message.role) {
             Role.USER -> UserBubble(message)
-            Role.ASSISTANT -> AssistantBody(message, onInfo, responding)
+            Role.ASSISTANT -> AssistantBody(message, onInfo, responding, showActions)
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
             DropdownMenuItem(
@@ -1071,7 +1093,12 @@ private fun UserBubble(message: ChatMessage) {
 }
 
 @Composable
-private fun AssistantBody(message: ChatMessage, onInfo: (ChatMessage) -> Unit, responding: Boolean = false) {
+private fun AssistantBody(
+    message: ChatMessage,
+    onInfo: (ChatMessage) -> Unit,
+    responding: Boolean = false,
+    showActions: Boolean = true,
+) {
     // the per-turn accounting lives behind a quiet hollow "i", not printed under
     // every reply; a copy button sits beside it for the reply's own text
     val hasInfo = message.tokens != null || message.cost != null || message.model != null
@@ -1094,22 +1121,24 @@ private fun AssistantBody(message: ChatMessage, onInfo: (ChatMessage) -> Unit, r
         message.error?.let {
             Text(it, color = MaterialTheme.colorScheme.error, fontSize = 14.sp)
         }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            if (hasInfo) {
+        if (showActions) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (hasInfo) {
+                    Icon(
+                        Icons.Outlined.Info,
+                        "response info",
+                        Modifier.size(15.dp).clickable { onInfo(message) },
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    )
+                    Spacer(Modifier.size(16.dp))
+                }
                 Icon(
-                    Icons.Outlined.Info,
-                    "response info",
-                    Modifier.size(15.dp).clickable { onInfo(message) },
+                    Icons.Outlined.ContentCopy,
+                    "copy response",
+                    Modifier.size(15.dp).clickable { clipboard.setText(AnnotatedString(fullText)) },
                     tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                 )
-                Spacer(Modifier.size(16.dp))
             }
-            Icon(
-                Icons.Outlined.ContentCopy,
-                "copy response",
-                Modifier.size(15.dp).clickable { clipboard.setText(AnnotatedString(fullText)) },
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-            )
         }
     }
 }

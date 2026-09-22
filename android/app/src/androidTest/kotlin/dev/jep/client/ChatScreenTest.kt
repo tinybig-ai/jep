@@ -178,6 +178,25 @@ class ChatScreenTest {
     }
 
     @Test
+    fun only_the_message_that_ends_a_turn_has_the_buttons() {
+        // opencode answers a turn with several assistant messages (the tool call,
+        // then the text); the info/copy row belongs to the last one only
+        val vm = ChatViewModel(
+            FakeChatRepository(
+                messages = listOf(
+                    ChatMessage("u1", Role.USER, 1, listOf(ChatPart.Text("write it"))),
+                    ChatMessage("a1", Role.ASSISTANT, 2, listOf(ChatPart.Tool("t1", "write", ToolStatus.COMPLETED, "/tmp/f.py", added = 3))),
+                    ChatMessage("a2", Role.ASSISTANT, 3, listOf(ChatPart.Text("Created f.py"))),
+                ),
+            ),
+            "s1", "T", "jep", "opencode",
+        )
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(6_000) { rule.onAllNodesWithText("Created f.py", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        rule.onAllNodesWithContentDescription("copy response").assertCountEquals(1)
+    }
+
+    @Test
     fun a_reasoning_block_says_thinking_and_counts_while_it_is_still_going() {
         val repo = FakeChatRepository()
         val vm = ChatViewModel(repo, "s1", "T", "jep", "opencode")
