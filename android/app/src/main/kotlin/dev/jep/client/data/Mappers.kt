@@ -122,6 +122,30 @@ private fun JsonElement.lineChange(tool: String): Pair<Int, Int>? {
     }
 }
 
+// The change a tool call made, as a unified hunk. No context lines: the old file
+// is not available (opencode's write metadata carries only the path), so this is
+// exactly what changed — which is what a diff view is for.
+private fun JsonElement.toolDiff(tool: String): String? {
+    val obj = this as? JsonObject ?: return null
+    fun text(v: JsonElement?): String? = (v as? JsonPrimitive)?.contentOrNull
+    fun hunk(old: String?, new: String?): List<String> =
+        (old?.takeIf { it.isNotEmpty() }?.split("\n")?.map { "-$it" } ?: emptyList()) +
+            (new?.takeIf { it.isNotEmpty() }?.split("\n")?.map { "+$it" } ?: emptyList())
+    val lines = when (tool.lowercase()) {
+        "write" -> hunk(null, text(obj["content"]))
+        "edit" -> hunk(text(obj["oldString"]), text(obj["newString"]))
+        "multi-edit", "multiedit" -> {
+            val edits = obj["edits"] as? JsonArray ?: return null
+            edits.flatMap { e ->
+                val o = e as? JsonObject ?: return@flatMap emptyList<String>()
+                hunk(text(o["oldString"]), text(o["newString"]))
+            }
+        }
+        else -> return null
+    }
+    return lines.takeIf { it.isNotEmpty() }?.joinToString("\n")
+}
+
 fun PartDto.toDomain(): ChatPart? = when (kind) {
     "text" -> text?.let { ChatPart.Text(it) }
     "reasoning" -> text?.let { ChatPart.Reasoning(it, durationMs) }
@@ -136,6 +160,7 @@ fun PartDto.toDomain(): ChatPart? = when (kind) {
             output?.display(),
             change?.first,
             change?.second,
+            input?.toolDiff(name.orEmpty()),
         )
     }
     "file" -> filePath?.takeIf { it.isNotBlank() }?.let { ChatPart.File(it, fileName, mimeType) }

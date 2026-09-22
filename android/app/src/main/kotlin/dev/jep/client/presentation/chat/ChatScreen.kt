@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -50,6 +51,7 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowDropUp
 import androidx.compose.material.icons.filled.AccountTree
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Build
@@ -80,6 +82,9 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -1256,6 +1261,11 @@ private fun ToolRow(part: ChatPart.Tool) {
     val expanded = open || (running && body != null)
     val added = part.added ?: 0
     val removed = part.removed ?: 0
+    // An edit opens the change itself, in a diff view — not a "wrote file
+    // successfully" fold. The eye is the affordance; a file with no diff (a bash
+    // command, a read) keeps the chevron and its output.
+    val diff = part.diff
+    var diffOpen by remember(part.id) { mutableStateOf(false) }
     // The same visual language as a thinking block: a quiet line with a chevron
     // that opens. A tool call is not a different kind of thing to read — it is
     // the same "the agent did something here" note.
@@ -1263,7 +1273,7 @@ private fun ToolRow(part: ChatPart.Tool) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .clickable(enabled = body != null) { open = !open },
+                .clickable(enabled = diff != null || body != null) { if (diff != null) diffOpen = true else open = !open },
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
@@ -1295,7 +1305,14 @@ private fun ToolRow(part: ChatPart.Tool) {
                     modifier = Modifier.padding(start = 4.dp),
                 )
             }
-            if (body != null) {
+            if (diff != null) {
+                Icon(
+                    Icons.Filled.Visibility,
+                    "view changes",
+                    Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else if (body != null) {
                 Icon(
                     if (expanded) Icons.Filled.ArrowDropUp else Icons.Filled.ArrowDropDown,
                     "expand",
@@ -1315,7 +1332,7 @@ private fun ToolRow(part: ChatPart.Tool) {
                 )
             }
         }
-        AnimatedVisibility(expanded && body != null) {
+        AnimatedVisibility(expanded && body != null && diff == null) {
             Column {
                 Text(
                     body.orEmpty(),
@@ -1335,6 +1352,57 @@ private fun ToolRow(part: ChatPart.Tool) {
                     Modifier.size(15.dp).padding(top = 4.dp).clickable { clipboard.setText(AnnotatedString(body.orEmpty())) },
                     tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                 )
+            }
+        }
+    }
+    if (diffOpen && diff != null) {
+        DiffSheet(part.title, diff) { diffOpen = false }
+    }
+}
+
+// A file's change, GitHub-style but single column: the path, then the hunk, with
+// what came out in red and what went in in green. A bottom sheet, so it starts
+// as a peek and pulls up to fullscreen — a diff wants the whole screen.
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DiffSheet(path: String?, diff: String, onDismiss: () -> Unit) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(Modifier.fillMaxWidth().padding(bottom = 20.dp)) {
+            Text(
+                path?.substringAfterLast('/') ?: "changes",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+            path?.let {
+                Text(
+                    it,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+            }
+            HorizontalDivider(Modifier.padding(top = 8.dp))
+            LazyColumn(Modifier.fillMaxWidth()) {
+                items(diff.split("\n")) { line ->
+                    val color = when {
+                        line.startsWith("+") -> LineAdded
+                        line.startsWith("-") -> LineRemoved
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                    Text(
+                        line,
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 1.dp),
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = color,
+                    )
+                }
             }
         }
     }

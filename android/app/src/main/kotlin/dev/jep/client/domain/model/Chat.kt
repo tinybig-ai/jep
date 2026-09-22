@@ -89,6 +89,10 @@ sealed interface ChatPart {
          * a change at a glance, without opening the row */
         val added: Int? = null,
         val removed: Int? = null,
+        /** the change as a unified hunk ("-old" then "+new"), for the diff view.
+         * The harness gives no diff for a write and its edit args are the literal
+         * old/new strings, so this is built from the call's own arguments. */
+        val diff: String? = null,
     ) : ChatPart
 
     data class Reasoning(val text: String, val durationMs: Long? = null) : ChatPart
