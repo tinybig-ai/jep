@@ -1,6 +1,6 @@
 <div align="center">
 
-<!-- LOGO: supply a transparent PNG, square, ~512×512: docs/images/jep.png -->
+<img src="docs/images/jep.png" alt="jep" width="120" />
 
 # jep
 
@@ -10,8 +10,7 @@ Coding agents are mostly driven from their own CLIs, each with its own feel,
 its own models, its own mobile situation. jep gives you one layer on top: a
 single companion experience that speaks the same way to **opencode**, **codex**
 and **claude**, reachable from **Telegram** today and the **Android app**,
-with any client possible behind the gateway. Your code never leaves your
-machine.
+with any client possible behind the gateway. Your code stays on your machine.
 
 [![](https://img.shields.io/badge/version-0.1.0-3d6aa8)](package.json)
 [![](https://img.shields.io/badge/Node-%E2%89%A526-339933)](package.json)
@@ -26,72 +25,74 @@ machine.
 </div>
 
 <!--
-HERO IMAGE: the single most important asset. A screen mockup that captures the
-whole promise in ~5 seconds:
+HERO IMAGE: the single most important asset. A screenshot that captures the
+whole promise in ~5 seconds. Drop real captures from a client here:
 
-docs/images/hero.gif (1080×1080 is Instagram-safe; 720 wide is fine)
-or docs/images/hero.png when a GIF is too much work.
+docs/images/screens-telegram.png   a Telegram chat: a streamed turn with a
+                                   native Stop button, a 💭 thinking line,
+                                   collapsible tool calls, a markdown table
+docs/images/screens-android.png    an Android chat: the same turn, Compose UI,
+                                   the pinned conversation + notifications
+docs/images/screens-gateway.png    optional: a web dashboard pixel proof
 
-Suggested sequence, top to bottom:
-1. A chat: "refactor the queue into a class" ⌨️
-2. A live draft appears with a native "Stop" button and a 💭 *thinking…* line
-3. Text streams in, a tool call runs (collapsed),
-4. The turn settles on a markdown table + code block, fully rendered
+Pick one wide 16:9 crop (≈1280 wide) for the hero, or a 2-up side-by-side of
+the Telegram and Android chats. Everything else goes in the client READMEs
+(docs/clients/telegram.md, docs/clients/android.md).
 -->
 
 ---
 
 ## Why jep
 
-The claude companion is nice. Try the same thing with codex or opencode and the
-nice mobile story quietly disappears, so teams bolt a *specific* companion onto
+Coding agents are built around their own CLIs. Each agent has its own feel, its
+own models, and its own story for working away from a desk: Claude Code ships a
+polished mobile companion, while opencode and codex meet you at the terminal.
+Reaching an agent from another device means bolting a *specific* companion onto
 a *specific* harness. That is slow to build, precarious to keep, and duplicated
-once per harness. It also never fixes the deeper friction: jumping between
-harnesses just to reach a proprietary model or feature, and re-learning a different
-feel every time you switch.
+once per harness. It also never fixes the deeper friction of jumping between
+harnesses just to reach a proprietary model or feature, and relearning a
+different feel every time you switch.
 
-jep is the shared layer that removes both problems.
+jep is the shared layer. One harness contract, one set of clients, every agent.
 
 - **🧠 One hexagonal core, every harness.** A single `HarnessAdapter` port
-  normalizes each agent, **opencode** as the flagship, with **Claude Code** and
-  **Codex** as full adapters. The bot and the native app never see harness
-  specifics. Bring a harness, keep every client.
-- **📱 Clients that reach you wherever you are.** The control plane is not
-  phone-first. Today it ships as a **Telegram bot** with native rich-message
-  rendering (tables, collapsible thinking and tool calls, native stop buttons,
-  ephemeral asks) and a **Jetpack Compose Android app**. Any machine can host a
-  client; the [gateway](docs/GATEWAY.md) is a token-authenticated HTTP + SSE
-  door that a web dashboard, a Slack bot, or a desktop widget can use just the
-  same.
-- **⚡ Live, not "later".** Turns stream into an animated draft: a 💭 thinking
-  line while the model reasons, tool calls you can expand, and the answer tail
-  updating every ~700 ms. Tap **stop** to cut a turn, **/steer** to replace it.
+  normalizes each agent, with **opencode** as the flagship and full adapters for
+  **Claude Code** and **Codex**. Every client speaks to the same contract, so a
+  harness behind the shared layer is reachable from any device.
+- **📱 Clients that reach you wherever you are.** A **Telegram bot** with native
+  rich-message rendering (tables, collapsible thinking and tool calls, native
+  stop buttons, ephemeral permission prompts) and a **Jetpack Compose Android
+  app**. The [gateway](docs/GATEWAY.md) is a token-authenticated HTTP + SSE
+  door, so a web dashboard, a Slack bot, or a desktop widget can be a client
+  just the same.
+- **⚡ Live from the first word.** Turns stream into an animated draft: a 💭
+  thinking line while the model reasons, tool calls you can expand, and the
+  answer tail updating every ~700 ms. Tap **stop** to cut a turn, **steer** to
+  replace it.
 - **🎙 Speak your prompt.** Voice notes are decoded, transcribed with whisper,
   and land as real prompts, with a receipt of what was *heard* so a misheard
   word is debuggable.
-- **🖥 The repo, from your client.** Read-only `/git` screens (status, log, diff,
+- **🖥 The repo, from your client.** Read-only git screens (status, log, diff,
   paginated against the wire limits), one confirmed **push** action, and
   config-as-data toggles for **MCP servers and skills**, one line touched per
   switch.
-- **💸 Spend you can see, not guess.** `/usage` and a pinned cost chip report
-  what the harness itself priced every turn: tokens, model, USD. **Free by
-  default**: the default model never burns money until you explicitly pick one.
-- **🔒 Private by default.** Everything runs on your machine. The daemon keeps
-  sessions in an isolated data home (your CLI's store is never touched) and
-  services Tailscale/LAN, no cloud, no telemetry, no account.
+- **💸 Spend you can see, not guess.** A usage screen and a pinned cost chip
+  report what the harness itself priced every turn: tokens, model, USD.
+  **Free by default** until you explicitly pick a paid model.
+- **🔒 Private by default.** Everything runs on your machine: sessions live in
+  an isolated data home (your CLI's store is untouched), and the daemon serves
+  Tailscale or your LAN. Self-hosted and account-free.
 
 ---
 
 ## Quick start
 
-Two minutes to your first agent reply from a phone.
+Two minutes to your first agent reply from wherever you are.
 
 ### Requirements
 
 - **Node ≥ 26** (the daemon runs native TypeScript, no build step)
 - at least one agent CLI installed: **opencode**, **codex**, or **claude**
-- (live bot) a Telegram bot token from [@BotFather](https://t.me/BotFather)
-- (Android app) a network path to your machine, Tailscale or the LAN
 
 ### 1. Install
 
@@ -100,14 +101,11 @@ git clone https://github.com/tinybig-ai/jep.git && cd jep
 npm install
 ```
 
-### 2. Run it
+### 2. Run the daemon
 
 ```sh
 # point at a workspace (defaults to the current directory)
 export JEP_WORKSPACES="$HOME/your-project"
-
-# your Telegram token from @BotFather
-export JEP_TG_TOKEN=123456:ABC-DEF...
 
 npm run tg
 ```
@@ -117,31 +115,23 @@ npm run tg
 > [docs/PROCESSES.md](docs/PROCESSES.md). For a quick dev loop, `npm run tg`
 > is all you need.
 
-### 3. Pair & talk
+### 3. Pick a client
 
-Message the bot. It replies with a **pairing code**, send `/pair <code>` to
-lock it to your chat, then just text it. Plain text is a prompt; `/settings`
-picks a model, `/git` shows the repo, `/find` searches your conversations.
-These commands belong to the Telegram surface; each client documents its own.
+jep runs as one daemon and reaches you through whatever client you prefer.
+Each client has its own setup and command surface:
 
-### No Telegram? No problem
+- **Telegram bot** → [clients/telegram](docs/clients/telegram.md):
+  pair it from your chat, then text it. Rich messages, voice notes, git and
+  usage screens, and a streaming stop/steer loop.
+- **Android app** → [clients/android](docs/clients/android.md):
+  Point it at the gateway, pair, and you have conversations, streaming turns,
+  and notifications in a native Compose client.
+- **Anything else** → the [gateway](docs/GATEWAY.md): a token-authenticated
+  HTTP + SSE door that any client (web dashboard, Slack bot, desktop widget)
+  can speak to.
 
-- **Android app:** add the gateway to the same daemon and build the app:
-
-  ```sh
-  JEP_GW_PORT=8080 JEP_GW_PAIR_CODE=pickme npm run tg
-  cd android && ./gradlew app:assembleDebug
-  ```
-
-  The app pairs over the gateway (`/pair`), lists your conversations, and reads
-  live turns from the SSE stream.
-
-- **Mock mode, zero setup:** replay a scripted session and inspect every wire
-  call jep made:
-
-  ```sh
-  JEP_TG_MOCK=1 npm run tg < fixture/telegram-mock.jsonl
-  ```
+Client setup lives in those READMEs so the top of this file stays the same
+whichever client you choose.
 
 ---
 
@@ -184,12 +174,13 @@ flowchart LR
 ```
 
 <!--
-ARCHITECTURE IMAGE: optional. Mermaid above always renders; supply a polished
-flattened-PNG only if you want something more brandable.
+ARCHITECTURE IMAGE: optional. The Mermaid diagram above always renders; supply
+a polished image if you want something more brandable.
 
-docs/images/architecture.png, a three-column hexagon drawing:
-[Harness adapters] → [Hexagonal core · ports + compliance] → [Presentation:
-Telegram · Gateway/Android]. Reuse the exact shape of the mermaid graph.
+docs/images/architecture.png, a three-column rendering of the same graph:
+[Client adapters: Telegram bot · Gateway (HTTP+SSE) · Android app] → [Hexagonal
+core · ports + compliance] → [Harness adapters: opencode · codex · claude].
+Keep the exact node labels from the Mermaid graph.
 -->
 
 ### The hexagon in practice
@@ -276,8 +267,8 @@ is a third consumer behind the same door (`JEP_GW_PORT`), with the full
 endpoint reference in [docs/GATEWAY.md](docs/GATEWAY.md).
 
 When a client grows its own surface (commands, screens, flows), document it in
-a README next to that client. Adapters can live in this repo today and in their
-own repos tomorrow, without touching the core.
+its own README under [docs/clients/](docs/clients/). Adapters can live in this
+repo today and in their own repos tomorrow, without touching the core.
 
 ---
 
@@ -306,7 +297,7 @@ src/
   gateway.ts            HTTP/SSE transport for native clients
   importers/ · terminals/   cross-store session import · tmux shell
 android/                the native Android client (Kotlin · Jetpack Compose)
-docs/                   PHILOSOPHY · GATEWAY · PROCESSES
+docs/                   PHILOSOPHY · GATEWAY · PROCESSES · clients/
 ```
 
 ## Contributing
