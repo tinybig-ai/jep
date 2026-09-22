@@ -678,7 +678,8 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       // conversation, never listed on their own
       if (path === "/subagents") {
         const sessions = adapter.subagents ? await adapter.subagents(id).catch(() => []) : []
-        return json(res, 200, { sessions })
+        // `items`, like /sessions — the client decodes both with the same shape
+        return json(res, 200, { items: sessions })
       }
 
       // the files this conversation has changed, so the phone can show them

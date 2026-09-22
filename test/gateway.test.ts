@@ -123,6 +123,51 @@ test("sessions merge adapter names; history replays from the harness", async () 
   }
 })
 
+test("subagents lists a conversation's children under `items`, like /sessions", async () => {
+  const adapter = fakeAdapter()
+  adapter.subagents = async () => [{ id: "s2", title: "Sub", workspace: "/tmp/ws", createdAt: 3, updatedAt: 4 }]
+  const g = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter }],
+    dataHome: mkdtempSync(join(tmpdir(), "gw-test-")),
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+  })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const token = await pair(base, "TESTCODE")
+    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" }
+    const res = await fetch(`${base}/subagents`, { method: "POST", headers, body: JSON.stringify({ id: "s1" }) })
+    // the shape is the client's contract — `items`, exactly as /sessions. A
+    // silent mismatch here once made the app say "no subagents" while the
+    // list showed one.
+    const body = (await res.json()) as { items: SessionSummary[] }
+    assert.deepEqual(Object.keys(body), ["items"])
+    assert.equal(body.items.length, 1)
+    assert.equal(body.items[0]?.id, "s2")
+  } finally {
+    await g.close()
+  }
+})
+
+test("subagents is an empty list when the harness has no such notion", async () => {
+  const { gw } = spawnGateway()
+  const g = await gw
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const token = await pair(base, "TESTCODE")
+    const res = await fetch(`${base}/subagents`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ id: "s1" }),
+    })
+    const body = (await res.json()) as { items: SessionSummary[] }
+    assert.deepEqual(body.items, [])
+  } finally {
+    await g.close()
+  }
+})
+
 test("history pages the newest limit; before walks older windows; hasMore flips", async () => {
   const adapter = fakeAdapter()
   const history: Message[] = []
