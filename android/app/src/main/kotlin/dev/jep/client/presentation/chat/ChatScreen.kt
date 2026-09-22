@@ -140,12 +140,13 @@ fun ChatScreen(
 ) {
     val state by vm.state.collectAsState()
 
-    // the streaming live row and a history row can carry the same message id
-    // (opencode snapshots the in-flight message); LazyColumn keys must stay
-    // unique, so the live copy wins and the identical history row is dropped
+    // the live row and a history row can carry the same message id (the harness
+    // persists the in-flight message). History is the fuller record — it keeps
+    // growing as the turn is polled — so it wins the moment it has the message,
+    // and the live row only fills the gap before that. Keys stay unique.
     val rendered = remember(state) {
-        val liveId = state.live?.messageId
-        state.messages.filterNot { it.id == liveId } + listOfNotNull(liveAsMessage(state.live))
+        val served = state.messages.mapTo(mutableSetOf()) { it.id }
+        state.messages + listOfNotNull(liveAsMessage(state.live)?.takeIf { it.id !in served })
     }
     val listState = rememberLazyListState()
     // system back should pop the conversation, not the whole activity; the

@@ -20,6 +20,7 @@ import dev.jep.client.domain.model.Role
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 // The open conversation: stateful merge of the authoritative history and the
@@ -105,12 +106,28 @@ class ChatViewModel(
         // the banner needs the model's name and context window up front, not
         // only when Settings is opened
         loadModels()
+        // The push feed is a convenience, not the record: it drops on a daemon
+        // restart, a network change, a backgrounded radio. A chat that stops
+        // updating is worse than one that reconnects a moment late, so we
+        // resubscribe forever and catch up from history after every drop.
         viewModelScope.launch {
-            repo.events().collect { evt ->
-                when (evt) {
-                    is ChatEvent.Lost -> _state.update { it.copy(lost = true) }
-                    else -> if (evt.sessionId == sessionId) apply(evt)
+            while (true) {
+                repo.events().collect { evt ->
+                    if (evt.sessionId == sessionId || evt is ChatEvent.Lost) apply(evt)
                 }
+                // the feed ended: say so, wait a beat, resubscribe, catch up
+                _state.update { it.copy(lost = true) }
+                delay(1_000)
+                refresh()
+            }
+        }
+        // And while a turn is in flight, follow it from history as well. Even
+        // with no push feed at all the answer grows, which is what makes the
+        // streaming seamless rather than all-at-once at the end.
+        viewModelScope.launch {
+            while (true) {
+                delay(1_200)
+                if (_state.value.sending) refresh()
             }
         }
     }
@@ -154,6 +171,7 @@ class ChatViewModel(
                 it.copy(failure = if (evt.error.isAbort()) null else evt.error, live = null, sending = false)
             }
             is ChatEvent.Quiet -> refresh()
+            is ChatEvent.Lost -> _state.update { it.copy(lost = true) }
             is ChatEvent.MessageSeen -> {
                 evt.role?.let { roles[evt.messageId] = it }
                 // learning mid-turn that the row we're streaming is the user's

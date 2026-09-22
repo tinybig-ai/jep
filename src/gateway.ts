@@ -283,6 +283,18 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
 
   // fan-out: one push feed per device, none of them ever addressable by token
   const clients = new Set<ServerResponse>()
+  // a keepalive comment so an idle stream is not dropped by a proxy or a phone
+  // radio between turns, and a dead socket surfaces here rather than silently
+  const pingTimer = setInterval(() => {
+    for (const res of [...clients]) {
+      try {
+        res.write(": ping\n\n")
+      } catch {
+        clients.delete(res)
+      }
+    }
+  }, 15_000)
+  pingTimer.unref()
   const broadcast = (evt: DomainEvent): void => {
     const frame = `data: ${JSON.stringify(evt)}\n\n`
     for (const res of [...clients]) {
@@ -853,6 +865,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     port: bound,
     close: async () => {
       clearInterval(pumpTimer)
+      clearInterval(pingTimer)
       for (const signal of pumps.values()) signal.abort()
       for (const res of clients) res.end()
       await new Promise<void>((resolve) => server.close(() => resolve()))
