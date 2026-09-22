@@ -139,6 +139,25 @@ class ChatScreenTest {
     }
 
     @Test
+    fun the_reply_does_not_rewind_when_the_turn_ends() {
+        // The harness's record can lag the live row by a beat. Swapping to it at
+        // the instant a turn ends rewound the text for a frame — the "deleted
+        // and recreated" flicker. Whichever is further along wins.
+        val repo = FakeChatRepository(
+            messages = listOf(ChatMessage("a1", Role.ASSISTANT, 5, listOf(ChatPart.Text("one ")))),
+        )
+        val vm = ChatViewModel(repo, "s1", "T", "jep", "opencode")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitForIdle()
+        rule.runOnUiThread { repo.emitEvent(ChatEvent.TextDelta("s1", "a1", "p1", "text", "one two three")) }
+        rule.waitUntil(5_000) {
+            rule.onAllNodesWithText("one two three", substring = true, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        // the shorter served copy must not take over
+        rule.onAllNodesWithText("one two three", substring = true, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+    }
+
+    @Test
     fun a_reasoning_block_says_thinking_and_counts_while_it_is_still_going() {
         val repo = FakeChatRepository()
         val vm = ChatViewModel(repo, "s1", "T", "jep", "opencode")

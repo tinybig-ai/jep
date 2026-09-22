@@ -146,23 +146,27 @@ fun ChatScreen(
 ) {
     val state by vm.state.collectAsState()
 
-    // the live row and a history row can carry the same message id (the harness
-    // persists the in-flight message). History is the fuller record — it keeps
-    // growing as the turn is polled — so it wins the moment it has the message,
-    // and the live row only fills the gap before that. Keys stay unique.
+    // The live row and the harness's record are the same message (both carry the
+    // raw message id), so one replaces the other in place. Which one to show is
+    // decided by how far along it is, not by whether a turn is open: at the
+    // instant a turn ends the record can still be a beat behind, and swapping to
+    // it rewound the text for a frame — the "deleted and recreated" flicker.
     val rendered = remember(state) {
         val live = liveAsMessage(state.live)
-        when {
-            // A turn in flight: the live row is fed by the harness's delta
-            // stream, so it grows smoothly, while history arrives only in
-            // polling-sized jumps. The live copy wins and the served one is
-            // dropped — otherwise the answer appeared to land after it was
-            // written, in chunks.
-            live != null && state.sending -> state.messages.filterNot { it.id == live.id } + live
-            // once the turn is over the record is authoritative; the live row
-            // only fills a gap before the harness has the message
-            live != null && state.messages.none { it.id == live.id } -> state.messages + live
-            else -> state.messages
+        val served = state.messages
+        if (live == null) {
+            served
+        } else {
+            val twin = served.firstOrNull { it.id == live.id }
+            when {
+                // not in the record yet: the live row fills the gap
+                twin == null -> served + live
+                // the record has caught up: it is authoritative (it also carries
+                // the tool/file parts and the settled thinking duration)
+                messageText(twin).length >= messageText(live).length -> served
+                // the record lags the live row: keep the live row in place
+                else -> served.map { if (it.id == live.id) live else it }
+            }
         }
     }
     val listState = rememberLazyListState()
