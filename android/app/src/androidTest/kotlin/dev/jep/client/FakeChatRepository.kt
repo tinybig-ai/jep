@@ -18,6 +18,8 @@ import dev.jep.client.domain.repository.ChatEvent
 import dev.jep.client.domain.repository.ChatRepository
 import dev.jep.client.domain.repository.HistoryBatch
 import dev.jep.client.domain.repository.ModelChoices
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 
@@ -68,7 +70,10 @@ class FakeChatRepository(
     override suspend fun rename(sessionId: String, title: String) = true
     override suspend fun delete(sessionId: String) = true
     override suspend fun attach(sessionId: String, filename: String, bytes: ByteArray) = "attachment"
-    override fun events(): Flow<ChatEvent> = flow { }
+    // tests drive a turn by hand: whatever the harness would emit goes here
+    private val _events = MutableSharedFlow<ChatEvent>(extraBufferCapacity = 64)
+    override fun events(): Flow<ChatEvent> = _events.asSharedFlow()
+    fun emitEvent(evt: ChatEvent) { _events.tryEmit(evt) }
 }
 
 /** a small helpers so tests can name model rows */

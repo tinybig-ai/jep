@@ -61,7 +61,7 @@ class GatewayEventStream(
             "part.delta" -> {
                 val mid = messageID ?: return null
                 val pid = partID ?: return null
-                ChatEvent.TextDelta(sid, mid, pid, text.orEmpty())
+                ChatEvent.TextDelta(sid, mid, pid, partType.orEmpty(), text.orEmpty())
             }
             "part.updated" -> {
                 val mid = messageID ?: return null

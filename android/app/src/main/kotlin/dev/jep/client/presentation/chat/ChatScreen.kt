@@ -879,7 +879,7 @@ private fun ChangesDialog(vm: ChatViewModel, onDismiss: () -> Unit) {
 
 private fun liveAsMessage(live: ChatViewModel.LiveTurn?): ChatMessage? {
     if (live == null) return null
-    val parts = live.texts.entries.map { ChatPart.Text(it.value.toString()) } + live.extras.values
+    val parts = live.parts.values.toList()
     if (parts.isEmpty()) return null
     return ChatMessage(live.messageId, Role.ASSISTANT, 0, parts)
 }

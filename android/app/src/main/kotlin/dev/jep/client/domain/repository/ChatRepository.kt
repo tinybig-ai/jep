@@ -41,6 +41,8 @@ sealed interface ChatEvent {
         override val sessionId: String,
         val messageId: String,
         val partId: String,
+        /** opencode's part type: "text" is the answer, "reasoning" is thinking */
+        val partType: String,
         val text: String,
     ) : ChatEvent
 

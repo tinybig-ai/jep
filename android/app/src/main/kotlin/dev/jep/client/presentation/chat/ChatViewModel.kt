@@ -51,8 +51,10 @@ class ChatViewModel(
     /** the turn being written right now, unit = streaming part */
     data class LiveTurn(
         val messageId: String,
-        val texts: LinkedHashMap<String, StringBuilder> = LinkedHashMap(),
-        val extras: LinkedHashMap<String, ChatPart> = LinkedHashMap(),
+        /** parts in arrival order, keyed by part id: a delta appends to the part
+         * it belongs to, a full snapshot replaces it — so the same text never
+         * lands twice (once accumulated, once as the snapshot) */
+        val parts: LinkedHashMap<String, ChatPart> = LinkedHashMap(),
     )
 
     data class UiState(
@@ -89,6 +91,10 @@ class ChatViewModel(
     // sends land optimistically and are reconciled by the next history read
     private val optimistic = mutableListOf<ChatMessage>()
 
+    // who said what, from the harness's message events: a user message's parts
+    // are echoed back during the turn and must never stream into the agent's row
+    private val roles = mutableMapOf<String, Role>()
+
     // Identifies the turn whose callbacks may still write state. A reply that
     // arrives after the turn was superseded — stopped, or replaced by a newer
     // send — is stale and must not touch the state that replaced it.
@@ -111,16 +117,34 @@ class ChatViewModel(
 
     private fun apply(evt: ChatEvent) {
         when (evt) {
-            is ChatEvent.TextDelta -> _state.update { st ->
-                val live = st.live ?: LiveTurn(evt.messageId)
-                live.texts.getOrPut(evt.partId) { StringBuilder() }.append(evt.text)
-                st.copy(live = live, lost = false, failure = null)
+            is ChatEvent.TextDelta -> {
+                // the harness echoes the user's own message back mid-turn; its
+                // parts are not the agent's output (this rendered your prompt
+                // as if the agent had said it)
+                if (isUserMessage(evt.messageId)) return
+                _state.update { st ->
+                    val live = liveFor(st, evt.messageId)
+                    val existing = live.parts[evt.partId]
+                    live.parts[evt.partId] =
+                        if (evt.partType == "reasoning")
+                            // thinking streams into a thinking block, never
+                            // into the answer body
+                            ChatPart.Reasoning((existing as? ChatPart.Reasoning)?.text.orEmpty() + evt.text)
+                        else
+                            ChatPart.Text((existing as? ChatPart.Text)?.text.orEmpty() + evt.text)
+                    st.copy(live = live, lost = false, failure = null)
+                }
             }
-            is ChatEvent.PartChanged -> _state.update { st ->
-                val live = st.live ?: LiveTurn(evt.messageId)
-                val key = evt.partId ?: "extra${live.extras.size}"
-                live.extras[key] = evt.part
-                st.copy(live = live)
+            is ChatEvent.PartChanged -> {
+                if (isUserMessage(evt.messageId)) return
+                _state.update { st ->
+                    val live = liveFor(st, evt.messageId)
+                    val key = evt.partId ?: "extra${live.parts.size}"
+                    // a full snapshot is authoritative: it replaces whatever the
+                    // deltas accumulated for this part
+                    live.parts[key] = evt.part
+                    st.copy(live = live)
+                }
             }
             is ChatEvent.Asked -> _state.update { it.copy(ask = evt.ask) }
             // a harness-reported failure ends the turn: it must clear the live
@@ -130,9 +154,26 @@ class ChatViewModel(
                 it.copy(failure = if (evt.error.isAbort()) null else evt.error, live = null, sending = false)
             }
             is ChatEvent.Quiet -> refresh()
-            is ChatEvent.MessageSeen, is ChatEvent.Lost -> Unit
+            is ChatEvent.MessageSeen -> {
+                evt.role?.let { roles[evt.messageId] = it }
+                // learning mid-turn that the row we're streaming is the user's
+                // message: drop it rather than leave the prompt on screen as
+                // the agent's
+                if (evt.role == Role.USER && _state.value.live?.messageId == evt.messageId) {
+                    _state.update { it.copy(live = null) }
+                }
+            }
+            is ChatEvent.Lost -> Unit
         }
     }
+
+    // the live row is always one message's: an event for a different message
+    // (the user's echo, then the agent's answer) starts a fresh row rather than
+    // mixing two speakers into one
+    private fun liveFor(st: UiState, messageId: String): LiveTurn =
+        if (st.live?.messageId == messageId) st.live!! else LiveTurn(messageId)
+
+    private fun isUserMessage(messageId: String): Boolean = roles[messageId] == Role.USER
 
     // the harness's own record is authoritative once served; optimistic rows
     // survive only until they show up there. History is paged: the newest

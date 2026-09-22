@@ -17,6 +17,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
 import dev.jep.client.domain.model.Role
+import dev.jep.client.domain.repository.ChatEvent
 import dev.jep.client.domain.model.TokenUsage
 import dev.jep.client.domain.model.ToolStatus
 import dev.jep.client.presentation.chat.ChatScreen
@@ -55,6 +56,37 @@ class ChatScreenTest {
             rule.onAllNodesWithText("message number 30").fetchSemanticsNodes().isNotEmpty()
         }
         rule.onNodeWithText("message number 30").assertIsDisplayed()
+    }
+
+    @Test
+    fun the_user_message_echo_and_thinking_never_render_as_the_answer() {
+        // opencode replays the user's own message mid-turn, then streams
+        // thinking, then the answer — the echo once rendered as an agent
+        // bubble, and the reasoning as the answer's text
+        val repo = FakeChatRepository()
+        val vm = ChatViewModel(repo, "s1", "T", "jep", "opencode")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitForIdle()
+        rule.runOnUiThread {
+            repo.emitEvent(ChatEvent.MessageSeen("s1", "u1", Role.USER))
+            repo.emitEvent(ChatEvent.PartChanged("s1", "u1", "p0", ChatPart.Text("how much is a train to london")))
+            repo.emitEvent(ChatEvent.TextDelta("s1", "a1", "p1", "reasoning", "The user asks about fares"))
+            repo.emitEvent(ChatEvent.TextDelta("s1", "a1", "p2", "text", "about ninety pounds"))
+        }
+        // the events land in the live row, keyed to the agent's message
+        rule.waitUntil(5_000) { vm.state.value.live != null }
+        val live = vm.state.value.live!!
+        assertEquals("a1", live.messageId)
+        // the prompt never enters it — that is the user's message, not the agent's
+        assertEquals(
+            listOf("about ninety pounds"),
+            live.parts.values.filterIsInstance<ChatPart.Text>().map { it.text },
+        )
+        // and thinking is a thinking block, not the answer's body
+        assertEquals(
+            listOf("The user asks about fares"),
+            live.parts.values.filterIsInstance<ChatPart.Reasoning>().map { it.text },
+        )
     }
 
     @Test
