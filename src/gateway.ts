@@ -659,7 +659,20 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         msgCache.delete(sid) // a stale frame must not outlive the import
         // a running server only lists sessions from its boot; bring the one
         // serving this directory back up so the import shows
-        if (forked.dir && deps.restartWorkspace) await deps.restartWorkspace(forked.dir).catch(() => {})
+        if (forked.dir && deps.restartWorkspace) {
+          await deps.restartWorkspace(forked.dir).catch(() => {})
+          // Bringing the server back up is only half of it: it lists what it
+          // can see once it is actually serving. Wait for the copy to be
+          // visible before answering, so the phone's immediate refresh finds
+          // it instead of a list that will not change until something else
+          // happens. Only after a restart — without one the copy is already
+          // there, and waiting would just be latency.
+          sessionAdapters.delete(sid)
+          for (let i = 0; i < 20; i++) {
+            if (await ensureListed(sid)) break
+            await sleep(250)
+          }
+        }
         return json(res, 200, { ok: true, id: sid })
       }
 

@@ -186,9 +186,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         return built
     }
 
+    // A refresh asked for while one is already running is remembered, not
+    // dropped. Importing a conversation asks for one the moment it lands, and
+    // silently skipping it left the list without the new row — which looked
+    // exactly like the import having failed.
+    private var refreshQueued = false
+
     fun refresh() {
         val r = repo ?: return
-        if (_busy.value) return
+        if (_busy.value) {
+            refreshQueued = true
+            return
+        }
         viewModelScope.launch {
             _busy.value = true
             var anyActive = false
@@ -204,10 +213,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             // fresh with the session list so "New conversation" is never empty
             runCatching { r.workspaces() }.onSuccess { _workspaces.value = it }
             _busy.value = false
-            // A live mark has to clear itself when the turn ends, and there is no
-            // push for "this conversation is done" — so while anything is running,
-            // look again in a moment. Stops as soon as nothing is.
-            if (anyActive && _screen.value == Screen.Sessions) {
+            if (refreshQueued) {
+                refreshQueued = false
+                refresh()
+            } else if (anyActive && _screen.value == Screen.Sessions) {
+                // A live mark has to clear itself when the turn ends, and there is
+                // no push for "this conversation is done" — so while anything is
+                // running, look again in a moment. Stops as soon as nothing is.
                 delay(4_000)
                 if (_screen.value == Screen.Sessions) refresh()
             }
@@ -286,7 +298,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             runCatching { r.importSession(id) }
                 .onSuccess {
                     _importable.value = _importable.value?.filterNot { it.id == id }
+                    // The daemon forks the copy and then restarts the workspace
+                    // so the running harness can see it; that takes a beat, so
+                    // look now and again shortly — otherwise the list misses the
+                    // conversation it was just told about.
                     refresh()
+                    viewModelScope.launch {
+                        delay(1_500)
+                        refresh()
+                    }
                 }
                 .onFailure { _notice.value = "import failed: ${it.message}" }
         }
