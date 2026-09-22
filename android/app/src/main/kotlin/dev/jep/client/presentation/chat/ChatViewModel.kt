@@ -289,6 +289,13 @@ class ChatViewModel(
                         )
                     }
                     refresh()
+                    // the harness can still be settling its own record for a
+                    // moment after the turn returns; read once more, so a
+                    // finished answer is never left out
+                    viewModelScope.launch {
+                        delay(1_500)
+                        if (seq == turn) refresh()
+                    }
                 }
                 .onFailure { err ->
                     if (seq != turn) return@onFailure

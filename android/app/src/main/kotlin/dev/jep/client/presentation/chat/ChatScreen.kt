@@ -158,26 +158,33 @@ fun ChatScreen(
     // instantly, not an animated fly-through of the whole conversation.
     // Land at the bottom once content arrives — instantly. Keyed on the message
     // count, not on layout inspection, so it cannot fire before anything exists.
+    // Scroll so the END of the last item is on screen, not its start: a single
+    // answer is often taller than the viewport, and aligning its top would show
+    // you the beginning of a growing message forever. A huge offset clamps to
+    // the true bottom. Item heights are estimates until laid out, so re-issue
+    // it across a few frames until it settles.
+    suspend fun toBottom() {
+        repeat(6) {
+            listState.scrollToItem(rendered.lastIndex, 100_000)
+            withFrameNanos { }
+        }
+    }
     var landed by remember { mutableStateOf(false) }
     LaunchedEffect(rendered.size) {
         if (landed || rendered.isEmpty()) return@LaunchedEffect
-        // Scroll to the end instantly. Item heights are only estimated at this
-        // point, so a single request lands short; nudge it across a few frames
-        // until the measurements settle on the true bottom.
-        // item heights are estimates until laid out, so a single jump lands a
-        // little short; re-issue it across a few frames until it settles
-        repeat(6) {
-            listState.scrollToItem(rendered.lastIndex)
-            withFrameNanos { }
-        }
+        toBottom()
         landed = true
     }
-    // Then follow new output (or the live turn) only while already near the
-    // bottom; never get yanked down when older pages are prepended above.
-    LaunchedEffect(rendered.lastOrNull()?.id, state.live) {
-        if (rendered.isEmpty()) return@LaunchedEffect
-        val last = rendered.lastIndex
-        if (listState.firstVisibleItemIndex >= last - 3) listState.animateScrollToItem(last)
+    // While a turn is in flight, keep the newest output on screen — that is what
+    // streaming means to a reader, and it is what makes the answer appear to
+    // arrive. Checking indices ("are we near the last item?") cannot work here:
+    // one message is taller than the whole viewport, so the index barely moves
+    // while the view sits still. When the turn ends, following stops, so you can
+    // scroll back through it without being yanked.
+    val following = state.sending || state.live != null
+    LaunchedEffect(rendered.size, state.live, following) {
+        if (rendered.isEmpty() || !following) return@LaunchedEffect
+        toBottom()
     }
 
     // approaching the top of a long conversation pulls the previous page

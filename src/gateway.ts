@@ -306,6 +306,20 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     }
   }
 
+  // The harness hands back a conversation's *entire* message list — megabytes
+  // for a long one — and the phone pages it 30 at a time. Without this, every
+  // scroll-up refetched and re-mapped the whole session. A short-lived cache
+  // makes paging cheap; a turn's own writes invalidate only by age.
+  const MSG_TTL_MS = 4_000
+  const msgCache = new Map<string, { at: number; rows: Message[] }>()
+  const cachedMessages = async (a: HarnessAdapter, sid: string): Promise<Message[]> => {
+    const hit = msgCache.get(sid)
+    if (hit && Date.now() - hit.at < MSG_TTL_MS) return hit.rows
+    const rows = await a.messages(sid).catch(() => [] as Message[])
+    msgCache.set(sid, { at: Date.now(), rows })
+    return rows
+  }
+
   // One pump per adapter, for the life of the process: every events()
   // call holds its own subscription (fresh feed instance each time, so
   // Telegram's per-turn watchers and this pump never steal from each
@@ -322,6 +336,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         for await (const evt of adapter.events(signal)) {
           got = true
           if (evt.type === "ask.requested") askSessions.set(evt.ask.id, evt.ask.sessionID)
+          // the turn is over and the record is settled: drop the snapshot so the
+          // next read is the finished one
+          if (evt.type === "session.idle") msgCache.delete(evt.sessionID)
           broadcast(evt)
         }
       } catch {
@@ -362,20 +379,6 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   // one turn at a time per session, seen across every device and Telegram:
   // the harness serializes anyway, but a clean 409 beats a hung phone
   const active = new Set<string>()
-
-  // The harness hands back a conversation's *entire* message list — megabytes
-  // for a long one — and the phone pages it 30 at a time. Without this, every
-  // scroll-up refetched and re-mapped the whole session. A short-lived cache
-  // makes paging cheap; a turn's own writes invalidate only by age.
-  const MSG_TTL_MS = 4_000
-  const msgCache = new Map<string, { at: number; rows: Message[] }>()
-  const cachedMessages = async (a: HarnessAdapter, sid: string): Promise<Message[]> => {
-    const hit = msgCache.get(sid)
-    if (hit && Date.now() - hit.at < MSG_TTL_MS) return hit.rows
-    const rows = await a.messages(sid).catch(() => [] as Message[])
-    msgCache.set(sid, { at: Date.now(), rows })
-    return rows
-  }
 
   const tokenOf = (req: IncomingMessage, url: URL): string | null => {
     const head = req.headers.authorization ?? ""
@@ -829,6 +832,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           return json(res, 502, { error: String((err as Error)?.message ?? err) })
         } finally {
           active.delete(id)
+          // the turn wrote to the record; a snapshot from during it must not
+          // outlive it
+          msgCache.delete(id)
         }
       }
 
