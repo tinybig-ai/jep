@@ -93,7 +93,7 @@ Two minutes to your first agent reply on the phone.
 ### 1. Install
 
 ```sh
-git clone <this-repo> && cd jep
+git clone https://github.com/tinybig-ai/jep.git && cd jep
 npm install
 ```
 
