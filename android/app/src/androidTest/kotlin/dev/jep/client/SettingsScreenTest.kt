@@ -67,6 +67,7 @@ class SettingsScreenTest {
                 theme = theme,
                 terminalEnabled = terminalEnabled,
                 backgroundStreaming = true,
+                knownCode = null,
                 terminalAccess = TerminalAccess(allowed = true, authorized = false),
                 gateway = gateway,
                 onBack = {},

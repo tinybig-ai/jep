@@ -7,6 +7,8 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.jep.client.domain.model.BrowseResult
 import dev.jep.client.domain.model.DirEntry
@@ -100,6 +102,18 @@ class NewChatScreenTest {
         rule.onNodeWithText("jep can't read that folder", substring = true).assertExists()
     }
 
+    @Test
+    fun the_browser_creates_a_folder_in_place() {
+        // a new project usually starts in a folder that isn't there yet, so
+        // creating one belongs in the picker rather than in a terminal
+        var made: String? = null
+        show(browsing = true, onNewFolder = { made = it })
+        rule.onNodeWithContentDescription("new folder").performClick()
+        rule.onNodeWithContentDescription("folder name").performTextInput("fresh")
+        rule.onNodeWithText("Create").performClick()
+        assert(made == "fresh") { "the dialog's name must reach the create action" }
+    }
+
     private fun show(
         browsing: Boolean,
         browse: BrowseResult? = if (browsing) root else null,
@@ -108,6 +122,7 @@ class NewChatScreenTest {
         onBack: () -> Unit = {},
         onCloseBrowse: () -> Unit = {},
         onBrowseInto: (String) -> Unit = {},
+        onNewFolder: (String) -> Unit = {},
         workspaces: List<Workspace> = listOf(Workspace("jep", "opencode", "/home/me/jep")),
     ) {
         val state = NewChatState(
@@ -132,6 +147,7 @@ class NewChatScreenTest {
                 onCloseBrowse = onCloseBrowse,
                 onBrowseInto = onBrowseInto,
                 onBrowseUp = {},
+                onNewFolder = onNewFolder,
                 onCreate = {},
             )
         }

@@ -87,6 +87,10 @@ interface ChatRepository {
     suspend fun harnesses(): Harnesses
     /** folders under `path` (or the browse root when null), bounded by the root */
     suspend fun browse(path: String?): BrowseResult
+    /** create a folder under `path` (or the browse root); returns its full path */
+    suspend fun newFolder(path: String?, name: String): String
+    /** conversations that were archived, so they can be found and restored */
+    suspend fun archivedSessions(): List<SessionSummary>
     /** create a conversation in a named workspace and/or at an absolute path,
      * under a harness — the path is spawned as a workspace if not served yet */
     suspend fun newSession(

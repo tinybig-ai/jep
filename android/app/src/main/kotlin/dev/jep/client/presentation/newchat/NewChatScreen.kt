@@ -19,10 +19,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Source
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -34,8 +36,13 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
@@ -61,6 +68,7 @@ fun NewChatScreen(
     onCloseBrowse: () -> Unit,
     onBrowseInto: (String) -> Unit,
     onBrowseUp: () -> Unit,
+    onNewFolder: (String) -> Unit,
     onCreate: () -> Unit,
 ) {
     // System back unwinds this view the way its own back arrow does — out of
@@ -84,7 +92,7 @@ fun NewChatScreen(
             Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(pad),
         ) {
             if (state.browsing) {
-                Browser(state, onBrowseInto, onBrowseUp, onSelectPath)
+                Browser(state, onBrowseInto, onBrowseUp, onSelectPath, onNewFolder)
             } else {
                 Form(state, onTitle, onHarness, onSelectWorkspace, onOpenBrowse, onCreate)
             }
@@ -173,13 +181,44 @@ private fun Form(
     }
 }
 
+// One name, no path: the folder is created inside the one being browsed, and
+// the daemon refuses a slash — nesting is what the browser is for.
+@Composable
+private fun NewFolderDialog(parent: String?, onDismiss: () -> Unit, onCreate: (String) -> Unit) {
+    var name by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("New folder") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                parent?.let {
+                    Text(it, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    singleLine = true,
+                    label = { Text("Folder name") },
+                    modifier = Modifier.fillMaxWidth().semantics { contentDescription = "folder name" },
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = name.isNotBlank(), onClick = { onCreate(name.trim()) }) { Text("Create") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
 @Composable
 private fun Browser(
     state: NewChatState,
     onBrowseInto: (String) -> Unit,
     onBrowseUp: () -> Unit,
     onSelectPath: (String) -> Unit,
+    onNewFolder: (String) -> Unit,
 ) {
+    var folderOpen by remember { mutableStateOf(false) }
     val b = state.browse
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
         Row(
@@ -196,12 +235,27 @@ private fun Browser(
             )
             // a listing can take seconds — especially a folder the daemon has to
             // time out on — so the header spins instead of looking frozen
+            // creating one is the reason the browser is open as often as not —
+            // a new project usually starts in a folder that isn't there yet
+            IconButton(onClick = { folderOpen = true }, enabled = b != null) {
+                Icon(Icons.Filled.CreateNewFolder, "new folder", Modifier.size(20.dp))
+            }
             if (state.loadingBrowse) {
                 CircularProgressIndicator(
                     Modifier.size(16.dp).semantics { contentDescription = "loading folders" },
                     strokeWidth = 2.dp,
                 )
             }
+        }
+        if (folderOpen) {
+            NewFolderDialog(
+                parent = b?.cwd,
+                onDismiss = { folderOpen = false },
+                onCreate = { name ->
+                    folderOpen = false
+                    onNewFolder(name)
+                },
+            )
         }
         if (b == null) {
             // first open: nothing to show until the root listing lands

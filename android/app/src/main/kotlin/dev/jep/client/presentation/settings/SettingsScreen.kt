@@ -57,6 +57,8 @@ fun SettingsScreen(
     theme: ThemeMode,
     terminalEnabled: Boolean,
     backgroundStreaming: Boolean,
+    /** the code the daemon will accept next, when it has handed one over */
+    knownCode: String?,
     gateway: String?,
     onBack: () -> Unit,
     onTheme: (ThemeMode) -> Unit,
@@ -165,6 +167,7 @@ fun SettingsScreen(
     }
 
     if (codeOpen) TerminalUnlockDialog(
+        known = knownCode,
         onDismiss = { codeOpen = false },
         onSubmit = onUnlockTerminal,
     )
@@ -233,8 +236,15 @@ private fun ReconnectDialog(
 // A shell is the one thing holding a device token shouldn't buy you, so it is
 // gated behind the pairing code a second time — entered here, checked daemon-side.
 @Composable
-private fun TerminalUnlockDialog(onDismiss: () -> Unit, onSubmit: (String, (Boolean) -> Unit) -> Unit) {
-    var code by remember { mutableStateOf("") }
+private fun TerminalUnlockDialog(
+    known: String?,
+    onDismiss: () -> Unit,
+    onSubmit: (String, (Boolean) -> Unit) -> Unit,
+) {
+    // the daemon rotates its code per use and hands the next one over whenever
+    // it accepts one — so the gate can arrive already filled in, rather than
+    // sending the person to read it off the machine
+    var code by remember { mutableStateOf(known.orEmpty()) }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     AlertDialog(
@@ -243,7 +253,10 @@ private fun TerminalUnlockDialog(onDismiss: () -> Unit, onSubmit: (String, (Bool
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    "A shell on this machine is powerful, so it asks for the pairing code again — the one shown when the gateway started.",
+                    if (known.isNullOrBlank())
+                        "A shell on this machine is powerful, so it asks for the pairing code again — the one shown when the gateway started."
+                    else
+                        "A shell on this machine is powerful, so it asks for the pairing code again. This is the one the daemon will accept next.",
                     fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

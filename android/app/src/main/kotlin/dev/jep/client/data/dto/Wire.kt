@@ -8,7 +8,7 @@ import kotlinx.serialization.json.JsonElement
 // parser; mapping into domain types is data/'s job, never the UI's.
 
 @Serializable
-data class PairRes(val token: String)
+data class PairRes(val token: String, val nextCode: String? = null)
 
 @Serializable
 data class SessionDto(
@@ -86,6 +86,12 @@ data class MessageDto(
 
 @Serializable
 data class MessageRes(val message: MessageDto? = null, val aborted: Boolean = false)
+
+@Serializable
+data class MkdirRes(val ok: Boolean = false, val path: String = "")
+
+@Serializable
+data class NextCodeRes(val ok: Boolean = false, val nextCode: String? = null)
 
 @Serializable
 data class HistoryRes(val messages: List<MessageDto> = emptyList(), val hasMore: Boolean = false)

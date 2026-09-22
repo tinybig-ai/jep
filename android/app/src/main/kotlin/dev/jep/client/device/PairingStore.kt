@@ -34,9 +34,22 @@ class PairingStore(private val prefs: android.content.SharedPreferences) {
         token = tokenValue
     }
 
+    /** The code the daemon will accept next, handed over when a pairing or a
+     * terminal unlock succeeds. The daemon rotates its code per use, so the
+     * one the person just proved is already spent — this is the live one, and
+     * it saves them going to read it off the machine. */
+    var nextCode: String?
+        get() = prefs.getString(KEY_NEXT_CODE, null)
+        private set(value) = prefs.edit().putString(KEY_NEXT_CODE, value).apply()
+
+    fun rememberCode(code: String?) {
+        if (!code.isNullOrBlank()) nextCode = code
+    }
+
     fun forget() {
         baseUrl = null
         token = null
+        nextCode = null
     }
 
     // token and base ride SharedPreferences' simple storage: fine on the
@@ -44,5 +57,6 @@ class PairingStore(private val prefs: android.content.SharedPreferences) {
     private companion object {
         const val KEY_BASE = "gateway_base"
         const val KEY_TOKEN = "gateway_token"
+        const val KEY_NEXT_CODE = "gateway_next_code"
     }
 }

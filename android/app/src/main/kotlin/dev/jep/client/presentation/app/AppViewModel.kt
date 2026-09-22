@@ -174,6 +174,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             base = pairing.baseUrl ?: "",
             token = { pairing.token },
             http = JepHttp.client(),
+            onNextCode = { pairing.rememberCode(it) },
         )
         repo = built
         refresh()
@@ -214,7 +215,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             onDone(false, "an address and the code are both needed")
             return
         }
-        val attempt = GatewayChatRepository(base, { null }, JepHttp.client())
+        val attempt = GatewayChatRepository(base, { null }, JepHttp.client(), { pairing.rememberCode(it) })
         viewModelScope.launch {
             runCatching { attempt.pair(base, code) }
                 .onSuccess { token ->
@@ -234,6 +235,30 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             runCatching { r.archiveSession(session.id) }
                 .onFailure { _notice.value = "couldn't archive: ${it.message}"; refresh() }
+        }
+    }
+
+    // conversations that were archived: reachable, restorable, and otherwise
+    // invisible — null until asked for, like the importable list
+    private val _archived = MutableStateFlow<List<SessionSummary>?>(null)
+    val archived = _archived.asStateFlow()
+
+    fun loadArchived() {
+        val r = repo ?: return
+        viewModelScope.launch {
+            runCatching { r.archivedSessions() }
+                .onSuccess { _archived.value = it }
+                .onFailure { _notice.value = "couldn't list archived conversations: ${it.message}" }
+        }
+    }
+
+    fun unarchive(session: SessionSummary) {
+        val r = repo ?: return
+        _archived.value = _archived.value?.filterNot { it.id == session.id }
+        viewModelScope.launch {
+            runCatching { r.unarchiveSession(session.id) }
+                .onFailure { _notice.value = "couldn't restore it: ${it.message}"; loadArchived() }
+                .onSuccess { refresh() }
         }
     }
 
@@ -315,6 +340,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun closeBrowse() = _newChat.update { it.copy(browsing = false) }
+
+    /** create a folder in the folder being browsed, then show it in place */
+    fun newFolder(name: String) {
+        val r = repo ?: return
+        val cwd = _newChat.value.browse?.cwd
+        viewModelScope.launch {
+            runCatching { r.newFolder(cwd, name.trim()) }
+                .onSuccess { loadBrowse(cwd) }
+                .onFailure { e -> _newChat.update { it.copy(error = e.message ?: "couldn't create that folder") } }
+        }
+    }
     fun browseInto(path: String) = loadBrowse(path)
     fun browseUp() = loadBrowse(_newChat.value.browse?.parent)
 

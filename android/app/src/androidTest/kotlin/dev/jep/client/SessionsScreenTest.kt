@@ -6,6 +6,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.jep.client.domain.model.SessionSummary
 import dev.jep.client.presentation.sessions.SessionsScreen
@@ -43,6 +44,31 @@ class SessionsScreenTest {
         }
         // exactly one row carries the live mark
         rule.onAllNodesWithContentDescription("running").assertCountEquals(1)
+    }
+
+    @Test
+    fun an_unread_conversation_is_marked_and_an_active_one_is_not_double_marked() {
+        val rows = listOf(
+            SessionSummary("s1", "New reply", "", 0, 2, "jep", "opencode"),
+            SessionSummary("s2", "Read", "", 0, 1, "jep", "opencode"),
+        )
+        rule.setContent {
+            SessionsScreen(rows, busy = false, notice = null, onOpen = {}, onNew = {}, onRefresh = {}, onSettings = {}, onArchive = {}, importable = emptyList(), onLoadImportable = {}, onImport = {}, unread = setOf("s1"))
+        }
+        rule.onAllNodesWithContentDescription("unread").assertCountEquals(1)
+    }
+
+    @Test
+    fun archived_conversations_can_be_restored() {
+        val filed = listOf(SessionSummary("s9", "Old work", "/home/me/jep", 0, 0, "jep", "codex"))
+        var restored: SessionSummary? = null
+        rule.setContent {
+            SessionsScreen(emptyList(), busy = false, notice = null, onOpen = {}, onNew = {}, onRefresh = {}, onSettings = {}, onArchive = {}, importable = emptyList(), onLoadImportable = {}, onImport = {}, archived = filed, onUnarchive = { restored = it })
+        }
+        rule.onNodeWithContentDescription("archived conversations").performClick()
+        rule.onNodeWithText("Old work").assertExists()
+        rule.onNodeWithText("Restore").performClick()
+        assert(restored?.id == "s9") { "the row's restore must name the conversation" }
     }
 
     @Test

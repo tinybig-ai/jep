@@ -178,6 +178,37 @@ class ChatScreenTest {
     }
 
     @Test
+    fun an_edit_opens_its_change() {
+        // the diff sheet used to open at the half-height anchor, so a short
+        // change was clipped; skipPartiallyExpanded made it open at the
+        // content's own height. This is the assertion that was missing.
+        val vm = ChatViewModel(
+            FakeChatRepository(
+                messages = listOf(
+                    ChatMessage(
+                        "a1", Role.ASSISTANT, 5,
+                        listOf(
+                            ChatPart.Tool(
+                                "t1", "edit", ToolStatus.COMPLETED, "/tmp/fib.py",
+                                added = 1, removed = 1,
+                                diff = "@@ -1,1 +1,1 @@\n-old line\n+new line",
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            "s1", "T", "jep", "opencode",
+        )
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(6_000) { rule.onAllNodesWithText("Edited fib.py").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("Edited fib.py").performClick()
+        // the sheet names the file and shows the change itself, both sides
+        rule.waitUntil(6_000) { rule.onAllNodesWithText("new line", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("old line", substring = true).assertExists()
+        rule.onNodeWithText("new line", substring = true).assertExists()
+    }
+
+    @Test
     fun only_the_message_that_ends_a_turn_has_the_buttons() {
         // opencode answers a turn with several assistant messages (the tool call,
         // then the text); the info/copy row belongs to the last one only

@@ -35,6 +35,7 @@ fun JepApp(app: AppViewModel) {
                 onCloseBrowse = { app.closeBrowse() },
                 onBrowseInto = { app.browseInto(it) },
                 onBrowseUp = { app.browseUp() },
+                onNewFolder = { app.newFolder(it) },
                 onCreate = { app.createConversation() },
             )
         }
@@ -44,6 +45,7 @@ fun JepApp(app: AppViewModel) {
                 theme = prefs.theme,
                 terminalEnabled = prefs.terminalEnabled,
                 backgroundStreaming = prefs.backgroundStreaming,
+                knownCode = app.pairing.nextCode,
                 terminalAccess = app.termAccess.collectAsState().value,
                 gateway = app.gateway.collectAsState().value,
                 onBack = { app.back() },
@@ -85,6 +87,9 @@ fun JepApp(app: AppViewModel) {
             onImport = { app.importSession(it.id) },
             onArchive = { app.archive(it) },
             unread = app.unread.collectAsState().value,
+            archived = app.archived.collectAsState().value,
+            onLoadArchived = { app.loadArchived() },
+            onUnarchive = { app.unarchive(it) },
         )
     }
 }

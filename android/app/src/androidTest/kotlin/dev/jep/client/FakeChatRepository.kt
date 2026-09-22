@@ -37,6 +37,18 @@ class FakeChatRepository(
     override suspend fun workspaces(): List<Workspace> = emptyList()
     override suspend fun harnesses() = Harnesses(listOf("opencode"), "opencode")
     override suspend fun browse(path: String?): BrowseResult = browseAnswer(path)
+
+    /** folders the fake "created", by absolute path */
+    val madeFolders = mutableListOf<String>()
+
+    override suspend fun newFolder(path: String?, name: String): String {
+        val full = "${path ?: "/fake"}/$name"
+        madeFolders += full
+        return full
+    }
+
+    var archivedAnswer: List<dev.jep.client.domain.model.SessionSummary> = emptyList()
+    override suspend fun archivedSessions() = archivedAnswer
     override suspend fun newSession(title: String?, workspace: String?, path: String?, harness: String?) =
         SessionSummary("new-session", title ?: "new", workspace ?: "", 0, 0, workspace, harness)
     override suspend fun models(sessionId: String) = choices ?: ModelChoices(emptyList(), null)

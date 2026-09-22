@@ -10,6 +10,8 @@ import dev.jep.client.data.dto.HistoryRes
 import dev.jep.client.data.dto.ImportableRes
 import dev.jep.client.data.dto.McpRes
 import dev.jep.client.data.dto.MessageRes
+import dev.jep.client.data.dto.MkdirRes
+import dev.jep.client.data.dto.NextCodeRes
 import dev.jep.client.data.dto.ModelsRes
 import dev.jep.client.data.dto.SkillsRes
 import dev.jep.client.data.dto.NewSessionRes
@@ -56,6 +58,9 @@ class GatewayChatRepository(
     private val base: String,
     private val token: () -> String?,
     private val http: OkHttpClient,
+    /** the daemon rotates its pairing code per use; every response that carries
+     * the next one hands it here, so the person never has to go and read it */
+    private val onNextCode: (String?) -> Unit = {},
 ) : ChatRepository {
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
@@ -94,7 +99,9 @@ class GatewayChatRepository(
             val err = runCatching { json.decodeFromString(ErrorDto.serializer(), text) }.getOrNull()
             throw ApiFailure(code_, err?.message ?: err?.error ?: "pairing failed")
         }
-        return json.decodeFromString(PairRes.serializer(), text).token
+        val res = json.decodeFromString(PairRes.serializer(), text)
+        onNextCode(res.nextCode)
+        return res.token
     }
 
     private suspend fun postUnauthed(url: String, body: String): Pair<Int, String> =
@@ -120,6 +127,17 @@ class GatewayChatRepository(
             BrowseRes.serializer(),
             buildJsonObject { path?.let { put("path", it) } }.toString(),
         ).toDomain()
+
+    override suspend fun newFolder(path: String?, name: String): String {
+        val body = buildJsonObject {
+            path?.let { put("path", it) }
+            put("name", name)
+        }.toString()
+        return decode("/mkdir", MkdirRes.serializer(), body).path
+    }
+
+    override suspend fun archivedSessions(): List<SessionSummary> =
+        decode("/archived", SessionsRes.serializer()).items.map { it.toDomain() }
 
     override suspend fun newSession(title: String?, workspace: String?, path: String?, harness: String?): SessionSummary {
         val body = buildJsonObject {
@@ -183,8 +201,13 @@ class GatewayChatRepository(
         return TerminalAccess(r.allowed, r.authorized)
     }
 
-    override suspend fun unlockTerminal(code: String): Boolean =
-        post("/term/unlock", payload("code" to code)).first in 200..299
+    override suspend fun unlockTerminal(code: String): Boolean {
+        val (status, text) = post("/term/unlock", payload("code" to code))
+        if (status in 200..299) {
+            onNextCode(runCatching { json.decodeFromString(NextCodeRes.serializer(), text) }.getOrNull()?.nextCode)
+        }
+        return status in 200..299
+    }
 
     override suspend fun lockTerminal(): Boolean = post("/term/lock", "{}").first in 200..299
 

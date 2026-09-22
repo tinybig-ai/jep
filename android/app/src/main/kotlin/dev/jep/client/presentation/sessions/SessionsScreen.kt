@@ -41,6 +41,7 @@ import kotlin.math.roundToInt
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -77,11 +78,16 @@ fun SessionsScreen(
     onArchive: (SessionSummary) -> Unit,
     /** conversations that have changed since they were last opened */
     unread: Set<String> = emptySet(),
+    /** what was archived — null until the view is asked for */
+    archived: List<SessionSummary>? = null,
+    onLoadArchived: () -> Unit = {},
+    onUnarchive: (SessionSummary) -> Unit = {},
     importable: List<ImportableSession>?,
     onLoadImportable: () -> Unit,
     onImport: (ImportableSession) -> Unit,
 ) {
     var importOpen by remember { mutableStateOf(false) }
+    var archivedOpen by remember { mutableStateOf(false) }
     var confirmImport by remember { mutableStateOf<ImportableSession?>(null) }
     Scaffold(
         floatingActionButton = {
@@ -124,6 +130,10 @@ fun SessionsScreen(
                     IconButton(onClick = { importOpen = true; onLoadImportable() }) {
                         Icon(Icons.Filled.Link, "import a session", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
+                    // archive hid conversations with no way back to them
+                    IconButton(onClick = { archivedOpen = true; onLoadArchived() }) {
+                        Icon(Icons.Filled.Inventory2, "archived conversations", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                     IconButton(onClick = onSettings) {
                         Icon(Icons.Filled.Settings, "settings", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
@@ -157,6 +167,13 @@ fun SessionsScreen(
                 }
             }
         }
+    }
+    if (archivedOpen) {
+        ArchivedDialog(
+            archived = archived,
+            onDismiss = { archivedOpen = false },
+            onUnarchive = onUnarchive,
+        )
     }
     if (importOpen) ImportDialog(
         importable,
@@ -262,6 +279,54 @@ private fun SwipeToArchive(onArchive: () -> Unit, content: @Composable () -> Uni
                 .offset { androidx.compose.ui.unit.IntOffset(offset.value.roundToInt(), 0) },
         ) { content() }
     }
+}
+
+// Swipe-to-archive was a one-way door: nothing listed what had been filed
+// away, so restoring one meant guessing its id. This is that door, both ways.
+@Composable
+private fun ArchivedDialog(
+    archived: List<SessionSummary>?,
+    onDismiss: () -> Unit,
+    onUnarchive: (SessionSummary) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Archived") },
+        text = {
+            when {
+                archived == null -> Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                }
+                archived.isEmpty() -> Text(
+                    "Nothing is archived.",
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                else -> LazyColumn(Modifier.fillMaxWidth()) {
+                    items(archived.size) { i ->
+                        val s = archived[i]
+                        Row(
+                            Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(s.title.ifEmpty { "Untitled" }, fontSize = 15.sp, maxLines = 1)
+                                Text(
+                                    s.adapter ?: s.workspace.substringAfterLast('/'),
+                                    fontSize = 12.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                )
+                            }
+                            TextButton(onClick = { onUnarchive(s) }) { Text("Restore") }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
 }
 
 @Composable
