@@ -59,7 +59,13 @@ class StreamService : Service() {
                     repo.events().collect { evt ->
                         when (evt) {
                             is dev.jep.client.domain.repository.ChatEvent.Asked -> notify("the harness asks", evt.ask.title)
-                            is dev.jep.client.domain.repository.ChatEvent.Failed -> notify("harness failed", evt.error)
+                            is dev.jep.client.domain.repository.ChatEvent.Failed -> {
+                                // A stop you asked for is not a failure. The chat
+                                // view already knows this; the service did not, so
+                                // pressing stop raised "harness failed" with the
+                                // harness's raw error payload as the body.
+                                if (!evt.error.isAbort()) notify("turn failed", humanError(evt.error))
+                            }
                             is dev.jep.client.domain.repository.ChatEvent.Lost -> Unit
                             else -> Unit
                         }
@@ -68,6 +74,13 @@ class StreamService : Service() {
             }
         }.also { it.start() }
     }
+
+    // the harness reports errors as JSON; a notification wants a sentence
+    private fun humanError(raw: String): String =
+        Regex("\"message\"\\s*:\\s*\"([^\"]+)\"").find(raw)?.groupValues?.get(1)
+            ?: raw.take(140)
+
+    private fun String.isAbort(): Boolean = contains("abort", ignoreCase = true)
 
     private fun notify(title: String, text: String) {
         if (cancelled) return
