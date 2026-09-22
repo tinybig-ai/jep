@@ -19,6 +19,7 @@ import dev.jep.client.domain.model.Workspace
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -245,14 +246,82 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // Conversations archived a moment ago, held so they can be put back. A
+    // swipe is easy to trigger by accident, and every mail client sets the
+    // expectation that it is undoable.
+    private val _undo = MutableStateFlow<List<SessionSummary>>(emptyList())
+    val undo = _undo.asStateFlow()
+    private var undoTimer: Job? = null
+
+    /** rows picked in select mode */
+    private val _selection = MutableStateFlow<Set<String>>(emptySet())
+    val selection = _selection.asStateFlow()
+
+    fun toggleSelect(session: SessionSummary) =
+        _selection.update { if (session.id in it) it - session.id else it + session.id }
+
+    fun clearSelection() = _selection.update { emptySet() }
+
     // swipe-to-archive: hide it from the list, leave the harness untouched
-    fun archive(session: SessionSummary) {
+    fun archive(session: SessionSummary) = archiveAll(listOf(session))
+
+    fun archiveSelected() {
+        val chosen = _sessions.value.filter { it.id in _selection.value }
+        _selection.value = emptySet()
+        archiveAll(chosen)
+    }
+
+    fun markSelected(read: Boolean) {
+        val ids = _selection.value
+        if (ids.isEmpty()) return
+        _selection.value = emptySet()
+        ids.forEach { if (read) markRead(it) else markUnread(it) }
+    }
+
+    private fun archiveAll(sessions: List<SessionSummary>) {
         val r = repo ?: return
-        _sessions.value = _sessions.value.filterNot { it.id == session.id }
-        viewModelScope.launch {
-            runCatching { r.archiveSession(session.id) }
-                .onFailure { _notice.value = "couldn't archive: ${it.message}"; refresh() }
+        if (sessions.isEmpty()) return
+        val ids = sessions.map { it.id }.toSet()
+        _sessions.value = _sessions.value.filterNot { it.id in ids }
+        _undo.value = sessions
+        undoTimer?.cancel()
+        undoTimer = viewModelScope.launch {
+            delay(UNDO_MS)
+            _undo.value = emptyList()
         }
+        viewModelScope.launch {
+            var failed = false
+            for (s in sessions) {
+                runCatching { r.archiveSession(s.id) }.onFailure { failed = true }
+            }
+            if (failed) {
+                _notice.value = "couldn't archive something — the list is being reloaded"
+                refresh()
+            }
+        }
+    }
+
+    fun undoArchive() {
+        val sessions = _undo.value
+        if (sessions.isEmpty()) return
+        undoTimer?.cancel()
+        _undo.value = emptyList()
+        val r = repo ?: return
+        viewModelScope.launch {
+            for (s in sessions) runCatching { r.unarchiveSession(s.id) }
+            refresh()
+        }
+    }
+
+    /** the row was looked at: stop marking it unread */
+    fun markRead(sessionId: String) {
+        read.markRead(sessionId)
+        _unread.value = _unread.value - sessionId
+    }
+
+    fun markUnread(sessionId: String) {
+        read.markUnread(sessionId)
+        recomputeUnread()
     }
 
     // conversations that were archived: reachable, restorable, and otherwise
@@ -312,10 +381,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** the conversation has been looked at: stop marking it unread */
-    fun markRead(sessionId: String) {
-        read.markRead(sessionId)
-        _unread.value = _unread.value - sessionId
+    /** Open a conversation by id — how a notification tap lands in the chat
+     * it was about rather than on the list. The list may not be loaded yet on a
+     * cold start, so fall back to fetching it once. */
+    fun openSessionById(sessionId: String) {
+        _sessions.value.firstOrNull { it.id == sessionId }?.let {
+            open(it)
+            return
+        }
+        val r = repo ?: return
+        viewModelScope.launch {
+            runCatching { r.sessions() }.onSuccess { list ->
+                _sessions.value = list
+                recomputeUnread()
+                list.firstOrNull { it.id == sessionId }?.let { open(it) }
+            }
+        }
     }
 
     fun open(session: SessionSummary) {
@@ -444,4 +525,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     /** every chat opens against the same port; ChatViewModels share it */
     fun chat(): ChatRepository = connect()
+
+    private companion object {
+        /** how long the undo affordance stays up after an archive */
+        const val UNDO_MS = 6_000L
+    }
 }

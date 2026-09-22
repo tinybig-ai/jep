@@ -1,6 +1,18 @@
 package dev.jep.client.presentation.sessions
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.material.icons.filled.Circle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.MarkEmailRead
+import androidx.compose.material.icons.filled.MarkEmailUnread
+import androidx.compose.material3.Checkbox
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -82,6 +94,15 @@ fun SessionsScreen(
     archived: List<SessionSummary>? = null,
     onLoadArchived: () -> Unit = {},
     onUnarchive: (SessionSummary) -> Unit = {},
+    /** rows picked in select mode */
+    selection: Set<String> = emptySet(),
+    onToggleSelect: (SessionSummary) -> Unit = {},
+    onClearSelection: () -> Unit = {},
+    onArchiveSelected: () -> Unit = {},
+    onMarkSelected: (Boolean) -> Unit = {},
+    /** conversations archived a moment ago, restorable while this is non-empty */
+    undo: List<SessionSummary> = emptyList(),
+    onUndoArchive: () -> Unit = {},
     importable: List<ImportableSession>?,
     onLoadImportable: () -> Unit,
     onImport: (ImportableSession) -> Unit,
@@ -102,7 +123,25 @@ fun SessionsScreen(
         },
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad)) {
-            TopAppBar(
+            if (selection.isNotEmpty()) {
+                TopAppBar(
+                    navigationIcon = {
+                        IconButton(onClick = onClearSelection) { Icon(Icons.Filled.Close, "cancel selection") }
+                    },
+                    title = { Text("${selection.size} selected") },
+                    actions = {
+                        IconButton(onClick = onArchiveSelected) {
+                            Icon(Icons.Filled.Archive, "archive selected")
+                        }
+                        IconButton(onClick = { onMarkSelected(true) }) {
+                            Icon(Icons.Filled.MarkEmailRead, "mark as read")
+                        }
+                        IconButton(onClick = { onMarkSelected(false) }) {
+                            Icon(Icons.Filled.MarkEmailUnread, "mark as unread")
+                        }
+                    },
+                )
+            } else TopAppBar(
                 title = {
                     Row(
                         // the harness icons in the rows below start at 18dp, and the
@@ -126,6 +165,11 @@ fun SessionsScreen(
                             Modifier.size(18.dp).padding(end = 6.dp),
                             strokeWidth = 2.dp,
                         )
+                    }
+                    // an archive you can take back, for a moment — a swipe is
+                    // easy to trigger by accident
+                    if (undo.isNotEmpty()) {
+                        TextButton(onClick = onUndoArchive) { Text("Undo") }
                     }
                     IconButton(onClick = { importOpen = true; onLoadImportable() }) {
                         Icon(Icons.Filled.Link, "import a session", tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -160,8 +204,23 @@ fun SessionsScreen(
             } else {
                 LazyColumn(Modifier.fillMaxSize()) {
                     items(sessions.size) { i ->
-                        SwipeToArchive(onArchive = { onArchive(sessions[i]) }) {
-                            SessionRow(sessions[i], unread.contains(sessions[i].id), onOpen)
+                        val s = sessions[i]
+                        val row = @Composable {
+                            SessionRow(
+                                session = s,
+                                unread = unread.contains(s.id),
+                                selected = s.id in selection,
+                                selecting = selection.isNotEmpty(),
+                                onOpen = { onOpen(s) },
+                                onToggleSelect = { onToggleSelect(s) },
+                            )
+                        }
+                        // selecting replaces the swipe: a row you are picking is
+                        // not a row you are filing away
+                        if (selection.isEmpty()) {
+                            SwipeToArchive(onArchive = { onArchive(s) }) { row() }
+                        } else {
+                            row()
                         }
                     }
                 }
@@ -270,7 +329,6 @@ private fun SwipeToArchive(onArchive: () -> Unit, content: @Composable () -> Uni
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(Icons.Filled.Archive, "archive", tint = MaterialTheme.colorScheme.primary)
-                Text("Archive", Modifier.padding(start = 8.dp), fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
             }
         }
         Box(
@@ -330,13 +388,31 @@ private fun ArchivedDialog(
 }
 
 @Composable
-private fun SessionRow(session: SessionSummary, unread: Boolean, onOpen: (SessionSummary) -> Unit) {
+@OptIn(ExperimentalFoundationApi::class)
+private fun SessionRow(
+    session: SessionSummary,
+    unread: Boolean,
+    selected: Boolean,
+    selecting: Boolean,
+    onOpen: () -> Unit,
+    onToggleSelect: () -> Unit,
+) {
     Row(
         Modifier.fillMaxWidth()
-            .clickable { onOpen(session) }
+            // long-press starts a selection, the way a mail client does; once
+            // anything is selected, a plain tap picks rather than opens
+            .combinedClickable(
+                onClick = { if (selecting) onToggleSelect() else onOpen() },
+                onLongClick = { if (!selecting) onToggleSelect() },
+            )
+            .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f) else Color.Transparent)
             .padding(horizontal = 18.dp, vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        if (selecting) {
+            Checkbox(checked = selected, onCheckedChange = { onToggleSelect() })
+            Spacer(Modifier.width(6.dp))
+        }
         HarnessAvatar(session.harness)
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -358,9 +434,12 @@ private fun SessionRow(session: SessionSummary, unread: Boolean, onOpen: (Sessio
                     // changed since it was last opened. The slot is always
                     // there — an empty box when neither — so nothing nudges the
                     // age, the title, or anything below it.
-                    Box(Modifier.padding(top = 3.dp).size(9.dp)) {
+                    Box(Modifier.padding(top = 3.dp).size(9.dp), contentAlignment = Alignment.Center) {
                         when {
-                            session.active -> Icon(Icons.Filled.Circle, "running", Modifier.fillMaxSize(), tint = LiveMark)
+                            // Working reads as *alive*: it pulses, where unread is a
+                            // still dot. Two green-ish dots that both just sat there
+                            // said the same thing; the movement is the difference.
+                            session.active -> LiveDot()
                             unread -> Icon(Icons.Filled.Circle, "unread", Modifier.fillMaxSize(), tint = MaterialTheme.colorScheme.primary)
                         }
                     }
@@ -413,6 +492,27 @@ private fun HarnessAvatar(harness: String?) {
 
 // the mark on a conversation that is working right now
 private val LiveMark = Color(0xFF4CAF50)
+
+// A pulse, not a spinner: a progress ring is indeterminate work you cannot
+// finish, while a slow glow is just "this is happening". One transition drives
+// both the core and its halo, so the two never disagree.
+@Composable
+private fun LiveDot() {
+    val transition = rememberInfiniteTransition(label = "live")
+    val pulse by transition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(850, easing = LinearEasing), RepeatMode.Reverse),
+        label = "pulse",
+    )
+    Box(
+        Modifier.fillMaxSize().semantics { contentDescription = "running" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(Icons.Filled.Circle, null, Modifier.fillMaxSize(), tint = LiveMark.copy(alpha = pulse * 0.30f))
+        Icon(Icons.Filled.Circle, null, Modifier.size(5.dp), tint = LiveMark.copy(alpha = pulse))
+    }
+}
 
 private fun ago(epoch: Long): String {
     val minutes = (System.currentTimeMillis() - epoch) / 60_000

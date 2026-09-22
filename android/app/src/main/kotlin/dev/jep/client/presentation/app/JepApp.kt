@@ -90,6 +90,13 @@ fun JepApp(app: AppViewModel) {
             archived = app.archived.collectAsState().value,
             onLoadArchived = { app.loadArchived() },
             onUnarchive = { app.unarchive(it) },
+            selection = app.selection.collectAsState().value,
+            onToggleSelect = { app.toggleSelect(it) },
+            onClearSelection = { app.clearSelection() },
+            onArchiveSelected = { app.archiveSelected() },
+            onMarkSelected = { app.markSelected(it) },
+            undo = app.undo.collectAsState().value,
+            onUndoArchive = { app.undoArchive() },
         )
     }
 }

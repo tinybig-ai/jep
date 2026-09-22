@@ -60,8 +60,8 @@ class StreamService : Service() {
                         // the service hosts the stream; what is worth a
                         // notification is the policy's call, not its own
                         when (NotificationPolicy.decide(evt, AppPresence.openSessionId, AppPresence.foreground)) {
-                            NotificationPolicy.Notice.FINISHED -> evt.sessionId?.let { notify(titleOf(repo, it), "finished replying") }
-                            NotificationPolicy.Notice.ASKED -> evt.sessionId?.let { notify(titleOf(repo, it), "needs you") }
+                            NotificationPolicy.Notice.FINISHED -> evt.sessionId?.let { notify(titleOf(repo, it), "finished replying", it) }
+                            NotificationPolicy.Notice.ASKED -> evt.sessionId?.let { notify(titleOf(repo, it), "needs you", it) }
                             null -> Unit
                         }
                     }
@@ -78,13 +78,19 @@ class StreamService : Service() {
             kotlinx.coroutines.runBlocking { repo.sessions() }.firstOrNull { it.id == sessionId }?.title
         }.getOrNull()?.ifBlank { null } ?: "jep"
 
-    private fun notify(title: String, text: String) {
+    private fun notify(title: String, text: String, sessionId: String) {
         if (cancelled) return
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        // Tapping it should land in the conversation it is about, not on the
+        // list. The id rides the intent, and the request code is per
+        // conversation — otherwise Android reuses the first notification's
+        // intent and every tap opens the same chat.
         val open = PendingIntent.getActivity(
-            this, 0,
-            Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE,
+            this, sessionId.hashCode(),
+            Intent(this, MainActivity::class.java)
+                .putExtra(MainActivity.EXTRA_SESSION, sessionId)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val n: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_chat)
