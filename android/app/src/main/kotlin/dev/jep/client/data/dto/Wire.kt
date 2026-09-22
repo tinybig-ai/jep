@@ -15,6 +15,7 @@ data class SessionDto(
     val id: String,
     val title: String = "",
     val subagents: Int = 0,
+    val active: Boolean = false,
     val workspace: String = "",
     val createdAt: Long = 0,
     val updatedAt: Long = 0,

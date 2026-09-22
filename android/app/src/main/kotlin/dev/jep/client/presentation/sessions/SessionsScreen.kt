@@ -1,5 +1,7 @@
 package dev.jep.client.presentation.sessions
 
+import androidx.compose.material.icons.filled.Circle
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -279,11 +281,22 @@ private fun SessionRow(session: SessionSummary, onOpen: (SessionSummary) -> Unit
                     color = MaterialTheme.colorScheme.onBackground,
                     maxLines = 1,
                 )
-                Text(
-                    ago(session.updatedAt),
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        ago(session.updatedAt),
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    // still working: a reply streaming or a tool running right now
+                    if (session.active) {
+                        Icon(
+                            Icons.Filled.Circle,
+                            "running",
+                            Modifier.padding(top = 3.dp).size(9.dp),
+                            tint = LiveMark,
+                        )
+                    }
+                }
             }
             Text(
                 // workspace, harness, and — when it spawned any — how many
@@ -329,6 +342,9 @@ private fun HarnessAvatar(harness: String?) {
         }
     }
 }
+
+// the mark on a conversation that is working right now
+private val LiveMark = Color(0xFF4CAF50)
 
 private fun ago(epoch: Long): String {
     val minutes = (System.currentTimeMillis() - epoch) / 60_000

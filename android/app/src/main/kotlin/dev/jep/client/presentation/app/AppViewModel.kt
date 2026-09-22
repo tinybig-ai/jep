@@ -19,6 +19,7 @@ import dev.jep.client.domain.model.Workspace
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 // Which screen is up, and the one object every screen builds its data from.
@@ -168,13 +169,25 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (_busy.value) return
         viewModelScope.launch {
             _busy.value = true
+            var anyActive = false
             runCatching { r.sessions() }
-                .onSuccess { _sessions.value = it; _notice.value = null }
+                .onSuccess { list ->
+                    _sessions.value = list
+                    _notice.value = null
+                    anyActive = list.any { it.active }
+                }
                 .onFailure { _notice.value = "gateway unreachable: ${it.message}" }
             // the creation picker lists the same served workspaces; keep them
             // fresh with the session list so "New conversation" is never empty
             runCatching { r.workspaces() }.onSuccess { _workspaces.value = it }
             _busy.value = false
+            // A live mark has to clear itself when the turn ends, and there is no
+            // push for "this conversation is done" — so while anything is running,
+            // look again in a moment. Stops as soon as nothing is.
+            if (anyActive && _screen.value == Screen.Sessions) {
+                delay(4_000)
+                if (_screen.value == Screen.Sessions) refresh()
+            }
         }
     }
 

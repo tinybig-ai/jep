@@ -465,7 +465,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
             // `adapter` is the workspace's friendly name; `harness` the engine
             // behind it (opencode/codex/claude). Both are display-only: a
             // conversation cannot move between harnesses after it exists.
-            items.push({ ...s, title: overridden ?? s.title, adapter: name, harness: adapter.id })
+            // `active` = a turn is in flight for it right now (a reply streaming,
+            // a tool running) — the phone shows a live mark on the row
+            items.push({ ...s, title: overridden ?? s.title, adapter: name, harness: adapter.id, active: active.has(s.id) })
           }
         }
         items.sort((x, y) => y.updatedAt - x.updatedAt)

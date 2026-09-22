@@ -14,6 +14,8 @@ data class SessionSummary(
     val harness: String? = null,
     /** subagent sessions this one spawned (0 = none, or the harness has none) */
     val subagents: Int = 0,
+    /** a turn is in flight for it right now: a reply streaming, a tool running */
+    val active: Boolean = false,
 )
 
 /** a workspace the gateway serves, the harness (opencode/codex/…) behind it,
