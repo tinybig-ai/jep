@@ -130,6 +130,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _screen = MutableStateFlow<Screen>(Screen.Sessions)
     val screen = _screen.asStateFlow()
 
+    // Opening a subagent replaces the conversation it was reached from, so
+    // Back would drop you at the list. A stack keeps the way back: drill in,
+    // come out where you were.
+    private val chatStack = ArrayDeque<Screen.Chat>()
+
     private val _sessions = MutableStateFlow<List<SessionSummary>>(emptyList())
     val sessions = _sessions.asStateFlow()
 
@@ -297,12 +302,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         markRead(session.id)
         // `adapter` is the workspace's friendly name; fall back to the folder
         // name of the path when an older listing didn't carry it
-        _screen.value = Screen.Chat(
+        val target = Screen.Chat(
             session.id,
             session.title,
             session.adapter ?: session.workspace.substringAfterLast('/'),
             session.harness,
         )
+        // reached from another conversation (a subagent): remember the way back
+        (_screen.value as? Screen.Chat)?.takeIf { it.sessionId != target.sessionId }?.let { chatStack.addLast(it) }
+        _screen.value = target
     }
 
     // ---- New conversation (a full view, not a modal) ----------------------
@@ -395,13 +403,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun back() {
-        _screen.value = Screen.Sessions
+        // up to the conversation this one was opened from, if any; the list
+        // otherwise
+        val parent = if (_screen.value is Screen.Chat) chatStack.removeLastOrNull() else null
+        _screen.value = parent ?: Screen.Sessions
         // a conversation can be renamed or deleted while it's open; the list
         // must show that on the way back rather than needing a manual pull
         refresh()
     }
 
     fun forgetPairing() {
+        chatStack.clear()
         pairing.forget()
         _gateway.value = null
         repo = null
