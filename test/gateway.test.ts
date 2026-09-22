@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { startGateway, type GatewayHandle } from "../src/gateway.ts"
 import type { HarnessAdapter } from "../src/core/ports.ts"
 import type { DomainEvent, Message, SessionSummary } from "../src/core/types.ts"
-import { mkdtempSync } from "node:fs"
+import { existsSync, mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -420,6 +420,71 @@ test("harnesses, a bounded directory browse, and /new spawning a workspace by pa
     ).json()) as { session: SessionSummary }
     assert.equal(added, "/tmp/newdir:other")
     assert.equal(nw.session.id, "s1")
+  } finally {
+    await g.close()
+  }
+})
+
+test("/mkdir creates a folder under the browse root, and only there", async () => {
+  const root = mkdtempSync(join(tmpdir(), "gw-mkdir-"))
+  const g = await startGateway({
+    adapters: () => [],
+    browseRoot: root,
+    dataHome: mkdtempSync(join(tmpdir(), "gw-test-")),
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+  })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const token = await pair(base, "TESTCODE")
+    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" }
+    const mk = (body: Record<string, unknown>) =>
+      fetch(`${base}/mkdir`, { method: "POST", headers, body: JSON.stringify(body) })
+
+    assert.equal((await mk({ name: "fresh" })).status, 200)
+    assert.ok(existsSync(join(root, "fresh")))
+
+    // the same name twice is a conflict, not a silent success
+    assert.equal((await mk({ name: "fresh" })).status, 409)
+    // a slash would escape the level it was asked for
+    assert.equal((await mk({ name: "a/b" })).status, 400)
+    assert.equal((await mk({ name: "" })).status, 400)
+    // and the root bound holds: /etc is outside it
+    assert.equal((await mk({ path: "/etc", name: "jep-should-not-exist" })).status, 403)
+    assert.equal(existsSync("/etc/jep-should-not-exist"), false)
+  } finally {
+    await g.close()
+  }
+})
+
+test("an archived conversation leaves the list and appears under /archived", async () => {
+  const a = fakeAdapter()
+  const g = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter: a }],
+    dataHome: mkdtempSync(join(tmpdir(), "gw-test-")),
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+  })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const token = await pair(base, "TESTCODE")
+    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" }
+    const post = async (path: string, body: Record<string, unknown> = {}) =>
+      ((await (await fetch(`${base}${path}`, { method: "POST", headers, body: JSON.stringify(body) })).json()) as {
+        items?: SessionSummary[]
+      })
+
+    assert.equal((await post("/sessions")).items?.length, 1)
+    await post("/archive", { id: "s1" })
+    assert.equal((await post("/sessions")).items?.length, 0)
+    const filed = await post("/archived")
+    assert.equal(filed.items?.length, 1)
+    assert.equal(filed.items?.[0]?.id, "s1")
+    await post("/unarchive", { id: "s1" })
+    assert.equal((await post("/sessions")).items?.length, 1)
+    assert.equal((await post("/archived")).items?.length, 0)
   } finally {
     await g.close()
   }

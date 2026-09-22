@@ -453,15 +453,17 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
 
       if (req.method !== "POST") return json(res, 404, { error: "no such route" })
 
-      if (path === "/sessions") {
+      if (path === "/sessions" || path === "/archived") {
         ensurePumps()
+        // the archived view is the only place a filed-away conversation shows
+        const wantArchived = path === "/archived"
         const items = []
         for (const { name, adapter } of deps.adapters()) {
           const list = await adapter.listSessions().catch(() => [])
           for (const s of list) {
             sessionAdapters.set(s.id, adapter)
             // archived conversations are filed away, not listed
-            if (archived.has(s.id)) continue
+            if (archived.has(s.id) !== wantArchived) continue
             const overridden = titles.get(s.id)
             // `adapter` is the workspace's friendly name; `harness` the engine
             // behind it (opencode/codex/claude). Both are display-only: a
@@ -619,6 +621,30 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         return json(res, 200, { ok: true, id: sid })
       }
 
+
+      // Create a folder inside the browse root, so a conversation can start in
+      // one that does not exist yet. Bounded by the same root as browsing: the
+      // phone may not conjure directories anywhere the daemon can see.
+      if (path === "/mkdir") {
+        const root = resolve(deps.browseRoot ?? homedir())
+        const parent = str("path")
+        const name = (str("name") ?? "").trim()
+        if (!name || name === "." || name === ".." || /[\\/]/.test(name)) {
+          return json(res, 400, { error: "a folder name can't be empty or contain a slash" })
+        }
+        const dir = parent ? resolve(parent) : root
+        if (dir !== root && !dir.startsWith(root + sep)) return json(res, 403, { error: "outside the browse root" })
+        const target = join(dir, name)
+        if (!target.startsWith(root + sep)) return json(res, 403, { error: "outside the browse root" })
+        try {
+          await mkdir(target)
+          return json(res, 200, { ok: true, path: target })
+        } catch (err) {
+          const code = (err as NodeJS.ErrnoException)?.code
+          if (code === "EEXIST") return json(res, 409, { error: "a folder with that name is already there" })
+          return json(res, 500, { error: `couldn't create it: ${(err as Error)?.message ?? err}` })
+        }
+      }
 
       const id = str("id")
       if (!id) return json(res, 400, { error: "id required" })
