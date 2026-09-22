@@ -880,7 +880,8 @@ private fun ChangesDialog(vm: ChatViewModel, onDismiss: () -> Unit) {
 
 private fun liveAsMessage(live: ChatViewModel.LiveTurn?): ChatMessage? {
     if (live == null) return null
-    val parts = live.parts.values.toList()
+    // a thinking part with nothing in it yet is not worth a bubble
+    val parts = live.parts.values.filterNot { it is ChatPart.Text && it.text.isEmpty() || it is ChatPart.Reasoning && it.text.isEmpty() }
     if (parts.isEmpty()) return null
     return ChatMessage(live.messageId, Role.ASSISTANT, 0, parts)
 }

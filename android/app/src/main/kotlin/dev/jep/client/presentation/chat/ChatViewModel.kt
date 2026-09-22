@@ -185,6 +185,11 @@ class ChatViewModel(
         }
     }
 
+    // the text of a message as the user sees it, for reconciling a local
+    // placeholder against the harness's record
+    private fun textOf(m: ChatMessage): String =
+        m.parts.filterIsInstance<ChatPart.Text>().joinToString("\n") { it.text }.trim()
+
     // the live row is always one message's: an event for a different message
     // (the user's echo, then the agent's answer) starts a fresh row rather than
     // mixing two speakers into one
@@ -202,8 +207,22 @@ class ChatViewModel(
         viewModelScope.launch {
             runCatching { repo.history(sessionId, limit = WINDOW) }
                 .onSuccess { batch ->
-                    val servedIds = batch.messages.map { it.id }.toSet()
-                    optimistic.removeAll { it.id in servedIds }
+                    // An optimistic row is a placeholder for a send still in
+                    // flight, and it must go the moment the harness's own
+                    // record has that message. The ids can never match (ours is
+                    // local, the harness mints its own), so match by text —
+                    // otherwise your own message sits there twice for the whole
+                    // turn.
+                    val servedUser = batch.messages.filter { it.role == Role.USER }.map { textOf(it) }.toMutableList()
+                    optimistic.removeAll { o ->
+                        val i = servedUser.indexOf(textOf(o))
+                        if (i >= 0) {
+                            servedUser.removeAt(i)
+                            true
+                        } else {
+                            false
+                        }
+                    }
                     _state.update { st ->
                         st.copy(
                             messages = batch.messages + optimistic.toList(),
@@ -260,7 +279,15 @@ class ChatViewModel(
                 .onSuccess { final ->
                     if (seq != turn) return@onSuccess
                     optimistic.removeAll { it.id == pending.id }
-                    _state.update { it.copy(messages = it.messages + final, sending = false, live = null) }
+                    // polling may already have served this message; replace by
+                    // id rather than append, or the answer lands twice
+                    _state.update { st ->
+                        st.copy(
+                            messages = st.messages.filterNot { it.id == final.id } + final,
+                            sending = false,
+                            live = null,
+                        )
+                    }
                     refresh()
                 }
                 .onFailure { err ->

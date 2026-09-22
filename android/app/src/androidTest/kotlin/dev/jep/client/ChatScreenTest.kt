@@ -90,6 +90,24 @@ class ChatScreenTest {
     }
 
     @Test
+    fun your_message_is_not_shown_twice_while_the_turn_is_in_flight() {
+        // the placeholder shows the moment you send; the harness's own record
+        // then serves the same message. Matching them by id can never work
+        // (ours is local), so without matching by text your message sat there
+        // twice for the whole turn.
+        val repo = FakeChatRepository(
+            messages = listOf(ChatMessage("u1", Role.USER, 1, listOf(ChatPart.Text("what else? be creative")))),
+        )
+        val vm = ChatViewModel(repo, "s1", "T", "jep", "opencode")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitForIdle()
+        rule.runOnUiThread { vm.send("what else? be creative") }
+        // the turn is in flight; once history has served the message, only one copy remains
+        rule.waitUntil(10_000) { vm.state.value.messages.size == 1 }
+        rule.onAllNodesWithText("what else? be creative").assertCountEquals(1)
+    }
+
+    @Test
     fun a_jump_to_latest_button_appears_once_scrolled_up() {
         val vm = ChatViewModel(FakeChatRepository(messages = manyMessages(30)), "s1", "T")
         rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
