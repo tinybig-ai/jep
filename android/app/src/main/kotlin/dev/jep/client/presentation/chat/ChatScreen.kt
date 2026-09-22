@@ -181,10 +181,17 @@ fun ChatScreen(
     // one message is taller than the whole viewport, so the index barely moves
     // while the view sits still. When the turn ends, following stops, so you can
     // scroll back through it without being yanked.
-    val following = state.sending || state.live != null
+    // Stick to the bottom as the answer arrives — that is what makes streaming
+    // readable, and it must hold whether the text is streaming into the live row
+    // or being served from history, and whether or not a turn is still open (the
+    // last of it often lands after the turn returns).
+    //
     // Keyed on the content, not on state.live: the live row mutates its parts in
     // place, so the LiveTurn instance never changes and an effect keyed on it
     // would fire once and never again — the answer then grew out of view.
+    //
+    // The one case that must not jump: older messages being prepended above
+    // (loadOlder). The tail is unchanged there, so the reader stays put.
     val contentTick = rendered.size * 1_000_000 + (rendered.lastOrNull()?.parts?.sumOf { p ->
         when (p) {
             is ChatPart.Text -> p.text.length
@@ -192,11 +199,21 @@ fun ChatScreen(
             else -> 1
         }
     } ?: 0)
+    val following = state.sending || state.live != null
+    var prevFirst by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(contentTick, following) {
-        if (rendered.isEmpty() || !following) return@LaunchedEffect
-        // one jump per change: the next delta corrects any estimate that landed
-        // short, so the tail stays pinned without animating against itself
-        listState.scrollToItem(rendered.lastIndex, 100_000)
+        if (rendered.isEmpty()) return@LaunchedEffect
+        val prepended = prevFirst != null && rendered.first().id != prevFirst
+        prevFirst = rendered.first().id
+        // Stick during a turn no matter what; otherwise only when the tail is
+        // already (even partly) on screen, so scrolling up to read while idle is
+        // not fought — and the last content, which lands after the turn ends,
+        // still gets pinned instead of sitting clipped behind the composer.
+        val tailOnScreen = listState.layoutInfo.visibleItemsInfo.any { it.index == rendered.lastIndex }
+        // nudge across frames: a growing last item is only an estimate at the
+        // moment we jump, so a single jump lands a line short — and then no
+        // further content change comes to correct it
+        if (!prepended && (following || tailOnScreen)) toBottom()
     }
 
     // approaching the top of a long conversation pulls the previous page
