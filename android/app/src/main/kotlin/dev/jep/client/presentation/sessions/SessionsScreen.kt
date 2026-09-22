@@ -94,7 +94,13 @@ fun SessionsScreen(
         Column(Modifier.fillMaxSize().padding(pad)) {
             TopAppBar(
                 title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        // the harness icons in the rows below start at 18dp, and the
+                        // logo's mipmap carries its own transparent margin, so the
+                        // apple sits further right than the marks it lines up with
+                        Modifier.offset(x = (-12).dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Image(
                             painterResource(R.mipmap.ic_launcher),
                             null,
