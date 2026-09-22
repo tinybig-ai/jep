@@ -1,8 +1,10 @@
 package dev.jep.client
 
 import androidx.activity.ComponentActivity
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -65,6 +67,22 @@ class NewChatScreenTest {
     }
 
     @Test
+    fun a_folder_is_listed_once_even_when_several_harnesses_serve_it() {
+        // the same directory under two harnesses is two workspaces, but one row
+        show(
+            browsing = false,
+            workspaces = listOf(
+                Workspace("jep", "opencode", "/home/me/jep"),
+                Workspace("jep", "codex", "/home/me/jep"),
+                Workspace("morsel", "claude", "/home/me/morsel"),
+            ),
+        )
+        rule.onAllNodesWithText("jep").assertCountEquals(1)
+        rule.onNodeWithText("/home/me/jep").assertExists()
+        rule.onNodeWithText("morsel").assertExists()
+    }
+
+    @Test
     fun a_slow_first_listing_shows_a_spinner() {
         show(browsing = true, browse = null, loading = true)
         rule.onNodeWithText("Opening…").assertExists()
@@ -90,12 +108,13 @@ class NewChatScreenTest {
         onBack: () -> Unit = {},
         onCloseBrowse: () -> Unit = {},
         onBrowseInto: (String) -> Unit = {},
+        workspaces: List<Workspace> = listOf(Workspace("jep", "opencode", "/home/me/jep")),
     ) {
         val state = NewChatState(
             harness = "opencode",
             defaultHarness = "opencode",
             harnesses = listOf("opencode", "codex"),
-            workspaces = listOf(Workspace("jep", "opencode", "/home/me/jep")),
+            workspaces = workspaces,
             browse = browse,
             browsing = browsing,
             loadingBrowse = loading,

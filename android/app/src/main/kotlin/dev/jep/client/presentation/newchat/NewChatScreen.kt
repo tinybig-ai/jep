@@ -132,13 +132,18 @@ private fun Form(
 
         item { SectionTitle("WORKSPACE") }
         item {
-            state.workspaces.forEach { w ->
+            // A folder is listed once. The same directory is a different
+            // workspace per harness — separate stores, separate sessions — so
+            // repeating it under every harness is noise: the HARNESS chips
+            // above choose which one, and the gateway brings that harness up
+            // for the directory if it isn't serving it yet.
+            state.workspaces.distinctBy { it.dir.ifBlank { it.name } }.forEach { w ->
                 val selected = state.workspace == w.name && state.path == null
                 SelectRow(
                     title = w.name,
-                    subtitle = w.harness + (w.dir.takeIf { it.isNotBlank() }?.let { "  ·  $it" } ?: ""),
+                    subtitle = w.dir.ifBlank { w.harness },
                     selected = selected,
-                    onClick = { onSelectWorkspace(w.name, w.harness) },
+                    onClick = { onSelectWorkspace(w.name, state.harness ?: w.harness) },
                 )
             }
             SelectRow(

@@ -182,9 +182,21 @@ fun ChatScreen(
     // while the view sits still. When the turn ends, following stops, so you can
     // scroll back through it without being yanked.
     val following = state.sending || state.live != null
-    LaunchedEffect(rendered.size, state.live, following) {
+    // Keyed on the content, not on state.live: the live row mutates its parts in
+    // place, so the LiveTurn instance never changes and an effect keyed on it
+    // would fire once and never again — the answer then grew out of view.
+    val contentTick = rendered.size * 1_000_000 + (rendered.lastOrNull()?.parts?.sumOf { p ->
+        when (p) {
+            is ChatPart.Text -> p.text.length
+            is ChatPart.Reasoning -> p.text.length
+            else -> 1
+        }
+    } ?: 0)
+    LaunchedEffect(contentTick, following) {
         if (rendered.isEmpty() || !following) return@LaunchedEffect
-        toBottom()
+        // one jump per change: the next delta corrects any estimate that landed
+        // short, so the tail stays pinned without animating against itself
+        listState.scrollToItem(rendered.lastIndex, 100_000)
     }
 
     // approaching the top of a long conversation pulls the previous page
