@@ -287,14 +287,14 @@ private fun SessionRow(session: SessionSummary, onOpen: (SessionSummary) -> Unit
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    // still working: a reply streaming or a tool running right now
-                    if (session.active) {
-                        Icon(
-                            Icons.Filled.Circle,
-                            "running",
-                            Modifier.padding(top = 3.dp).size(9.dp),
-                            tint = LiveMark,
-                        )
+                    // still working: a reply streaming or a tool running right
+                    // now. The slot is always there — an empty box when idle —
+                    // so a conversation starting or finishing work cannot nudge
+                    // the age, the row, or anything below it.
+                    Box(Modifier.padding(top = 3.dp).size(9.dp)) {
+                        if (session.active) {
+                            Icon(Icons.Filled.Circle, "running", Modifier.fillMaxSize(), tint = LiveMark)
+                        }
                     }
                 }
             }
