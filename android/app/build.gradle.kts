@@ -49,6 +49,9 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
     implementation("com.mikepenz:multiplatform-markdown-renderer-m3:0.43.0")
 
+    // pure policy/parsing tests — no device needed, so they run in seconds
+    testImplementation("junit:junit:4.13.2")
+
     // UI e2e: drive the real screens on an emulator, no network (fakes injected)
     androidTestImplementation(platform("androidx.compose:compose-bom:2025.12.00"))
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")

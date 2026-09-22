@@ -19,12 +19,22 @@ class AppSettings(private val prefs: SharedPreferences) {
     val terminalEnabled: Boolean
         get() = (prefs.all[KEY_TERMINAL] as? Boolean) ?: false
 
+    /** Whether the app keeps its push feed alive while backgrounded. Off
+     * means no foreground service, and therefore no notifications — the
+     * trade the user makes is the persistent notification itself. Default on:
+     * a notification about a finished turn is the reason the service exists. */
+    val backgroundStreaming: Boolean
+        get() = (prefs.all[KEY_STREAM] as? Boolean) ?: true
+
     fun setTheme(mode: ThemeMode) = prefs.edit().putString(KEY_THEME, mode.name).apply()
+
+    fun setBackgroundStreaming(enabled: Boolean) = prefs.edit().putBoolean(KEY_STREAM, enabled).apply()
 
     fun setTerminalEnabled(enabled: Boolean) = prefs.edit().putBoolean(KEY_TERMINAL, enabled).apply()
 
     private companion object {
         const val KEY_THEME = "app_theme"
         const val KEY_TERMINAL = "app_terminal_enabled"
+        const val KEY_STREAM = "app_background_streaming"
     }
 }

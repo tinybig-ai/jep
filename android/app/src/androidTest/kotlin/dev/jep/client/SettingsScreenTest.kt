@@ -3,6 +3,7 @@ package dev.jep.client
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -34,7 +35,7 @@ class SettingsScreenTest {
     @Test
     fun enabling_the_terminal_asks_for_the_pairing_code() {
         show(theme = ThemeMode.SYSTEM, terminalEnabled = false)
-        rule.onNode(isToggleable()).performClick()
+        rule.onNodeWithContentDescription("In-chat terminal").performClick()
         rule.onNodeWithText("Enable terminal").assertExists()
         rule.onNodeWithText("Pairing code").assertExists()
     }
@@ -43,7 +44,7 @@ class SettingsScreenTest {
     fun turning_the_terminal_off_reports_it() {
         var disabled = false
         show(theme = ThemeMode.SYSTEM, terminalEnabled = true, onDisable = { disabled = true })
-        rule.onNode(isToggleable()).performClick()
+        rule.onNodeWithContentDescription("In-chat terminal").performClick()
         assertTrue(disabled)
     }
 
@@ -65,12 +66,14 @@ class SettingsScreenTest {
             SettingsScreen(
                 theme = theme,
                 terminalEnabled = terminalEnabled,
+                backgroundStreaming = true,
                 terminalAccess = TerminalAccess(allowed = true, authorized = false),
                 gateway = gateway,
                 onBack = {},
                 onTheme = onTheme,
                 onUnlockTerminal = onUnlockTerminal,
                 onDisableTerminal = onDisable,
+                onBackgroundStreaming = {},
                 onReconnect = { _, _, done -> done(false) },
             )
         }

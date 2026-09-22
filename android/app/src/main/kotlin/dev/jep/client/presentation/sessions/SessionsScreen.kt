@@ -75,6 +75,8 @@ fun SessionsScreen(
     onRefresh: () -> Unit,
     onSettings: () -> Unit,
     onArchive: (SessionSummary) -> Unit,
+    /** conversations that have changed since they were last opened */
+    unread: Set<String> = emptySet(),
     importable: List<ImportableSession>?,
     onLoadImportable: () -> Unit,
     onImport: (ImportableSession) -> Unit,
@@ -149,7 +151,7 @@ fun SessionsScreen(
                 LazyColumn(Modifier.fillMaxSize()) {
                     items(sessions.size) { i ->
                         SwipeToArchive(onArchive = { onArchive(sessions[i]) }) {
-                            SessionRow(sessions[i], onOpen)
+                            SessionRow(sessions[i], unread.contains(sessions[i].id), onOpen)
                         }
                     }
                 }
@@ -263,7 +265,7 @@ private fun SwipeToArchive(onArchive: () -> Unit, content: @Composable () -> Uni
 }
 
 @Composable
-private fun SessionRow(session: SessionSummary, onOpen: (SessionSummary) -> Unit) {
+private fun SessionRow(session: SessionSummary, unread: Boolean, onOpen: (SessionSummary) -> Unit) {
     Row(
         Modifier.fillMaxWidth()
             .clickable { onOpen(session) }
@@ -274,6 +276,13 @@ private fun SessionRow(session: SessionSummary, onOpen: (SessionSummary) -> Unit
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                // a conversation that has moved on since it was last opened.
+                // The slot is always there, so nothing shifts when it clears.
+                Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) {
+                    if (unread && !session.active) {
+                        Icon(Icons.Filled.Circle, "unread", Modifier.size(8.dp), tint = MaterialTheme.colorScheme.primary)
+                    }
+                }
                 Text(
                     session.title.ifEmpty { "Untitled" },
                     Modifier.weight(1f),

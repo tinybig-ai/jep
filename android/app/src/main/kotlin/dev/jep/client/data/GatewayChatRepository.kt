@@ -23,6 +23,7 @@ import dev.jep.client.data.dto.WorkspacesRes
 import dev.jep.client.domain.repository.ChatEvent
 import dev.jep.client.domain.repository.HistoryBatch
 import dev.jep.client.domain.repository.ModelChoices
+import dev.jep.client.domain.repository.TurnAborted
 import dev.jep.client.domain.model.BrowseResult
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.FileDiff
@@ -223,6 +224,9 @@ class GatewayChatRepository(
             if (files.isNotEmpty()) put("files", JsonArray(files.map { JsonPrimitive(it) }))
         }.toString()
         val dto = decode("/prompt", MessageRes.serializer(), body)
+        // a stop is not a failure: the gateway answers {aborted:true} rather
+        // than an error, and the caller renders it as a stop
+        if (dto.aborted) throw TurnAborted()
         return (dto.message ?: error("gateway returned no message for the turn")).toDomain()
     }
 

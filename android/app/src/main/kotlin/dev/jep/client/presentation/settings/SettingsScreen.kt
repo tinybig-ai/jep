@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.ArrowDropUp
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.SettingsBrightness
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.AlertDialog
@@ -41,6 +42,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.sp
 import dev.jep.client.device.ThemeMode
 import dev.jep.client.domain.model.TerminalAccess
@@ -53,12 +56,14 @@ import dev.jep.client.domain.model.TerminalAccess
 fun SettingsScreen(
     theme: ThemeMode,
     terminalEnabled: Boolean,
+    backgroundStreaming: Boolean,
     gateway: String?,
     onBack: () -> Unit,
     onTheme: (ThemeMode) -> Unit,
     terminalAccess: TerminalAccess?,
     onUnlockTerminal: (String, (Boolean) -> Unit) -> Unit,
     onDisableTerminal: () -> Unit,
+    onBackgroundStreaming: (Boolean) -> Unit,
     onReconnect: (String, String, (Boolean) -> Unit) -> Unit,
 ) {
     BackHandler { onBack() }
@@ -97,6 +102,18 @@ fun SettingsScreen(
                     checked = terminalEnabled,
                     enabled = terminalAccess?.allowed != false,
                     onChange = { want -> if (want) codeOpen = true else onDisableTerminal() },
+                )
+            }
+            item {
+                SwitchRow(
+                    name = "Background updates",
+                    subtitle = if (backgroundStreaming)
+                        "notifies you about a finished reply — needs a standing notification"
+                    else
+                        "off: no notification, and the app stops listening in the background",
+                    icon = Icons.Filled.Notifications,
+                    checked = backgroundStreaming,
+                    onChange = onBackgroundStreaming,
                 )
             }
             if (terminalAccess?.allowed == false) {
@@ -303,7 +320,14 @@ private fun SwitchRow(
                 Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        Switch(checked = checked, enabled = enabled, onCheckedChange = onChange)
+        // the switch carries the row's name: a bare toggle has nothing for a
+        // screen reader (or a test) to identify it by
+        Switch(
+            checked = checked,
+            enabled = enabled,
+            onCheckedChange = onChange,
+            modifier = Modifier.semantics { contentDescription = name },
+        )
     }
 }
 

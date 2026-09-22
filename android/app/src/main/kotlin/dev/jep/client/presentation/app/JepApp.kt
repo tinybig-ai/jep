@@ -43,12 +43,14 @@ fun JepApp(app: AppViewModel) {
             dev.jep.client.presentation.settings.SettingsScreen(
                 theme = prefs.theme,
                 terminalEnabled = prefs.terminalEnabled,
+                backgroundStreaming = prefs.backgroundStreaming,
                 terminalAccess = app.termAccess.collectAsState().value,
                 gateway = app.gateway.collectAsState().value,
                 onBack = { app.back() },
                 onTheme = { app.setTheme(it) },
                 onUnlockTerminal = { code, done -> app.enableTerminal(code, done) },
                 onDisableTerminal = { app.disableTerminal() },
+                onBackgroundStreaming = { app.setBackgroundStreaming(it) },
                 onReconnect = { address, code, done -> app.reconnect(address, code, done) },
             )
         }
@@ -56,7 +58,9 @@ fun JepApp(app: AppViewModel) {
             val c = screen as Screen.Chat
             val vm: ChatViewModel = viewModel(
                 key = c.sessionId,
-                factory = viewModelFactory { initializer { ChatViewModel(app.chat(), c.sessionId, c.title, c.workspace, c.harness) } },
+                factory = viewModelFactory {
+                    initializer { ChatViewModel(app.chat(), c.sessionId, c.title, c.workspace, c.harness, { app.markRead(c.sessionId) }) }
+                },
             )
             ChatScreen(
                 vm,
@@ -80,6 +84,7 @@ fun JepApp(app: AppViewModel) {
             onLoadImportable = { app.loadImportable() },
             onImport = { app.importSession(it.id) },
             onArchive = { app.archive(it) },
+            unread = app.unread.collectAsState().value,
         )
     }
 }

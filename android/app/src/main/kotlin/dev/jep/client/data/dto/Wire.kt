@@ -85,7 +85,7 @@ data class MessageDto(
 )
 
 @Serializable
-data class MessageRes(val message: MessageDto? = null)
+data class MessageRes(val message: MessageDto? = null, val aborted: Boolean = false)
 
 @Serializable
 data class HistoryRes(val messages: List<MessageDto> = emptyList(), val hasMore: Boolean = false)

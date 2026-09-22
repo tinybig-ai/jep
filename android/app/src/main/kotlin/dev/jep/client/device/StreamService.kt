@@ -57,17 +57,12 @@ class StreamService : Service() {
             runCatching {
                 kotlinx.coroutines.runBlocking {
                     repo.events().collect { evt ->
-                        when (evt) {
-                            is dev.jep.client.domain.repository.ChatEvent.Asked -> notify("the harness asks", evt.ask.title)
-                            is dev.jep.client.domain.repository.ChatEvent.Failed -> {
-                                // A stop you asked for is not a failure. The chat
-                                // view already knows this; the service did not, so
-                                // pressing stop raised "harness failed" with the
-                                // harness's raw error payload as the body.
-                                if (!evt.error.isAbort()) notify("turn failed", humanError(evt.error))
-                            }
-                            is dev.jep.client.domain.repository.ChatEvent.Lost -> Unit
-                            else -> Unit
+                        // the service hosts the stream; what is worth a
+                        // notification is the policy's call, not its own
+                        when (NotificationPolicy.decide(evt, AppPresence.openSessionId, AppPresence.foreground)) {
+                            NotificationPolicy.Notice.FINISHED -> evt.sessionId?.let { notify(titleOf(repo, it), "finished replying") }
+                            NotificationPolicy.Notice.ASKED -> evt.sessionId?.let { notify(titleOf(repo, it), "needs you") }
+                            null -> Unit
                         }
                     }
                 }
@@ -75,12 +70,13 @@ class StreamService : Service() {
         }.also { it.start() }
     }
 
-    // the harness reports errors as JSON; a notification wants a sentence
-    private fun humanError(raw: String): String =
-        Regex("\"message\"\\s*:\\s*\"([^\"]+)\"").find(raw)?.groupValues?.get(1)
-            ?: raw.take(140)
-
-    private fun String.isAbort(): Boolean = contains("abort", ignoreCase = true)
+    // A notification is only useful if it says which conversation it is about.
+    // The event carries an id, not a title, so ask the gateway — and only when
+    // there is actually something to say.
+    private fun titleOf(repo: ChatRepository, sessionId: String): String =
+        runCatching {
+            kotlinx.coroutines.runBlocking { repo.sessions() }.firstOrNull { it.id == sessionId }?.title
+        }.getOrNull()?.ifBlank { null } ?: "jep"
 
     private fun notify(title: String, text: String) {
         if (cancelled) return

@@ -37,8 +37,12 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         ensureNotificationPermission()
 
-        // the socket outlives screens; the service is what keeps it alive
-        ContextCompat.startForegroundService(this, Intent(this, StreamService::class.java))
+        // the socket outlives screens; the service is what keeps it alive —
+        // unless the person has turned background streaming off, in which case
+        // there is no service and therefore no notification
+        if (dev.jep.client.device.AppSettings(getSharedPreferences("jep", MODE_PRIVATE)).backgroundStreaming) {
+            ContextCompat.startForegroundService(this, Intent(this, StreamService::class.java))
+        }
         setContent {
             val app: AppViewModel = viewModel()
             val prefs by app.prefs.collectAsState()
@@ -52,6 +56,16 @@ class MainActivity : ComponentActivity() {
                 Surface { JepApp(app) }
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        dev.jep.client.device.AppPresence.onForeground()
+    }
+
+    override fun onStop() {
+        dev.jep.client.device.AppPresence.onBackground()
+        super.onStop()
     }
 
     private fun ensureNotificationPermission() {

@@ -55,13 +55,15 @@ data class NewChatState(
 }
 
 // app-wide preferences, mirrored into a flow so the theme can react
-data class Prefs(val theme: ThemeMode, val terminalEnabled: Boolean)
+data class Prefs(val theme: ThemeMode, val terminalEnabled: Boolean, val backgroundStreaming: Boolean)
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
     val pairing = PairingStore(application.getSharedPreferences("jep", Context.MODE_PRIVATE))
     private val settings = AppSettings(application.getSharedPreferences("jep", Context.MODE_PRIVATE))
 
-    private val _prefs = MutableStateFlow(Prefs(settings.theme, settings.terminalEnabled))
+    private val read = dev.jep.client.device.ReadStore(application.getSharedPreferences("jep", Context.MODE_PRIVATE))
+
+    private val _prefs = MutableStateFlow(Prefs(settings.theme, settings.terminalEnabled, settings.backgroundStreaming))
     val prefs = _prefs.asStateFlow()
 
     // the gateway we're pointed at — changes when re-paired, and the Settings
@@ -98,6 +100,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun setBackgroundStreaming(enabled: Boolean) {
+        settings.setBackgroundStreaming(enabled)
+        _prefs.value = _prefs.value.copy(backgroundStreaming = enabled)
+    }
+
     fun disableTerminal() {
         settings.setTerminalEnabled(false)
         _prefs.value = _prefs.value.copy(terminalEnabled = false)
@@ -128,6 +135,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _busy = MutableStateFlow(false)
     val busy = _busy.asStateFlow()
+
+    // conversations that have moved on since they were last opened; the list
+    // marks them so a finished turn is visible without opening every chat
+    private val _unread = MutableStateFlow<Set<String>>(emptySet())
+    val unread = _unread.asStateFlow()
+
+    private fun recomputeUnread() {
+        _unread.value = _sessions.value.filter { read.isUnread(it) }.map { it.id }.toSet()
+    }
 
     // workspaces a conversation can be created in, for the creation picker
     private val _workspaces = MutableStateFlow<List<Workspace>>(emptyList())
@@ -173,6 +189,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             runCatching { r.sessions() }
                 .onSuccess { list ->
                     _sessions.value = list
+                    recomputeUnread()
                     _notice.value = null
                     anyActive = list.any { it.active }
                 }
@@ -245,7 +262,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** the conversation has been looked at: stop marking it unread */
+    fun markRead(sessionId: String) {
+        read.markRead(sessionId)
+        _unread.value = _unread.value - sessionId
+    }
+
     fun open(session: SessionSummary) {
+        markRead(session.id)
         // `adapter` is the workspace's friendly name; fall back to the folder
         // name of the path when an older listing didn't carry it
         _screen.value = Screen.Chat(

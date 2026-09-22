@@ -11,6 +11,8 @@ import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
 import dev.jep.client.domain.repository.ChatRepository
 import dev.jep.client.domain.repository.ModelChoices
+import dev.jep.client.domain.repository.TurnAborted
+import dev.jep.client.device.AppPresence
 import dev.jep.client.domain.model.FileDiff
 import dev.jep.client.domain.model.McpServer
 import dev.jep.client.domain.model.SessionSummary
@@ -41,6 +43,9 @@ class ChatViewModel(
     // header, never changed: a conversation cannot move between harnesses
     val workspace: String = "",
     val harness: String? = null,
+    // tells the device layer this conversation has been seen, so the list stops
+    // marking it unread
+    private val onRead: () -> Unit = {},
 ) : ViewModel() {
 
     // a chat the user renamed no longer matches the sessions-list title
@@ -102,6 +107,11 @@ class ChatViewModel(
     private var turn = 0
 
     init {
+        // the foreground service needs to know which conversation is on screen:
+        // it is the difference between "you are reading this" and "tell me when
+        // it is done" (see NotificationPolicy)
+        AppPresence.onChatOpen(sessionId)
+        onRead()
         refresh()
         // the banner needs the model's name and context window up front, not
         // only when Settings is opened
@@ -130,6 +140,11 @@ class ChatViewModel(
                 if (_state.value.sending) refresh()
             }
         }
+    }
+
+    override fun onCleared() {
+        AppPresence.onChatClosed(sessionId)
+        super.onCleared()
     }
 
     private fun apply(evt: ChatEvent) {
@@ -177,9 +192,18 @@ class ChatViewModel(
             // row too, or the spinner outlives the turn it belonged to. An
             // abort is the user's own stop coming back around, not an error.
             is ChatEvent.Failed -> _state.update {
-                it.copy(failure = if (evt.error.isAbort()) null else evt.error, live = null, sending = false)
+                it.copy(failure = evt.error, live = null, sending = false)
             }
-            is ChatEvent.Quiet -> refresh()
+            // a stop ends the turn quietly: clear the live row (or it dangles
+            // as a spinner forever) and say nothing
+            is ChatEvent.Aborted -> _state.update {
+                it.copy(failure = null, live = null, sending = false)
+            }
+            // the turn finished while this chat is open: it has been seen
+            is ChatEvent.Quiet -> {
+                onRead()
+                refresh()
+            }
             is ChatEvent.Lost -> _state.update { it.copy(lost = true) }
             is ChatEvent.MessageSeen -> {
                 evt.role?.let { roles[evt.messageId] = it }
@@ -190,7 +214,6 @@ class ChatViewModel(
                     _state.update { it.copy(live = null) }
                 }
             }
-            is ChatEvent.Lost -> Unit
         }
     }
 
@@ -312,7 +335,7 @@ class ChatViewModel(
                     // dangles as a spinner forever — the "freak-out". A stop the
                     // user asked for is not a failure to shout about, either.
                     _state.update {
-                        it.copy(sending = false, live = null, failure = if (err.message.isAbort()) null else (err.message ?: "the turn failed"))
+                        it.copy(sending = false, live = null, failure = if (err is TurnAborted) null else (err.message ?: "the turn failed"))
                     }
                 }
         }
@@ -489,7 +512,6 @@ class ChatViewModel(
 
     // the gateway reports an aborted turn as a failure carrying the harness's
     // own words ("prompt aborted"); it is a stop, not an error worth surfacing
-    private fun String?.isAbort(): Boolean = this?.contains("abort", ignoreCase = true) == true
 
     fun respond(askId: String, optionId: String) {
         viewModelScope.launch {

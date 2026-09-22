@@ -31,6 +31,9 @@ data class ModelChoices(
     val default: String? = null,
 )
 
+/** raised when a turn ends because it was stopped, not because it failed */
+class TurnAborted : Exception("stopped")
+
 // Events the push feed forwards, translated out of the wire's vocabulary.
 // The presentation layer renders from these alone; it never learns how they
 // traveled or who sent them.
@@ -64,6 +67,11 @@ sealed interface ChatEvent {
     data class Asked(override val sessionId: String, val ask: Ask) : ChatEvent
 
     data class Failed(override val sessionId: String, val error: String) : ChatEvent
+
+    /** the turn ended because somebody stopped it. The daemon says so in its
+     * own words (see core/types.ts) instead of reporting an error, so no
+     * client has to read the error's text to tell a stop from a failure. */
+    data class Aborted(override val sessionId: String) : ChatEvent
 
     data object Lost : ChatEvent {
         override val sessionId: String? = null
