@@ -6,11 +6,9 @@
 
 **One interface for every coding agent. On whatever device you're on.**
 
-Coding agents are mostly driven from their own CLIs, each with its own feel,
-its own models, its own mobile situation. jep gives you one layer on top: a
-single companion experience that speaks the same way to **opencode**, **codex**
-and **claude**, reachable from **Telegram** today and the **Android app**,
-with any client possible behind the gateway. Your code stays on your machine.
+jep is a remote control for **opencode**, **codex** and **claude**, reachable
+from **Telegram**, the **Android app**, or any client behind the
+[gateway](docs/GATEWAY.md). Your code stays on your machine.
 
 [![](https://img.shields.io/badge/version-0.1.0-3d6aa8)](package.json)
 [![](https://img.shields.io/badge/Node-%E2%89%A526-339933)](package.json)
@@ -52,44 +50,38 @@ the Telegram and Android chats. Everything else goes in the client READMEs
 
 ## Why jep
 
-Coding agents are built around their own CLIs. Each agent has its own feel, its
-own models, and its own story for working away from a desk: Claude Code ships a
-polished mobile companion, while opencode and codex meet you at the terminal.
-Reaching an agent from another device means bolting a *specific* companion onto
-a *specific* harness. That is slow to build, precarious to keep, and duplicated
-once per harness. It also never fixes the deeper friction of jumping between
-harnesses just to reach a proprietary model or feature, and relearning a
-different feel every time you switch.
+Every agent ships its own CLI, its own models, and its own way of working away
+from a desk: Claude Code has a polished mobile app, opencode and codex meet you
+at the terminal. Reaching one from another device means bolting a *specific*
+app onto a *specific* harness, duplicated per harness, and you still switch
+harnesses to reach a given model.
 
-jep is the shared layer. One harness contract, one set of clients, every agent.
+jep is the shared layer: one harness contract, one set of clients, every agent.
+It's a framework too, so a new harness or client drops in without touching the
+rest.
 
-- **🧠 One hexagonal core, every harness.** A single `HarnessAdapter` port
-  normalizes each agent, with **opencode** as the flagship and full adapters for
-  **Claude Code** and **Codex**. Every client speaks to the same contract, so a
-  harness behind the shared layer is reachable from any device.
-- **📱 Clients that reach you wherever you are.** A **Telegram bot** with native
-  rich-message rendering (tables, collapsible thinking and tool calls, native
-  stop buttons, ephemeral permission prompts) and a **Jetpack Compose Android
-  app**. The [gateway](docs/GATEWAY.md) is a token-authenticated HTTP + SSE
-  door, so a web dashboard, a Slack bot, or a desktop widget can be a client
-  just the same.
+- **🧠 One core, every harness.** A single `HarnessAdapter` port normalizes each
+  agent: **opencode** as the flagship, full adapters for **Claude Code** and
+  **Codex**, so any harness behind the layer is reachable from any device.
+- **📱 Clients wherever you are.** A **Telegram bot** with native rich messages
+  (tables, collapsible thinking and tool calls, stop buttons, permission
+  prompts) and a **Jetpack Compose Android app**. The
+  [gateway](docs/GATEWAY.md) makes a web dashboard, Slack bot, or desktop
+  widget a client too.
 - **⚡ Live from the first word.** Turns stream into an animated draft: a 💭
-  thinking line while the model reasons, tool calls you can expand, and the
-  answer tail updating every ~700 ms. Tap **stop** to cut a turn, **steer** to
-  replace it.
-- **🎙 Speak your prompt.** Voice notes are decoded, transcribed with whisper,
-  and land as real prompts, with a receipt of what was *heard* so a misheard
-  word is debuggable.
-- **🖥 The repo, from your client.** Read-only git screens (status, log, diff,
-  paginated against the wire limits), one confirmed **push** action, and
-  config-as-data toggles for **MCP servers and skills**, one line touched per
-  switch.
-- **💸 Spend you can see, not guess.** A usage screen and a pinned cost chip
-  report what the harness itself priced every turn: tokens, model, USD.
-  **Free by default** until you explicitly pick a paid model.
-- **🔒 Private by default.** Everything runs on your machine: sessions live in
-  an isolated data home (your CLI's store is untouched), and the daemon serves
-  Tailscale or your LAN. Self-hosted and account-free.
+  thinking line, expandable tool calls, the answer tail updating every ~700 ms.
+  Tap **stop** to cut a turn, **steer** to replace it.
+- **🎙 Speak your prompt.** Voice notes are transcribed with whisper and land as
+  real prompts, with a receipt of what was *heard*.
+- **🖥 The repo, from your client.** Read-only git screens (status, log, diff),
+  one confirmed **push**, and config-as-data toggles for **MCP servers and
+  skills**.
+- **💸 Spend you can see.** A usage screen and pinned cost chip report what the
+  harness priced each turn: tokens, model, USD. **Free by default** until you
+  pick a paid model.
+- **🔒 Private by default.** Sessions live in an isolated data home, your CLI's
+  store untouched; the daemon serves Tailscale or your LAN. Self-hosted,
+  account-free.
 
 ---
 
