@@ -47,15 +47,18 @@ class SessionsScreenTest {
     }
 
     @Test
-    fun an_unread_conversation_is_marked_and_an_active_one_is_not_double_marked() {
+    fun the_row_mark_is_either_unread_or_running_never_both() {
         val rows = listOf(
             SessionSummary("s1", "New reply", "", 0, 2, "jep", "opencode"),
             SessionSummary("s2", "Read", "", 0, 1, "jep", "opencode"),
+            // changed *and* still working: the live state wins, one mark
+            SessionSummary("s3", "Working", "", 0, 3, "jep", "opencode", active = true),
         )
         rule.setContent {
-            SessionsScreen(rows, busy = false, notice = null, onOpen = {}, onNew = {}, onRefresh = {}, onSettings = {}, onArchive = {}, importable = emptyList(), onLoadImportable = {}, onImport = {}, unread = setOf("s1"))
+            SessionsScreen(rows, busy = false, notice = null, onOpen = {}, onNew = {}, onRefresh = {}, onSettings = {}, onArchive = {}, importable = emptyList(), onLoadImportable = {}, onImport = {}, unread = setOf("s1", "s3"))
         }
         rule.onAllNodesWithContentDescription("unread").assertCountEquals(1)
+        rule.onAllNodesWithContentDescription("running").assertCountEquals(1)
     }
 
     @Test

@@ -341,13 +341,6 @@ private fun SessionRow(session: SessionSummary, unread: Boolean, onOpen: (Sessio
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                // a conversation that has moved on since it was last opened.
-                // The slot is always there, so nothing shifts when it clears.
-                Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) {
-                    if (unread && !session.active) {
-                        Icon(Icons.Filled.Circle, "unread", Modifier.size(8.dp), tint = MaterialTheme.colorScheme.primary)
-                    }
-                }
                 Text(
                     session.title.ifEmpty { "Untitled" },
                     Modifier.weight(1f),
@@ -361,13 +354,14 @@ private fun SessionRow(session: SessionSummary, unread: Boolean, onOpen: (Sessio
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    // still working: a reply streaming or a tool running right
-                    // now. The slot is always there — an empty box when idle —
-                    // so a conversation starting or finishing work cannot nudge
-                    // the age, the row, or anything below it.
+                    // The one mark a row can carry: working right now, or
+                    // changed since it was last opened. The slot is always
+                    // there — an empty box when neither — so nothing nudges the
+                    // age, the title, or anything below it.
                     Box(Modifier.padding(top = 3.dp).size(9.dp)) {
-                        if (session.active) {
-                            Icon(Icons.Filled.Circle, "running", Modifier.fillMaxSize(), tint = LiveMark)
+                        when {
+                            session.active -> Icon(Icons.Filled.Circle, "running", Modifier.fillMaxSize(), tint = LiveMark)
+                            unread -> Icon(Icons.Filled.Circle, "unread", Modifier.fillMaxSize(), tint = MaterialTheme.colorScheme.primary)
                         }
                     }
                 }
