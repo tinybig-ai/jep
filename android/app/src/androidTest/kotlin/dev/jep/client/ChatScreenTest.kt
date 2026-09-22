@@ -123,6 +123,22 @@ class ChatScreenTest {
     }
 
     @Test
+    fun every_delta_reaches_the_screen_not_just_the_first() {
+        // The live row used to mutate its parts in place, and a StateFlow drops a
+        // value equal to the last one — so every delta after the first was
+        // invisible and the visible growth came from the 1.2s history poll. That
+        // is what made streaming look chunky and late.
+        val repo = FakeChatRepository()
+        val vm = ChatViewModel(repo, "s1", "T", "jep", "opencode")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitForIdle()
+        rule.runOnUiThread { repo.emitEvent(ChatEvent.TextDelta("s1", "a1", "p1", "text", "one ")) }
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("one ", substring = true, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+        rule.runOnUiThread { repo.emitEvent(ChatEvent.TextDelta("s1", "a1", "p1", "text", "two")) }
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("one two", substring = true, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+    }
+
+    @Test
     fun a_reasoning_block_says_thinking_and_counts_while_it_is_still_going() {
         val repo = FakeChatRepository()
         val vm = ChatViewModel(repo, "s1", "T", "jep", "opencode")

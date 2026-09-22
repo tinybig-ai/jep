@@ -142,14 +142,23 @@ class ChatViewModel(
                 _state.update { st ->
                     val live = liveFor(st, evt.messageId)
                     val existing = live.parts[evt.partId]
-                    live.parts[evt.partId] =
-                        if (evt.partType == "reasoning")
-                            // thinking streams into a thinking block, never
-                            // into the answer body
-                            ChatPart.Reasoning((existing as? ChatPart.Reasoning)?.text.orEmpty() + evt.text)
-                        else
-                            ChatPart.Text((existing as? ChatPart.Text)?.text.orEmpty() + evt.text)
-                    st.copy(live = live, lost = false, failure = null)
+                    val part = if (evt.partType == "reasoning")
+                        // thinking streams into a thinking block, never into the
+                        // answer body
+                        ChatPart.Reasoning((existing as? ChatPart.Reasoning)?.text.orEmpty() + evt.text)
+                    else
+                        ChatPart.Text((existing as? ChatPart.Text)?.text.orEmpty() + evt.text)
+                    // A NEW map and a NEW LiveTurn, never a mutation in place:
+                    // StateFlow drops a value equal to the last one, and a
+                    // mutated-in-place LiveTurn compares equal — so every delta
+                    // after the first was invisible and the visible growth was
+                    // coming from the 1.2s history poll instead. That is exactly
+                    // why streaming looked chunky and late.
+                    st.copy(
+                        live = live.copy(parts = LinkedHashMap(live.parts).apply { put(evt.partId, part) }),
+                        lost = false,
+                        failure = null,
+                    )
                 }
             }
             is ChatEvent.PartChanged -> {
@@ -158,9 +167,9 @@ class ChatViewModel(
                     val live = liveFor(st, evt.messageId)
                     val key = evt.partId ?: "extra${live.parts.size}"
                     // a full snapshot is authoritative: it replaces whatever the
-                    // deltas accumulated for this part
-                    live.parts[key] = evt.part
-                    st.copy(live = live)
+                    // deltas accumulated for this part (and, as above, as a new
+                    // map so the change is actually observable)
+                    st.copy(live = live.copy(parts = LinkedHashMap(live.parts).apply { put(key, evt.part) }))
                 }
             }
             is ChatEvent.Asked -> _state.update { it.copy(ask = evt.ask) }

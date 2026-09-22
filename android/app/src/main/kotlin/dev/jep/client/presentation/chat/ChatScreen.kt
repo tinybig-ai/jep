@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
@@ -170,73 +171,31 @@ fun ChatScreen(
     // nothing here intercepted it.
     BackHandler { onBack() }
 
-    // Land at the bottom once, as soon as the list is actually laid out —
-    // instantly, not an animated fly-through of the whole conversation.
-    // Land at the bottom once content arrives — instantly. Keyed on the message
-    // count, not on layout inspection, so it cannot fire before anything exists.
-    // Scroll so the END of the last item is on screen, not its start: a single
-    // answer is often taller than the viewport, and aligning its top would show
-    // you the beginning of a growing message forever. A huge offset clamps to
-    // the true bottom. Item heights are estimates until laid out, so re-issue
-    // it across a few frames until it settles.
-    suspend fun toBottom() {
-        repeat(6) {
-            listState.scrollToItem(rendered.lastIndex, 100_000)
-            withFrameNanos { }
+    // Newest first, laid out reversed: index 0 is the BOTTOM of the screen.
+    // This is how the Compose team and the chat UIs do it — a bottom-up list
+    // stays pinned by itself, because new content grows the item at index 0 and
+    // nothing above it moves. No scroll calls, no item-height estimates, no
+    // "am I near the bottom?" heuristics (which cannot work when one message is
+    // taller than the viewport).
+    val ordered = remember(rendered) { rendered.asReversed() }
+    // At the bottom iff the sentinel below is the first thing on screen. Exact,
+    // cheap, and stable while the answer streams.
+    val atBottom by remember {
+        derivedStateOf {
+            listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset <= 2
         }
     }
-    var landed by remember { mutableStateOf(false) }
-    LaunchedEffect(rendered.size) {
-        if (landed || rendered.isEmpty()) return@LaunchedEffect
-        toBottom()
-        landed = true
-    }
-    // While a turn is in flight, keep the newest output on screen — that is what
-    // streaming means to a reader, and it is what makes the answer appear to
-    // arrive. Checking indices ("are we near the last item?") cannot work here:
-    // one message is taller than the whole viewport, so the index barely moves
-    // while the view sits still. When the turn ends, following stops, so you can
-    // scroll back through it without being yanked.
-    // Stick to the bottom as the answer arrives — that is what makes streaming
-    // readable, and it must hold whether the text is streaming into the live row
-    // or being served from history, and whether or not a turn is still open (the
-    // last of it often lands after the turn returns).
-    //
-    // Keyed on the content, not on state.live: the live row mutates its parts in
-    // place, so the LiveTurn instance never changes and an effect keyed on it
-    // would fire once and never again — the answer then grew out of view.
-    //
-    // The one case that must not jump: older messages being prepended above
-    // (loadOlder). The tail is unchanged there, so the reader stays put.
-    val contentTick = rendered.size * 1_000_000 + (rendered.lastOrNull()?.parts?.sumOf { p ->
-        when (p) {
-            is ChatPart.Text -> p.text.length
-            is ChatPart.Reasoning -> p.text.length
-            else -> 1
-        }
-    } ?: 0)
-    val following = state.sending || state.live != null
-    var prevFirst by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(contentTick, following) {
-        if (rendered.isEmpty()) return@LaunchedEffect
-        val prepended = prevFirst != null && rendered.first().id != prevFirst
-        prevFirst = rendered.first().id
-        // Stick during a turn no matter what; otherwise only when the tail is
-        // already (even partly) on screen, so scrolling up to read while idle is
-        // not fought — and the last content, which lands after the turn ends,
-        // still gets pinned instead of sitting clipped behind the composer.
-        val tailOnScreen = listState.layoutInfo.visibleItemsInfo.any { it.index == rendered.lastIndex }
-        // nudge across frames: a growing last item is only an estimate at the
-        // moment we jump, so a single jump lands a line short — and then no
-        // further content change comes to correct it
-        if (!prepended && (following || tailOnScreen)) toBottom()
+    // Sending pulls you back to your own message wherever you had scrolled to.
+    LaunchedEffect(state.sending) {
+        if (state.sending) listState.animateScrollToItem(0)
     }
 
     // approaching the top of a long conversation pulls the previous page
-    LaunchedEffect(listState, state.hasMore) {
-        snapshotFlow { listState.firstVisibleItemIndex }
-            .collect { index ->
-                if (index <= 2 && state.hasMore && !state.loadingOlder) vm.loadOlder()
+    LaunchedEffect(listState, state.hasMore, ordered.size) {
+        snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }
+            .collect { last ->
+                // the top of the screen is the END of a reversed list
+                if (state.hasMore && !state.loadingOlder && last >= ordered.size - 1) vm.loadOlder()
             }
     }
 
@@ -372,7 +331,7 @@ fun ChatScreen(
         }
         val scope = rememberCoroutineScope()
         // there is content below the fold: one tap and you are back at the end
-        val showJump by remember { derivedStateOf { listState.canScrollForward } }
+        val showJump = !atBottom && rendered.isNotEmpty()
         Box(Modifier.weight(1f)) {
             if (state.messages.isEmpty() && state.loadingHistory) {
                 Box(
@@ -384,11 +343,16 @@ fun ChatScreen(
             } else LazyColumn(
                 Modifier.fillMaxSize().testTag("chat-list"),
                 state = listState,
-                // bottom spacing as padding, not a trailing item: a trailing item
-                // left the list "scrollable" even at the end, so the jump button
-                // never hid
+                // bottom-up: index 0 is the bottom of the screen
+                reverseLayout = true,
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 10.dp),
             ) {
+                // A 1px sentinel at index 0, below the newest message. It is the
+                // current scroll position if and only if we are at the very
+                // bottom, which is what makes "at the bottom" exact — and new
+                // messages slot in above it, so a pinned view stays pinned with
+                // no scroll call at all.
+                item(key = "bottom-sentinel") { Spacer(Modifier.height(1.dp)) }
                 // reaching the top threshold pulls the previous page; say so while
                 // it is in flight, or the list just sits there looking stuck
                 if (state.loadingOlder) {
@@ -404,21 +368,21 @@ fun ChatScreen(
                     }
                 }
                 val busy = state.sending || state.live != null
-                items(rendered.size, key = { rendered[it].id }) { i ->
+                items(ordered.size, key = { ordered[it].id }) { i ->
                     MessageRow(
-                        rendered[i],
+                        ordered[i],
                         onInfo = { infoMsg = it },
                         onReply = { replyTo = it },
-                        // the last reply carries the "still working" mark: a
+                        // the newest reply carries the "still working" mark: a
                         // pause between parts (thinking, a tool call) must not
-                        // read as finished
-                        responding = busy && i == rendered.lastIndex && rendered[i].role == Role.ASSISTANT,
+                        // read as finished. Index 0 is the newest, at the bottom.
+                        responding = busy && i == 0 && ordered[i].role == Role.ASSISTANT,
                     )
                 }
             }
             if (showJump) {
                 FloatingActionButton(
-                    onClick = { scope.launch { listState.animateScrollToItem(rendered.size) } },
+                    onClick = { scope.launch { listState.animateScrollToItem(0) } },
                     modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 12.dp).size(44.dp),
                     containerColor = MaterialTheme.colorScheme.primaryContainer,
                     contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
