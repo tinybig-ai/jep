@@ -4,8 +4,10 @@ node_modules/
 # scratch: exported session transcripts and local scratch notes
 session-*.md
 todo.md
+20*-*-*-*-*-handoff*.txt
 
 # Gradle build state: generated, machine-specific, never worth reviewing
 android/.gradle/
 android/build/
 android/app/build/
+android/local.properties

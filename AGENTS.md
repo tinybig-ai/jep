@@ -19,5 +19,8 @@ The rules, in `docs/PROCESSES.md` § launchd:
 - Never `pkill` + `nohup` a manual copy next to launchd; if one exists, kill
   it and let launchd own the single instance. Verify with exactly one
   `pgrep -f src/tg.ts` and a fresh banner in `~/Library/Logs/jep-tg.log`.
+- When running any launchctl command, wrap it in a 60s hard bound
+  (`perl -e 'alarm shift; exec @ARGV' 60 launchctl …`) — a wedged launchctl
+  subprocess has hung harness bash tools for 20+ minutes (twice).
 - Serialize: if another agent (or the user) is mid-deploy or mid-turn on the
   daemon, do not restart concurrently — announce, wait, or defer.

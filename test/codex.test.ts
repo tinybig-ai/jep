@@ -6,9 +6,9 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { isCodexInjectedContext, externalAgentCall, externalAgentResult } from "../src/adapters/codex.ts"
 
-const INJECTED = `<workspace_roots><root>/Users/user/Documents/code/jep</root></workspace_roots>
+const INJECTED = `<workspace_roots><root>/home/me/jep</root></workspace_roots>
 <permission_profile type="managed"><file_system type="restricted">...</file_system></permission_profile>
-<environment_context><cwd>/Users/user/Documents/code/jep</cwd></environment_context>`
+<environment_context><cwd>/home/me/jep</cwd></environment_context>`
 
 test("codex's own environment block is recognised", () => {
   assert.equal(isCodexInjectedContext(INJECTED), true)

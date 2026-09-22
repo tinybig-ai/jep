@@ -10,7 +10,7 @@ end) talks to opencode serve (the agent backend). You text the bot, the bot
 turns your words into a prompt on a workspace, the agent does the work, and the
 bot renders the reply — markdown, tables, and all — in Telegram.
 
-No git repo. Everything lives in `/Users/user/Documents/code/jep`.
+Everything lives in the checkout you cloned this repo from.
 
 ## 2. File map (separation at a glance)
 
@@ -87,7 +87,7 @@ fixture/
 | `JEP_TG_MOCK=1` | mock mode — reads JSON-lines updates from stdin, dumps calls |
 | `JEP_WORKSPACES` | `:`-separated workspace dirs (default: `process.cwd()` — mock mode: the two fixtures) |
 | `JEP_TG_PAIR_CODE` | fixed pairing code (default: generated) |
-| `JEP_TG_OWNER` | seed the owner (default: 000000000 via pairing.json) |
+| `JEP_TG_OWNER` | seed the owner (default: none — set via pairing) |
 | `JEP_TG_PAIR_MAX/WINDOW/ROTATE` | pairing-attempt limits, window, rotation |
 | `JEP_TG_MODELS` | comma-separated extra model labels appended to the picker |
 | `OPENCODE_BIN` | path to the opencode CLI (default: `opencode` on PATH) |
@@ -134,13 +134,25 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jep.tg.plist
 # and let launchd own the one instance.
 ```
 
+When an **agent** (opencode/codex) runs any of the above through its bash tool,
+bound the launchctl call: the harness tool can hang for 20+ minutes on a
+wedged `launchctl` subprocess and only the idle watchdog rescues the turn.
+`perl` ships with macOS and `alarm` gives the call a hard lifetime, so the
+tool always returns with an answer instead of wedging:
+
+```sh
+perl -e 'alarm shift; exec @ARGV' 60 launchctl kickstart -k gui/$(id -u)/com.jep.tg
+perl -e 'alarm shift; exec @ARGV' 60 launchctl bootout gui/$(id -u)/com.jep.tg
+perl -e 'alarm shift; exec @ARGV' 60 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jep.tg.plist
+```
+
 Manual management (only if you edit the plist):
 
 ```sh
 launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.jep.tg.plist
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jep.tg.plist
 launchctl list | grep 'com.jep.tg'                        # expect loaded, exit 0
-tail -3 ~/Library/Logs/jep-tg.log  # expect "mode: live · owner: 000000000 · paired chats: 1"
+tail -3 ~/Library/Logs/jep-tg.log  # expect "mode: live · owner: <you> · paired chats: 1"
 ```
 
 The plist pins the env (token, `JEP_DATA_HOME=~/.local/share/jep-tg`, `PATH` so
@@ -189,7 +201,7 @@ d=plistlib.load(open(os.path.expanduser("~/Library/LaunchAgents/com.jep.tg.plist
 env=dict(os.environ); env.update(d["EnvironmentVariables"])
 log=open(os.path.expanduser("~/Library/Logs/jep-tg.log"),"a")
 print(subprocess.Popen(d["ProgramArguments"],env=env,stdout=log,stderr=log,
-    cwd="/Users/user/Documents/code/jep",start_new_session=True).pid)'
+    cwd="<repo checkout>",start_new_session=True).pid)'
 ```
 
 That loses `KeepAlive`, so it is a stopgap. The durable fixes are to grant
@@ -383,7 +395,7 @@ vision-capable models as direct `mdl:` buttons plus "All models ›".
 
 - New bots print a pairing code; `/pair <code>` claims the bot and locks it to
   that chat id. The owner is persisted to `pairing.json`, so restarts keep
-  ownership (live: owner 000000000, no re-pair).
+  ownership (live: the original owner, no re-pair).
 - Pairing has attempt limits and code rotation (env-tunable).
 - Commands and even plain free text are ignored for non-owner chats.
 

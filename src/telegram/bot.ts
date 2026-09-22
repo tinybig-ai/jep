@@ -687,7 +687,7 @@ const HELP = [
 // addendum only applies because bot.ts is currently jep's one front end.
 const JEP_CONTEXT = [
   "[jep context — background only, not a request]",
-  "This conversation is relayed through jep, a phone-first control plane for coding agents (headless, no terminal on the other end). jep's own code and docs: /Users/user/Documents/code/jep — see docs/PROCESSES.md and docs/PHILOSOPHY.md.",
+  "This conversation is relayed through jep, a phone-first control plane for coding agents (headless, no terminal on the other end). jep's own code and docs are in this checkout — see docs/PROCESSES.md and docs/PHILOSOPHY.md.",
 ].join("\n")
 const JEP_TELEGRAM_CONTEXT =
   "This conversation is specifically relayed via Telegram — replies render as chat messages (markdown, tables, collapsible details), not a terminal."
