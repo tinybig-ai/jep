@@ -343,4 +343,29 @@ class ChatScreenTest {
         rule.waitForIdle()
         rule.onNodeWithText("total 0\nfile.txt", substring = true).assertExists()
     }
+
+    @Test
+    fun a_running_tool_does_not_expand_on_its_own() {
+        // A running tool used to auto-open and then collapse when it finished,
+        // jittering the list. It must stay a quiet line until asked, running or
+        // not.
+        val vm = ChatViewModel(
+            FakeChatRepository(
+                messages = listOf(
+                    ChatMessage(
+                        "a1", Role.ASSISTANT, 5,
+                        listOf(ChatPart.Tool("t1", "bash", ToolStatus.RUNNING, "ls -la", null, "partial output")),
+                    ),
+                ),
+            ),
+            "s1", "T", "jep", "opencode",
+        )
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(6_000) { rule.onAllNodesWithText("Ran a command").fetchSemanticsNodes().isNotEmpty() }
+        rule.onAllNodesWithText("partial output", substring = true).assertCountEquals(0)
+        rule.onNodeWithText("Ran a command").performClick()
+        rule.waitUntil(4_000) {
+            rule.onAllNodesWithText("partial output", substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
+    }
 }

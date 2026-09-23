@@ -125,6 +125,11 @@ import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import coil3.compose.AsyncImage
+import androidx.compose.ui.text.style.TextOverflow
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import androidx.compose.ui.unit.sp
 import com.mikepenz.markdown.m3.Markdown
 import kotlinx.coroutines.flow.first
@@ -1319,108 +1324,110 @@ private fun ReasoningRow(part: ChatPart.Reasoning, active: Boolean = false) {
 private val LineAdded = Color(0xFF4CAF50)
 private val LineRemoved = Color(0xFFEF5350)
 
+private val ToolSubjectKeys = listOf("command", "filePath", "file_path", "path", "pattern", "query", "description", "url")
+
+// opencode sometimes hands the whole call input as the title; pull the one field
+// a person cares about rather than printing JSON at them.
+private fun toolTitle(part: ChatPart.Tool): String? {
+    val raw = part.title?.trim().orEmpty()
+    if (raw.isEmpty()) return null
+    if (!raw.startsWith("{")) return raw
+    val obj = runCatching { Json.parseToJsonElement(raw) as? JsonObject }.getOrNull() ?: return null
+    for (k in ToolSubjectKeys) {
+        (obj[k] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }?.let { return it }
+    }
+    return null
+}
+
 @Composable
 private fun ToolRow(part: ChatPart.Tool) {
     val running = part.status == ToolStatus.RUNNING || part.status == ToolStatus.PENDING
     val failed = part.status == ToolStatus.ERROR
-    // The body — command output, a diff, a file's contents, the arguments — is
-    // what the collapsed row hides; a tap reveals it. A running tool auto-opens
-    // so progress is visible. `open` is remembered by the part's stable id:
-    // keying it on the whole part collapsed the row whenever it was re-emitted.
     val body = toolBody(part)
-    var open by remember(part.id) { mutableStateOf(false) }
-    val expanded = open || (running && body != null)
     val added = part.added ?: 0
     val removed = part.removed ?: 0
-    // An edit opens the change itself, in a diff view — not a "wrote file
-    // successfully" fold. The eye is the affordance; a file with no diff (a bash
-    // command, a read) keeps the chevron and its output.
     val diff = part.diff
-    var diffOpen by remember(part.id) { mutableStateOf(false) }
-    // The same visual language as a thinking block: a quiet line with a chevron
-    // that opens. A tool call is not a different kind of thing to read — it is
-    // the same "the agent did something here" note.
+    val title = toolTitle(part)
+    var sheet by remember(part.id) { mutableStateOf(false) }
+    val hasDetail = diff != null || body != null
+    // One shape always: a quiet line, then the call's subject. Nothing expands or
+    // collapses on its own. A running tool used to auto-open and then shut when it
+    // finished, which jittered the whole list; the detail is a sheet now, reusing
+    // the shelf the diff already uses.
     Column(Modifier.fillMaxWidth()) {
         Row(
-            Modifier
-                .fillMaxWidth()
-                .clickable(enabled = diff != null || body != null) { if (diff != null) diffOpen = true else open = !open },
+            Modifier.fillMaxWidth().clickable(enabled = hasDetail) { if (hasDetail) sheet = true },
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
                 when (part.name.lowercase()) {
-                    "write", "edit", "multi-edit" -> "Edited " + (part.title?.substringAfterLast('/') ?: "file")
-                    "read" -> "Read " + (part.title?.substringAfterLast('/') ?: "file")
+                    "write", "edit", "multi-edit" -> "Edited " + (title?.substringAfterLast('/') ?: "file")
+                    "read" -> "Read " + (title?.substringAfterLast('/') ?: "file")
                     "bash", "run" -> "Ran a command"
                     else -> "Used ${part.name.ifEmpty { "tool" }}"
                 },
                 style = MaterialTheme.typography.labelMedium,
-                color = if (running) MaterialTheme.colorScheme.primary else if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                color = when {
+                    running -> MaterialTheme.colorScheme.primary
+                    failed -> MaterialTheme.colorScheme.error
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                },
             )
-            // how big the change was, readable without opening the row
+            // how big the change was, readable without opening anything
             if (added > 0) {
-                Text(
-                    "+$added",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontFamily = FontFamily.Monospace,
-                    color = LineAdded,
-                    modifier = Modifier.padding(start = 6.dp),
-                )
+                Text("+$added", style = MaterialTheme.typography.labelMedium, fontFamily = FontFamily.Monospace, color = LineAdded, modifier = Modifier.padding(start = 6.dp))
             }
             if (removed > 0) {
-                Text(
-                    "-$removed",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontFamily = FontFamily.Monospace,
-                    color = LineRemoved,
-                    modifier = Modifier.padding(start = 4.dp),
-                )
+                Text("-$removed", style = MaterialTheme.typography.labelMedium, fontFamily = FontFamily.Monospace, color = LineRemoved, modifier = Modifier.padding(start = 4.dp))
             }
-            if (diff == null && body != null) {
-                Icon(
-                    if (expanded) Icons.Filled.ArrowDropUp else Icons.Filled.ArrowDropDown,
-                    "expand",
-                    Modifier.size(16.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            if (hasDetail) {
+                Icon(Icons.Filled.ArrowDropDown, "open details", Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        part.title?.let { t ->
-            if (part.name.lowercase() in setOf("bash", "run")) {
+        // the subject of the call, one line, cleaned of any JSON in the title
+        title?.let {
+            if (part.name.lowercase() in setOf("bash", "run", "grep", "glob", "search")) {
                 Text(
-                    t,
+                    it.lineSequence().first(),
                     fontSize = 12.sp,
                     fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = if (expanded) 4 else 1,
-                )
-            }
-        }
-        AnimatedVisibility(expanded && body != null && diff == null) {
-            Column {
-                Text(
-                    body.orEmpty(),
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(top = 6.dp),
-                    fontSize = 12.sp,
-                    lineHeight = 17.sp,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                // the tool's own output copies from here, inside the fold
-                val clipboard = LocalClipboardManager.current
-                Icon(
-                    Icons.Outlined.ContentCopy,
-                    "copy tool output",
-                    Modifier.size(15.dp).padding(top = 4.dp).clickable { clipboard.setText(AnnotatedString(body.orEmpty())) },
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
     }
-    if (diffOpen && diff != null) {
-        DiffSheet(part.title, diff) { diffOpen = false }
+    if (sheet) {
+        if (diff != null) DiffSheet(part.title, diff) { sheet = false }
+        else ToolSheet(title ?: part.name, body.orEmpty()) { sheet = false }
+    }
+}
+
+// The detail of a tool call, in the same shelf as a diff: a sheet, so it never
+// grows the row in place.
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ToolSheet(title: String, body: String, onDismiss: () -> Unit) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(Modifier.fillMaxWidth().padding(bottom = 20.dp)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+            HorizontalDivider(Modifier.padding(top = 8.dp))
+            Text(
+                body.ifBlank { "(no output)" },
+                Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
+                fontSize = 12.sp,
+                lineHeight = 17.sp,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
     }
 }
 
