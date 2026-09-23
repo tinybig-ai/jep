@@ -5,24 +5,40 @@ turns, and notifications, talking to the daemon over the gateway.
 
 <table>
   <tr>
-    <td align="center"><img src="../images/screens/android-sessions.jpg" alt="The conversation list" width="210" /></td>
-    <td align="center"><img src="../images/screens/android-chat.jpg" alt="A streaming turn with thinking and tool calls" width="210" /></td>
-    <td align="center"><img src="../images/screens/android-settings.jpg" alt="Settings: model, harness, agent, skills" width="210" /></td>
+    <td align="center"><img src="../images/screens/android-sessions.jpg" alt="The conversation list" width="190" /></td>
+    <td align="center"><img src="../images/screens/android-chat.jpg" alt="A streaming turn, light mode" width="190" /></td>
+    <td align="center"><img src="../images/screens/android-settings.jpg" alt="Settings: model, harness, agent, skills" width="190" /></td>
+    <td align="center"><img src="../images/screens/android-usage.jpg" alt="Usage: turns, tokens, spend" width="190" /></td>
   </tr>
   <tr>
     <td align="center"><sub>Conversations</sub></td>
     <td align="center"><sub>A streaming turn</sub></td>
     <td align="center"><sub>Settings</sub></td>
-  </tr>
-  <tr>
-    <td align="center"><img src="../images/screens/android-usage.jpg" alt="Usage: turns, tokens, spend" width="210" /></td>
-    <td align="center"><img src="../images/screens/android-diff.jpg" alt="A file diff" width="210" /></td>
-    <td align="center"><img src="../images/screens/android-pair.jpg" alt="Pairing with the gateway" width="210" /></td>
-  </tr>
-  <tr>
     <td align="center"><sub>Usage</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="../images/screens/android-diff.jpg" alt="A file diff" width="190" /></td>
+    <td align="center"><img src="../images/screens/android-new.jpg" alt="Starting a new conversation" width="190" /></td>
+    <td align="center"><img src="../images/screens/android-pair.jpg" alt="Pairing with the gateway" width="190" /></td>
+    <td align="center"><img src="../images/screens/android-menu.jpg" alt="Per-conversation actions" width="190" /></td>
+  </tr>
+  <tr>
     <td align="center"><sub>Diffs</sub></td>
+    <td align="center"><sub>New conversation</sub></td>
     <td align="center"><sub>Pairing</sub></td>
+    <td align="center"><sub>Actions</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="../images/screens/android-turn-dark.jpg" alt="A turn in flight, dark mode" width="190" /></td>
+    <td align="center"><img src="../images/screens/android-finished-dark.jpg" alt="A finished turn, dark mode" width="190" /></td>
+    <td align="center"><img src="../images/screens/android-diff-dark.jpg" alt="A file diff, dark mode" width="190" /></td>
+    <td align="center"><img src="../images/screens/android-edit-dark.jpg" alt="An edit sheet, dark mode" width="190" /></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Turn in flight</sub></td>
+    <td align="center"><sub>A finished turn</sub></td>
+    <td align="center"><sub>Diffs</sub></td>
+    <td align="center"><sub>Edits</sub></td>
   </tr>
 </table>
 

@@ -5,12 +5,16 @@ messages, voice notes, git and usage screens, and a streaming stop/steer loop.
 
 <table>
   <tr>
-    <td align="center"><img src="../images/screens/telegram-chat.jpg" alt="A rich reply, with the cost chip pinned above" width="240" /></td>
-    <td align="center"><img src="../images/screens/telegram-git.jpg" alt="The /git screen" width="240" /></td>
+    <td align="center"><img src="../images/screens/telegram-chat.jpg" alt="A rich reply, with the cost chip pinned above" width="200" /></td>
+    <td align="center"><img src="../images/screens/telegram-git.jpg" alt="The /git screen" width="200" /></td>
+    <td align="center"><img src="../images/screens/telegram-ask.jpg" alt="A permission ask with tap-to-answer buttons" width="200" /></td>
+    <td align="center"><img src="../images/screens/telegram-settings.jpg" alt="The /settings menu" width="200" /></td>
   </tr>
   <tr>
     <td align="center"><sub>A rich reply, cost chip pinned above</sub></td>
     <td align="center"><sub>The /git screen</sub></td>
+    <td align="center"><sub>A permission ask</sub></td>
+    <td align="center"><sub>The /settings menu</sub></td>
   </tr>
 </table>
 

@@ -35,14 +35,14 @@ from **Telegram**, the **Android app**, or any client behind the
 
 <table>
   <tr>
-    <td align="center"><img src="docs/images/screens/telegram-chat.jpg" alt="jep in Telegram" width="200" /></td>
+    <td align="center"><img src="docs/images/screens/android-sessions.jpg" alt="Conversations" width="200" /></td>
     <td align="center"><img src="docs/images/screens/android-chat.jpg" alt="The jep Android app, a streaming turn" width="200" /></td>
     <td align="center"><img src="docs/images/screens/android-settings.jpg" alt="Settings" width="200" /></td>
     <td align="center"><img src="docs/images/screens/android-usage.jpg" alt="Usage" width="200" /></td>
   </tr>
   <tr>
-    <td align="center"><sub>Telegram</sub></td>
-    <td align="center"><sub>Android</sub></td>
+    <td align="center"><sub>Conversations</sub></td>
+    <td align="center"><sub>Chat</sub></td>
     <td align="center"><sub>Settings</sub></td>
     <td align="center"><sub>Usage</sub></td>
   </tr>
