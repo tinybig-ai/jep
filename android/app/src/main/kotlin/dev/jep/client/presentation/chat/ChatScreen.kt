@@ -1672,6 +1672,7 @@ private fun QueuedStrip(vm: ChatViewModel, queued: List<ChatViewModel.Queued>) {
 private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: () -> Unit) {
     val state by vm.state.collectAsState()
     val draft = remember { mutableStateOf("") }
+    var sendMenu by remember { mutableStateOf(false) }
     // Stop follows the turn THIS client started. Keying it off a live row
     // instead let a stale row turn a Send tap into a Stop.
     val busy = state.sending
@@ -1737,20 +1738,48 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
                         Icon(Icons.Filled.Stop, "stop", Modifier.size(22.dp), tint = MaterialTheme.colorScheme.error)
                     }
                 }
-                IconButton(onClick = {
-                    // a swipe-armed reply rides along as a quoted block
-                    val quote = replyTo?.let { m ->
-                        messageText(m).trim().lineSequence().take(6).joinToString("\n") { "> $it" } + "\n\n"
-                    } ?: ""
-                    vm.send(quote + draft.value)
-                    draft.value = ""
-                    onCancelReply()
-                }) {
+                Box(
+                    Modifier
+                        .size(48.dp)
+                        .combinedClickable(
+                            onClick = {
+                                // a swipe-armed reply rides along as a quoted block
+                                val quote = replyTo?.let { m ->
+                                    messageText(m).trim().lineSequence().take(6).joinToString("\n") { "> $it" } + "\n\n"
+                                } ?: ""
+                                vm.send(quote + draft.value)
+                                draft.value = ""
+                                onCancelReply()
+                            },
+                            // hold to choose: steer in now, or wait for the reply to end
+                            onLongClick = { if (draft.value.isNotBlank() || state.attachments.isNotEmpty()) sendMenu = true },
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
                     Icon(
                         Icons.AutoMirrored.Filled.Send,
                         "send",
                         Modifier.size(26.dp),
                         tint = if (draft.value.isBlank() && state.attachments.isEmpty()) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.primary,
+                    )
+                }
+                if (sendMenu) {
+                    val quote = replyTo?.let { m ->
+                        messageText(m).trim().lineSequence().take(6).joinToString("\n") { "> $it" } + "\n\n"
+                    } ?: ""
+                    AlertDialog(
+                        onDismissRequest = { sendMenu = false },
+                        title = { Text("Send how?") },
+                        text = { Text("While the agent works, Send steers your message in at the next tool call. You can hold to send it only after this reply ends.") },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                vm.send(quote + draft.value, steer = false)
+                                draft.value = ""
+                                sendMenu = false
+                                onCancelReply()
+                            }) { Text("After this reply") }
+                        },
+                        dismissButton = { TextButton(onClick = { sendMenu = false }) { Text("Back") } },
                     )
                 }
             }

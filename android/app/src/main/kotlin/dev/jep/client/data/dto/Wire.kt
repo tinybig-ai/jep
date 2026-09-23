@@ -87,7 +87,7 @@ data class MessageDto(
 )
 
 @Serializable
-data class MessageRes(val message: MessageDto? = null, val aborted: Boolean = false)
+data class MessageRes(val message: MessageDto? = null, val aborted: Boolean = false, val cancelled: Boolean = false)
 
 @Serializable
 data class MkdirRes(val ok: Boolean = false, val path: String = "")

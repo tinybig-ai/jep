@@ -57,7 +57,7 @@ class ChatViewModel(
 
     /** a message typed while the agent was busy: held, shown as queued, handed
      * over when the current turn ends */
-    data class Queued(val id: String, val text: String, val attachments: List<Attachment> = emptyList())
+    data class Queued(val id: String, val text: String, val attachments: List<Attachment> = emptyList(), val steer: Boolean = true)
 
     /** the turn being written right now, unit = streaming part */
     data class LiveTurn(
@@ -269,12 +269,16 @@ class ChatViewModel(
                             false
                         }
                     }
+                    val servedNow = batch.messages.filter { it.role == Role.USER }.map { textOf(it) }
                     _state.update { st ->
                         st.copy(
                             messages = batch.messages + optimistic.toList(),
                             live = if (st.sending) st.live else null,
                             hasMore = batch.hasMore,
                             loadingHistory = false,
+                            // a queued message that now shows in the record has been
+                            // picked up: it is no longer waiting, it is the turn
+                            queued = st.queued.filterNot { q -> servedNow.contains(q.text) },
                         )
                     }
                 }
@@ -309,7 +313,7 @@ class ChatViewModel(
         }
     }
 
-    fun send(text: String) {
+    fun send(text: String, steer: Boolean = true) {
         val trimmed = text.trim()
         val files = _state.value.attachments
         // an image on its own is a valid message. The model still needs words, so
@@ -318,14 +322,25 @@ class ChatViewModel(
         if (trimmed.isEmpty() && files.isEmpty()) return
         val body = trimmed.ifEmpty { "see the attached file" }
         if (_state.value.sending) {
-            // the agent is mid-turn: hold the message, marked queued, and hand it
-            // over the moment the turn ends. Tapping it offers edit / send now /
-            // cancel.
-            val q = Queued("q-${System.nanoTime()}", body, files)
-            _state.update { it.copy(queued = it.queued + q, attachments = emptyList()) }
+            enqueue(body, files, steer)
             return
         }
         sendNow(body, files)
+    }
+
+    // The daemon owns the queue now: hand the message over with an id and a mode,
+    // and it steers it in at the next tool boundary — or waits for the turn to end
+    // if the user asked for that. The client keeps it on screen as queued until it
+    // is picked up.
+    private fun enqueue(body: String, files: List<Attachment>, steer: Boolean) {
+        val clientID = "q-${System.nanoTime()}"
+        _state.update { it.copy(queued = it.queued + Queued(clientID, body, files, steer), attachments = emptyList()) }
+        viewModelScope.launch {
+            // resolves when the steered turn finishes, or at once if cancelled
+            runCatching { repo.prompt(sessionId, body, files.map { it.id }, clientID, steer) }
+            _state.update { st -> st.copy(queued = st.queued.filterNot { q -> q.id == clientID }) }
+            refresh()
+        }
     }
 
     private fun sendNow(body: String, files: List<Attachment>) {
@@ -356,7 +371,6 @@ class ChatViewModel(
                         )
                     }
                     refresh()
-                    drainQueue()
                     // the harness can still be settling its own record for a
                     // moment after the turn returns; read once more, so a
                     // finished answer is never left out
@@ -369,42 +383,36 @@ class ChatViewModel(
                     if (seq != turn) return@onFailure
                     // the live row is this turn's; an abort must clear it or it
                     // dangles as a spinner forever — the "freak-out". A stop the
-                    // user asked for is not a failure to shout about, either.
+                    // user asked for, or a steer, is not a failure to shout about.
                     _state.update {
                         it.copy(sending = false, live = null, failure = if (err is TurnAborted) null else (err.message ?: "the turn failed"))
                     }
-                    drainQueue()
                 }
         }
-    }
-
-    // hand the next queued message over, now that the turn has ended
-    private fun drainQueue() {
-        if (_state.value.sending) return
-        val next = _state.value.queued.firstOrNull() ?: return
-        _state.update { it.copy(queued = it.queued.drop(1)) }
-        sendNow(next.text, next.attachments)
     }
 
     fun editQueued(id: String, text: String) {
         val body = text.trim().ifEmpty { return }
         _state.update { st -> st.copy(queued = st.queued.map { if (it.id == id) it.copy(text = body) else it }) }
+        viewModelScope.launch { runCatching { repo.queueEdit(sessionId, id, body) } }
     }
 
     fun cancelQueued(id: String) {
         _state.update { st -> st.copy(queued = st.queued.filterNot { it.id == id }) }
+        viewModelScope.launch { runCatching { repo.queueCancel(sessionId, id) } }
     }
 
-    /** send a queued message now; while a turn is still running it becomes next */
+    /** run a queued message next, aborting the running turn so it can */
     fun forceSendQueued(id: String) {
-        val st = _state.value
-        val item = st.queued.firstOrNull { it.id == id } ?: return
-        if (!st.sending) {
+        val item = _state.value.queued.firstOrNull { it.id == id } ?: return
+        if (!_state.value.sending) {
+            // nothing is running: it can go now
             _state.update { it.copy(queued = it.queued.filterNot { q -> q.id == id }) }
             sendNow(item.text, item.attachments)
-        } else {
-            _state.update { s -> s.copy(queued = listOf(item) + s.queued.filterNot { q -> q.id == id }) }
+            return
         }
+        _state.update { st -> st.copy(queued = listOf(item) + st.queued.filterNot { q -> q.id == id }) }
+        viewModelScope.launch { runCatching { repo.queueForce(sessionId, id) } }
     }
 
     fun attach(filename: String, bytes: ByteArray) {

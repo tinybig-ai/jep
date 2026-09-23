@@ -247,11 +247,14 @@ class GatewayChatRepository(
             HistoryBatch(res.messages.map { it.toDomain() }, res.hasMore)
         }
 
-    override suspend fun prompt(sessionId: String, text: String, files: List<String>): ChatMessage {
+    override suspend fun prompt(sessionId: String, text: String, files: List<String>, clientID: String?, steer: Boolean): ChatMessage {
         val body = buildJsonObject {
             put("id", sessionId)
             put("text", text)
             if (files.isNotEmpty()) put("files", JsonArray(files.map { JsonPrimitive(it) }))
+            clientID?.let { put("clientID", it) }
+            // the daemon steers by default; only say so when it should wait
+            if (!steer) put("steer", false)
         }.toString()
         val dto = try {
             decode("/prompt", MessageRes.serializer(), body)
@@ -262,10 +265,20 @@ class GatewayChatRepository(
             throw e
         }
         // a stop is not a failure: the gateway answers {aborted:true} rather
-        // than an error, and the caller renders it as a stop
-        if (dto.aborted) throw TurnAborted()
+        // than an error, and the caller renders it as a stop. A cancel is the
+        // queued prompt being withdrawn before it ran.
+        if (dto.aborted || dto.cancelled) throw TurnAborted()
         return (dto.message ?: error("gateway returned no message for the turn")).toDomain()
     }
+
+    override suspend fun queueCancel(sessionId: String, clientID: String): Boolean =
+        post("/queue/cancel", payload("id" to sessionId, "clientID" to clientID)).first in 200..299
+
+    override suspend fun queueEdit(sessionId: String, clientID: String, text: String): Boolean =
+        post("/queue/edit", payload("id" to sessionId, "clientID" to clientID, "text" to text)).first in 200..299
+
+    override suspend fun queueForce(sessionId: String, clientID: String): Boolean =
+        post("/queue/force", payload("id" to sessionId, "clientID" to clientID)).first in 200..299
 
     override suspend fun rename(sessionId: String, title: String): Boolean =
         post("/rename", payload("id" to sessionId, "title" to title)).first in 200..299

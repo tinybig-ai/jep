@@ -82,10 +82,13 @@ class FakeChatRepository(
     @Volatile
     var promptGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 
-    override suspend fun prompt(sessionId: String, text: String, files: List<String>): ChatMessage {
+    override suspend fun prompt(sessionId: String, text: String, files: List<String>, clientID: String?, steer: Boolean): ChatMessage {
         promptGate?.await()
         return ChatMessage("reply", Role.ASSISTANT, 1, listOf(ChatPart.Text("ok")))
     }
+    override suspend fun queueCancel(sessionId: String, clientID: String) = true
+    override suspend fun queueEdit(sessionId: String, clientID: String, text: String) = true
+    override suspend fun queueForce(sessionId: String, clientID: String) = true
     override suspend fun stop(sessionId: String) = true
     override fun fileUrl(path: String) = "http://test/file"
     override suspend fun respond(askId: String, optionId: String) = true
