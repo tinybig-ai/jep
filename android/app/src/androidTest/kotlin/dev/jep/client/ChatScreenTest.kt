@@ -439,4 +439,31 @@ class ChatScreenTest {
         }
         rule.onAllNodesWithText("shell_metadata", substring = true).assertCountEquals(0)
     }
+
+    @Test
+    fun a_message_sent_while_busy_is_queued_with_an_hourglass() {
+        val repo = FakeChatRepository()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        repo.promptGate = gate
+        val vm = ChatViewModel(repo, "s1", "T", "jep", "opencode")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitForIdle()
+        rule.runOnUiThread { vm.send("first") }
+        rule.waitUntil(5_000) { vm.state.value.sending }
+        // sent while the turn is in flight: held and marked queued, not refused
+        rule.runOnUiThread { vm.send("second while busy") }
+        rule.waitUntil(5_000) { vm.state.value.queued.size == 1 }
+        rule.onNodeWithContentDescription("queued").assertExists()
+        rule.onNodeWithText("second while busy").assertExists()
+        // tapping it offers edit / send now / cancel
+        rule.onNodeWithText("second while busy").performClick()
+        rule.waitUntil(4_000) { rule.onAllNodesWithText("Send now").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("Edit").assertExists()
+        // cancel asks first
+        rule.onNodeWithText("Cancel").performClick()
+        rule.waitUntil(4_000) { rule.onAllNodesWithText("Cancel this message?").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("Cancel it").performClick()
+        rule.waitUntil(5_000) { vm.state.value.queued.isEmpty() }
+        gate.complete(Unit)
+    }
 }

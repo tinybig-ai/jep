@@ -77,8 +77,15 @@ class FakeChatRepository(
     override suspend fun termKey(sessionId: String, key: String) = true
     override suspend fun termClose(sessionId: String) = true
     override suspend fun history(sessionId: String, limit: Int, before: Long, have: Int) = HistoryBatch(messages, false)
-    override suspend fun prompt(sessionId: String, text: String, files: List<String>) =
-        ChatMessage("reply", Role.ASSISTANT, 1, listOf(ChatPart.Text("ok")))
+
+    /** when set, prompt() waits on it, so a test can keep a turn in flight */
+    @Volatile
+    var promptGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+
+    override suspend fun prompt(sessionId: String, text: String, files: List<String>): ChatMessage {
+        promptGate?.await()
+        return ChatMessage("reply", Role.ASSISTANT, 1, listOf(ChatPart.Text("ok")))
+    }
     override suspend fun stop(sessionId: String) = true
     override fun fileUrl(path: String) = "http://test/file"
     override suspend fun respond(askId: String, optionId: String) = true

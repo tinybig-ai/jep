@@ -54,6 +54,7 @@ import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -82,6 +83,7 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -1600,6 +1602,73 @@ private fun AskBar(ask: dev.jep.client.domain.model.Ask, vm: ChatViewModel) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+private fun QueuedStrip(vm: ChatViewModel, queued: List<ChatViewModel.Queued>) {
+    if (queued.isEmpty()) return
+    var menuFor by remember { mutableStateOf<ChatViewModel.Queued?>(null) }
+    var editFor by remember { mutableStateOf<ChatViewModel.Queued?>(null) }
+    var cancelFor by remember { mutableStateOf<ChatViewModel.Queued?>(null) }
+    // A sent-but-not-yet-handed-over message: dimmed, hourglass on the left, one
+    // tap for edit / send now / cancel.
+    Column(Modifier.fillMaxWidth().padding(bottom = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        queued.forEach { q ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f))
+                    .clickable { menuFor = q }
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Filled.HourglassEmpty, "queued", Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onPrimaryContainer)
+                Text(
+                    q.text,
+                    Modifier.padding(start = 8.dp).weight(1f),
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
+                    fontSize = 14.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+    menuFor?.let { q ->
+        AlertDialog(
+            onDismissRequest = { menuFor = null },
+            title = { Text("Queued") },
+            text = { Text("The agent is busy, so this sends when the current reply finishes.") },
+            confirmButton = { TextButton(onClick = { menuFor = null; vm.forceSendQueued(q.id) }) { Text("Send now") } },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { menuFor = null; editFor = q }) { Text("Edit") }
+                    TextButton(onClick = { menuFor = null; cancelFor = q }) { Text("Cancel") }
+                }
+            },
+        )
+    }
+    editFor?.let { q ->
+        var text by remember(q.id) { mutableStateOf(q.text) }
+        AlertDialog(
+            onDismissRequest = { editFor = null },
+            title = { Text("Edit queued message") },
+            text = { OutlinedTextField(value = text, onValueChange = { text = it }, Modifier.fillMaxWidth()) },
+            confirmButton = { TextButton(onClick = { vm.editQueued(q.id, text); editFor = null }) { Text("Save") } },
+            dismissButton = { TextButton(onClick = { editFor = null }) { Text("Back") } },
+        )
+    }
+    cancelFor?.let { q ->
+        AlertDialog(
+            onDismissRequest = { cancelFor = null },
+            title = { Text("Cancel this message?") },
+            text = { Text("It will not be sent.") },
+            confirmButton = { TextButton(onClick = { vm.cancelQueued(q.id); cancelFor = null }) { Text("Cancel it") } },
+            dismissButton = { TextButton(onClick = { cancelFor = null }) { Text("Keep") } },
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
 private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: () -> Unit) {
     val state by vm.state.collectAsState()
     val draft = remember { mutableStateOf("") }
@@ -1618,6 +1687,7 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
 
     Surface(tonalElevation = 2.dp, color = MaterialTheme.colorScheme.background) {
         Column(Modifier.fillMaxWidth().imePadding().padding(horizontal = 12.dp, vertical = 10.dp)) {
+            QueuedStrip(vm, state.queued)
             if (state.attachments.isNotEmpty()) {
                 FlowRow(
                     Modifier.fillMaxWidth().padding(bottom = 8.dp),
@@ -1660,27 +1730,28 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
                         unfocusedBorderColor = Color.Transparent,
                     ),
                 )
+                // while the agent works, the send button queues the message and a
+                // small stop sits beside it, so you are never forced to stop first
+                if (busy) {
+                    IconButton(onClick = { vm.stop() }) {
+                        Icon(Icons.Filled.Stop, "stop", Modifier.size(22.dp), tint = MaterialTheme.colorScheme.error)
+                    }
+                }
                 IconButton(onClick = {
-                    if (busy) vm.stop() else {
-                        // a swipe-armed reply rides along as a quoted block
-                        val quote = replyTo?.let { m ->
-                            messageText(m).trim().lineSequence().take(6).joinToString("\n") { "> $it" } + "\n\n"
-                        } ?: ""
-                        vm.send(quote + draft.value)
-                        draft.value = ""
-                        onCancelReply()
-                    }
+                    // a swipe-armed reply rides along as a quoted block
+                    val quote = replyTo?.let { m ->
+                        messageText(m).trim().lineSequence().take(6).joinToString("\n") { "> $it" } + "\n\n"
+                    } ?: ""
+                    vm.send(quote + draft.value)
+                    draft.value = ""
+                    onCancelReply()
                 }) {
-                    if (busy) {
-                        Icon(Icons.Filled.Stop, "stop", Modifier.size(26.dp), tint = MaterialTheme.colorScheme.error)
-                    } else {
-                        Icon(
-                            Icons.AutoMirrored.Filled.Send,
-                            "send",
-                            Modifier.size(26.dp),
-                            tint = if (draft.value.isBlank() && state.attachments.isEmpty()) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.primary,
-                        )
-                    }
+                    Icon(
+                        Icons.AutoMirrored.Filled.Send,
+                        "send",
+                        Modifier.size(26.dp),
+                        tint = if (draft.value.isBlank() && state.attachments.isEmpty()) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.primary,
+                    )
                 }
             }
         }

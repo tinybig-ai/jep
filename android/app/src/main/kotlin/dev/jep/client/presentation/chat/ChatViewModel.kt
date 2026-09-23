@@ -55,6 +55,10 @@ class ChatViewModel(
 
     data class Attachment(val id: String, val name: String)
 
+    /** a message typed while the agent was busy: held, shown as queued, handed
+     * over when the current turn ends */
+    data class Queued(val id: String, val text: String, val attachments: List<Attachment> = emptyList())
+
     /** the turn being written right now, unit = streaming part */
     data class LiveTurn(
         val messageId: String,
@@ -72,6 +76,7 @@ class ChatViewModel(
         val sending: Boolean = false,
         val lost: Boolean = false,
         val attachments: List<Attachment> = emptyList(),
+        val queued: List<Queued> = emptyList(),
         val notice: String? = null,
         val hasMore: Boolean = false,
         val loadingOlder: Boolean = false,
@@ -306,14 +311,24 @@ class ChatViewModel(
 
     fun send(text: String) {
         val trimmed = text.trim()
-        if (_state.value.sending) return
         val files = _state.value.attachments
         // an image on its own is a valid message. The model still needs words, so
-        // use the line the daemon and Telegram use and send it, so the optimistic
-        // row and the served message agree on the text (refresh reconciles them
-        // by text).
+        // use the line the daemon and Telegram use, so the optimistic row and the
+        // served message agree on the text (refresh reconciles them by text).
         if (trimmed.isEmpty() && files.isEmpty()) return
         val body = trimmed.ifEmpty { "see the attached file" }
+        if (_state.value.sending) {
+            // the agent is mid-turn: hold the message, marked queued, and hand it
+            // over the moment the turn ends. Tapping it offers edit / send now /
+            // cancel.
+            val q = Queued("q-${System.nanoTime()}", body, files)
+            _state.update { it.copy(queued = it.queued + q, attachments = emptyList()) }
+            return
+        }
+        sendNow(body, files)
+    }
+
+    private fun sendNow(body: String, files: List<Attachment>) {
         // The optimistic row carries the prompt text and the attachments as
         // separate parts, never the prompt plus an "[attached: …]" suffix the
         // daemon would never produce.
@@ -341,6 +356,7 @@ class ChatViewModel(
                         )
                     }
                     refresh()
+                    drainQueue()
                     // the harness can still be settling its own record for a
                     // moment after the turn returns; read once more, so a
                     // finished answer is never left out
@@ -357,7 +373,37 @@ class ChatViewModel(
                     _state.update {
                         it.copy(sending = false, live = null, failure = if (err is TurnAborted) null else (err.message ?: "the turn failed"))
                     }
+                    drainQueue()
                 }
+        }
+    }
+
+    // hand the next queued message over, now that the turn has ended
+    private fun drainQueue() {
+        if (_state.value.sending) return
+        val next = _state.value.queued.firstOrNull() ?: return
+        _state.update { it.copy(queued = it.queued.drop(1)) }
+        sendNow(next.text, next.attachments)
+    }
+
+    fun editQueued(id: String, text: String) {
+        val body = text.trim().ifEmpty { return }
+        _state.update { st -> st.copy(queued = st.queued.map { if (it.id == id) it.copy(text = body) else it }) }
+    }
+
+    fun cancelQueued(id: String) {
+        _state.update { st -> st.copy(queued = st.queued.filterNot { it.id == id }) }
+    }
+
+    /** send a queued message now; while a turn is still running it becomes next */
+    fun forceSendQueued(id: String) {
+        val st = _state.value
+        val item = st.queued.firstOrNull { it.id == id } ?: return
+        if (!st.sending) {
+            _state.update { it.copy(queued = it.queued.filterNot { q -> q.id == id }) }
+            sendNow(item.text, item.attachments)
+        } else {
+            _state.update { s -> s.copy(queued = listOf(item) + s.queued.filterNot { q -> q.id == id }) }
         }
     }
 
