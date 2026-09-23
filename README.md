@@ -109,6 +109,10 @@ npm start
 > [docs/PROCESSES.md](docs/PROCESSES.md). For a quick dev loop, `npm start`
 > is all you need.
 
+> The daemon itself is plain Node and runs on Linux as well: CI boots it on
+> Debian in mock mode on every push. Only the auto-installer above is
+> macOS-specific — on Linux, run `npm start` under your own service manager.
+
 ### 3. Pick a client
 
 jep runs as one daemon and reaches you through whatever client you prefer.
