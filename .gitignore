@@ -5,6 +5,8 @@ node_modules/
 session-*.md
 todo.md
 20*-*-*-*-*-handoff*.txt
+# maintainer-only actions: GitHub settings, secrets, the signing key
+MAINTAINER-TODO.md
 
 # Gradle build state: generated, machine-specific, never worth reviewing
 android/.gradle/
