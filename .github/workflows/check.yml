@@ -42,15 +42,19 @@ jobs:
       - name: Run in fresh container
         uses: addnab/docker-run-action@v3
         with:
-          image: node:22-alpine
+          image: node:22-bookworm-slim
           options: -v /tmp:/pkg -w /app
           run: |
             set -e
             npm install /pkg/jep-*.tgz --omit=dev
             node node_modules/.bin/jep --version
             node node_modules/.bin/jep --help
-            timeout 30 env JEP_TG_MOCK=1 JEP_TG_PAIR_CODE=TESTCODE JEP_GW_PORT=18932 \
+            # a real machine needs a real agent: jep refuses to boot without one
+            npm install -g opencode-ai
+            mkdir -p /ws
+            timeout 90 env JEP_TG_MOCK=1 JEP_TG_PAIR_CODE=TESTCODE JEP_GW_PORT=18932 JEP_WORKSPACES=/ws \
               node node_modules/.bin/jep < node_modules/jep/fixture/telegram-mock.jsonl > /tmp/mock.log 2>&1 || true
+            cat /tmp/mock.log
             grep -q "mode: MOCK" /tmp/mock.log
             grep -q "Paired" /tmp/mock.log
             echo "clean-machine run OK"
