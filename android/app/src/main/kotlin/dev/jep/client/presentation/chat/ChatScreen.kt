@@ -109,6 +109,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -1352,13 +1354,23 @@ private fun ToolRow(part: ChatPart.Tool) {
     val title = toolTitle(part)
     var sheet by remember(part.id) { mutableStateOf(false) }
     val hasDetail = diff != null || body != null
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focus = LocalFocusManager.current
     // One shape always: a quiet line, then the call's subject. Nothing expands or
     // collapses on its own. A running tool used to auto-open and then shut when it
     // finished, which jittered the whole list; the detail is a sheet now, reusing
     // the shelf the diff already uses.
     Column(Modifier.fillMaxWidth()) {
         Row(
-            Modifier.fillMaxWidth().clickable(enabled = hasDetail) { if (hasDetail) sheet = true },
+            Modifier.fillMaxWidth().clickable(enabled = hasDetail) {
+                if (hasDetail) {
+                    // put the keyboard away first, or the sheet opens above it
+                    // and then drops to its place (still expanded) when it hides
+                    focus.clearFocus(force = true)
+                    keyboard?.hide()
+                    sheet = true
+                }
+            },
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
