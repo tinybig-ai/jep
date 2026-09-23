@@ -96,6 +96,8 @@ export interface Message {
   sessionID: string
   role: Role
   time: number
+  /** how long the harness took to produce it, when it records a completion time */
+  durationMs?: number
   parts: Part[]
   /**
    * What the harness says this turn cost, in USD. Reported, never computed:

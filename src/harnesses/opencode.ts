@@ -213,6 +213,9 @@ function mapParts(parts: any[] | undefined, workspace: string): Part[] {
 
 function mapMessage(info: any, parts: any[] | undefined, workspace: string): Message {
   const time = info.time && typeof info.time === "object" ? info.time.created : info.time
+  const completed = info.time && typeof info.time === "object" ? info.time.completed : undefined
+  const durationMs =
+    typeof time === "number" && typeof completed === "number" && completed >= time ? completed - time : undefined
   const t = info.tokens
   const model = info.providerID && info.modelID ? `${info.providerID}/${info.modelID}` : undefined
   return {
@@ -220,6 +223,7 @@ function mapMessage(info: any, parts: any[] | undefined, workspace: string): Mes
     sessionID: toInternalId(info.sessionID ?? ""),
     role: info.role === "user" ? "user" : "assistant",
     time: typeof time === "number" ? time : Date.now(),
+    ...(durationMs !== undefined ? { durationMs } : {}),
     parts: mapParts(parts, workspace),
     ...(typeof info.cost === "number" ? { cost: info.cost } : {}),
     ...(model ? { model } : {}),

@@ -90,6 +90,7 @@ fun MessageDto.toDomain() = ChatMessage(
     model = model,
     cost = cost,
     tokens = tokens?.toDomain(),
+    durationMs = durationMs,
 )
 
 fun AskDto.toDomain() = Ask(

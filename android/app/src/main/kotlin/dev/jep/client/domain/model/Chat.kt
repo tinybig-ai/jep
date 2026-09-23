@@ -121,6 +121,8 @@ data class ChatMessage(
     /** reported cost of this turn in USD; null when the harness didn't price it */
     val cost: Double? = null,
     val tokens: TokenUsage? = null,
+    /** how long the reply took, when the harness recorded a completion time */
+    val durationMs: Long? = null,
 )
 
 data class AskOption(val id: String, val label: String, val danger: Boolean = false)

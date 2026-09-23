@@ -82,6 +82,8 @@ data class MessageDto(
     val model: String? = null,
     val cost: Double? = null,
     val tokens: TokensDto? = null,
+    /** how long the reply took, when the harness recorded a completion time */
+    val durationMs: Long? = null,
 )
 
 @Serializable

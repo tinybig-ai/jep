@@ -490,8 +490,10 @@ private fun ResponseInfoDialog(message: ChatMessage, onDismiss: () -> Unit) {
             // what it generated, what it was shown, and what that cost
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 message.model?.takeIf { it.isNotBlank() }?.let { StatRow("Model", it.substringAfterLast('/')) }
+                message.durationMs?.takeIf { it > 0 }?.let { StatRow("Took", fmtDuration(it)) }
+                StatRow("Time", fmtClock(message.time))
                 message.tokens?.let { tk ->
-                    StatRow("Generated", fmtTokens(tk.output))
+                    StatRow("Output", fmtTokens(tk.output))
                     if (tk.reasoning > 0) StatRow("Thinking", fmtTokens(tk.reasoning))
                     StatRow("Prompt", fmtTokens(tk.input + tk.cacheRead + tk.cacheWrite))
                     if (tk.cacheRead + tk.cacheWrite > 0) {
@@ -1276,9 +1278,9 @@ private fun ReasoningRow(part: ChatPart.Reasoning, active: Boolean = false) {
         label = "seconds",
     )
     val secs = elapsed.toInt()
-    Column {
+    Column(Modifier.fillMaxWidth().combinedClickable(onClick = { open = !open }, onLongClick = {})) {
         Row(
-            Modifier.fillMaxWidth().combinedClickable(onClick = { open = !open }, onLongClick = {}),
+            Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
@@ -1748,6 +1750,12 @@ private fun fmtTokens(n: Long): String = when {
     n >= 1_000 -> String.format(java.util.Locale.US, "%.1fK", n / 1_000.0)
     else -> n.toString()
 }
+
+private fun fmtDuration(ms: Long): String =
+    if (ms < 60_000) String.format(java.util.Locale.US, "%.1fs", ms / 1000.0) else "${ms / 60_000}m ${(ms / 1000) % 60}s"
+
+private fun fmtClock(ms: Long): String =
+    java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(ms))
 
 private fun fmtMoney(usd: Double): String = when {
     usd <= 0 -> ""

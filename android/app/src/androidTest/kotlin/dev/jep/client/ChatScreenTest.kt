@@ -323,7 +323,7 @@ class ChatScreenTest {
         rule.onNodeWithContentDescription("response info").performClick()
         rule.onNodeWithText("This reply").assertExists()
         rule.onNodeWithText("big-pickle").assertExists()
-        rule.onNodeWithText("Generated").assertExists()
+        rule.onNodeWithText("Output").assertExists()
     }
 
     @Test
@@ -367,5 +367,49 @@ class ChatScreenTest {
         rule.waitUntil(4_000) {
             rule.onAllNodesWithText("partial output", substring = true).fetchSemanticsNodes().isNotEmpty()
         }
+    }
+
+    @Test
+    fun tapping_a_thinking_block_collapses_it_again() {
+        // The whole block is the tap target now, not only its header: once it had
+        // grown, collapsing meant scrolling back up to the header.
+        val vm = ChatViewModel(
+            FakeChatRepository(
+                messages = listOf(ChatMessage("a1", Role.ASSISTANT, 5, listOf(ChatPart.Reasoning("because reasons", 2_000)))),
+            ),
+            "s1", "T", "jep", "opencode",
+        )
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(6_000) { rule.onAllNodesWithText("Thought for 2s").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("Thought for 2s").performClick()
+        rule.waitUntil(4_000) { rule.onAllNodesWithText("because reasons", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        // tapping the body itself, not the header, must collapse it
+        rule.onNodeWithText("because reasons", substring = true).performClick()
+        rule.waitUntil(4_000) { rule.onAllNodesWithText("because reasons", substring = true).fetchSemanticsNodes().isEmpty() }
+    }
+
+    @Test
+    fun the_reply_sheet_shows_model_duration_and_time() {
+        val vm = ChatViewModel(
+            FakeChatRepository(
+                messages = listOf(
+                    ChatMessage(
+                        "a1", Role.ASSISTANT, 1, listOf(ChatPart.Text("hi")),
+                        model = "opencode-go/deepseek-v4.1-flash",
+                        cost = 0.01,
+                        tokens = TokenUsage(input = 10, output = 5, reasoning = 2, cacheRead = 1, cacheWrite = 0),
+                        durationMs = 3_400,
+                    ),
+                ),
+            ),
+            "s1", "T",
+        )
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(5_000) { rule.onAllNodesWithContentDescription("response info").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithContentDescription("response info").performClick()
+        rule.onNodeWithText("deepseek-v4.1-flash").assertExists()
+        rule.onNodeWithText("Took").assertExists()
+        rule.onNodeWithText("3.4s").assertExists()
+        rule.onNodeWithText("Time").assertExists()
     }
 }
