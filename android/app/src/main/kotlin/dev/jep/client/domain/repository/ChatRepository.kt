@@ -154,6 +154,9 @@ interface ChatRepository {
     suspend fun history(sessionId: String, limit: Int = 0, before: Long = 0, have: Int = 0): HistoryBatch
     suspend fun prompt(sessionId: String, text: String, files: List<String> = emptyList()): ChatMessage
     suspend fun stop(sessionId: String): Boolean
+    /** a fetchable URL for a file part's bytes: the gateway's authenticated
+     * `/file` route, so a client can render an image it did not attach itself */
+    fun fileUrl(path: String): String
     suspend fun respond(askId: String, optionId: String): Boolean
     suspend fun rename(sessionId: String, title: String): Boolean
     suspend fun delete(sessionId: String): Boolean

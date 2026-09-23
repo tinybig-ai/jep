@@ -120,6 +120,11 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import coil3.compose.AsyncImage
 import androidx.compose.ui.unit.sp
 import com.mikepenz.markdown.m3.Markdown
 import kotlinx.coroutines.flow.first
@@ -404,16 +409,18 @@ fun ChatScreen(
                 }
                 val busy = state.sending || state.live != null
                 items(ordered.size, key = { ordered[it].id }) { i ->
-                    MessageRow(
-                        ordered[i],
-                        onInfo = { infoMsg = it },
-                        onReply = { replyTo = it },
-                        // the newest reply carries the "still working" mark: a
-                        // pause between parts (thinking, a tool call) must not
-                        // read as finished. Index 0 is the newest, at the bottom.
-                        responding = busy && i == 0 && ordered[i].role == Role.ASSISTANT,
-                        showActions = ordered[i].id in actionIds,
-                    )
+                    CompositionLocalProvider(LocalFileUrl provides { path -> vm.fileUrl(path) }) {
+                        MessageRow(
+                            ordered[i],
+                            onInfo = { infoMsg = it },
+                            onReply = { replyTo = it },
+                            // the newest reply carries the "still working" mark: a
+                            // pause between parts (thinking, a tool call) must not
+                            // read as finished. Index 0 is the newest, at the bottom.
+                            responding = busy && i == 0 && ordered[i].role == Role.ASSISTANT,
+                            showActions = ordered[i].id in actionIds,
+                        )
+                    }
                 }
             }
             if (showJump) {
@@ -1093,15 +1100,19 @@ private fun UserBubble(message: ChatMessage) {
                 message.parts.forEach { part ->
                     when (part) {
                         is ChatPart.Text -> Text(part.text, color = MaterialTheme.colorScheme.onPrimaryContainer, fontSize = 15.sp)
-                        is ChatPart.File -> Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Filled.AttachFile, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onPrimaryContainer)
-                            Text(
-                                part.name ?: part.path.substringAfterLast('/'),
-                                Modifier.padding(start = 6.dp),
-                                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                fontSize = 13.sp,
-                                maxLines = 1,
-                            )
+                        is ChatPart.File -> if (isImagePart(part)) {
+                            ImageThumb(part, MaterialTheme.colorScheme.onPrimaryContainer)
+                        } else {
+                            Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Filled.AttachFile, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onPrimaryContainer)
+                                Text(
+                                    part.name ?: part.path.substringAfterLast('/'),
+                                    Modifier.padding(start = 6.dp),
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    fontSize = 13.sp,
+                                    maxLines = 1,
+                                )
+                            }
                         }
                         else -> Unit
                     }
@@ -1173,26 +1184,74 @@ private fun PartView(part: ChatPart, streaming: Boolean) {
     }
 }
 
-// A file the agent produced or touched. Images aren't fetched (no image
-// dependency wired) — the row names it so it is at least visible in the turn.
+// How a file part becomes a fetchable URL: the gateway's authenticated /file
+// route plus the pairing token, built by the repository. A CompositionLocal so
+// the deep part renderers need not thread it through every signature.
+private val LocalFileUrl = compositionLocalOf<(String) -> String> { { "" } }
+
+private val IMAGE_EXTS = setOf("png", "jpg", "jpeg", "webp", "gif", "bmp", "heic", "heif", "avif", "svg")
+
+private fun isImagePart(part: ChatPart.File): Boolean {
+    val mime = part.mimeType?.lowercase()
+    if (mime?.startsWith("image/") == true) return true
+    return (part.name ?: part.path).substringAfterLast('.', "").lowercase() in IMAGE_EXTS
+}
+
+// An image attachment as a thumbnail; tapping it opens the full picture. The
+// bytes come from the daemon (/file), so this works for an image sent from any
+// client, not only the one that attached it.
+@Composable
+private fun ImageThumb(part: ChatPart.File, labelColor: Color) {
+    var open by remember { mutableStateOf(false) }
+    val url = LocalFileUrl.current(part.path)
+    AsyncImage(
+        model = url,
+        contentDescription = part.name ?: "image",
+        contentScale = ContentScale.Fit,
+        modifier = Modifier
+            .padding(top = 4.dp)
+            .heightIn(max = 240.dp)
+            .widthIn(max = 260.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(enabled = url.isNotBlank()) { open = true },
+    )
+    part.name?.let { Text(it, color = labelColor, fontSize = 11.sp, maxLines = 1, modifier = Modifier.padding(top = 2.dp)) }
+    if (open) {
+        Dialog(onDismissRequest = { open = false }) {
+            AsyncImage(
+                model = url,
+                contentDescription = part.name ?: "image",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxWidth().clickable { open = false },
+            )
+        }
+    }
+}
+
+// A file the agent produced or touched. An image shows as a tappable thumbnail;
+// anything else is named in a card.
 @Composable
 private fun FileRow(part: ChatPart.File) {
-    Surface(
-        Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        shape = RoundedCornerShape(10.dp),
-    ) {
-        Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Filled.AttachFile, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            Column(Modifier.padding(start = 8.dp)) {
-                Text(
-                    part.name ?: part.path.substringAfterLast('/'),
-                    fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                )
-                part.mimeType?.let {
-                    Text(it, fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    if (isImagePart(part)) {
+        ImageThumb(part, MaterialTheme.colorScheme.onSurfaceVariant)
+    } else {
+        Surface(
+            Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            shape = RoundedCornerShape(10.dp),
+        ) {
+            Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.AttachFile, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Column(Modifier.padding(start = 8.dp)) {
+                    Text(
+                        part.name ?: part.path.substringAfterLast('/'),
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                    )
+                    part.mimeType?.let {
+                        Text(it, fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
         }

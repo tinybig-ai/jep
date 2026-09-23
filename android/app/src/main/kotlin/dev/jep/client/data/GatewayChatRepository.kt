@@ -52,6 +52,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import android.util.Base64
 import java.net.URLEncoder
 
 // The gateway's protocol, behind the one port the app knows. OkHttp lives
@@ -282,6 +283,13 @@ class GatewayChatRepository(
 
     override suspend fun stop(sessionId: String): Boolean =
         post("/stop", payload("id" to sessionId)).first in 200..299
+
+    override fun fileUrl(path: String): String {
+        // the pairing token rides in the query because the image loader fetches
+        // this URL on its own, outside the repository's header path
+        val enc = Base64.encodeToString(path.toByteArray(Charsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+        return "$base/file?p=$enc&token=${token() ?: ""}"
+    }
 
     override suspend fun respond(askId: String, optionId: String): Boolean =
         post("/respond", payload("askID" to askId, "optionID" to optionId)).first in 200..299

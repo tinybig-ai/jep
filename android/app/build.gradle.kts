@@ -77,6 +77,8 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp-sse:5.3.2")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
     implementation("com.mikepenz:multiplatform-markdown-renderer-m3:0.43.0")
+    implementation("io.coil-kt.coil3:coil-compose:3.6.3")
+    implementation("io.coil-kt.coil3:coil-network-okhttp:3.6.3")
 
     // pure policy/parsing tests — no device needed, so they run in seconds
     testImplementation("junit:junit:4.13.2")

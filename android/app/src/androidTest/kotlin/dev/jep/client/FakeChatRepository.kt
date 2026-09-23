@@ -78,6 +78,7 @@ class FakeChatRepository(
     override suspend fun prompt(sessionId: String, text: String, files: List<String>) =
         ChatMessage("reply", Role.ASSISTANT, 1, listOf(ChatPart.Text("ok")))
     override suspend fun stop(sessionId: String) = true
+    override fun fileUrl(path: String) = "http://test/file"
     override suspend fun respond(askId: String, optionId: String) = true
     override suspend fun rename(sessionId: String, title: String) = true
     override suspend fun delete(sessionId: String) = true
