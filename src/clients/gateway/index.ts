@@ -996,6 +996,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       }
 
       if (path === "/stop") {
+        console.error(`[stop] origin=client (gateway session ${id})`)
         const stopped = await adapter.abort(id).catch(() => false)
         return json(res, 200, { stopped })
       }

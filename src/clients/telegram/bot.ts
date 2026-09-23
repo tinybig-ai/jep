@@ -1127,6 +1127,7 @@ export class TelegramBot {
   async #stopTurn(chatID: number): Promise<boolean> {
     const c = this.#chat(chatID)
     const inflight = c.inflight
+    console.error(`[stop] origin=client (telegram chat ${chatID})`)
     // Local abort FIRST. It is synchronous, so the turn's prompt() rejects
     // immediately and its "(stopped)" message starts rendering right away.
     // This used to run last, behind resolveSessionID and the harness abort —
@@ -2081,6 +2082,7 @@ export class TelegramBot {
       if (pe) {
         providerErrored = pe
         console.error(`[watchdog] provider error (session ${sessionID}): ${describeError(pe)}`)
+        console.error(`[stop] origin=watchdog-provider-error (session ${sessionID})`)
         ac.abort()
         return
       }
@@ -2112,6 +2114,7 @@ export class TelegramBot {
       console.error(
         `[watchdog] turn stalled ${Math.round(elapsed / 1000)}s (ceiling ${Math.round(ceiling / 1000)}s, toolRunning=${toolRunning}, session ${sessionID}, model ${model ? `${model.providerID}/${model.modelID}` : "default"})`,
       )
+      console.error(`[stop] origin=watchdog-stall (session ${sessionID})`)
       ac.abort()
     }, 15_000)
     let lastEdit = 0
@@ -2554,6 +2557,7 @@ export class TelegramBot {
               }, IDLE_GRACE_MS)
             }
           } else if (evt.type === "turn.aborted") {
+            console.error(`[stop] origin=harness (session ${sessionID})`)
             harnessStopped = true
             if (!finished) {
               ac.abort()
