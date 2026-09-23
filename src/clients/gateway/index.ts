@@ -499,7 +499,11 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         res.write(": ok\n\n")
         clients.add(res)
         req.socket.setTimeout(0)
-        req.on("close", () => clients.delete(res))
+        console.error(`[gw] stream open (${clients.size} client(s))`)
+        req.on("close", () => {
+          clients.delete(res)
+          console.error(`[gw] stream closed (${clients.size} left)`)
+        })
         return
       }
 
@@ -996,7 +1000,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       }
 
       if (path === "/stop") {
-        console.error(`[stop] origin=client (gateway session ${id})`)
+        console.error(`[stop] origin=client (gateway session ${id}, device ${token.slice(0, 6)}, from ${req.socket.remoteAddress ?? "?"})`)
         const stopped = await adapter.abort(id).catch(() => false)
         return json(res, 200, { stopped })
       }

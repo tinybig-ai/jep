@@ -2525,6 +2525,7 @@ export class TelegramBot {
               const waiting = c.queue.some((q, i) => i > 0 && !q.cancelled && q.prompt)
               if (waiting && !questionAsked) {
                 steered = true
+                console.error(`[stop] origin=steer (session ${sessionID})`)
                 ac.abort()
                 void ws.adapter.abort(sessionID).catch(logFail("abort"))
               }
@@ -2544,6 +2545,7 @@ export class TelegramBot {
               // Stop the turn instead; the tapped answer (or typed reply) goes
               // back as an ordinary message the model can read and carry on.
               questionAsked = true
+              console.error(`[stop] origin=question (session ${sessionID})`)
               ac.abort()
               void ws.adapter.abort(sessionID).catch(logFail("abort"))
             }
@@ -2553,6 +2555,7 @@ export class TelegramBot {
             if (!finished && idleGrace === null) {
               idleGrace = setTimeout(() => {
                 finishedViaIdle = true
+                console.error(`[stop] origin=idle-grace (session ${sessionID})`)
                 ac.abort()
               }, IDLE_GRACE_MS)
             }
