@@ -39,6 +39,25 @@ const toInternalId = (native: string) => `${HARNESS_NS}://${native}`
 const toNativeId = (id: string) =>
   id.startsWith(`${HARNESS_NS}://`) ? id.slice(HARNESS_NS.length + 3) : id
 
+// Two listings of the same store seen through different scopes: union them by
+// id, the project-scoped entry winning a tie. One opencode data home can hold
+// more than one project row for the same worktree (its project id follows repo
+// identity), and /session only ever returns the project this serve instance
+// resolved, so the cross-project view is what adds the threads filed under a
+// sibling project. Exported so the unit test can pin that ordering rule.
+export function mergeSessionRows(primary: any[], supplement: any[]): any[] {
+  const byID = new Map<string, any>()
+  for (const s of primary ?? []) {
+    const id = String(s?.id ?? "")
+    if (id) byID.set(id, s)
+  }
+  for (const s of supplement ?? []) {
+    const id = String(s?.id ?? "")
+    if (id && !byID.has(id)) byID.set(id, s)
+  }
+  return [...byID.values()]
+}
+
 const listenRe = /listening on http:\/\/([^:]+):(\d+)/
 
 const MIME_BY_EXT: Record<string, string> = {
@@ -385,8 +404,21 @@ export class OpenCodeAdapter implements HarnessAdapter {
   // sessions via its own /session. So a session stays reachable no matter
   // how many times the configured workspace directory changes; jep doesn't
   // need to filter by directory itself to get that.
+  //
+  // /session is scoped to the one *project* this serve instance resolved,
+  // though, and opencode can hold more than one project row for the same
+  // worktree: its project id is keyed to repo identity, so adding or renaming
+  // a remote, rewriting history, or re-initing the repo mints a new id and
+  // strands every earlier session under the old one. Those threads then
+  // vanish from /ls even though they are still in the store. /experimental/
+  // session lists across projects, so unioning it with the project-scoped list
+  // keeps them reachable. Absent on older opencode — then the project list is
+  // the whole of what this adapter can know.
   async listSessions(): Promise<SessionSummary[]> {
-    const sessions = await this.#json<any[]>("/session")
+    const sessions = mergeSessionRows(
+      await this.#json<any[]>("/session"),
+      await this.#crossProjectSessions(),
+    )
     // a session with a parent is a subagent the model spawned for a sub-task —
     // an implementation detail of somebody else's turn, never something you
     // meant to open, so it never lists (the codex adapter does the same). The
@@ -399,6 +431,20 @@ export class OpenCodeAdapter implements HarnessAdapter {
     return sessions
       .filter((s) => !(s?.parentID ?? s?.parent_id))
       .map((s) => ({ ...this.#toSummary(s), subagents: children.get(String(s.id)) ?? 0 }))
+  }
+
+  // every session in this workspace's directory, whichever project row holds it.
+  // Best-effort: a 404 (older opencode) means no supplement, and anything else
+  // is logged and swallowed so an enrichment can never take down the primary
+  // listing it exists to help.
+  async #crossProjectSessions(): Promise<any[]> {
+    try {
+      return await this.#json<any[]>(`/experimental/session?directory=${encodeURIComponent(this.workspace)}`)
+    } catch (err) {
+      if (!(err instanceof HttpError && err.status === 404))
+        console.error(`[sessions] cross-project listing failed: ${(err as Error)?.message ?? err}`)
+      return []
+    }
   }
 
   async subagents(sessionID: string): Promise<SessionSummary[]> {
