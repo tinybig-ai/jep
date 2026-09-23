@@ -1,4 +1,6 @@
 node_modules/
+# compiled output: built on demand (`npm run build`) and shipped in the tarball
+dist/
 *.log
 .DS_Store
 # scratch: exported session transcripts and local scratch notes

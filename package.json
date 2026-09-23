@@ -7,6 +7,15 @@
     "jep": "bin/jep.mjs"
   },
   "engines": {"node": ">=22.6.0"},
+  "files": [
+    "dist",
+    "bin",
+    "src",
+    "fixture",
+    "scripts",
+    "tsconfig.json",
+    "tsconfig.build.json"
+  ],
   "description": "One interface for every coding agent: a hexagonal core with Telegram, Android and gateway clients (opencode, codex, claude)",
   "scripts": {
     "start": "node --experimental-strip-types src/app/tg.ts",
@@ -15,6 +24,8 @@
     "probe": "node --experimental-strip-types src/app/probe.ts",
     "probe:harness": "node --experimental-strip-types src/app/probe-harness.ts",
     "pair": "node --experimental-strip-types src/app/paircode.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "prepare": "npm run build",
     "typecheck": "tsc",
     "test": "node --test \"test/*.test.ts\"",
     "test:e2e": "JEP_E2E=1 node --test --test-timeout=300000 test/e2e.test.ts",

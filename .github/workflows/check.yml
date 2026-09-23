@@ -26,7 +26,9 @@ jobs:
 
   clean-machine:
     # Simulate a fresh install: build the tarball, install it in a fresh container,
-    # and exercise the entry point (version, help, mock mode).
+    # and exercise the entry point (version, help, mock mode). This is the CI
+    # stand-in for `npx --yes github:tinybig-ai/jep` on a machine that has never
+    # cloned the repo, and it is where the node_modules type-stripping wall shows up.
     runs-on: ubuntu-latest
     needs: check
     steps:
@@ -41,9 +43,14 @@ jobs:
         uses: addnab/docker-run-action@v3
         with:
           image: node:22-alpine
-          options: -v /tmp:/pkg -v ${{ github.workspace }}/fixture:/fixture -w /app
+          options: -v /tmp:/pkg -w /app
           run: |
+            set -e
             npm install /pkg/jep-*.tgz --omit=dev
             node node_modules/.bin/jep --version
             node node_modules/.bin/jep --help
-            JEP_TG_MOCK=1 JEP_TG_PAIR_CODE=TESTCODE node node_modules/.bin/jep < /fixture/telegram-mock.jsonl
+            timeout 30 env JEP_TG_MOCK=1 JEP_TG_PAIR_CODE=TESTCODE JEP_GW_PORT=18932 \
+              node node_modules/.bin/jep < node_modules/jep/fixture/telegram-mock.jsonl > /tmp/mock.log 2>&1 || true
+            grep -q "mode: MOCK" /tmp/mock.log
+            grep -q "Paired" /tmp/mock.log
+            echo "clean-machine run OK"
