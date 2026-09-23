@@ -101,3 +101,52 @@ test("listSessions falls back to the project list when the route is missing", as
     await srv.close()
   }
 })
+
+test("a user message drops opencode's synthetic part and names a data: attachment", async () => {
+  // What opencode really stores when a person attaches an image: their text, a
+  // `synthetic` text part that is opencode's own "read this file" scaffolding
+  // for the model, and the image as an inline data: URL. The first two fixes:
+  // the synthetic part must not reach a client as the user's words, and the
+  // data: URL must not be treated as a path (it used to become
+  // "<workspace>/data:image/jpeg;base64,…").
+  const srv = await serve((pathname) => {
+    if (pathname !== "/session/ses_a/message") return undefined
+    return [
+      {
+        info: { id: "msg_1", role: "user", time: { created: 10 } },
+        parts: [
+          { type: "text", text: "see the attached file" },
+          {
+            type: "text",
+            text: 'Called the Read tool with the following input: {"filePath":"/tmp/x.jpg"}',
+            synthetic: true,
+          },
+          { type: "file", url: "data:image/jpeg;base64,AAAA", mime: "image/jpeg" },
+        ],
+      },
+    ]
+  })
+  try {
+    const adapter = new OpenCodeAdapter({} as any, WS, srv.base)
+    const msgs = await adapter.messages("opencode://ses_a")
+    assert.equal(msgs.length, 1)
+    const parts = msgs[0]!.parts
+    assert.deepEqual(
+      parts.map((p) => p.kind),
+      ["text", "file"],
+      "the synthetic scaffolding part is gone",
+    )
+    const text = parts[0]!
+    assert.equal(text.kind === "text" ? text.text : "", "see the attached file")
+    const file = parts[1]!
+    assert.equal(file.kind === "file" ? file.fileName : "", "attached.jpeg")
+    assert.equal(file.kind === "file" ? file.mimeType : "", "image/jpeg")
+    assert.equal(
+      file.kind === "file" ? file.filePath.startsWith(WS) || file.filePath.includes("data:") : true,
+      false,
+      "the data: URL is not path-joined to the workspace",
+    )
+  } finally {
+    await srv.close()
+  }
+})

@@ -119,6 +119,11 @@ function parseSse(raw: string): SseFrame[] {
 }
 
 function mapPart(part: any, workspace: string): Part {
+  // opencode marks its own scaffolding `synthetic` — e.g. the
+  // "Called the Read tool with the following input: …" text it inserts when a
+  // file is attached. It is written for the model, never for a person; passing
+  // it on painted that scaffolding into the user's own message on every client.
+  if (part?.synthetic === true) return { kind: "other", nativeType: "synthetic" }
   switch (part?.type) {
     case "text":
       return { kind: "text", text: part.text ?? "", ...(part.id ? { id: part.id } : {}) }
@@ -145,8 +150,19 @@ function mapPart(part: any, workspace: string): Part {
     case "snapshot":
       return { kind: "snapshot" }
     case "file": {
-      // output FileParts carry a file:// url, not a file_path
+      const mime = part.mime_type ?? part.mime
       const raw = part.file_path ?? part.url ?? ""
+      // An input attachment (what the user sent) arrives as a data: URL with the
+      // bytes inlined; an output FilePart carries a file:// url or a path. A
+      // data: URL is not a path: joining it produced
+      // "<workspace>/data:image/jpeg;base64,…", a file that exists nowhere, and
+      // shipping the inlined bytes to every client on every history page is
+      // megabytes per image. Name it from the mime instead.
+      if (raw.startsWith("data:")) {
+        const ext = (mime ?? "").split("/")[1]?.split("+")[0] ?? ""
+        const name = part.file_name ?? part.filename ?? (ext ? `attached.${ext}` : "attached file")
+        return { kind: "file", filePath: name, fileName: name, mimeType: mime }
+      }
       let fp = raw
       try {
         if (raw.startsWith("file://")) fp = fileURLToPath(raw)
@@ -158,7 +174,7 @@ function mapPart(part: any, workspace: string): Part {
         kind: "file",
         filePath: path.isAbsolute(fp) ? fp : path.join(workspace, fp),
         fileName: part.file_name ?? part.filename,
-        mimeType: part.mime_type ?? part.mime,
+        mimeType: mime,
       }
     }
     default:
@@ -175,7 +191,7 @@ function mapMessage(info: any, parts: any[] | undefined, workspace: string): Mes
     sessionID: toInternalId(info.sessionID ?? ""),
     role: info.role === "user" ? "user" : "assistant",
     time: typeof time === "number" ? time : Date.now(),
-    parts: (parts ?? []).map((p) => mapPart(p, workspace)),
+    parts: (parts ?? []).filter((p) => p?.synthetic !== true).map((p) => mapPart(p, workspace)),
     ...(typeof info.cost === "number" ? { cost: info.cost } : {}),
     ...(model ? { model } : {}),
     ...(t
@@ -691,7 +707,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
           // from the delta-accumulated part, once from this orphan.
           partID: part?.id ?? partID ?? "",
           partType: (part?.type as string) ?? "",
-          part: part ? mapPart(part, this.workspace) : undefined,
+          part: part && (part as { synthetic?: unknown }).synthetic !== true ? mapPart(part, this.workspace) : undefined,
         }
       }
       case "message.part.delta":
