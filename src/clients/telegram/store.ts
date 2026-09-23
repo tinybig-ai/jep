@@ -4,18 +4,20 @@ import { readFileSync, writeFileSync } from "node:fs"
 export type DetailMode = "off" | "collapsed" | "expanded"
 /** how reasoning + tool calls are grouped in the reply. "minimal" ignores
  * collapse entirely — just an icon+name line up front, then the answer. */
-export type InternalsLayout = "per-step" | "per-section" | "combined" | "minimal"
+export type VerbosityLayout = "per-step" | "per-section" | "combined" | "minimal"
 
-export interface InternalsSettings {
+export interface VerbositySettings {
   thinking: DetailMode
   tools: DetailMode
-  layout: InternalsLayout
+  layout: VerbosityLayout
 }
 
-export const DEFAULT_INTERNALS: InternalsSettings = {
+// Minimal by default: an icon line for thinking and tools, then the answer.
+// Anyone who wants the collapsed per-step detail turns it up in Settings.
+export const DEFAULT_VERBOSITY: VerbositySettings = {
   thinking: "collapsed",
   tools: "collapsed",
-  layout: "per-step",
+  layout: "minimal",
 }
 
 export interface StoreData {
@@ -26,8 +28,8 @@ export interface StoreData {
   // opencode-go model into Codex asks it to run something it has never heard
   // of, and it fails the turn rather than ignoring it.
   models: Record<string, string>
-  // chat id -> how much agent internals (thinking / tool calls) to show
-  internals?: Record<string, InternalsSettings>
+  // chat id -> how much agent verbosity (thinking / tool calls) to show
+  verbosity?: Record<string, VerbositySettings>
   // chat id -> primary agent name (e.g. "build", "plan")
   agents?: Record<string, string>
   // chat id -> message id of the pinned live status message
@@ -107,7 +109,7 @@ const indexKey = (dir: string, harness?: string | null): string => (harness ? `$
 export class ChatStore {
   #titles: Record<string, string>
   #models: Record<string, string>
-  #internals: Record<string, InternalsSettings>
+  #verbosity: Record<string, VerbositySettings>
   #agents: Record<string, string>
   #statusMsgs: Record<string, number>
   #injectContext: Record<string, boolean>
@@ -124,7 +126,9 @@ export class ChatStore {
   constructor(d: StoreData, file: string | null) {
     this.#titles = d.titles ?? {}
     this.#models = migrateModelKeys(d.models ?? {})
-    this.#internals = d.internals ?? {}
+    // read the old "internals" key as a fallback, so the rename does not reset
+    // a chat that had already tuned it
+    this.#verbosity = d.verbosity ?? (d as { internals?: Record<string, VerbositySettings> }).internals ?? {}
     this.#agents = d.agents ?? {}
     this.#statusMsgs = d.statusMsgs ?? {}
     this.#injectContext = d.injectContext ?? {}
@@ -154,8 +158,8 @@ export class ChatStore {
     return this.#models[`${chatID}:${harness}`] ?? null
   }
 
-  internals(chatID: number): InternalsSettings {
-    return { ...DEFAULT_INTERNALS, ...(this.#internals[String(chatID)] ?? {}) }
+  verbosity(chatID: number): VerbositySettings {
+    return { ...DEFAULT_VERBOSITY, ...(this.#verbosity[String(chatID)] ?? {}) }
   }
 
   agent(chatID: number): string | null {
@@ -293,8 +297,8 @@ export class ChatStore {
     this.#save()
   }
 
-  setInternals(chatID: number, settings: InternalsSettings): void {
-    this.#internals[String(chatID)] = settings
+  setVerbosity(chatID: number, settings: VerbositySettings): void {
+    this.#verbosity[String(chatID)] = settings
     this.#save()
   }
 
@@ -312,7 +316,7 @@ export class ChatStore {
         {
           titles: this.#titles,
           models: this.#models,
-          internals: this.#internals,
+          verbosity: this.#verbosity,
           agents: this.#agents,
           statusMsgs: this.#statusMsgs,
           injectContext: this.#injectContext,

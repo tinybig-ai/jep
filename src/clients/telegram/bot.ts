@@ -42,7 +42,7 @@ import {
   pushCount,
 } from "./gitview.ts"
 import type { Pairing } from "./pair.ts"
-import type { ChatStore, HeldPrompt, InternalsSettings, DetailMode, InternalsLayout, PendingPrompt } from "./store.ts"
+import type { ChatStore, HeldPrompt, VerbositySettings, DetailMode, VerbosityLayout, PendingPrompt } from "./store.ts"
 import type { ReminderRecord, ReminderStore } from "./reminders.ts"
 
 interface Ws {
@@ -259,7 +259,7 @@ const agentIcon = (agent: string): string => (agent === "plan" ? "📝" : "🔨"
 
 const styled = (b: InlineButton, style: InlineButton["style"]): InlineButton => (style ? { ...b, style } : b)
 
-// ─── agent-internals rendering (thinking + tool calls as collapsible details) ───
+// ─── agent-verbosity rendering (thinking + tool calls as collapsible details) ───
 
 const MAX_TOOL_CHARS = 1500
 // beyond this many collapses we roll per-section up to one block (message limits)
@@ -453,7 +453,7 @@ function splitSteps(parts: Part[]): Part[][] {
 // these build the FINAL, static message only. The live draft never shows
 // collapsible content — see buildLiveBlocks — so there's nothing here to keep
 // in sync with closeStreamingTable's half-row heuristic.
-function richPerSection(parts: Part[], s: InternalsSettings): RichBlock[] {
+function richPerSection(parts: Part[], s: VerbositySettings): RichBlock[] {
   const out: RichBlock[] = []
   for (const p of parts) {
     if (p.kind === "reasoning") {
@@ -467,7 +467,7 @@ function richPerSection(parts: Part[], s: InternalsSettings): RichBlock[] {
   return out
 }
 
-function richCombined(parts: Part[], s: InternalsSettings): RichBlock[] {
+function richCombined(parts: Part[], s: VerbositySettings): RichBlock[] {
   const out: RichBlock[] = []
   const reasoning = reasoningOf(parts)
   const tools = parts.filter((p): p is ToolCallPart => p.kind === "tool")
@@ -487,7 +487,7 @@ function richCombined(parts: Part[], s: InternalsSettings): RichBlock[] {
   return out
 }
 
-function richPerStep(parts: Part[], s: InternalsSettings): RichBlock[] {
+function richPerStep(parts: Part[], s: VerbositySettings): RichBlock[] {
   const out: RichBlock[] = []
   for (const step of splitSteps(parts)) {
     const reasoning = reasoningOf(step)
@@ -522,7 +522,7 @@ function richPerStep(parts: Part[], s: InternalsSettings): RichBlock[] {
 // nothing for a Telegram edit to ever reset. In a streamed minimal turn this
 // renders the *final* (still-open) segment; the segments before it were
 // already sent as their own messages.
-function richMinimal(parts: Part[], s: InternalsSettings): RichBlock[] {
+function richMinimal(parts: Part[], s: VerbositySettings): RichBlock[] {
   const bits: string[] = []
   for (const p of parts) {
     if (p.kind === "reasoning" && s.thinking !== "off" && p.text.trim()) bits.push(`💭 ${thinkingPhrase(p.durationMs).toLowerCase()}`)
@@ -535,7 +535,7 @@ function richMinimal(parts: Part[], s: InternalsSettings): RichBlock[] {
   return out
 }
 
-function buildRich(parts: Part[], s: InternalsSettings): RichBlock[] {
+function buildRich(parts: Part[], s: VerbositySettings): RichBlock[] {
   if (s.layout === "minimal") return richMinimal(parts, s)
   if (s.layout === "combined") return richCombined(parts, s)
   if (s.layout === "per-section") {
@@ -558,7 +558,7 @@ function buildRich(parts: Part[], s: InternalsSettings): RichBlock[] {
 // the final message.
 function buildLiveBlocks(
   parts: Part[],
-  s: InternalsSettings,
+  s: VerbositySettings,
   flushedToolIDs: Set<string>,
   reasoningStarted: Map<string, number>,
   reasoningEnded: Map<string, number>,
@@ -569,7 +569,7 @@ function buildLiveBlocks(
     // icon-line-then-text pair; finished segments are flushed to their own
     // permanent messages by #freeText (see minimalFlushed), and the draft
     // starts fresh for the next segment. What's left here is the *open*
-    // segment plus any just-finished internals. durationMs isn't known yet
+    // segment plus any just-finished verbosity. durationMs isn't known yet
     // mid-stream, so estimate it from when we first saw this part, and stop
     // the clock once its step has finished.
     const bits: string[] = []
@@ -610,7 +610,7 @@ function withLiveMarker(out: RichBlock[], live: boolean): RichBlock[] {
 const quoteLines = (title: string, body: string): string => `> **${title}**\n> ${body.split("\n").join("\n> ")}`
 
 // HTML fallback: blockquotes (not collapsible) instead of rich details blocks
-function partsToMarkdown(parts: Part[], s: InternalsSettings): string {
+function partsToMarkdown(parts: Part[], s: VerbositySettings): string {
   if (s.layout === "minimal") {
     const bits: string[] = []
     for (const p of parts) {
@@ -633,14 +633,14 @@ function partsToMarkdown(parts: Part[], s: InternalsSettings): string {
   return out.join("\n\n")
 }
 
-const PRESETS: Record<"simple" | "minimal" | "detailed" | "debug", InternalsSettings> = {
+const PRESETS: Record<"simple" | "minimal" | "detailed" | "debug", VerbositySettings> = {
   simple: { thinking: "off", tools: "off", layout: "per-step" },
   minimal: { thinking: "collapsed", tools: "collapsed", layout: "minimal" },
   detailed: { thinking: "collapsed", tools: "collapsed", layout: "per-step" },
   debug: { thinking: "expanded", tools: "expanded", layout: "per-section" },
 }
 
-function internalsPreset(s: InternalsSettings): "simple" | "minimal" | "detailed" | "debug" | "custom" {
+function verbosityPreset(s: VerbositySettings): "simple" | "minimal" | "detailed" | "debug" | "custom" {
   for (const name of ["simple", "minimal", "detailed", "debug"] as const) {
     const p = PRESETS[name]
     if (p.thinking === s.thinking && p.tools === s.tools && p.layout === s.layout) return name
@@ -649,7 +649,7 @@ function internalsPreset(s: InternalsSettings): "simple" | "minimal" | "detailed
 }
 
 const cycleMode = (m: DetailMode): DetailMode => (m === "off" ? "collapsed" : m === "collapsed" ? "expanded" : "off")
-const cycleLayout = (l: InternalsLayout): InternalsLayout =>
+const cycleLayout = (l: VerbosityLayout): VerbosityLayout =>
   l === "per-step" ? "per-section" : l === "per-section" ? "combined" : l === "combined" ? "minimal" : "per-step"
 
 // a row of buttons as a rich block (RichBlockButtons, 10.3)
@@ -1950,11 +1950,11 @@ export class TelegramBot {
   ): Promise<void> {
     const c = this.#chat(chatID)
     let filePaths = opts?.filePaths
-    const internals = this.#store.internals(chatID)
+    const verbosity = this.#store.verbosity(chatID)
     // minimal layout feeds finished text segments to the transcript as their
     // own messages while streaming; everything below that splits parts into
     // per-segment boundaries only exists in minimal mode
-    const minimal = internals.layout === "minimal"
+    const minimal = verbosity.layout === "minimal"
 
     const ac = new AbortController()
     c.inflight = ac
@@ -2198,10 +2198,10 @@ export class TelegramBot {
     const flushedReasoningIDs = new Set<string>()
     const flushTool = async (p: ToolCallPart) => {
       // minimal layout has nothing collapsible to protect — never splits cards out
-      if (internals.tools === "off" || internals.layout === "minimal" || flushedToolIDs.has(p.id)) return
+      if (verbosity.tools === "off" || verbosity.layout === "minimal" || flushedToolIDs.has(p.id)) return
       flushedToolIDs.add(p.id)
       try {
-        await this.#tg.sendRichMessage({ chatID, rich_message: { blocks: [toolBlock(p, internals.tools === "expanded")] } })
+        await this.#tg.sendRichMessage({ chatID, rich_message: { blocks: [toolBlock(p, verbosity.tools === "expanded")] } })
       } catch (err) {
         console.error(`[card] tool send failed: ${(err as Error)?.message ?? err}`)
       }
@@ -2209,10 +2209,10 @@ export class TelegramBot {
     // a finished reasoning part has no explicit "done" event of its own, but
     // opencode's step-finish marker tells us the step (and its reasoning) is over
     const flushPendingReasoning = async () => {
-      if (internals.thinking === "off") return
+      if (verbosity.thinking === "off") return
       for (const p of liveParts) {
         if (p.kind !== "reasoning" || !p.id || !p.text.trim() || flushedReasoningIDs.has(p.id) || reasoningEnded.has(p.id)) continue
-        if (internals.layout === "minimal") {
+        if (verbosity.layout === "minimal") {
           // nothing to flush here — the icon row keeps it inline. Freezing the
           // timer is the only thing a finished step needs.
           reasoningEnded.set(p.id, Date.now())
@@ -2222,7 +2222,7 @@ export class TelegramBot {
         const started = reasoningStarted.get(p.id)
         const ms = p.durationMs ?? (started !== undefined ? Date.now() - started : undefined)
         try {
-          await this.#tg.sendRichMessage({ chatID, rich_message: { blocks: [reasoningBlock(p.text, internals.thinking === "expanded", ms)] } })
+          await this.#tg.sendRichMessage({ chatID, rich_message: { blocks: [reasoningBlock(p.text, verbosity.thinking === "expanded", ms)] } })
         } catch (err) {
           console.error(`[card] reasoning send failed: ${(err as Error)?.message ?? err}`)
         }
@@ -2230,7 +2230,7 @@ export class TelegramBot {
     }
     // minimal layout delivers finished text segments as their own messages —
     // "all icons + all text in one screenful" flattened the turn's chronology,
-    // so instead each segment (internals + the text that finalized it) ships
+    // so instead each segment (verbosity + the text that finalized it) ships
     // the moment its text completes, and the draft restarts fresh for the next.
     const minimalFlushed = new Set<string>()
     let minimalOpenTextID: string | null = null
@@ -2250,8 +2250,8 @@ export class TelegramBot {
         if (!first.text.length) return // nothing user-visible yet — keep accumulating
         if (!textOf(first.text).trim()) return // whitespace-only — wait for real content
         const blocks = minimalSegmentBlocks(first, {
-          thinking: internals.thinking !== "off",
-          tools: internals.tools !== "off",
+          thinking: verbosity.thinking !== "off",
+          tools: verbosity.tools !== "off",
           ms: (p) => {
             const started = p.id ? reasoningStarted.get(p.id) : undefined
             const ended = p.id ? reasoningEnded.get(p.id) : undefined
@@ -2315,7 +2315,7 @@ export class TelegramBot {
       if (finished) return // the final message is already out; nothing to preview
       if (Date.now() < floodUntil) return // Telegram is throttling us — skip this frame rather than reset the window
       try {
-        const blocks = buildLiveBlocks(minimalVisible(liveParts), internals, flushedToolIDs, reasoningStarted, reasoningEnded, true)
+        const blocks = buildLiveBlocks(minimalVisible(liveParts), verbosity, flushedToolIDs, reasoningStarted, reasoningEnded, true)
         const json = JSON.stringify(blocks)
         // an unchanged frame still re-sends on the expiry beat: drafts vanish
         // after ~30s unpushed, so the 1s tick also keeps silent stretches alive
@@ -2422,10 +2422,10 @@ export class TelegramBot {
     }
 
     // Structured render of a finished turn: thinking + tool calls become
-    // collapsible `details` blocks per the chat's Internals settings; produced
+    // collapsible `details` blocks per the chat's Verbosity settings; produced
     // files ride along as attach:// blocks. Falls back to markdown. Returns true
     // when something was shown.
-    const presentParts = async (parts: Part[], s: InternalsSettings): Promise<boolean> => {
+    const presentParts = async (parts: Part[], s: VerbositySettings): Promise<boolean> => {
       const media = parts.filter((p): p is FilePart => p.kind === "file")
       const blocks = buildRich(parts, s)
       if (minimal) console.log(`[present] parts=${parts.length} blocks=${blocks.length} flushed=${minimalFlushed.size} text="${textOf(parts).slice(0, 40).replace(/\n/g, "\\n")}"`)
@@ -2484,7 +2484,7 @@ export class TelegramBot {
           if (evt.type === "part.delta" && evt.text) {
             // reasoning deltas build the collapsible 💭 block but never the answer text
             if (evt.partType === "reasoning") {
-              // new internals after user-visible text: that text just finalized
+              // new verbosity after user-visible text: that text just finalized
               if (minimal && minimalOpenTextID !== null) await flushMinimalSegment()
               if (!reasoningStarted.has(evt.partID)) reasoningStarted.set(evt.partID, Date.now())
               reasoningBuf.set(evt.partID, (reasoningBuf.get(evt.partID) ?? "") + evt.text)
@@ -2630,7 +2630,7 @@ export class TelegramBot {
       if (segmentFlushInFlight) await segmentFlushInFlight
       const visible = dropFlushed(turn)
       const media = visible.filter((p): p is FilePart => p.kind === "file")
-      const shown = await presentParts(visible, internals)
+      const shown = await presentParts(visible, verbosity)
       if (!shown && textOf(visible).trim()) await presentBody(textOf(visible), media)
       else if (!shown && placeholder) await this.#tg.deleteMessage({ chatID, messageID: placeholder.message_id })
       // A turn must never end silently. An error the harness reported gets
@@ -2667,7 +2667,7 @@ export class TelegramBot {
       if (ac.signal.aborted) {
         // render whatever we streamed so far (partial details included)
         if (segmentFlushInFlight) await segmentFlushInFlight
-        const shown = await presentParts(dropFlushed(liveParts), internals)
+        const shown = await presentParts(dropFlushed(liveParts), verbosity)
         // a silent stall (the idle watchdog fired) can still be explained: the
         // harness may have named a provider failure — a 429, a usage cap —
         // that never arrived as a session.error event. Prefer that over
@@ -2702,7 +2702,7 @@ export class TelegramBot {
         const partial = textOf(liveParts).trim()
         if (dropped && partial) {
           if (segmentFlushInFlight) await segmentFlushInFlight
-          const shown = await presentParts(dropFlushed(liveParts), internals)
+          const shown = await presentParts(dropFlushed(liveParts), verbosity)
           if (shown) await this.#tg.sendMessage({ chatID, text: "⚠️ the AI server dropped the connection — the answer above may be incomplete." })
           else await this.#tg.sendMessage({ chatID, text: "⚠️ the AI server dropped the connection before an answer arrived." })
         } else {
@@ -3551,7 +3551,7 @@ export class TelegramBot {
     const model = await this.#modelLabel(chatID, ws)
 
     // Only fields with no button of their own belong here. Anything a button
-    // already carries (model, agent, internals, context, workspace) would
+    // already carries (model, agent, verbosity, context, workspace) would
     // otherwise be stated twice, one line apart.
     const lines = [
       "⚙️ Settings",
@@ -3559,18 +3559,20 @@ export class TelegramBot {
       `conversation: "${label}"`,
     ]
     const rows: InlineButton[][] = [
+      // Harness first: it decides which runtime answers, and everything below
+      // it is about that runtime.
+      // always shown, like 🗂 Workspace: hiding a row until a second option
+      // exists is how the only route to something ends up undiscoverable, and
+      // with one harness it still answers "what is actually running this?"
+      [btn(`🔌 Harness · ${this.#activeWs(chatID).adapter.id}`, "set:harness")],
       // /ls by another route: Settings is where people look for "where am I,
       // and how do I get somewhere else", and switching conversations was the
       // one answer that lived only behind a typed command
       [btn("💬 Conversations", "set:ls")],
       [btn(`🤖 Model · ${model}`, "set:model")],
       [btn(`🧭 Agent · ${this.#store.agent(chatID) ?? "default"}`, "set:agent")],
-      // always shown, like 🗂 Workspace: hiding a row until a second option
-      // exists is how the only route to something ends up undiscoverable, and
-      // with one harness it still answers "what is actually running this?"
-      [btn(`🔌 Harness · ${this.#activeWs(chatID).adapter.id}`, "set:harness")],
       [btn("🔌 MCP servers", "set:mcp"), btn("🧩 Skills", "set:skills")],
-      [btn(`🔎 Internals · ${internalsPreset(this.#store.internals(chatID))}`, "set:internals")],
+      [btn(`🔎 Verbosity · ${verbosityPreset(this.#store.verbosity(chatID))}`, "set:verbosity")],
       [btn("📜 Conversation log", "set:log")],
       [btn(`🧩 Context · ${this.#store.injectContext(chatID) ? "on" : "off"}`, "ctx:toggle")],
       [btn("✏️ Rename conversation", "set:rename")],
@@ -3585,8 +3587,8 @@ export class TelegramBot {
     if (sent.messageID !== undefined) c.settingsMsg = sent.messageID
   }
 
-  // 🗂 Workspace: switch between projects, or add a new one. Switching starts
-  // a fresh conversation there (sessions are per-workspace).
+  // 🗂 Workspace: switch between projects, or add a new one. Switching reopens
+  // your latest conversation there (sessions are per-workspace).
   async #settingsWorkspace(chatID: number, messageID: number | null): Promise<void> {
     const c = this.#chat(chatID)
     const added = new Set(this.#store.workspaces())
@@ -3602,7 +3604,7 @@ export class TelegramBot {
     rows.push([btn("‹ Back", "set:root")])
     const hint =
       this.#workspaces.length > 1
-        ? "Tap one to switch — starts a fresh conversation there."
+        ? "Tap one to switch — reopens your latest conversation there."
         : "➕ Add project to browse for another, or clone one."
     const lines = ["🗂 Workspace", "", `current: ${c.workspace}`, "", hint]
     await this.#menu(chatID, [...lines, ...rows], messageID === null ? undefined : { messageID })
@@ -3610,8 +3612,9 @@ export class TelegramBot {
 
   // 🔌 Harness: which agent runtime answers, for this chat. Sessions belong to
   // the harness that made them — opencode and codex keep separate transcripts
-  // in separate stores — so switching starts a fresh conversation rather than
-  // pretending the old one carries over.
+  // in separate stores — so switching drops the current session id. The next
+  // message then reopens the newest conversation on the new harness, or starts
+  // one if it has none; nothing carries over.
   async #settingsHarness(chatID: number, messageID: number): Promise<void> {
     const current = this.#activeWs(chatID).adapter.id
     const rows: InlineButton[][] = this.#harnessList.map((h) => {
@@ -3622,7 +3625,7 @@ export class TelegramBot {
     rows.push([btn("‹ Back", "set:root")])
     const hint =
       this.#harnessList.length > 1
-        ? "Switching starts a fresh conversation — sessions don't move between harnesses."
+        ? "Switching reopens your latest conversation on that harness — sessions don't move between harnesses."
         : "The only harness installed here. Install another (e.g. codex) and it shows up."
     const lines = ["🔌 Harness", "", `current: ${current}`, "", hint]
     await this.#menu(chatID, [...lines, ...rows], { messageID })
@@ -3880,11 +3883,11 @@ export class TelegramBot {
     await this.#menu(chatID, [...lines, ...rows], { messageID })
   }
 
-  // 🔎 Internals: how much the agent shows per reply (thinking + tool calls).
+  // 🔎 Verbosity: how much the agent shows per reply (thinking + tool calls).
   // Presets set all three at once; each row also cycles independently.
-  async #settingsInternals(chatID: number, messageID: number): Promise<void> {
-    const s = this.#store.internals(chatID)
-    const preset = internalsPreset(s)
+  async #settingsVerbosity(chatID: number, messageID: number): Promise<void> {
+    const s = this.#store.verbosity(chatID)
+    const preset = verbosityPreset(s)
     const presetBtn = (label: string, name: "simple" | "minimal" | "detailed" | "debug"): InlineButton => {
       const b = btn(label, `intp:${name}`)
       if (preset === name) b.style = "success"
@@ -3904,7 +3907,7 @@ export class TelegramBot {
       [btn("‹ Back", "set:root")],
     ]
     const lines = [
-      "🔎 Internals",
+      "🔎 Verbosity",
       "",
       "How much of the agent's work shows in its replies:",
       "💭 chain-of-thought · ⚙ tool calls · 🧩 how they're grouped.",
@@ -4111,7 +4114,7 @@ export class TelegramBot {
       case "set":
         if (rest === "root") await this.#settingsRoot(chatID, msg.message_id)
         else if (rest === "model") await this.#settingsModel(chatID, msg.message_id)
-        else if (rest === "internals") await this.#settingsInternals(chatID, msg.message_id)
+        else if (rest === "verbosity") await this.#settingsVerbosity(chatID, msg.message_id)
         else if (rest === "agent") await this.#settingsAgent(chatID, msg.message_id)
         else if (rest === "rename") await this.#settingsRename(chatID, msg.message_id)
         else if (rest === "ws") await this.#settingsWorkspace(chatID, msg.message_id)
@@ -4189,13 +4192,13 @@ export class TelegramBot {
         break
       }
       case "int": {
-        const s = this.#store.internals(chatID)
+        const s = this.#store.verbosity(chatID)
         if (rest === "think") s.thinking = cycleMode(s.thinking)
         else if (rest === "tools") s.tools = cycleMode(s.tools)
         else if (rest === "layout") s.layout = cycleLayout(s.layout)
-        this.#store.setInternals(chatID, s)
-        await this.#settingsInternals(chatID, msg.message_id)
-        await tg.answerCallbackQuery({ id: cq.id, text: `internals: ${internalsPreset(s)}` })
+        this.#store.setVerbosity(chatID, s)
+        await this.#settingsVerbosity(chatID, msg.message_id)
+        await tg.answerCallbackQuery({ id: cq.id, text: `verbosity: ${verbosityPreset(s)}` })
         break
       }
       case "intp": {
@@ -4204,9 +4207,9 @@ export class TelegramBot {
           await tg.answerCallbackQuery({ id: cq.id, text: "unknown preset" })
           break
         }
-        const s = this.#store.internals(chatID)
-        this.#store.setInternals(chatID, { ...s, ...preset })
-        await this.#settingsInternals(chatID, msg.message_id)
+        const s = this.#store.verbosity(chatID)
+        this.#store.setVerbosity(chatID, { ...s, ...preset })
+        await this.#settingsVerbosity(chatID, msg.message_id)
         await tg.answerCallbackQuery({ id: cq.id, text: `preset: ${rest}` })
         break
       }

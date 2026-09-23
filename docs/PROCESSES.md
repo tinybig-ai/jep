@@ -67,7 +67,7 @@ fixture/
   workspace-alpha/        // test working directories for the two harness workspaces
   workspace-beta/
   telegram-mock*.jsonl    // mock update fixtures (pair, settings, callbacks,
-                          // internals, git)
+                          // verbosity, git)
 ```
 
 ## 3. Runtime model
@@ -292,17 +292,17 @@ plus the bytes, two more). The download used to be awaited in
    Reasoning deltas are **not** appended to the answer: `message.part.delta`
    carries only a `partID` (no type), so the adapter learns each part's type from
    its `message.part.updated` event (the `#partTypes` map in `opencode.ts`) and
-   stamps `partType` on the delta. While reasoning streams and Internals thinking
+   stamps `partType` on the delta. While reasoning streams and Verbosity thinking
    ≠ off, the draft shows `💭 thinking…` (then the answer tail). On completion the
    draft is replaced by a message built from `reply.parts` **in order** (see
-   *Agent internals*): thinking/tool `details` blocks + answer blocks + embedded
+   *Agent verbosity*): thinking/tool `details` blocks + answer blocks + embedded
    files. Older clients fall back to the legacy "…" placeholder +
    `editMessageText`. The native stop button delivers
    `stopped_message_generation`, aborting the turn.
-   - Rich path: `buildRich(parts, internals)` → `sendRichMessage`. Produced files
+   - Rich path: `buildRich(parts, verbosity)` → `sendRichMessage`. Produced files
      (assistant `file` parts) are embedded as `photo`/`document` blocks with
      `attach://f0` multipart uploads (Bot API 10.3), capped at `MAX_RICH_FILES`.
-   - Fallback: `partsToMarkdown(parts, internals)` → `clearPlaceholder` (HTML) +
+   - Fallback: `partsToMarkdown(parts, verbosity)` → `clearPlaceholder` (HTML) +
      files as separate `sendPhoto`/`sendDocument` messages.
    - The HTML renderer's fallback (`callWithFallback` in `api.ts`): if Telegram
      rejects the parsed entities, retry the same call **without** `parse_mode`;
@@ -350,15 +350,15 @@ Block shapes were confirmed verbatim from the official Bot API docs dumps at
 and `tool_0a2534d4e001pFWxYwQchV6S7v` (9.x) (do not trust memory for new
 shapes; re-check those references).
 
-### Agent internals (thinking + tool calls)
+### Agent verbosity (thinking + tool calls)
 Reasoning and tool calls render as collapsible **`details` blocks**
 (`InputRichBlockDetails`, Bot API 10.3: `summary` header always shown, `blocks`
 body, `is_open` for default-expanded). They are tap-to-expand natively, so
 "collapsed" is still fully readable on demand.
 
-Per-chat policy lives in `store.json` (`InternalsSettings`, via `ChatStore`):
+Per-chat policy lives in `store.json` (`VerbositySettings`, via `ChatStore`):
 - `thinking` / `tools`: `off` | `collapsed` | `expanded` (defaults `collapsed`).
-- `layout`: `per-step` (default) | `per-section` | `combined` | `minimal`.
+- `layout`: `per-step` | `per-section` | `combined` | `minimal` (default).
   - `per-step`: one `details` per opencode step (`splitSteps` on
     `step-start`/`step-finish`), holding that step's reasoning + tool calls;
     answer text follows each step.
@@ -368,9 +368,9 @@ Per-chat policy lives in `store.json` (`InternalsSettings`, via `ChatStore`):
   - `combined`: one `💭 Thinking` + one `⚙ Tools` above the answer.
   - `minimal`: no collapse, no `details` at all: one `💭`/`⚙` icon line
     followed by answer text. Streaming **splits this into multiple messages**
-    (`minimal.ts`: `splitMinimalSegments`/`minimalSegmentBlocks`): internals
+    (`minimal.ts`: `splitMinimalSegments`/`minimalSegmentBlocks`): verbosity
     accumulate in a segment, and the moment user-visible text is finalized by
-    later internals (a reasoning/tool event, step boundary, new text part, or
+    later verbosity (a reasoning/tool event, step boundary, new text part, or
     an ask) the segment ships as its own permanent message and the draft
     restarts at a fresh spinner (`flushMinimalSegment` in `#freeText`). Flushed
     part ids live in `minimalFlushed` so both the live draft and the final
@@ -379,9 +379,9 @@ Per-chat policy lives in `store.json` (`InternalsSettings`, via `ChatStore`):
 - Tool bodies are `input` + `output` (JSON-stringified), head+tail capped at
   `MAX_TOOL_CHARS` (1500).
 
-UI: `/settings → 🔎 Internals` (rich menu). Four **presets**: Simple
-(off/off), Minimal (collapsed/collapsed/minimal), Detailed
-(collapsed/collapsed/per-step, default), Debug (expanded/expanded/per-section).
+UI: `/settings → 🔎 Verbosity` (rich menu). Four **presets**: Simple
+(off/off), Minimal (collapsed/collapsed/minimal, default), Detailed
+(collapsed/collapsed/per-step), Debug (expanded/expanded/per-section).
 They set all three at once (active preset shown green); each row also cycles
 independently. HTML fallback uses `> ` blockquotes
 (not collapsible).
@@ -884,7 +884,7 @@ is not.
 | `force_reply` | pair-code + bare `/use` prompts | reply bar forced on the user |
 | `can_stop` + `stopped_message_generation` | `#freeText` | native stop button on streaming drafts |
 | `details` blocks (thinking/tools) | `buildRich` | collapsible per-part; per-step/per-section/combined; auto-rollup |
-| Internals toggles | `/settings → 🔎 Internals` | presets Simple/Detailed/Debug + cyclers, per-chat in `store.json` |
+| Verbosity toggles | `/settings → 🔎 Verbosity` | presets Simple/Detailed/Debug + cyclers, per-chat in `store.json` |
 
 `/remind <5s to 7d> <what>` schedules a silent (`disable_notification`) nudge via
 an **in-process** `setTimeout` (`timer.unref()` so it never keeps the process

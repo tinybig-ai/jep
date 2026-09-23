@@ -4,7 +4,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ChatStore } from "../src/clients/telegram/store.ts"
@@ -32,6 +32,22 @@ test("queued prompts survive a restart, in order", () => {
     )
     assert.deepEqual(b.pending(1)[1]!.filePaths, ["/tmp/x.png"], "attachments come back too")
     assert.deepEqual(b.pending(2), [], "and a chat with nothing waiting has nothing")
+  })
+})
+
+test("verbosity is minimal by default", () => {
+  withStore((file) => {
+    const s = ChatStore.load(file).verbosity(7)
+    assert.equal(s.layout, "minimal")
+    assert.equal(s.thinking, "collapsed")
+    assert.equal(s.tools, "collapsed")
+  })
+})
+
+test("a store written before the rename keeps its tuning", () => {
+  withStore((file) => {
+    writeFileSync(file, JSON.stringify({ internals: { "7": { thinking: "off", tools: "expanded", layout: "combined" } } }))
+    assert.deepEqual(ChatStore.load(file).verbosity(7), { thinking: "off", tools: "expanded", layout: "combined" })
   })
 })
 

@@ -1,7 +1,7 @@
 // telegram/minimal.ts — the minimal-layout segmentation. The deadline: a
 // "minimal" turn used to flatten into [all icons][all text], which hid the
-// turn's chronology. Now internals accumulate in a segment, and the text that
-// finalizes it ships as its own message; the next internals start a fresh
+// turn's chronology. Now verbosity accumulate in a segment, and the text that
+// finalizes it ships as its own message; the next verbosity start a fresh
 // segment. This test sticks to the pure split blocks.
 
 import { test } from "node:test"
@@ -27,7 +27,7 @@ test("pure text is one segment carrying no icons", () => {
   assert.equal(texts(segs[0]!), "hello world")
 })
 
-test("internals before text ride the same segment", () => {
+test("verbosity before text ride the same segment", () => {
   const segs = splitMinimalSegments([reasoning("hmm"), tool("read"), text("found it"), text("!")])
   assert.equal(segs.length, 1)
   assert.equal(segs[0]!.icons.length, 2)

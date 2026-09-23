@@ -82,7 +82,7 @@ Once paired, `/pair_status` shows the owner and the current code.
 | `/find <text>` | search titles and recent transcripts |
 | `/usage` (alias `/cost`) | spend by the harness itself: tokens, model, USD |
 | `/remind <5s to 7d> <what>` | a silent nudge (recurring: `every <d>`) |
-| `/settings` | rich menu: model, harness, workspace, internals, MCP, skills |
+| `/settings` | rich menu: model, harness, workspace, verbosity, MCP, skills |
 | `/ws <name>` | switch workspace |
 | `/cancel` | back out of a pending prompt |
 | `/help` | the command list |

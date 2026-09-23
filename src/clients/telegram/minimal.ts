@@ -3,9 +3,9 @@
 // into [all icons][all text] — destroying the chronology of "I checked this,
 // here's what I found, now I'm running that".
 //
-// The fix is multiple messages: a segment is the internals accumulated since
+// The fix is multiple messages: a segment is the verbosity accumulated since
 // the last piece of user-visible text, plus that text. When a text part is
-// finalized the segment ships as its own message, and the next internals
+// finalized the segment ships as its own message, and the next verbosity
 // accumulate into a fresh one.
 
 import type { Part, ReasoningPart, TextPart, ToolCallPart } from "../../core/types.ts"
@@ -42,7 +42,7 @@ export function splitMinimalSegments(parts: Part[]): MinimalSegment[] {
 }
 
 export interface MinimalRenderers {
-  /** whether thinking shows at all (the chat's Internals setting) */
+  /** whether thinking shows at all (the chat's Verbosity setting) */
   thinking: boolean
   tools: boolean
   /** duration for a reasoning part — frozen when known, live estimate otherwise */
