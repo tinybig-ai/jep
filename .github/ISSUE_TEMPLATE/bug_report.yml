@@ -1,0 +1,65 @@
+name: Bug report
+description: Something broke, or behaved differently than you expected.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **Redact tokens, chat ids, and credentials** before pasting anything.
+        For a security issue, use [SECURITY.md](../blob/main/SECURITY.md) — not a public issue.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you actually see?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. …
+        2. …
+        3. …
+    validations:
+      required: true
+  - type: dropdown
+    id: client
+    attributes:
+      label: Which client?
+      options:
+        - Telegram
+        - Android
+        - Gateway (or other)
+        - Daemon only (no client)
+    validations:
+      required: true
+  - type: input
+    id: harness
+    attributes:
+      label: Harness and version
+      placeholder: opencode 1.18 / codex 0.x / claude 2.x / n-a
+    validations:
+      required: false
+  - type: input
+    id: environment
+    attributes:
+      label: OS and Node version
+      placeholder: macOS 15, Node 26.0.0
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or output
+      description: From `~/Library/Logs/jep-tg.log` or the console. Redact secrets.
+      render: shell
+    validations:
+      required: false
