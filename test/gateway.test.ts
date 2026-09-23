@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 import { startGateway, type GatewayHandle } from "../src/clients/gateway/index.ts"
 import type { HarnessAdapter } from "../src/core/ports.ts"
 import type { DomainEvent, Message, SessionSummary } from "../src/core/types.ts"
+import { TurnAbortedError } from "../src/core/types.ts"
 import { JEP_CONTEXT, JEP_CONTEXT_FOOTER } from "../src/core/transcript.ts"
 import { existsSync, mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -82,6 +83,137 @@ async function pair(base: string, code: string): Promise<string> {
   const { token } = (await res.json()) as { token: string }
   return token
 }
+
+// A turn that stays in flight until released or aborted, and an event feed a
+// test can push into — enough to exercise the queue, steering and force.
+function stallable() {
+  const releases = new Map<string, () => void>()
+  const pendingEvents: DomainEvent[] = []
+  let wakeFeed: (() => void) | null = null
+  const calls: string[] = []
+  const base = fakeAdapter()
+  const adapter: HarnessAdapter = {
+    ...base,
+    async prompt(_id, text, opts) {
+      calls.push(text)
+      // only the turn that is meant to stay in flight waits; the rest answer at once
+      if (text === "first") {
+        await new Promise<void>((resolve, reject) => {
+          releases.set(text, resolve)
+          opts?.signal?.addEventListener("abort", () => reject(new TurnAbortedError()), { once: true })
+        })
+      }
+      return {
+        id: `m-${text}`,
+        sessionID: "s1",
+        role: "assistant",
+        time: 2,
+        parts: [{ kind: "text", text: `echo: ${text}` }],
+      } as Message
+    },
+    async *events(signal?: AbortSignal) {
+      while (!signal?.aborted) {
+        if (pendingEvents.length === 0) {
+          await Promise.race([
+            new Promise<void>((r) => { wakeFeed = r }),
+            new Promise<void>((r) => signal?.addEventListener("abort", () => r(), { once: true })),
+          ])
+        }
+        if (signal?.aborted) return
+        while (pendingEvents.length) yield pendingEvents.shift()!
+      }
+    },
+  }
+  return {
+    adapter,
+    calls,
+    release: (text: string) => releases.get(text)?.(),
+    feed: (e: DomainEvent) => {
+      pendingEvents.push(e)
+      wakeFeed?.()
+      wakeFeed = null
+    },
+  }
+}
+
+async function startWith(a: ReturnType<typeof stallable>): Promise<{ base: string; headers: Record<string, string>; g: GatewayHandle }> {
+  const g = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter: a.adapter }],
+    dataHome: mkdtempSync(join(tmpdir(), "gw-q-")),
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+  })
+  const base = `http://127.0.0.1:${g.port}`
+  const token = await pair(base, "TESTCODE")
+  return { base, headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, g }
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+const textOf = (j: { message?: Message }) => (j.message?.parts[0] as { text?: string } | undefined)?.text
+
+test("a prompt sent mid-turn is queued, not refused, and runs when the turn ends", async () => {
+  const a = stallable()
+  const { base, headers, g } = await startWith(a)
+  try {
+    const post = (text: string, force = false) =>
+      fetch(`${base}/prompt`, { method: "POST", headers, body: JSON.stringify({ id: "s1", text, force }) })
+    const first = post("first")
+    await sleep(50)
+    const second = post("second")
+    await sleep(50)
+    assert.deepEqual(a.calls, ["first"], "the second waits rather than starting or being refused")
+    a.release("first")
+    const j1 = (await (await first).json()) as { message?: Message }
+    const j2 = (await (await second).json()) as { message?: Message }
+    assert.equal(textOf(j1), "echo: first")
+    assert.equal(textOf(j2), "echo: second")
+    assert.deepEqual(a.calls, ["first", "second"])
+  } finally {
+    await g.close()
+  }
+})
+
+test("a waiting prompt steers in at the next step boundary", async () => {
+  const a = stallable()
+  const { base, headers, g } = await startWith(a)
+  try {
+    const post = (text: string) =>
+      fetch(`${base}/prompt`, { method: "POST", headers, body: JSON.stringify({ id: "s1", text }) })
+    const first = post("first")
+    await sleep(50)
+    const second = post("second")
+    await sleep(50)
+    // the running turn reaches a tool boundary with something waiting: superseded
+    a.feed({ type: "part.updated", sessionID: "s1", messageID: "m1", partID: "p1", partType: "step-finish", part: { kind: "other", nativeType: "step-finish" } } as DomainEvent)
+    const j1 = (await (await first).json()) as { aborted?: boolean }
+    assert.equal(j1.aborted, true, "the running turn is stopped")
+    a.release("second")
+    const j2 = (await (await second).json()) as { message?: Message }
+    assert.equal(textOf(j2), "echo: second")
+  } finally {
+    await g.close()
+  }
+})
+
+test("a forced prompt aborts the running turn and runs now", async () => {
+  const a = stallable()
+  const { base, headers, g } = await startWith(a)
+  try {
+    const post = (text: string, force = false) =>
+      fetch(`${base}/prompt`, { method: "POST", headers, body: JSON.stringify({ id: "s1", text, force }) })
+    const first = post("first")
+    await sleep(50)
+    const forced = post("second", true)
+    const j1 = (await (await first).json()) as { aborted?: boolean }
+    assert.equal(j1.aborted, true)
+    a.release("second")
+    const j2 = (await (await forced).json()) as { message?: Message }
+    assert.equal(textOf(j2), "echo: second")
+  } finally {
+    await g.close()
+  }
+})
 
 test("pair gates: wrong code rejected, right code yields a working token", async () => {
   const { gw } = spawnGateway()

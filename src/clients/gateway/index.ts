@@ -431,6 +431,12 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           // the turn is over and the record is settled: drop the snapshot so the
           // next read is the finished one
           if (evt.type === "session.idle" || evt.type === "turn.aborted") msgCache.delete(evt.sessionID)
+          // steer: a prompt waiting behind this turn is folded in at the next tool
+          // boundary — abort here, and the runner starts the waiting prompt
+          if (evt.type === "part.updated" && evt.part?.kind === "other" && evt.part.nativeType === "step-finish") {
+            const st = turns.get(evt.sessionID)
+            if (st?.running && st.waiting.length > 0) st.signal?.abort()
+          }
           broadcast(evt)
           void wake(evt)
         }
@@ -469,9 +475,61 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     return null
   }
 
-  // one turn at a time per session, seen across every device and Telegram:
-  // the harness serializes anyway, but a clean 409 beats a hung phone
-  const active = new Set<string>()
+  // One turn in flight per session, plus whatever waits behind it. The queue is
+  // what makes "send while it works" real: a prompt that arrives mid-turn waits,
+  // and is steered in at the next tool boundary — or forced, when the client asks
+  // to abort the running turn and run it now. This mirrors the Telegram client's
+  // own turn queue.
+  type TurnResult = { status: number; message?: Message; aborted?: boolean; error?: string }
+  type PendingTurn = {
+    text: string
+    filePaths: string[]
+    model?: { providerID: string; modelID: string }
+    agent?: string
+    resolve: (r: TurnResult) => void
+  }
+  type TurnState = { running: PendingTurn | null; waiting: PendingTurn[]; signal?: AbortController }
+  const turns = new Map<string, TurnState>()
+  const isActive = (id: string): boolean => turns.get(id)?.running != null
+
+  async function runNext(id: string): Promise<void> {
+    const st = turns.get(id)
+    if (!st || st.running) return
+    const next = st.waiting.shift()
+    if (!next) {
+      turns.delete(id)
+      return
+    }
+    const adapter = await ensureListed(id)
+    if (!adapter) {
+      next.resolve({ status: 404, error: "no such session" })
+      void runNext(id)
+      return
+    }
+    st.running = next
+    const ac = new AbortController()
+    st.signal = ac
+    try {
+      const message = await adapter.prompt(id, next.text, {
+        timeoutMs: 0,
+        filePaths: next.filePaths,
+        ...(next.model ? { model: next.model } : {}),
+        ...(next.agent ? { agent: next.agent } : {}),
+        signal: ac.signal,
+      })
+      next.resolve({ status: 200, message })
+    } catch (err) {
+      // a stop is not a failure: it is the turn ending because somebody asked
+      if (isAborted(err)) next.resolve({ status: 200, aborted: true })
+      else next.resolve({ status: 502, error: String((err as Error)?.message ?? err) })
+    } finally {
+      st.running = null
+      st.signal = undefined
+      // the turn wrote to the record; a snapshot from during it must not outlive it
+      msgCache.delete(id)
+      void runNext(id)
+    }
+  }
 
   const tokenOf = (req: IncomingMessage, url: URL): string | null => {
     const head = req.headers.authorization ?? ""
@@ -590,7 +648,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
             // conversation cannot move between harnesses after it exists.
             // `active` = a turn is in flight for it right now (a reply streaming,
             // a tool running) — the phone shows a live mark on the row
-            items.push({ ...s, title: overridden ?? s.title, adapter: name, harness: adapter.id, active: active.has(s.id) })
+            items.push({ ...s, title: overridden ?? s.title, adapter: name, harness: adapter.id, active: isActive(s.id) })
           }
         }
         items.sort((x, y) => y.updatedAt - x.updatedAt)
@@ -1021,36 +1079,29 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const asked = str("text") ?? ""
         if (!asked && filePaths.length === 0) return json(res, 400, { error: "text required" })
         const text = asked || "see the attached file"
-        if (active.has(id)) return json(res, 409, { error: "busy" })
         // this conversation's chosen model, if the phone set one in Settings
         const ref = models.get(id)
         const [providerID = "", modelID = ""] = ref ? ref.split("/") : []
         const model = providerID && modelID ? { providerID, modelID } : undefined
         const agent = agents.get(id)
-        active.add(id)
-        try {
-          const message = await adapter.prompt(id, text, {
-            // no absolute deadline. A real turn can run far longer than the
-            // adapter's default ceiling, and that ceiling was severing Android
-            // turns mid-work with no client involved (the bot opts out for the
-            // same reason). A stuck turn is the client's to stop.
-            timeoutMs: 0,
-            filePaths,
-            ...(model ? { model } : {}),
-            ...(agent ? { agent } : {}),
-          })
-          return json(res, 200, { message })
-        } catch (err) {
-          // a stop is not a server failure: the turn ended because somebody
-          // asked it to, and the client should read it as exactly that
-          if (isAborted(err)) return json(res, 200, { aborted: true })
-          return json(res, 502, { error: String((err as Error)?.message ?? err) })
-        } finally {
-          active.delete(id)
-          // the turn wrote to the record; a snapshot from during it must not
-          // outlive it
-          msgCache.delete(id)
+        let settle!: (r: TurnResult) => void
+        const done = new Promise<TurnResult>((r) => { settle = r })
+        const pending: PendingTurn = { text, filePaths, model, agent, resolve: settle }
+        const st = turns.get(id) ?? { running: null, waiting: [] }
+        turns.set(id, st)
+        if (b.force === true) {
+          // force: run this next, and if a turn is in flight, abort it so it can
+          st.waiting.unshift(pending)
+          st.signal?.abort()
+        } else {
+          // queue normally: the pump steers it in at the next tool boundary
+          st.waiting.push(pending)
         }
+        void runNext(id)
+        const result = await done
+        if (result.message) return json(res, 200, { message: result.message })
+        if (result.aborted) return json(res, 200, { aborted: true })
+        return json(res, result.status, { error: result.error ?? "prompt failed" })
       }
 
       if (path === "/stop") {
