@@ -1507,7 +1507,9 @@ private fun AskBar(ask: dev.jep.client.domain.model.Ask, vm: ChatViewModel) {
 private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: () -> Unit) {
     val state by vm.state.collectAsState()
     val draft = remember { mutableStateOf("") }
-    val busy = state.sending || state.live != null
+    // Stop follows the turn THIS client started. Keying it off a live row
+    // instead let a stale row turn a Send tap into a Stop.
+    val busy = state.sending
 
     val context = LocalContext.current
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->

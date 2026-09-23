@@ -197,15 +197,21 @@ class ChatViewModel(
             is ChatEvent.Failed -> _state.update {
                 it.copy(failure = evt.error, live = null, sending = false)
             }
-            // a stop ends the turn quietly: clear the live row (or it dangles
-            // as a spinner forever) and say nothing
+            // a stop ends the turn: clear the live row (or it dangles as a
+            // spinner forever) and say why, since the stop can come from the
+            // watchdog or the harness and not only from this screen's button
             is ChatEvent.Aborted -> _state.update {
-                it.copy(failure = null, live = null, sending = false)
+                it.copy(failure = null, live = null, sending = false, notice = "the turn was stopped")
             }
-            // the turn finished while this chat is open: it has been seen
+            // the turn finished while this chat is open: it has been seen.
+            // session.idle is the turn ending, and prompt() (the blocking POST)
+            // can hang even after the model is done (readTimeout is 0), so
+            // without clearing here the Stop button outlives the turn and eats
+            // the next Send as another stop.
             is ChatEvent.Quiet -> {
                 onRead()
                 refresh()
+                _state.update { it.copy(sending = false, live = null) }
             }
             is ChatEvent.Lost -> _state.update { it.copy(lost = true) }
             is ChatEvent.MessageSeen -> {
