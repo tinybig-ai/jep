@@ -20,8 +20,16 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
       - uses: gradle/actions/setup-gradle@v4
+      # The runner image already ships the Android SDK (ANDROID_HOME), so we
+      # skip android-actions/setup-android: it now tries to install the removed
+      # legacy "tools" package and fails. Accepting licenses lets AGP download a
+      # platform the image happens to lack.
+      - name: Accept Android SDK licenses
+        run: |
+          sdk="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          sm=$(ls "$sdk"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)
+          if [ -n "$sm" ]; then yes | "$sm" --licenses >/dev/null 2>&1 || true; fi
       # -Dorg.gradle.java.home wins over android/gradle.properties, which pins
       # the maintainer's local Android Studio JDK and would not exist here.
       - name: Assemble the debug APK
