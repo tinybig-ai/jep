@@ -3,7 +3,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { clipTitle, fmtCount, fmtDuration, fmtHome, fmtWsPath, timeAgo } from "../src/telegram/fmt.ts"
+import { clipTitle, fmtCount, fmtDuration, fmtHome, fmtWsPath, timeAgo } from "../src/clients/telegram/fmt.ts"
 
 test("durations pick one unit and round", () => {
   assert.equal(fmtDuration(900), "1s")

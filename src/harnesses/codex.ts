@@ -798,7 +798,7 @@ function rolloutUsage(u: any): Message["tokens"] {
 //
 //   [external_agent_tool_call: Bash]
 //   description: Search for draftMode usage in bot.ts
-//   command: grep -n "draftMode" src/telegram/bot.ts
+//   command: grep -n "draftMode" src/clients/telegram/bot.ts
 //   [/external_agent_tool_call]
 //
 // followed by the matching

@@ -118,7 +118,7 @@ export interface Message {
   // the turn failed harness-side (bad credentials, provider refusal, quota).
   // The harness reports these on the message rather than as a failed request,
   // so without this a failed turn is indistinguishable from an empty one.
-  error?: { name: string; message: string }
+  error?: HarnessError
 }
 
 // one file's accumulated change within a session, as reported by the harness
@@ -173,6 +173,21 @@ export interface SkillDirs {
   userDirs: string[]
   projectDirs: string[]
   toggleable: boolean
+}
+
+// A failure a harness names for a turn. The core models it once so every
+// adapter reports the same shape (and carries the provider/model the harness
+// knew) and every client renders it identically. Only `message` is guaranteed;
+// the rest is present where the harness knows it.
+export interface HarnessError {
+  name?: string
+  message: string
+  /** the failing endpoint's provider id, e.g. "opencode-go" */
+  provider?: string
+  /** the model that was running, when the harness names it */
+  model?: string
+  /** HTTP status, when the failure carried one (a 429, a 5xx) */
+  status?: number
 }
 
 export type DomainEvent =

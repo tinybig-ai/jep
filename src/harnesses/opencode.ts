@@ -5,7 +5,7 @@ import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { Agent } from "undici"
 import type { HarnessAdapter, ModelRef, ModelCaps } from "../core/ports.ts"
-import type { AskOption, DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionSummary, SkillDirs } from "../core/types.ts"
+import type { AskOption, DomainEvent, FileDiff, HarnessError, Message, Part, ProjectSummary, SessionSummary, SkillDirs } from "../core/types.ts"
 import { TurnAbortedError } from "../core/types.ts"
 import { parseOpencodeLogError } from "./opencode-log.ts"
 const OPENCODE_BIN = process.env.OPENCODE_BIN ?? "opencode"
@@ -169,13 +169,23 @@ function mapMessage(info: any, parts: any[] | undefined, workspace: string): Mes
 // answers the prompt POST with 200, so a refusal looks exactly like an empty
 // reply unless this is carried through. The useful text is nested under
 // data.message; name alone ("APIError") says nothing.
-function mapError(e: any): { name: string; message: string } {
-  const name = typeof e?.name === "string" ? e.name : "error"
+function mapError(e: any): HarnessError {
+  const name = typeof e?.name === "string" ? e.name : undefined
   const message =
     (typeof e?.data?.message === "string" && e.data.message) ||
     (typeof e?.message === "string" && e.message) ||
-    name
-  return { name, message }
+    name ||
+    "error"
+  const provider = typeof e?.data?.providerID === "string" ? e.data.providerID : undefined
+  const model = typeof e?.data?.modelID === "string" ? e.data.modelID : undefined
+  const status = typeof e?.data?.statusCode === "number" ? e.data.statusCode : undefined
+  return {
+    ...(name ? { name } : {}),
+    message,
+    ...(provider ? { provider } : {}),
+    ...(model ? { model } : {}),
+    ...(status ? { status } : {}),
+  }
 }
 
 export class OpenCodeAdapter implements HarnessAdapter {
@@ -196,13 +206,13 @@ export class OpenCodeAdapter implements HarnessAdapter {
   // own stderr, keyed by native session id. opencode logs these but never
   // emits a session.error for them, so without this a rate-limited turn just
   // goes silent and the watchdog can only say "no activity".
-  #providerErrors: Map<string, { message: string; at: number }>
+  #providerErrors: Map<string, { error: HarnessError; at: number }>
 
   constructor(
     child: ChildProcess,
     workspace: string,
     endpoint: string,
-    providerErrors: Map<string, { message: string; at: number }> = new Map(),
+    providerErrors: Map<string, { error: HarnessError; at: number }> = new Map(),
   ) {
     this.#child = child
     this.workspace = workspace
@@ -505,8 +515,8 @@ export class OpenCodeAdapter implements HarnessAdapter {
   // a session.error event (see opencode-log.ts). Cleared at the start of every
   // turn, so a failure can only ever explain the turn it happened in — a stale
   // 429 never gets blamed for an unrelated stall minutes later.
-  providerError(sessionID: string): string | null {
-    return this.#providerErrors.get(toNativeId(sessionID))?.message ?? null
+  providerError(sessionID: string): HarnessError | null {
+    return this.#providerErrors.get(toNativeId(sessionID))?.error ?? null
   }
 
   // opencode's own three answers, passed straight through: "always" is a
@@ -769,12 +779,12 @@ export async function startOpenCodeServer(workspace: string, opts?: { dataHome?:
   // `--print-logs` puts every level on stderr, so forward only what's worth a
   // line in our log (WARN/ERROR) and keep the provider failures on the side,
   // where a stalled turn can ask for them by session id.
-  const providerErrors = new Map<string, { message: string; at: number }>()
+  const providerErrors = new Map<string, { error: HarnessError; at: number }>()
   const forwardLine = (chunk: Buffer) => {
     for (const line of chunk.toString().split("\n")) {
       if (!line.trim()) continue
       const err = parseOpencodeLogError(line)
-      if (err) providerErrors.set(err.sessionID, { message: err.message, at: Date.now() })
+      if (err) providerErrors.set(err.sessionID, { error: err.error, at: Date.now() })
       if (err || /\blevel=(ERROR|WARN)\b/.test(line)) console.error(`[opencode:${tag}] ${line}`)
     }
   }

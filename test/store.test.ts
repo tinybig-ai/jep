@@ -7,7 +7,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { ChatStore } from "../src/telegram/store.ts"
+import { ChatStore } from "../src/clients/telegram/store.ts"
 
 function withStore(fn: (file: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), "jep-store-"))

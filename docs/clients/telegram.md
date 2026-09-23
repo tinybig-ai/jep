@@ -27,25 +27,34 @@ Two things, then you're paired.
 export JEP_TG_TOKEN=123456:ABC-DEF...   # from @BotFather
 export JEP_WORKSPACES="$HOME/your-project"
 
-npm run tg
+npm start
 ```
 
 > On macOS, `sh scripts/install.sh` installs it as a **launchd daemon** that
 > survives reboots and crashes; see [docs/PROCESSES.md](../PROCESSES.md).
-> For a quick dev loop, `npm run tg` is all you need.
+> For a quick dev loop, `npm start` is all you need.
 
 ### 2. Pair your chat
 
-Message the bot. It replies with a **pairing code**. Send
+The daemon mints a one-time **pairing code** at boot (pin your own with
+`JEP_TG_PAIR_CODE`). Read the current code any time with:
+
+```sh
+npm run pair
+```
+
+Then, in your chat with the bot, send:
 
 ```
 /pair <code>
 ```
 
-to lock the bot to that chat, then just text it. Plain text is a prompt. The
-owner is persisted, so restarts keep ownership (no re-pairing).
+The bot locks to that chat, and plain text from then on is a prompt. An
+unpaired chat is never told the code (that would leak it), so `/pair` on its own
+just prompts you for it. The code is single-use: a fresh one is minted the
+moment it works. The owner is persisted, so restarts keep ownership.
 
-Want to check who is paired? `/pair_status` shows the owner and code.
+Once paired, `/pair_status` shows the owner and the current code.
 
 ## Commands
 

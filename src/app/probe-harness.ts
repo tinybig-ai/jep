@@ -1,8 +1,8 @@
 import { mkdtempSync, mkdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { buildHarnesses } from "./core/harnesses.ts"
-import { runComplianceSuite } from "./core/compliance.ts"
+import { buildHarnesses } from "../core/harnesses.ts"
+import { runComplianceSuite } from "../core/compliance.ts"
 
 /**
  * Runs the port compliance suite against a harness by id:

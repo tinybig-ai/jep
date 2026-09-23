@@ -2,6 +2,7 @@ import type {
   AskRequest,
   DomainEvent,
   FileDiff,
+  HarnessError,
   Message,
   ProjectSummary,
   SessionHold,
@@ -67,7 +68,7 @@ export interface HarnessAdapter {
   /** The last provider failure the harness named for this session (a rate
    * limit, a usage cap) when it never surfaced as a normal event — so a turn
    * that stalled in silence can still say why. Null when nothing is pending. */
-  providerError?(sessionID: string): string | null
+  providerError?(sessionID: string): HarnessError | null
   /** where this harness looks for skills, and whether its SKILL.md frontmatter
    * honors a disable flag. Optional: adapters that don't declare it get the
    * shared convention table in core/skills.ts, so a new harness works before

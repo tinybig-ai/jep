@@ -34,7 +34,7 @@ watchdog=$!
 
 if wait "$probe" 2>/dev/null; then
   kill "$watchdog" 2>/dev/null || true
-  exec "$node" --experimental-strip-types "$root/src/tg.ts"
+  exec "$node" --experimental-strip-types "$root/src/app/tg.ts"
 fi
 
 cat >&2 <<EOF

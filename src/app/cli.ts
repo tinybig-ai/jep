@@ -3,11 +3,11 @@ import { stdin as input, stdout as output, stderr } from "node:process"
 import { basename, join } from "node:path"
 import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { startOpenCodeServer } from "./adapters/opencode.ts"
-import { runComplianceSuite, assertAdapterImplements } from "./core/compliance.ts"
-import type { HarnessAdapter } from "./core/ports.ts"
+import { startOpenCodeServer } from "../harnesses/opencode.ts"
+import { runComplianceSuite, assertAdapterImplements } from "../core/compliance.ts"
+import type { HarnessAdapter } from "../core/ports.ts"
 
-const FIXTURE = join(import.meta.dirname, "..", "fixture")
+const FIXTURE = join(import.meta.dirname, "..", "..", "fixture")
 const DEFAULT_WORKSPACES = ["workspace-alpha", "workspace-beta"].map((n) => join(FIXTURE, n))
 const DATA_HOME = process.env.JEP_DATA_HOME ?? mkdtempSync(join(tmpdir(), "jep-cli-"))
 

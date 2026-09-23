@@ -29,11 +29,12 @@ export JEP_WORKSPACES="$HOME/your-project"
 export JEP_GW_PORT=8080            # the port the app will reach
 export JEP_GW_PAIR_CODE=pickme     # 1st unlock; a code also prints at boot
 
-npm run tg
+npm start
 ```
 
 The gateway binds 0.0.0.0, so a phone reaches it over Tailscale, a VPN, or
-the LAN. See [docs/GATEWAY.md](../GATEWAY.md) for every endpoint.
+the LAN. The current pairing code is also readable any time with `npm run pair`
+(see the [gateway docs](../GATEWAY.md) for every endpoint).
 
 ### 2. Build the app
 

@@ -8,7 +8,7 @@ it.
 
 `src/core/ports.ts` defines the one surface every harness normalizes to:
 `HarnessAdapter` (id, endpoint, health, session CRUD, prompt, messages, abort,
-approvals, events, optional `models()`, close). `src/adapters/opencode.ts` is
+approvals, events, optional `models()`, close). `src/harnesses/opencode.ts` is
 currently the only real adapter, but the bot (`bot.ts`) only ever sees the
 port type, never `opencode serve` specifics.
 

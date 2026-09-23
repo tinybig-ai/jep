@@ -107,12 +107,12 @@ npm install
 # point at a workspace (defaults to the current directory)
 export JEP_WORKSPACES="$HOME/your-project"
 
-npm run tg
+npm start
 ```
 
 > On macOS, `sh scripts/install.sh` installs it as a **launchd daemon** that
 > survives reboots, crashes and full-disk-access quirks. See
-> [docs/PROCESSES.md](docs/PROCESSES.md). For a quick dev loop, `npm run tg`
+> [docs/PROCESSES.md](docs/PROCESSES.md). For a quick dev loop, `npm start`
 > is all you need.
 
 ### 3. Pick a client
@@ -214,7 +214,7 @@ Implement `HarnessAdapter` (`src/core/ports.ts`) for your favorite agent, it
 doesn't need to run over HTTP, or even be a server.
 
 ```ts
-// src/adapters/my-harness.ts
+// src/harnesses/my-harness.ts
 import type { HarnessAdapter } from "../core/ports.ts"
 import type { DomainEvent, Message, SessionSummary } from "../core/types.ts"
 
@@ -291,11 +291,13 @@ deploy rules: [docs/PROCESSES.md](docs/PROCESSES.md).
 
 ```
 src/
-  tg.ts                 composition root (wiring, env, gateway, update loop)
+  app/                  entry points (tg.ts composition root, probe, pair)
   core/                 hexagonal core: ports, types, compliance, pure satellites
-  adapters/             harness adapters: opencode · codex · claude · fcm
-  telegram/             the Telegram face: bot · api · renderers · store · pair
-  gateway.ts            HTTP/SSE transport for native clients
+  harnesses/            harness adapters: opencode · codex · claude
+  clients/
+    telegram/           the Telegram face: bot · api · renderers · store · pair
+    gateway/            HTTP/SSE transport for native clients
+  push/                 FCM push for the Android client
   importers/ · terminals/   cross-store session import · tmux shell
 android/                the native Android client (Kotlin · Jetpack Compose)
 docs/                   PHILOSOPHY · GATEWAY · PROCESSES · clients/

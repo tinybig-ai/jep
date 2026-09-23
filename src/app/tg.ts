@@ -3,18 +3,19 @@ import { readdir } from "node:fs/promises"
 import { join, sep } from "node:path"
 import { mkdtempSync } from "node:fs"
 import { tmpdir, homedir } from "node:os"
-import { buildHarnesses, DEFAULT_HARNESS } from "./core/harnesses.ts"
-import { opencodeSessionImport } from "./importers/opencode.ts"
-import { tmuxTerminal } from "./terminals/tmux.ts"
-import { assertAdapterImplements } from "./core/compliance.ts"
-import type { HarnessAdapter } from "./core/ports.ts"
-import { TelegramBot } from "./telegram/bot.ts"
-import { createTelegramApi, type ReplyMarkup, type TelegramApi, type TgUpdate } from "./telegram/api.ts"
-import { Pairing, newPairCode } from "./telegram/pair.ts"
-import { ChatStore } from "./telegram/store.ts"
-import { ReminderStore } from "./telegram/reminders.ts"
+import { buildHarnesses, DEFAULT_HARNESS } from "../core/harnesses.ts"
+import { opencodeSessionImport } from "../importers/opencode.ts"
+import { tmuxTerminal } from "../terminals/tmux.ts"
+import { assertAdapterImplements } from "../core/compliance.ts"
+import type { HarnessAdapter } from "../core/ports.ts"
+import { TelegramBot } from "../clients/telegram/bot.ts"
+import { createTelegramApi, type ReplyMarkup, type TelegramApi, type TgUpdate } from "../clients/telegram/api.ts"
+import { Pairing, newPairCode } from "../clients/telegram/pair.ts"
+import { ChatStore } from "../clients/telegram/store.ts"
+import { ReminderStore } from "../clients/telegram/reminders.ts"
+import type { PairingAdmin } from "../core/pairing.ts"
 
-const FIXTURE = join(import.meta.dirname, "..", "fixture")
+const FIXTURE = join(import.meta.dirname, "..", "..", "fixture")
 const DEFAULT_WORKSPACES = ["workspace-alpha", "workspace-beta"].map((n) => join(FIXTURE, n))
 const DATA_HOME = process.env.JEP_DATA_HOME ?? mkdtempSync(join(tmpdir(), "jep-tg-"))
 
@@ -387,8 +388,9 @@ async function main() {
 
   // The native phone client's side door: same process, same workspace
   // servers, no Telegram involved. Optional — set JEP_GW_PORT to turn it on.
+  let gwPairingAdmin: PairingAdmin | undefined
   if (process.env.JEP_GW_PORT) {
-    const { startGateway } = await import("./gateway.ts")
+    const { startGateway } = await import("../clients/gateway/index.ts")
     const gw = await startGateway({
       adapters: () => workspaces.map((w) => ({ name: w.name, adapter: w.adapter })),
       harnesses: () => ({ ids: available.map((h) => h.id), default: DEFAULT_HARNESS }),
@@ -424,7 +426,7 @@ async function main() {
       // push, and the device falls back to its own connection.
       ...(process.env.JEP_FCM_KEY
         ? await (async () => {
-            const { FcmNotifier } = await import("./adapters/fcm.ts")
+            const { FcmNotifier } = await import("../push/fcm.ts")
             const notifier = await FcmNotifier.fromFile(process.env.JEP_FCM_KEY!)
             console.error(`[gw] push enabled (fcm project ${notifier.projectID})`)
             return { push: notifier }
@@ -450,8 +452,25 @@ async function main() {
       pairCode: process.env.JEP_GW_PAIR_CODE,
     })
     console.error(`gateway: POST /pair {"code":…} on http://<tailscale-or-lan-ip>:${process.env.JEP_GW_PORT}`)
+    gwPairingAdmin = gw.pairingAdmin
     gwClose = () => gw.close()
   }
+
+  // Pairing state is a per-client concern, but reading it back should not be:
+  // each client reports through the admin port and the daemon aggregates into
+  // one file, so `npm run pair` never learns a client's private format.
+  const pairingAdmins: PairingAdmin[] = [pairing, ...(gwPairingAdmin ? [gwPairingAdmin] : [])]
+  const writePairingStatus = (): void => {
+    try {
+      mkdirSync(DATA_HOME, { recursive: true })
+      writeFileSync(join(DATA_HOME, "pairing-status.json"), JSON.stringify(pairingAdmins.map((a) => a.status()), null, 2))
+    } catch (err) {
+      console.error(`[pair] couldn't write pairing-status.json: ${(err as Error)?.message ?? err}`)
+    }
+  }
+  pairing.onChange = writePairingStatus
+  if (gwPairingAdmin) gwPairingAdmin.onChange = writePairingStatus
+  writePairingStatus()
 
   // One-shot at boot, and boot is exactly when the network is least likely to
   // be up: the machine has often just woken, which is what kills the long poll

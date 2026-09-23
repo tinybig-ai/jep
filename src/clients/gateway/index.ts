@@ -9,14 +9,16 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join, resolve, sep } from "node:path"
-import type { HarnessAdapter, SessionImport, Terminal } from "./core/ports.ts"
-import { pushFor, UnregisteredToken, type PushNotifier } from "./core/push.ts"
-import { readClaudeMcp, readCodexMcp, readOpencodeMcp, writeClaudeProjectEnabled, writeCodexMcpEnabled, writeOpencodeMcpEnabled } from "./core/mcpconfig.ts"
-import { listSkills, skillDirsFor, writeSkillModelInvocation } from "./core/skills.ts"
-import type { DomainEvent, Message } from "./core/types.ts"
-import { isAborted } from "./core/types.ts"
-import { usageOf } from "./core/usage.ts"
-import { newPairCode } from "./telegram/pair.ts"
+import type { HarnessAdapter, SessionImport, Terminal } from "../../core/ports.ts"
+import type { PairingAdmin } from "../../core/pairing.ts"
+import { pushFor, UnregisteredToken, type PushNotifier } from "../../core/push.ts"
+import { readClaudeMcp, readCodexMcp, readOpencodeMcp, writeClaudeProjectEnabled, writeCodexMcpEnabled, writeOpencodeMcpEnabled } from "../../core/mcpconfig.ts"
+import { listSkills, skillDirsFor, writeSkillModelInvocation } from "../../core/skills.ts"
+import type { DomainEvent, Message } from "../../core/types.ts"
+import { isAborted } from "../../core/types.ts"
+import { usageOf } from "../../core/usage.ts"
+import { transcriptText } from "../../core/transcript.ts"
+import { newPairCode } from "../telegram/pair.ts"
 
 export interface GatewayDeps {
   // called lazily and repeatedly: the Telegram bot can spawn more workspace
@@ -58,6 +60,8 @@ export interface GatewayHandle {
   pairCode: string
   /** the port actually bound (useful when the caller passes 0) */
   port: number
+  /** this client's pairing surface, for the daemon's aggregate view */
+  pairingAdmin: PairingAdmin
 }
 
 const TOKEN_FILE = "gateway-tokens.json"
@@ -73,6 +77,18 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 const sha256 = (s: string): Buffer => createHash("sha256").update(s).digest()
 const same = (a: string, b: string): boolean => timingSafeEqual(sha256(a), sha256(b))
+
+// The harness stores jep's own context header on a session's first prompt, and
+// splices its machinery (system reminders, command envelopes, background
+// output) into user turns. None of it belongs on the phone: show what the
+// person actually typed, the same way the Telegram client strips it.
+function cleanForDisplay(m: Message): Message {
+  if (m.role !== "user") return m
+  const parts = m.parts
+    .map((p) => (p.kind === "text" ? { ...p, text: transcriptText(p.text) } : p))
+    .filter((p) => p.kind !== "text" || p.text.trim().length > 0)
+  return { ...m, parts }
+}
 
 async function loadTokens(dataHome: string): Promise<Map<string, number>> {
   try {
@@ -281,11 +297,25 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   // single-use, always: every successful pairing or terminal unlock spends the
   // code and mints a fresh one, so a code seen once is never valid again
   let pairCode = deps.pairCode ?? newPairCode()
+  let tokens = await loadTokens(deps.dataHome)
+  // this client's pairing surface, reported through the shared admin port so
+  // tooling never reads gateway files directly
+  const pairingAdmin: PairingAdmin = {
+    client: "gateway",
+    status: () => ({
+      client: "gateway",
+      label: "Gateway (Android, native)",
+      code: pairCode,
+      owner: null,
+      devices: tokens.size,
+      hint: "enter the address, then this code",
+    }),
+  }
   const spendPairCode = (usedFor: string): void => {
     pairCode = newPairCode()
+    pairingAdmin.onChange?.()
     console.error(`[gw] pairing code spent (${usedFor}) — new code: ${pairCode}`)
   }
-  let tokens = await loadTokens(deps.dataHome)
   const titles = await loadTitles(deps.dataHome)
   const archived = await loadArchived(deps.dataHome)
   const models = await loadModels(deps.dataHome)
@@ -909,7 +939,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           .filter((m) => !before || m.time < before)
           .sort((a, b) => a.time - b.time)
         const hasMore = limit > 0 && window.length > limit
-        const messages = limit > 0 ? window.slice(-limit) : window
+        const messages = (limit > 0 ? window.slice(-limit) : window)
+          .map(cleanForDisplay)
+          .filter((m) => m.role !== "user" || m.parts.length > 0)
         return json(res, 200, { messages, hasMore })
       }
 
@@ -976,6 +1008,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   return {
     pairCode,
     port: bound,
+    pairingAdmin,
     close: async () => {
       clearInterval(pumpTimer)
       clearInterval(pingTimer)

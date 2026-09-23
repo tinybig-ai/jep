@@ -4,7 +4,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { isCodexInjectedContext, externalAgentCall, externalAgentResult } from "../src/adapters/codex.ts"
+import { isCodexInjectedContext, externalAgentCall, externalAgentResult } from "../src/harnesses/codex.ts"
 
 const INJECTED = `<workspace_roots><root>/home/me/jep</root></workspace_roots>
 <permission_profile type="managed"><file_system type="restricted">...</file_system></permission_profile>

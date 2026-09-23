@@ -8,7 +8,7 @@
 // finalized the segment ships as its own message, and the next internals
 // accumulate into a fresh one.
 
-import type { Part, ReasoningPart, TextPart, ToolCallPart } from "../core/types.ts"
+import type { Part, ReasoningPart, TextPart, ToolCallPart } from "../../core/types.ts"
 import type { RichBlock } from "./rich.ts"
 import { mdToRich, closeStreamingTable } from "./rich.ts"
 import { fmtDuration } from "./fmt.ts"

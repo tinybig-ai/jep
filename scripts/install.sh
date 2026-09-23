@@ -28,7 +28,7 @@ token="${JEP_TG_TOKEN:-}"
 say() { printf '%s\n' "$*"; }
 die() { printf 'install: %s\n' "$*" >&2; exit 1; }
 
-[ "$(uname -s)" = "Darwin" ] || die "launchd is macOS-only; run src/tg.ts under your own supervisor instead"
+[ "$(uname -s)" = "Darwin" ] || die "launchd is macOS-only; run src/app/tg.ts under your own supervisor instead"
 [ -n "$node" ] || die "no node on PATH — set JEP_NODE=/path/to/node"
 case $("$node" -p 'process.versions.node.split(".")[0]') in
   1[0-9]|2[01]) die "node $("$node" -p 'process.versions.node') is too old for --experimental-strip-types (need 22+)" ;;
@@ -171,7 +171,7 @@ tail -n 6 "$log" 2>/dev/null || true
 say ""
 if launchctl print "gui/$uid/$label" >/dev/null 2>&1; then
   say "installed: $label is loaded (log: $log)"
-  say "reload after a code change:  pkill -9 -f 'src/tg.ts'"
+  say "reload after a code change:  pkill -9 -f 'src/app/tg.ts'"
 else
   die "the job did not stay loaded — see $log"
 fi

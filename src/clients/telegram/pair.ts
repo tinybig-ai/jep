@@ -1,9 +1,14 @@
 import { randomBytes } from "node:crypto"
 import { readFileSync, writeFileSync } from "node:fs"
+import type { PairingAdmin, PairingStatus } from "../../core/pairing.ts"
 
 export interface PairState {
   owner: number | null
   paired: number[]
+  // the code currently valid is persisted too, so a running daemon's code can
+  // be read back out of band (`npm run pair`) instead of only existing in
+  // memory. It changes on boot and on every rotation.
+  code?: string
 }
 
 const ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -28,7 +33,9 @@ export type PairAttempt =
   | { status: "bad"; rotated?: boolean }
   | { status: "blocked"; retryIn: number }
 
-export class Pairing {
+export class Pairing implements PairingAdmin {
+  readonly client = "telegram"
+  onChange?: () => void
   #code: string
   #owner: number | null
   #file: string | null
@@ -47,6 +54,9 @@ export class Pairing {
     this.#max = opts.max ?? 5
     this.#windowMs = opts.windowMs ?? 60_000
     this.#rotateAt = opts.rotateAt ?? 10
+    // persist immediately: the code must be readable (`npm run pair`) even
+    // before the first chat has paired
+    this.#save()
   }
 
   static load(code: string, file: string | null, opts: PairOptions = {}): Pairing {
@@ -73,6 +83,17 @@ export class Pairing {
 
   isOwner(id: number): boolean {
     return this.#owner === id
+  }
+
+  status(): PairingStatus {
+    return {
+      client: this.client,
+      label: "Telegram bot",
+      code: this.#code,
+      owner: this.#owner === null ? null : String(this.#owner),
+      devices: this.count(),
+      hint: "send /pair <code>",
+    }
   }
 
   adoptOwner(id: number): void {
@@ -121,6 +142,7 @@ export class Pairing {
         this.#code = newPairCode()
         this.#failures = 0
         this.#hits.clear()
+        this.#save()
         return { status: "bad", rotated: true }
       }
       return { status: "bad" }
@@ -137,7 +159,8 @@ export class Pairing {
 
   #save(): void {
     if (!this.#file) return
-    const data: PairState = { owner: this.#owner, paired: [...this.#paired] }
+    const data: PairState = { owner: this.#owner, paired: [...this.#paired], code: this.#code }
     writeFileSync(this.#file, JSON.stringify(data, null, 2))
+    this.onChange?.()
   }
 }

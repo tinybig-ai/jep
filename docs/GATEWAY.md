@@ -7,15 +7,16 @@ OPTIONAL. jep-tg boots and runs without it.
 
 ## Shape
 
-One process hosts both adapters (`src/tg.ts` composition root). The gateway is
-`src/gateway.ts: startGateway(deps)`, enabled when `JEP_GW_PORT` is set, bound
+One process hosts both adapters (`src/app/tg.ts` composition root). The gateway is
+`src/clients/gateway/index.ts: startGateway(deps)`, enabled when `JEP_GW_PORT` is set, bound
 on 0.0.0.0 so a phone reaches it over Tailscale or the LAN. No TLS: the
 transport rides inside the network's own encryption (WireGuard), like SSH.
 
 Tokens live in `<DATA_HOME>/gateway-tokens.json`; the pairing code prints once
-at boot (env `JEP_GW_PAIR_CODE` pins it). Every endpoint except `/health` and
-`/pair` wants `Authorization: Bearer <token>` (also accepted as `?token=` on
-the stream, for plain clients).
+at boot and is readable any time with `npm run pair` (env `JEP_GW_PAIR_CODE`
+pins it). Every endpoint except `/health` and `/pair` wants
+`Authorization: Bearer <token>` (also accepted as `?token=` on the stream, for
+plain clients).
 
 ## Commands (JSON POSTs)
 

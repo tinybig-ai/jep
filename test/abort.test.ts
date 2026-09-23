@@ -6,7 +6,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { TurnAbortedError, isAborted } from "../src/core/types.ts"
-import { isAbortPayload } from "../src/adapters/opencode.ts"
+import { isAbortPayload } from "../src/harnesses/opencode.ts"
 
 test("opencode's spelling of a stop is recognised", () => {
   assert.equal(isAbortPayload({ name: "MessageAbortedError", data: { message: "Aborted" } }), true)

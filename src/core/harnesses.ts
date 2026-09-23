@@ -1,6 +1,6 @@
-import { startOpenCodeServer } from "../adapters/opencode.ts"
-import { startCodexAdapter } from "../adapters/codex.ts"
-import { startClaudeAdapter } from "../adapters/claude.ts"
+import { startOpenCodeServer } from "../harnesses/opencode.ts"
+import { startCodexAdapter } from "../harnesses/codex.ts"
+import { startClaudeAdapter } from "../harnesses/claude.ts"
 import type { HarnessAdapter, HarnessSupervisor } from "./ports.ts"
 
 /**

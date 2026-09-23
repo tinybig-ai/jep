@@ -1,11 +1,11 @@
 import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { startOpenCodeServer } from "./adapters/opencode.ts"
-import { eventSession } from "./core/types.ts"
-import type { DomainEvent } from "./core/types.ts"
+import { startOpenCodeServer } from "../harnesses/opencode.ts"
+import { eventSession } from "../core/types.ts"
+import type { DomainEvent } from "../core/types.ts"
 
-const FIXTURE = join(import.meta.dirname, "..", "fixture")
+const FIXTURE = join(import.meta.dirname, "..", "..", "fixture")
 const ALPHA = join(FIXTURE, "workspace-alpha")
 const BETA = join(FIXTURE, "workspace-beta")
 

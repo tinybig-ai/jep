@@ -8,7 +8,7 @@
 import { basename } from "node:path"
 import { mdTable } from "./rich.ts"
 import { clipTitle, fmtDuration, fmtWsPath } from "./fmt.ts"
-import type { GitCommit, GitFile, GitStatus } from "../core/git.ts"
+import type { GitCommit, GitFile, GitStatus } from "../../core/git.ts"
 
 // What /git shows at once, and what a "see more" tap adds. Small on purpose:
 // this is a phone screen, and the view's job is to answer "what is in this

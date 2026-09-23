@@ -5,7 +5,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { isRow, isSep, mdToHtml, parseRow, parseTable } from "../src/telegram/html.ts"
+import { isRow, isSep, mdToHtml, parseRow, parseTable } from "../src/clients/telegram/html.ts"
 
 // every tag html.ts can emit inside a single line
 const INLINE_TAGS = ["b", "i", "u", "s", "code", "a", "blockquote"]

@@ -4,8 +4,8 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { closeStreamingTable, mdTable, mdToRich, richTextFromBlocks } from "../src/telegram/rich.ts"
-import type { RichBlock } from "../src/telegram/rich.ts"
+import { closeStreamingTable, mdTable, mdToRich, richTextFromBlocks } from "../src/clients/telegram/rich.ts"
+import type { RichBlock } from "../src/clients/telegram/rich.ts"
 
 const types = (blocks: RichBlock[]): (string | undefined)[] => blocks.map((b) => b.type)
 

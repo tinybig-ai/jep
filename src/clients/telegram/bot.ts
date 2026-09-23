@@ -4,29 +4,31 @@ import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { homedir } from "node:os"
 import { basename, dirname, join, resolve } from "node:path"
-import type { HarnessAdapter, ModelCaps, ModelRef } from "../core/ports.ts"
-import type { AskOption, AskRequest, FilePart, Part, ProjectSummary, SessionSummary, TextPart, ReasoningPart, ToolCallPart } from "../core/types.ts"
-import { isAborted } from "../core/types.ts"
+import type { HarnessAdapter, ModelCaps, ModelRef } from "../../core/ports.ts"
+import type { AskOption, AskRequest, FilePart, HarnessError, Part, ProjectSummary, SessionSummary, TextPart, ReasoningPart, ToolCallPart } from "../../core/types.ts"
+import { describeError } from "../../core/errors.ts"
+import { isAborted } from "../../core/types.ts"
 import { mdToHtml } from "./html.ts"
 import { closeStreamingTable, inlineRich, mdTable, mdToRich, richTextFromBlocks } from "./rich.ts"
 import { splitMinimalSegments, minimalSegmentBlocks, thinkingPhrase } from "./minimal.ts"
 import type { RichBlock } from "./rich.ts"
 import type { TelegramApi, TgMessage, TgUpdate, InlineButton, ReplyMarkup } from "./api.ts"
-import { runComplianceSuite } from "../core/compliance.ts"
-import { eventMessage, eventSession } from "../core/types.ts"
-import { transcribe } from "../core/transcribe.ts"
-import { addUsage, emptyUsage, fmtMoney, usageChip, usageOf } from "../core/usage.ts"
-import type { Usage } from "../core/usage.ts"
-import { readClaudeMcp, readCodexMcp, readOpencodeMcp, writeClaudeProjectEnabled, writeCodexMcpEnabled, writeOpencodeMcpEnabled } from "../core/mcpconfig.ts"
-import type { McpServer } from "../core/mcpconfig.ts"
-import { listSkills, skillDirsFor, writeSkillModelInvocation } from "../core/skills.ts"
-import type { Skill } from "../core/skills.ts"
+import { runComplianceSuite } from "../../core/compliance.ts"
+import { eventMessage, eventSession } from "../../core/types.ts"
+import { transcribe } from "../../core/transcribe.ts"
+import { addUsage, emptyUsage, fmtMoney, usageChip, usageOf } from "../../core/usage.ts"
+import { JEP_CONTEXT, JEP_CONTEXT_FOOTER, transcriptText } from "../../core/transcript.ts"
+import type { Usage } from "../../core/usage.ts"
+import { readClaudeMcp, readCodexMcp, readOpencodeMcp, writeClaudeProjectEnabled, writeCodexMcpEnabled, writeOpencodeMcpEnabled } from "../../core/mcpconfig.ts"
+import type { McpServer } from "../../core/mcpconfig.ts"
+import { listSkills, skillDirsFor, writeSkillModelInvocation } from "../../core/skills.ts"
+import type { Skill } from "../../core/skills.ts"
 import { matches, rankHits, snippet } from "./search.ts"
 import type { Hit } from "./search.ts"
 import { IMAGE_RE, VOICE_MAX_SEC, audioOf, imageExt, sniffAudioExt, sniffImageExt, stickerPrompt } from "./media.ts"
 import type { AudioIn } from "./media.ts"
-import { commits as gitCommits, fileDiff, fullDiff, isRepo, push as gitPush, repoStatus } from "../core/git.ts"
-import type { GitFile, GitStatus } from "../core/git.ts"
+import { commits as gitCommits, fileDiff, fullDiff, isRepo, push as gitPush, repoStatus } from "../../core/git.ts"
+import type { GitFile, GitStatus } from "../../core/git.ts"
 import { clipTitle, fmtCount, fmtDuration, fmtHome, fmtWsPath, timeAgo } from "./fmt.ts"
 import {
   GIT_COMMITS,
@@ -679,76 +681,11 @@ const HELP = [
   "Everything else lives in the ☰ menu.",
 ].join("\n")
 
-// prepended once to a session's first real prompt (see ChatState.sessionFresh),
-// gated by the user's 🧩 Context setting — orients the harness to the fact
-// it's being driven through jep rather than a terminal, and where to look if
-// that ever matters, then hands off cleanly so it responds to the actual
-// request below, not this framing. jep itself isn't Telegram-specific — that
-// addendum only applies because bot.ts is currently jep's one front end.
-const JEP_CONTEXT = [
-  "[jep context — background only, not a request]",
-  "This conversation is relayed through jep, a phone-first control plane for coding agents (headless, no terminal on the other end). jep's own code and docs are in this checkout — see docs/PROCESSES.md and docs/PHILOSOPHY.md.",
-].join("\n")
+// The jep context header it prepends, and the transcript cleanup that hides it
+// again (plus the machinery a harness splices into the user's half of a
+// conversation), live in core so every client strips them the same way.
 const JEP_TELEGRAM_CONTEXT =
   "This conversation is specifically relayed via Telegram — replies render as chat messages (markdown, tables, collapsible details), not a terminal."
-const JEP_CONTEXT_FOOTER = "Ignore the block above. Treat the message below as the user's entire, only request.\n---"
-
-// The first prompt of a fresh session carries the jep context header (see
-// JEP_CONTEXT). It's for the model, not for you — in a transcript it buries
-// the message you actually sent under a screen of preamble.
-const stripInjectedContext = (text: string): string => {
-  const i = text.indexOf(JEP_CONTEXT_FOOTER)
-  return i === -1 ? text : text.slice(i + JEP_CONTEXT_FOOTER.length)
-}
-
-// A harness splices a lot of machinery into the user's half of a transcript:
-// background-task notifications, the envelope around a slash command, the
-// stdout of a `!` shell line, system reminders. All of it is addressed to the
-// model, and replayed in /log it reads as the user saying things they never
-// said. Dropped whole — a turn that was only machinery disappears.
-const NOISE_BLOCKS = [
-  "system-reminder",
-  "task-notification",
-  "local-command-caveat",
-  "local-command-stdout",
-  "bash-stdout",
-  "bash-stderr",
-  "interrupted-output",
-  "command-message",
-  "command-args",
-]
-
-// These wrap something a person really said — a message relayed from another
-// chat, or from a peer session — in routing metadata. The envelope goes, the
-// message stays.
-const UNWRAP_BLOCKS = ["channel", "cross-session-message"]
-
-const dropBlocks = (text: string): string => {
-  let out = text
-  for (const name of UNWRAP_BLOCKS) out = out.replace(new RegExp(`</?${name}(\\s[^>]*)?>`, "g"), "")
-  for (const name of NOISE_BLOCKS) {
-    out = out.replace(new RegExp(`<${name}>[\\s\\S]*?</${name}>`, "g"), "")
-    // an unclosed one means the harness truncated mid-block; the rest of the
-    // message is that block's tail, so it goes too
-    out = out.replace(new RegExp(`<${name}>[\\s\\S]*$`), "")
-  }
-  return out.replace(/\n{3,}/g, "\n\n").trim()
-}
-
-// What the user actually typed, recovered from however the harness recorded
-// it. A slash command and a `!` shell line are real input and stay; their
-// surrounding bookkeeping does not.
-const transcriptText = (raw: string): string => {
-  const text = stripInjectedContext(raw)
-  const cmd = text.match(/<command-name>([^<]*)<\/command-name>/)
-  if (cmd) {
-    const args = text.match(/<command-args>([^<]*)<\/command-args>/)
-    return [cmd[1]?.trim(), args?.[1]?.trim()].filter(Boolean).join(" ")
-  }
-  const bash = text.match(/<bash-input>([\s\S]*?)<\/bash-input>/)
-  if (bash) return `! ${bash[1]!.trim()}`
-  return dropBlocks(text)
-}
 
 // A transcript is for finding the thread of the conversation again, not for
 // re-reading it. A long turn shows its opening and says how much it is
@@ -2143,7 +2080,7 @@ export class TelegramBot {
       const pe = ws.adapter.providerError?.(sessionID)
       if (pe) {
         providerErrored = pe
-        console.error(`[watchdog] provider error (session ${sessionID}): ${pe}`)
+        console.error(`[watchdog] provider error (session ${sessionID}): ${describeError(pe)}`)
         ac.abort()
         return
       }
@@ -2215,7 +2152,7 @@ export class TelegramBot {
     // later, misreporting a known, already-diagnosed failure as a generic
     // stall. Capture it here so the abort branch below can say what actually
     // happened.
-    let providerErrored: string | null = null
+    let providerErrored: HarnessError | null = null
     // the harness's own word for how this turn ended: it was stopped. The
     // adapter translates opencode's MessageAbortedError into this (see
     // core/types.ts), so nothing here reads the error's prose.
@@ -2630,7 +2567,7 @@ export class TelegramBot {
             // branch it vanished silently and the turn just sat until the
             // idle watchdog killed it minutes later with no real reason given.
             console.error(`[turn] session.error (session ${sessionID}, model ${model ? `${model.providerID}/${model.modelID}` : "default"}): ${evt.message}`)
-            if (!providerErrored) providerErrored = evt.message || "provider reported an error"
+            if (!providerErrored) providerErrored = { message: evt.message || "provider reported an error" }
             if (!finished) {
               ac.abort()
               void ws.adapter.abort(sessionID).catch(logFail("abort"))
@@ -2708,11 +2645,11 @@ export class TelegramBot {
         // AbortController lands. Treat it as the outcome it is.
         if (!shown && !textOf(visible).trim() && minimalFlushed.size === 0 && !questionAsked && !steered) await presentBody("(stopped)")
       } else if (failure) {
-        console.error(`[turn] harness error: ${failure.name}: ${failure.message}`)
+        console.error(`[turn] harness error: ${describeError(failure)}`)
         // a session somebody else is already running in is not a fault the
         // user can read their way out of — it's a decision (see #reportHold)
         if (!(await this.#reportHold(chatID, ws, sessionID, promptText, filePaths))) {
-          await this.#tg.sendMessage({ chatID, text: `⚠️ ${failure.name}: ${failure.message}`.slice(0, MAX_MSG) })
+          await this.#tg.sendMessage({ chatID, text: `⚠️ ${describeError(failure)}`.slice(0, MAX_MSG) })
         }
       } else if (!shown && !textOf(visible).trim() && minimalFlushed.size === 0) {
         console.error(`[turn] empty reply with no error (session ${sessionID})`)
@@ -2739,7 +2676,7 @@ export class TelegramBot {
         if (providerErrored) {
           // A real, named failure beats a generic "stalled" message every
           // time -- this is the case the idle watchdog used to paper over.
-          const text = `⚠️ ${providerErrored}`.slice(0, MAX_MSG)
+          const text = `⚠️ ${describeError(providerErrored)}`.slice(0, MAX_MSG)
           if (!shown && !questionAsked && !steered) await presentBody(text)
           else if (!questionAsked && !steered) await this.#tg.sendMessage({ chatID, text })
         } else if (finishedViaIdle) {

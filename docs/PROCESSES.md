@@ -16,8 +16,9 @@ Everything lives in the checkout you cloned this repo from.
 
 ```
 src/
-  probe.ts                // quick adapter probes
-  tg.ts                   // ENTRYPOINT: dependency wiring, env, mock/live, auth sync
+  app/
+    tg.ts                 // ENTRYPOINT: dependency wiring, env, mock/live, auth sync
+    probe.ts              // quick adapter probes
   core/
     ports.ts              // hexagonal seam: HarnessAdapter + ModelRef surface
     types.ts              // Message, DomainEvent, SessionSummary, ApprovalRequest
@@ -31,25 +32,28 @@ src/
                           // codex TOML (section-line editor), claude .claude.json
     skills.ts             // PURE: SKILL.md discovery (bounded walk) + the
                           // disable-model-invocation frontmatter toggle
-  adapters/
+  harnesses/
     claude-ask-mcp.mjs    // MCP server Claude Code calls instead of a permission
                           // prompt; relays to jep over a unix socket
     opencode.ts           // the one real harness: opencode serve session lifecycle,
                           // prompt/events/models, spawn + health + close
-  telegram/
-    bot.ts                // ORCHESTRATION ONLY: chat state, commands, callbacks,
+  clients/
+    telegram/
+      bot.ts              // ORCHESTRATION ONLY: chat state, commands, callbacks,
                           // streaming placeholder, #recording choke point, pickers
-    api.ts                // TELEGRAM WIRE: raw/fallback calls, parse modes,
+      api.ts              // TELEGRAM WIRE: raw/fallback calls, parse modes,
                           // getUpdates + allowed_updates, TelegramApi interface
-    html.ts               // PURE RENDERER: markdown → Telegram HTML (box tables)
-    rich.ts               // PURE RENDERER: markdown → Rich Message blocks
-    gitview.ts            // PURE RENDERER: GitStatus → the /git screens' markdown
-    fmt.ts                // PURE FORMATTERS: durations, counts, ages, paths
-    media.ts              // PURE: what is in a message (audio/image/sticker)
+      html.ts             // PURE RENDERER: markdown → Telegram HTML (box tables)
+      rich.ts             // PURE RENDERER: markdown → Rich Message blocks
+      gitview.ts          // PURE RENDERER: GitStatus → the /git screens' markdown
+      fmt.ts              // PURE FORMATTERS: durations, counts, ages, paths
+      media.ts            // PURE: what is in a message (audio/image/sticker)
                           // and what to name the file it carries
-    search.ts             // PURE: matching, hit snippets, hit ranking
-    store.ts              // PERSISTENCE: titles + per-chat model pick, JSON file
-    pair.ts               // OWNERSHIP: pairing codes, owner lock, rotation
+      search.ts           // PURE: matching, hit snippets, hit ranking
+      store.ts            // PERSISTENCE: titles + per-chat model pick, JSON file
+      pair.ts             // OWNERSHIP: pairing codes, owner lock, rotation
+    gateway/
+      index.ts            // HTTP/SSE transport for native clients
 scripts/
   transcribe.py           // whisper driver: 16k mono WAV in, transcript out
   install.sh              // writes the plist, but proves a launchd job can read
@@ -75,7 +79,7 @@ fixture/
 - All sessions run inside an **isolated data home** so the bot never touches the
   user's CLI/opencode store. The user's `auth.json` is mirrored there at boot
   so registry models (zen + opencode-go) still run (see `syncOpenCodeAuth` in
-  `src/tg.ts:37`).
+  `src/app/tg.ts`).
 
 ## 4. Environment variables
 
@@ -120,7 +124,22 @@ with backoff, and launchd `KeepAlive` restarts anything that still dies):
 ```sh
 # reload after a code change: launchd restarts it with the new code
 launchctl kickstart -k gui/$(id -u)/com.jep.tg; sleep 5
-pgrep -fl 'src/tg.ts'   # expect exactly ONE node
+pgrep -fl 'src/app/tg.ts'   # expect exactly ONE node
+
+# prefer a graceful stop when you can: SIGTERM runs the daemon's shutdown
+# handler, which closes the gateway and every harness child, and then launchd
+# KeepAlive brings it straight back. kickstart -k kills the process without
+# that handler, so one `opencode serve` per active workspace can be orphaned.
+kill -TERM "$(launchctl list | awk '/com\.jep\.tg/{print $1}')"; sleep 5
+pgrep -fl 'src/app/tg.ts'
+
+# the job runs a COPY of the launcher, not scripts/jep-daemon.sh: install.sh
+# copies it to $JEP_DATA_HOME/jep-daemon.sh and the plist execs that copy.
+# Change the launcher (say, move the entrypoint) and the copy must be refreshed
+# too, or a restart execs a path that no longer exists and crash-loops. This is
+# exactly what install.sh does on every run:
+cp scripts/jep-daemon.sh ~/.local/share/jep-tg/jep-daemon.sh
+chmod +x ~/.local/share/jep-tg/jep-daemon.sh
 
 # a plist change (env vars, ProgramArguments) needs the definition reloaded,
 # not just the process killed: kickstart reruns the OLD definition
@@ -131,6 +150,14 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jep.tg.plist
 # makes two daemons that fight over getUpdates (Telegram 409 Conflicts) and
 # silently eat each other's updates. If a manual copy exists anyway, kill it
 # and let launchd own the one instance.
+```
+
+A restart always cuts any in-flight turn, so when an **agent** must deploy
+without eating its own reply, schedule a detached, delayed stop and let
+`KeepAlive` do the restart after the message is delivered:
+
+```sh
+nohup /bin/sh -c "sleep 60; kill -TERM $(launchctl list | awk '/com\.jep\.tg/{print $1}')" >/dev/null 2>&1 &
 ```
 
 When an **agent** (opencode/codex) runs any of the above through its bash tool,
@@ -171,7 +198,7 @@ symptom is exact: the process is alive, `%CPU` is 0, and **nothing at all is
 written to the log**, where a healthy boot banners in about a second.
 
 ```sh
-sample $(pgrep -f 'src/tg.ts') 3 -mayDie | grep -m1 -B2 'open '   # hung in __open
+sample $(pgrep -f 'src/app/tg.ts') 3 -mayDie | grep -m1 -B2 'open '   # hung in __open
 log show --last 5m --predicate 'process == "tccd"' | grep DocumentsFolder
 ```
 
@@ -194,7 +221,7 @@ grant (a terminal the user has already allowed), detached so it outlives the
 session, and unload the launchd job first so it stops respawning hung copies:
 
 ```sh
-launchctl bootout gui/$(id -u)/com.jep.tg; pkill -9 -f 'src/tg.ts'
+launchctl bootout gui/$(id -u)/com.jep.tg; pkill -9 -f 'src/app/tg.ts'
 python3 -c 'import os,plistlib,subprocess
 d=plistlib.load(open(os.path.expanduser("~/Library/LaunchAgents/com.jep.tg.plist"),"rb"))
 env=dict(os.environ); env.update(d["EnvironmentVariables"])
@@ -212,13 +239,13 @@ Mock replay of a fixture:
 
 ```sh
 JEP_DATA_HOME=/tmp/jep-tg-mock JEP_TG_PAIR_CODE=TESTCODE JEP_TG_MOCK=1 \
-  node --experimental-strip-types src/tg.ts < fixture/telegram-mock-settings.jsonl
+  node --experimental-strip-types src/app/tg.ts < fixture/telegram-mock-settings.jsonl
 ```
 
 Syntax check any single file:
 
 ```sh
-node --experimental-strip-types --check src/telegram/rich.ts
+node --experimental-strip-types --check src/clients/telegram/rich.ts
 ```
 
 **Type-stripping gotcha:** `--experimental-strip-types` (amaro) crashes at
@@ -226,13 +253,13 @@ node --experimental-strip-types --check src/telegram/rich.ts
 `?:` inside a generic call argument (e.g.
 `#json<{ all?: Array<{ models?: ... }> }>(...)`). It even passes `--check`.
 Keep such shapes as module-level `interface`/`type` aliases and pass the name
-as the generic; see `ProviderRoot` in `src/adapters/opencode.ts`.
+as the generic; see `ProviderRoot` in `src/harnesses/opencode.ts`.
 
 ## 6. The render pipeline
 
 Two routes, one choke point.
 
-1. **Choke point `#recording`** (`src/telegram/bot.ts:98`): every outbound
+1. **Choke point `#recording`** (`src/clients/telegram/bot.ts:98`): every outbound
    `sendMessage`/`editMessageText` text passes through `mdToHtml()` with
    `parseMode: "HTML"`. This is why menu text, status, help, and errors all
    render markdown correctly with zero per-call code. `sendRichMessage` passes
@@ -365,7 +392,7 @@ independently. HTML fallback uses `> ` blockquotes
 Sources, in priority order (merged, deduped, default always first):
 
 1. Default `localfree-models-proxy/auto` (the free proxy; engine picks):
-   `MODEL_REF` in `src/adapters/opencode.ts`.
+   `MODEL_REF` in `src/harnesses/opencode.ts`.
 2. Config providers + their `models` maps from
    `~/.config/opencode/opencode.json` (`providers.*.models`).
 3. Registry models from the **`opencode models` CLI** (provider lines
@@ -394,7 +421,11 @@ vision-capable models as direct `mdl:` buttons plus "All models ›".
 
 - New bots print a pairing code; `/pair <code>` claims the bot and locks it to
   that chat id. The owner is persisted to `pairing.json`, so restarts keep
-  ownership (live: the original owner, no re-pair).
+  ownership (live: the original owner, no re-pair). The current code is written
+  alongside it. Every client reports its pairing state through the `PairingAdmin`
+  port (`src/core/pairing.ts`); the daemon aggregates those into
+  `pairing-status.json`, which `npm run pair` reads back, so tooling never
+  parses a client's private file format.
 - Pairing has attempt limits and code rotation (env-tunable).
 - Commands and even plain free text are ignored for non-owner chats.
 
@@ -458,7 +489,7 @@ comes back having quietly not done the thing. `--permission-prompt-tool <tool>`
 replaces the prompt with a tool call, and whatever that tool answers is the
 decision. jep supplies it:
 
-- `src/adapters/claude-ask-mcp.mjs` (a stdio MCP server Claude Code spawns
+- `src/harnesses/claude-ask-mcp.mjs` (a stdio MCP server Claude Code spawns
   itself (hence a file, and plain `.mjs`: it runs under Claude Code's node and
   must not need type-stripping). It relays the question to jep over a unix
   socket handed to it in `JEP_ASK_SOCKET`, with the jep session id in

@@ -4,8 +4,8 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { audioOf, imageExt, sniffAudioExt, sniffImageExt, stickerPrompt } from "../src/telegram/media.ts"
-import type { TgMessage } from "../src/telegram/api.ts"
+import { audioOf, imageExt, sniffAudioExt, sniffImageExt, stickerPrompt } from "../src/clients/telegram/media.ts"
+import type { TgMessage } from "../src/clients/telegram/api.ts"
 
 const msg = (over: Partial<TgMessage>): TgMessage => ({ message_id: 1, chat: { id: 1, type: "private" }, ...over })
 

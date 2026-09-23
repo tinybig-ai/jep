@@ -30,7 +30,7 @@ function replay(fixture: string, extraEnv: Record<string, string> = {}, reuseHom
   // test can have a *past* to search
   const home = reuseHome ?? mkdtempSync(join(tmpdir(), "jep-e2e-"))
   try {
-    const out = execFileSync("node", ["--experimental-strip-types", "src/tg.ts"], {
+    const out = execFileSync("node", ["--experimental-strip-types", "src/app/tg.ts"], {
       cwd: ROOT,
       input: readFileSync(join(ROOT, "fixture", fixture), "utf8"),
       encoding: "utf8",

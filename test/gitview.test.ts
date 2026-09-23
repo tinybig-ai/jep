@@ -3,7 +3,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { GIT_ROWS, clipPath, diffWindow, gitLogText, gitMark, gitStatusText, pushCount } from "../src/telegram/gitview.ts"
+import { GIT_ROWS, clipPath, diffWindow, gitLogText, gitMark, gitStatusText, pushCount } from "../src/clients/telegram/gitview.ts"
 import type { GitCommit, GitFile, GitStatus } from "../src/core/git.ts"
 
 const file = (over: Partial<GitFile> = {}): GitFile => ({

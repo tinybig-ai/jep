@@ -6,9 +6,9 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { splitMinimalSegments, minimalSegmentBlocks, thinkingPhrase } from "../src/telegram/minimal.ts"
+import { splitMinimalSegments, minimalSegmentBlocks, thinkingPhrase } from "../src/clients/telegram/minimal.ts"
 import type { Part, TextPart } from "../src/core/types.ts"
-import type { RichBlock } from "../src/telegram/rich.ts"
+import type { RichBlock } from "../src/clients/telegram/rich.ts"
 
 const text = (s: string, id?: string): TextPart => ({ kind: "text", text: s, ...(id ? { id } : {}) })
 const reasoning = (s: string, durationMs?: number): Part => ({ kind: "reasoning", text: s, ...(durationMs !== undefined ? { durationMs } : {}) })

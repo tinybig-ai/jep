@@ -1,8 +1,9 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { startGateway, type GatewayHandle } from "../src/gateway.ts"
+import { startGateway, type GatewayHandle } from "../src/clients/gateway/index.ts"
 import type { HarnessAdapter } from "../src/core/ports.ts"
 import type { DomainEvent, Message, SessionSummary } from "../src/core/types.ts"
+import { JEP_CONTEXT, JEP_CONTEXT_FOOTER } from "../src/core/transcript.ts"
 import { existsSync, mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -99,6 +100,31 @@ test("pair gates: wrong code rejected, right code yields a working token", async
   }
 })
 
+test("the gateway reports its pairing state through the admin port", async () => {
+  const { gw } = spawnGateway()
+  const g = await gw
+  try {
+    const before = g.pairingAdmin.status()
+    assert.equal(before.client, "gateway")
+    assert.equal(before.code, "TESTCODE")
+    assert.equal(before.owner, null)
+    assert.equal(before.devices, 0)
+
+    let changes = 0
+    g.pairingAdmin.onChange = () => {
+      changes++
+    }
+    await pair(`http://127.0.0.1:${g.port}`, "TESTCODE")
+
+    const after = g.pairingAdmin.status()
+    assert.equal(after.devices, 1)
+    assert.notEqual(after.code, "TESTCODE", "pairing spends the code")
+    assert.ok(changes >= 1, "spending the code notifies the aggregate writer")
+  } finally {
+    await g.close()
+  }
+})
+
 test("sessions merge adapter names; history replays from the harness", async () => {
   const { gw } = spawnGateway()
   const g = await gw
@@ -118,6 +144,38 @@ test("sessions merge adapter names; history replays from the harness", async () 
     assert.equal(messages.length, 1)
     assert.equal(messages[0]?.parts[0]?.kind, "text")
     assert.equal(hasMore, false)
+  } finally {
+    await g.close()
+  }
+})
+
+test("history strips jep's injected context, showing what the user typed", async () => {
+  const adapter = fakeAdapter()
+  const injected = `${JEP_CONTEXT}\n\n${JEP_CONTEXT_FOOTER}\n\nfix the reddit bug`
+  adapter.messages = async () => [
+    { id: "u0", sessionID: "s1", role: "user", time: 1, parts: [{ kind: "text", text: injected }] },
+    { id: "a1", sessionID: "s1", role: "assistant", time: 2, parts: [{ kind: "text", text: "on it" }] },
+  ]
+  const g = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter }],
+    dataHome: mkdtempSync(join(tmpdir(), "gw-test-")),
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+  })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const token = await pair(base, "TESTCODE")
+    const res = await fetch(`${base}/history`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ id: "s1" }),
+    })
+    const { messages } = (await res.json()) as { messages: Message[] }
+    assert.equal(messages.length, 2)
+    const first = messages[0]!.parts[0]!
+    assert.equal(first.kind, "text")
+    assert.equal(first.kind === "text" ? first.text : "", "fix the reddit bug")
   } finally {
     await g.close()
   }

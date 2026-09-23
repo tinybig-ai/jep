@@ -2,8 +2,8 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { matches, rankHits, snippet } from "../src/telegram/search.ts"
-import type { Hit } from "../src/telegram/search.ts"
+import { matches, rankHits, snippet } from "../src/clients/telegram/search.ts"
+import type { Hit } from "../src/clients/telegram/search.ts"
 
 test("matching ignores case and surrounding space", () => {
   assert.equal(matches("The Draft IDs bug", "draft ids"), true)
