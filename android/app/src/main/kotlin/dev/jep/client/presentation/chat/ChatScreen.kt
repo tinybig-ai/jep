@@ -1088,9 +1088,22 @@ private fun UserBubble(message: ChatMessage) {
             shape = RoundedCornerShape(18.dp),
         ) {
             Column(Modifier.padding(horizontal = 14.dp, vertical = 9.dp)) {
+                // a file must show in the person's own bubble too, or an image
+                // sent from another client (Telegram) is invisible here
                 message.parts.forEach { part ->
-                    if (part is dev.jep.client.domain.model.ChatPart.Text) {
-                        Text(part.text, color = MaterialTheme.colorScheme.onPrimaryContainer, fontSize = 15.sp)
+                    when (part) {
+                        is ChatPart.Text -> Text(part.text, color = MaterialTheme.colorScheme.onPrimaryContainer, fontSize = 15.sp)
+                        is ChatPart.File -> Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Filled.AttachFile, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onPrimaryContainer)
+                            Text(
+                                part.name ?: part.path.substringAfterLast('/'),
+                                Modifier.padding(start = 6.dp),
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                fontSize = 13.sp,
+                                maxLines = 1,
+                            )
+                        }
+                        else -> Unit
                     }
                 }
             }

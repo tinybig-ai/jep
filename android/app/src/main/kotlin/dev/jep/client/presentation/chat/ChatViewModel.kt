@@ -306,25 +306,28 @@ class ChatViewModel(
 
     fun send(text: String) {
         val trimmed = text.trim()
-        if (trimmed.isEmpty() || _state.value.sending) return
+        if (_state.value.sending) return
         val files = _state.value.attachments
+        // an image on its own is a valid message. The model still needs words, so
+        // use the line the daemon and Telegram use and send it, so the optimistic
+        // row and the served message agree on the text (refresh reconciles them
+        // by text).
+        if (trimmed.isEmpty() && files.isEmpty()) return
+        val body = trimmed.ifEmpty { "see the attached file" }
         // The optimistic row carries the prompt text and the attachments as
         // separate parts, never the prompt plus an "[attached: …]" suffix the
-        // daemon would never produce. Refresh reconciles optimistic rows against
-        // the served message by text; a suffix there meant an attachment turn
-        // never matched, so the message showed twice and the echo landed after
-        // the reply.
+        // daemon would never produce.
         val pending = ChatMessage(
             id = "local-${System.nanoTime()}",
             role = Role.USER,
             time = System.currentTimeMillis(),
-            parts = listOf(ChatPart.Text(trimmed)) + files.map { ChatPart.File(path = it.name, name = it.name, mimeType = null) },
+            parts = listOf(ChatPart.Text(body)) + files.map { ChatPart.File(path = it.name, name = it.name, mimeType = null) },
         )
         val seq = ++turn
         optimistic.add(pending)
         _state.update { it.copy(messages = it.messages + pending, sending = true, live = null, failure = null, attachments = emptyList()) }
         viewModelScope.launch {
-            runCatching { repo.prompt(sessionId, trimmed, files.map { it.id }) }
+            runCatching { repo.prompt(sessionId, body, files.map { it.id }) }
                 .onSuccess { final ->
                     if (seq != turn) return@onSuccess
                     optimistic.removeAll { it.id == pending.id }
