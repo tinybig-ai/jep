@@ -31,25 +31,6 @@ from **Telegram**, the **Android app**, or any client behind the
 
 ---
 
-## What it looks like
-
-<table>
-  <tr>
-    <td align="center"><img src="docs/images/screens/android-sessions.jpg" alt="Conversations" width="200" /></td>
-    <td align="center"><img src="docs/images/screens/android-chat.jpg" alt="The jep Android app, a streaming turn" width="200" /></td>
-    <td align="center"><img src="docs/images/screens/android-settings.jpg" alt="Settings" width="200" /></td>
-    <td align="center"><img src="docs/images/screens/android-usage.jpg" alt="Usage" width="200" /></td>
-  </tr>
-  <tr>
-    <td align="center"><sub>Conversations</sub></td>
-    <td align="center"><sub>Chat</sub></td>
-    <td align="center"><sub>Settings</sub></td>
-    <td align="center"><sub>Usage</sub></td>
-  </tr>
-</table>
-
----
-
 ## Why jep
 
 Every agent ships its own CLI, its own models, and its own way of working away
@@ -151,6 +132,28 @@ LAN. The gateway has no TLS of its own, so it rides the network's encryption
 
 Client setup lives in those READMEs so the top of this file stays the same
 whichever client you choose.
+
+---
+
+## The Android app
+
+An example of one client. It talks to the same daemon over the gateway. The
+Telegram face and the gateway itself are in [docs/clients](docs/clients/).
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/images/screens/android-sessions.jpg" alt="Conversations" width="200" /></td>
+    <td align="center"><img src="docs/images/screens/android-chat.jpg" alt="A streaming turn" width="200" /></td>
+    <td align="center"><img src="docs/images/screens/android-settings.jpg" alt="Settings" width="200" /></td>
+    <td align="center"><img src="docs/images/screens/android-usage.jpg" alt="Usage" width="200" /></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Conversations</sub></td>
+    <td align="center"><sub>Chat</sub></td>
+    <td align="center"><sub>Settings</sub></td>
+    <td align="center"><sub>Usage</sub></td>
+  </tr>
+</table>
 
 ---
 
