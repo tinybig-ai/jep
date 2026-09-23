@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   # Builds the debug APK: proof the client compiles, nothing signed or shipped.
-  # Debug builds need no secret — the debug key is generated on the runner.
+  # Debug builds need no secret; the debug key is generated on the runner.
   build:
     runs-on: ubuntu-latest
     steps:

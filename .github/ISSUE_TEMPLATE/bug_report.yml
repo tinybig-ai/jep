@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         Thanks for the report. **Redact tokens, chat ids, and credentials** before pasting anything.
-        For a security issue, use [SECURITY.md](../blob/main/SECURITY.md) — not a public issue.
+        For a security issue, use [SECURITY.md](../blob/main/SECURITY.md), not a public issue.
   - type: textarea
     id: what-happened
     attributes:

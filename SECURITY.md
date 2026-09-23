@@ -1,7 +1,7 @@
 # Security
 
 jep runs coding agents on your machine and puts a control surface in front of
-them — Telegram, the [gateway](docs/GATEWAY.md), the Android app. That shape
+them (Telegram, the [gateway](docs/GATEWAY.md), the Android app). That shape
 makes security reports genuinely welcome, and it also means a few trade-offs are
 **by design**, not bugs. This file says which is which.
 
@@ -24,13 +24,13 @@ branches yet.
 - The daemon (`src/`): the hexagonal core, harness adapters, and the clients.
 - The gateway: authentication, session/workspace scoping, attachment handling.
 - Pairing and ownership (`pairing.json`, the owner lock).
-- How secrets are read, stored, and logged — and where they never are.
+- How secrets are read, stored, and logged, and where they never are.
 - The isolated data home (`JEP_DATA_HOME`) and credential mirroring.
 
 ## Known design trade-offs (please don't report these as bugs)
 
 - **The gateway has no TLS of its own.** It is meant to ride an encrypted
-  network you already trust — WireGuard/Tailscale, or your LAN. Do not expose it
+  network you already trust: WireGuard/Tailscale, or your LAN. Do not expose it
   to the open internet. This is stated in the README and
   [docs/GATEWAY.md](docs/GATEWAY.md).
 - **A paired bot is a shell on your machine.** The owner's messages are turned
@@ -51,5 +51,5 @@ branches yet.
   Secrets live in the environment (or the launchd plist) and the isolated data
   home only.
 - If you find a secret committed anywhere in history, treat it as leaked and
-  report it privately — rotating it is the fix, and removing the commit is not
+  report it privately. Rotating it is the fix, and removing the commit is not
   enough on its own.

@@ -18,13 +18,13 @@ The release APK must be signed with a key that lives nowhere in the repo. Set it
 up once:
 
 1. Generate a release key and keep it out of the tree. **Back it up somewhere
-   safe** — losing it means you can never update the app again:
+   safe**: losing it means you can never update the app again:
    ```sh
    keytool -genkeypair -v -keystore jep-release.jks -alias jep \
      -keyalg RSA -keysize 4096 -validity 10000
    ```
 2. Add these under **Settings → Secrets and variables → Actions**:
-   - `ANDROID_KEYSTORE_BASE64` — the output of `base64 -i jep-release.jks`
+   - `ANDROID_KEYSTORE_BASE64`: the output of `base64 -i jep-release.jks`
    - `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`
 3. Nothing else. The workflow decodes the key to a temp file at build time; the
    keystore and `android/keystore.properties` are gitignored.
@@ -33,9 +33,9 @@ Debug builds and PRs need none of this.
 
 ## Cutting a release
 
-1. Make sure `main` is green — the `check` and `android` workflows pass.
+1. Make sure `main` is green: the `check` and `android` workflows pass.
 2. Pick the version (semver; the project is pre-`1.0`, so a minor bump may carry
-   a breaking change — say so in the notes).
+   a breaking change, so say so in the notes).
 3. Bump the daemon version in `package.json` and commit it to `main`.
 4. Tag and push:
    ```sh
@@ -45,7 +45,7 @@ Debug builds and PRs need none of this.
 5. The `release` workflow builds the signed APK, stamps it with the tag's
    version (`versionName=0.2.0`, `versionCode` from the run number), and attaches
    it to the GitHub Release for that tag. Watch the run.
-6. Verify: the Release has `jep-0.2.0.apk`. Optionally install it —
+6. Verify: the Release has `jep-0.2.0.apk`. Optionally install it:
    `adb install jep-0.2.0.apk`.
 
 ## When it goes wrong

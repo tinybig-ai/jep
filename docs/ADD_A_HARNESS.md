@@ -1,8 +1,8 @@
 # Add a harness
 
 This is the contribution jep was built for. The core defines exactly one
-contract for an agent backend — `HarnessAdapter` in
-[`src/core/ports.ts`](../src/core/ports.ts) — and every client in the repo
+contract for an agent backend, `HarnessAdapter` in
+[`src/core/ports.ts`](../src/core/ports.ts), and every client in the repo
 (Telegram, the [gateway](GATEWAY.md), the Android app) is written against that
 one contract. Implement it for the agent you love and every client works
 unchanged.
@@ -32,7 +32,7 @@ stays independently testable.
 
 | Method | Contract |
 |---|---|
-| `health()` | `{ healthy, version }` — cheap; used to decide if the harness is installed |
+| `health()` | `{ healthy, version }`: cheap; used to decide if the harness is installed |
 | `createSession(title?)` | returns a `SessionSummary` with a stable `id` |
 | `getSession(id)` | the summary, or `null` when it doesn't exist |
 | `listSessions()` | newest-first summaries; **filter out subagent/child sessions**, count them in `subagents` |
@@ -41,24 +41,24 @@ stays independently testable.
 | `deleteSession(id)` | returns whether it deleted |
 | `abort(sessionID)` | stop the in-flight turn; return whether it stopped |
 | `respondAsk(sessionID, askID, optionID)` | answer a pending ask with one of *its* option ids |
-| `events(signal?)` | `AsyncIterable<DomainEvent>` — the live stream (see below) |
+| `events(signal?)` | `AsyncIterable<DomainEvent>`: the live stream (see below) |
 | `close()` | stop whatever you spawned; sessions stay on disk |
 
-And some are optional but high-value — implement them when your harness can,
+And some are optional but high-value; implement them when your harness can,
 because clients surface them:
 
-- `agents()` — the harness's primary agents (opencode's build/plan), for pickers.
-- `models()` / `defaultModel()` / `capabilities()` — the model picker and
+- `agents()`: the harness's primary agents (opencode's build/plan), for pickers.
+- `models()` / `defaultModel()` / `capabilities()`: the model picker and
   image-capability marks.
-- `listProjects()` — sessions outside the active workspace, so they're still
+- `listProjects()`: sessions outside the active workspace, so they're still
   reachable.
-- `sessionHold()` / `releaseHold()` — when another process owns a session.
-- `providerError()` — name a rate limit/usage cap that never surfaced as an event.
-- `skillDirs()` — where the harness loads skills from.
-- `subagents()` — the child sessions you filtered out of `listSessions()`.
-- `diff()` — files the session changed.
+- `sessionHold()` / `releaseHold()`: when another process owns a session.
+- `providerError()`: name a rate limit/usage cap that never surfaced as an event.
+- `skillDirs()`: where the harness loads skills from.
+- `subagents()`: the child sessions you filtered out of `listSessions()`.
+- `diff()`: files the session changed.
 
-Every optional method is documented on the interface itself. Read it — it's
+Every optional method is documented on the interface itself. Read it; it's
 short and it says *why* each exists.
 
 ## The event contract
@@ -66,14 +66,14 @@ short and it says *why* each exists.
 `events()` is what makes the frontends streaming and live. Emit
 `DomainEvent`s (`src/core/types.ts`) as the turn runs:
 
-- `{ type: "server.connected" }` **first**, always — a client blocks on it.
+- `{ type: "server.connected" }` **first**, always; a client blocks on it.
 - `message.created` / `message.updated` as a turn's messages appear.
 - `part.updated` for a part's shape, then `part.delta` with the text as it
   streams. (`part.delta` carries a `partID`, so stamp `partType` on it from the
-  preceding `part.updated` — the Telegram adapter's `#partTypes` map shows why.)
+  preceding `part.updated`; the Telegram adapter's `#partTypes` map shows why.)
 - `session.idle` when the session is quiet again.
 - `ask.requested` when the harness needs a person (see below).
-- `turn.aborted` when a stop ended the turn — it is not an error, and every
+- `turn.aborted` when a stop ended the turn; it is not an error, and every
   client used to misread it as one.
 - `session.error` for a real failure; `other` for anything you don't model yet.
 
@@ -91,7 +91,7 @@ When the harness stops and needs a decision, emit **one** shape:
 ```
 
 and answer it through `respondAsk(sessionID, askID, optionID)`. The option ids
-are **the harness's own vocabulary** — carry them through untouched. opencode
+are **the harness's own vocabulary**: carry them through untouched. opencode
 answers `once` / `always` / `reject`, and flattening those to yes/no would drop
 `always`, the only answer that outlives the call. See
 [PROCESSES §10](../docs/PROCESSES.md) for how the Claude adapter bridges its
@@ -150,7 +150,7 @@ Add **one row** to `defineHarnesses()` in
 
 Two rules the registry enforces at startup:
 
-- **`id` is unique** — it routes sessions.
+- **`id` is unique**: it routes sessions.
 - **`icon` is unique and single-glyph**, kept to Unicode 6.0 or older
   (`U+1F535–1F53A`). It stands alone on every `/ls` row, so a distinct *shape*
   matters more than a subtle colour, and a newer emoji renders as a missing-glyph
@@ -160,7 +160,7 @@ Two rules the registry enforces at startup:
 ### 3. Prove it
 
 The compliance suite boots your adapter against a throwaway workspace, creates a
-session, prompts it, reads history back, and prints a per-method matrix — no
+session, prompts it, reads history back, and prints a per-method matrix, no
 test to write:
 
 ```sh
@@ -169,7 +169,7 @@ npm run probe:harness -- my-harness
 
 Aim for every required row `PASS`. `abort` and `respondAsk` report `MANUAL`:
 they're correct by construction and proven live when you exercise a real abort
-or a tool-gated permission. That's fine for a PR — just say you did it.
+or a tool-gated permission. That's fine for a PR; just say you did it.
 
 Add a unit test for any pure helper you extract (parsers, id mapping, event
 translation), the way [`test/codex.test.ts`](../test/codex.test.ts) and
@@ -184,7 +184,7 @@ the probe output pasted in. See [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 - **Type-stripping is not type-checking.** Node runs the `.ts` directly, and
   `--experimental-strip-types` crashes at *runtime* (`ERR_INVALID_TYPESCRIPT_SYNTAX`)
-  on inline type literals with `?:` inside a generic call argument — even though
+  on inline type literals with `?:` inside a generic call argument, even though
   it passes `--check`. Hoist such shapes to a module-level `interface`/`type`
   and pass the name as the generic; see `ProviderRoot` in `opencode.ts`.
 - **`close()` must not orphan a child.** The daemon gets `SIGTERM` on restart and
