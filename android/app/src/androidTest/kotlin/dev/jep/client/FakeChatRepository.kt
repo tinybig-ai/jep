@@ -1,5 +1,6 @@
 package dev.jep.client
 
+import dev.jep.client.domain.model.AgentInfo
 import dev.jep.client.domain.model.BrowseResult
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
@@ -54,6 +55,7 @@ class FakeChatRepository(
     override suspend fun models(sessionId: String) = choices ?: ModelChoices(emptyList(), null)
     override suspend fun setModel(sessionId: String, ref: String?) = true
     override suspend fun agent(sessionId: String): String? = null
+    override suspend fun agents(sessionId: String) = emptyList<AgentInfo>()
     override suspend fun setAgent(sessionId: String, agent: String?) = true
     override suspend fun usage(sessionId: String) = Usage()
     override suspend fun diff(sessionId: String) = emptyList<FileDiff>()

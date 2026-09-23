@@ -35,6 +35,12 @@ jobs:
       - name: Assemble the debug APK
         working-directory: android
         run: ./gradlew :app:assembleDebug -Dorg.gradle.java.home="$JAVA_HOME"
+      # The instrumented tests are not run here (that needs an emulator), but
+      # they must at least compile: nothing built them, so FakeChatRepository
+      # silently drifted out of step with the repository interface.
+      - name: Compile the instrumented tests
+        working-directory: android
+        run: ./gradlew :app:compileDebugAndroidTestKotlin -Dorg.gradle.java.home="$JAVA_HOME"
       - uses: actions/upload-artifact@v4
         with:
           name: app-debug
