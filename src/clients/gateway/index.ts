@@ -968,11 +968,16 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       }
 
       if (path === "/prompt") {
-        const text = str("text")
-        if (!text) return json(res, 400, { error: "text required" })
-        if (active.has(id)) return json(res, 409, { error: "busy" })
         const files: string[] = Array.isArray(b.files) ? b.files.filter((f): f is string => typeof f === "string") : []
         const filePaths = files.map((fid) => attachments.get(fid)?.path).filter((p): p is string => Boolean(p))
+        // an attachment with no words is a valid prompt: the harness still needs
+        // something to read, so fill it in here as well. The Android app sends
+        // its own copy of this line so its optimistic row agrees; the Telegram
+        // client fills the same line in on its side.
+        const asked = str("text") ?? ""
+        if (!asked && filePaths.length === 0) return json(res, 400, { error: "text required" })
+        const text = asked || "see the attached file"
+        if (active.has(id)) return json(res, 409, { error: "busy" })
         // this conversation's chosen model, if the phone set one in Settings
         const ref = models.get(id)
         const [providerID = "", modelID = ""] = ref ? ref.split("/") : []
