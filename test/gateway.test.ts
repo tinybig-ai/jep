@@ -215,6 +215,81 @@ test("a forced prompt aborts the running turn and runs now", async () => {
   }
 })
 
+test("a queued prompt can be cancelled before it runs", async () => {
+  const a = stallable()
+  const { base, headers, g } = await startWith(a)
+  try {
+    const post = (text: string, extra: Record<string, unknown> = {}) =>
+      fetch(`${base}/prompt`, { method: "POST", headers, body: JSON.stringify({ id: "s1", text, ...extra }) })
+    const first = post("first")
+    await sleep(50)
+    const second = post("second", { clientID: "c2" })
+    await sleep(50)
+    const cancel = await fetch(`${base}/queue/cancel`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ id: "s1", clientID: "c2" }),
+    })
+    assert.equal(cancel.status, 200)
+    const j2 = (await (await second).json()) as { cancelled?: boolean }
+    assert.equal(j2.cancelled, true, "the held request is answered as cancelled")
+    assert.deepEqual(a.calls, ["first"], "the cancelled prompt never ran")
+    a.release("first")
+    await first
+  } finally {
+    await g.close()
+  }
+})
+
+test("a prompt asked to wait for the end is not steered in", async () => {
+  const a = stallable()
+  const { base, headers, g } = await startWith(a)
+  try {
+    const post = (text: string, steer = true) =>
+      fetch(`${base}/prompt`, { method: "POST", headers, body: JSON.stringify({ id: "s1", text, steer }) })
+    const first = post("first")
+    await sleep(50)
+    const second = post("second", false)
+    await sleep(50)
+    // a tool boundary arrives, but this prompt asked to wait: nothing is aborted
+    a.feed({ type: "part.updated", sessionID: "s1", messageID: "m1", partID: "p1", partType: "step-finish", part: { kind: "other", nativeType: "step-finish" } } as DomainEvent)
+    await sleep(50)
+    assert.deepEqual(a.calls, ["first"], "the running turn is left alone")
+    a.release("first")
+    const j1 = (await (await first).json()) as { message?: Message }
+    assert.equal(textOf(j1), "echo: first")
+    const j2 = (await (await second).json()) as { message?: Message }
+    assert.equal(textOf(j2), "echo: second")
+  } finally {
+    await g.close()
+  }
+})
+
+test("a queued prompt can be forced to run now", async () => {
+  const a = stallable()
+  const { base, headers, g } = await startWith(a)
+  try {
+    const post = (text: string, extra: Record<string, unknown> = {}) =>
+      fetch(`${base}/prompt`, { method: "POST", headers, body: JSON.stringify({ id: "s1", text, ...extra }) })
+    const first = post("first")
+    await sleep(50)
+    const second = post("second", { clientID: "c2" })
+    await sleep(50)
+    const force = await fetch(`${base}/queue/force`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ id: "s1", clientID: "c2" }),
+    })
+    assert.equal(force.status, 200)
+    const j1 = (await (await first).json()) as { aborted?: boolean }
+    assert.equal(j1.aborted, true, "the running turn is stopped")
+    const j2 = (await (await second).json()) as { message?: Message }
+    assert.equal(textOf(j2), "echo: second")
+  } finally {
+    await g.close()
+  }
+})
+
 test("pair gates: wrong code rejected, right code yields a working token", async () => {
   const { gw } = spawnGateway()
   const g = await gw

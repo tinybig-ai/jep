@@ -435,7 +435,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           // boundary — abort here, and the runner starts the waiting prompt
           if (evt.type === "part.updated" && evt.part?.kind === "other" && evt.part.nativeType === "step-finish") {
             const st = turns.get(evt.sessionID)
-            if (st?.running && st.waiting.length > 0) st.signal?.abort()
+            // only a prompt that asked to steer interrupts the running turn; one
+            // that asked to wait for the end is left alone
+            if (st?.running && st.waiting[0]?.steer) st.signal?.abort()
           }
           broadcast(evt)
           void wake(evt)
@@ -480,12 +482,16 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   // and is steered in at the next tool boundary — or forced, when the client asks
   // to abort the running turn and run it now. This mirrors the Telegram client's
   // own turn queue.
-  type TurnResult = { status: number; message?: Message; aborted?: boolean; error?: string }
+  type TurnResult = { status: number; message?: Message; aborted?: boolean; cancelled?: boolean; error?: string }
   type PendingTurn = {
     text: string
     filePaths: string[]
     model?: { providerID: string; modelID: string }
     agent?: string
+    /** steer at the next tool boundary (the default) or wait for the turn to end */
+    steer: boolean
+    /** the client's own handle, so it can edit / cancel / force this while it waits */
+    clientID?: string
     resolve: (r: TurnResult) => void
   }
   type TurnState = { running: PendingTurn | null; waiting: PendingTurn[]; signal?: AbortController }
@@ -1086,7 +1092,15 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const agent = agents.get(id)
         let settle!: (r: TurnResult) => void
         const done = new Promise<TurnResult>((r) => { settle = r })
-        const pending: PendingTurn = { text, filePaths, model, agent, resolve: settle }
+        const pending: PendingTurn = {
+          text,
+          filePaths,
+          model,
+          agent,
+          steer: b.steer !== false,
+          clientID: str("clientID") ?? undefined,
+          resolve: settle,
+        }
         const st = turns.get(id) ?? { running: null, waiting: [] }
         turns.set(id, st)
         if (b.force === true) {
@@ -1101,6 +1115,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const result = await done
         if (result.message) return json(res, 200, { message: result.message })
         if (result.aborted) return json(res, 200, { aborted: true })
+        if (result.cancelled) return json(res, 200, { cancelled: true })
         return json(res, result.status, { error: result.error ?? "prompt failed" })
       }
 
@@ -1108,6 +1123,35 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         console.error(`[stop] origin=client (gateway session ${id}, device ${token.slice(0, 6)}, from ${req.socket.remoteAddress ?? "?"})`)
         const stopped = await adapter.abort(id).catch(() => false)
         return json(res, 200, { stopped })
+      }
+
+      // act on a queued prompt the client still holds a handle to (a clientID):
+      // cancel it, change its words, or force it to run now. Once it is running
+      // it is too late, and the client is told so.
+      if (path === "/queue/cancel" || path === "/queue/edit" || path === "/queue/force") {
+        const clientID = str("clientID")
+        if (!clientID) return json(res, 400, { error: "clientID required" })
+        const st = turns.get(id)
+        if (st?.running?.clientID === clientID) return json(res, 409, { error: "already running" })
+        const idx = st ? st.waiting.findIndex((p) => p.clientID === clientID) : -1
+        if (!st || idx < 0) return json(res, 404, { error: "not queued" })
+        const entry = st.waiting[idx]!
+        if (path === "/queue/cancel") {
+          st.waiting.splice(idx, 1)
+          entry.resolve({ status: 200, cancelled: true })
+          return json(res, 200, { ok: true })
+        }
+        if (path === "/queue/edit") {
+          const more = str("text") ?? ""
+          if (!more.trim()) return json(res, 400, { error: "text required" })
+          entry.text = more
+          return json(res, 200, { ok: true })
+        }
+        // force: run it next, aborting the running turn so it can
+        st.waiting.splice(idx, 1)
+        st.waiting.unshift(entry)
+        st.signal?.abort()
+        return json(res, 200, { ok: true })
       }
 
       if (path === "/respond") {
