@@ -253,7 +253,14 @@ class GatewayChatRepository(
             put("text", text)
             if (files.isNotEmpty()) put("files", JsonArray(files.map { JsonPrimitive(it) }))
         }.toString()
-        val dto = decode("/prompt", MessageRes.serializer(), body)
+        val dto = try {
+            decode("/prompt", MessageRes.serializer(), body)
+        } catch (e: ApiFailure) {
+            // 409 is "a turn is already running": say so in words, not the
+            // gateway's bare "busy"
+            if (e.status == 409) throw ApiFailure(409, "the agent is still working on the last reply")
+            throw e
+        }
         // a stop is not a failure: the gateway answers {aborted:true} rather
         // than an error, and the caller renders it as a stop
         if (dto.aborted) throw TurnAborted()

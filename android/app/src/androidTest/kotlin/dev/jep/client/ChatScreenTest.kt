@@ -412,4 +412,31 @@ class ChatScreenTest {
         rule.onNodeWithText("3.4s").assertExists()
         rule.onNodeWithText("Time").assertExists()
     }
+
+    @Test
+    fun a_tool_note_is_shown_without_its_markup() {
+        val vm = ChatViewModel(
+            FakeChatRepository(
+                messages = listOf(
+                    ChatMessage(
+                        "a1", Role.ASSISTANT, 5,
+                        listOf(
+                            ChatPart.Tool(
+                                "t1", "bash", ToolStatus.ERROR, "slow-thing", null,
+                                "(no output)\n<shell_metadata>\nUser aborted the command\n</shell_metadata>",
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            "s1", "T", "jep", "opencode",
+        )
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(6_000) { rule.onAllNodesWithText("Ran a command").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("Ran a command").performClick()
+        rule.waitUntil(4_000) {
+            rule.onAllNodesWithText("User aborted the command", substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onAllNodesWithText("shell_metadata", substring = true).assertCountEquals(0)
+    }
 }

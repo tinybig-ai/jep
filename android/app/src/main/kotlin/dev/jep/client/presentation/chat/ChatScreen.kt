@@ -1538,10 +1538,15 @@ private fun DiffSheet(path: String?, diff: String, onDismiss: () -> Unit) {
 
 // The most useful single payload of a tool call, in the order a reader wants
 // it: what it produced (stdout / diff / file), then what it was told.
+private val ShellMetadataTag = Regex("</?shell_metadata>", RegexOption.IGNORE_CASE)
+
 private fun toolBody(part: ChatPart.Tool): String? {
     val out = part.output?.takeIf { it.isNotBlank() }
     val input = part.input?.takeIf { it.isNotBlank() && it != "{}" && it != "null" }
-    val text = out ?: input ?: return null
+    // opencode wraps its own note about a call in <shell_metadata> tags; strip the
+    // tags so the note reads as text and the markup never shows
+    val text = (out ?: input ?: return null).replace(ShellMetadataTag, "").replace(Regex("\n{3,}"), "\n\n").trim()
+    if (text.isEmpty()) return null
     return if (text.length > 4000) text.take(4000) + "\n… (${text.length - 4000} more chars)" else text
 }
 
