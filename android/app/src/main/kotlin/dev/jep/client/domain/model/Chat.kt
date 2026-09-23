@@ -63,6 +63,9 @@ data class Model(
     val ref: String get() = "$providerID/$modelID"
 }
 
+/** one primary agent a conversation may run under; ids are the harness's own */
+data class AgentInfo(val id: String, val label: String, val detail: String? = null)
+
 /** the token breakdown a turn reported; `context` is what it held at its peak */
 data class TokenUsage(
     val input: Long = 0,

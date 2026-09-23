@@ -23,6 +23,16 @@ export interface ModelCaps {
   contextLimit: number
 }
 
+/** A primary agent a harness can run a turn under. Ids are the harness's own
+ * (opencode's "build"/"plan", claude's agent types) and opaque to clients;
+ * `default` marks the one the harness uses when none is chosen. */
+export interface AgentRef {
+  id: string
+  label: string
+  detail?: string
+  default?: boolean
+}
+
 /**
  * A single live connection to one harness workspace. This is the "driven
  * adapter" seam of the hexagonal core: every harness we ever support (opencode
@@ -50,8 +60,8 @@ export interface HarnessAdapter {
       model?: ModelRef
       /** absolute paths to files attached to the prompt (e.g. images) */
       filePaths?: string[]
-      /** primary agent to run this turn under (e.g. "build", "plan"), when
-       * the harness supports switching — omitted means the harness default */
+      /** primary agent to run this turn under, an id from agents() — omitted
+       * means the harness default */
       agent?: string
     },
   ): Promise<Message>
@@ -74,6 +84,9 @@ export interface HarnessAdapter {
    * shared convention table in core/skills.ts, so a new harness works before
    * it customizes — but every harness can own its own roots. */
   skillDirs?(): SkillDirs
+  /** the primary agents this harness offers (opencode's build/plan, claude's
+   * agent types), for a picker. Omitted or empty when it has no such switch. */
+  agents?(): Promise<AgentRef[]>
   models?(): Promise<ModelRef[]>
   /** the `provider/model` a prompt runs on when `opts.model` is omitted — what
    * "default" actually resolves to, so a frontend can name it instead of

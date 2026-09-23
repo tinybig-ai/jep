@@ -100,6 +100,52 @@ test("pair gates: wrong code rejected, right code yields a working token", async
   }
 })
 
+test("agents come from the adapter, and an unknown id is refused", async () => {
+  const adapter = fakeAdapter()
+  adapter.agents = async () => [
+    { id: "build", label: "Build", default: true },
+    { id: "plan", label: "Plan" },
+  ]
+  const g = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter }],
+    dataHome: mkdtempSync(join(tmpdir(), "gw-test-")),
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+  })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const token = await pair(base, "TESTCODE")
+    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" }
+    const list = (await (
+      await fetch(`${base}/agents`, { method: "POST", headers, body: JSON.stringify({ id: "s1" }) })
+    ).json()) as { agents: Array<{ id: string }>; default: string | null }
+    assert.deepEqual(
+      list.agents.map((a) => a.id),
+      ["build", "plan"],
+    )
+    assert.equal(list.default, "build")
+
+    // an id the harness doesn't offer is refused rather than stored, so it
+    // can't fail the next turn
+    const bad = await fetch(`${base}/setagent`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ id: "s1", agent: "nope" }),
+    })
+    assert.equal(bad.status, 400)
+
+    const ok = await fetch(`${base}/setagent`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ id: "s1", agent: "plan" }),
+    })
+    assert.equal(ok.status, 200)
+  } finally {
+    await g.close()
+  }
+})
+
 test("the gateway reports its pairing state through the admin port", async () => {
   const { gw } = spawnGateway()
   const g = await gw

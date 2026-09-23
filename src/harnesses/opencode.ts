@@ -4,13 +4,21 @@ import os from "node:os"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { Agent } from "undici"
-import type { HarnessAdapter, ModelRef, ModelCaps } from "../core/ports.ts"
+import type { AgentRef, HarnessAdapter, ModelRef, ModelCaps } from "../core/ports.ts"
 import type { AskOption, DomainEvent, FileDiff, HarnessError, Message, Part, ProjectSummary, SessionSummary, SkillDirs } from "../core/types.ts"
 import { TurnAbortedError } from "../core/types.ts"
+import { resolveAgent } from "../core/agents.ts"
 import { parseOpencodeLogError } from "./opencode-log.ts"
 const OPENCODE_BIN = process.env.OPENCODE_BIN ?? "opencode"
 const MODEL_REF = process.env.JEP_MODEL ?? "localfree-models-proxy/auto"
 const DEFAULT_TIMEOUT_MS = 180_000
+
+// opencode's own primary agents — the one place that names them. Clients read
+// them through the port instead of hardcoding "build"/"plan".
+const AGENTS: AgentRef[] = [
+  { id: "build", label: "Build", detail: "executes tools", default: true },
+  { id: "plan", label: "Plan", detail: "read-only, no edits" },
+]
 
 // A turn against a slow (free) model can legitimately run past Node's default
 // 5-minute fetch timeouts (undici's headersTimeout/bodyTimeout), and the whole
@@ -453,6 +461,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
     try {
       const [defaultProvider, defaultModel] = MODEL_REF.split("/")
       const model = opts?.model ?? { providerID: defaultProvider, modelID: defaultModel }
+      const agent = resolveAgent(AGENTS, opts?.agent)
       const parts = [
         { type: "text", text },
         ...(opts?.filePaths ?? []).map((fp) => ({ type: "file", mime: mimeFor(fp), url: pathToFileURL(fp).href })),
@@ -460,7 +469,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
       const res = await fetch(this.#url(`/session/${encodeURIComponent(toNativeId(sessionID))}/message`), {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ parts, model, ...(opts?.agent ? { agent: opts.agent } : {}) }),
+        body: JSON.stringify({ parts, model, ...(agent ? { agent } : {}) }),
         signal: controller.signal,
         dispatcher: NO_TIMEOUT_AGENT,
       })
@@ -509,6 +518,10 @@ export class OpenCodeAdapter implements HarnessAdapter {
     // which events() translates to turn.aborted — so every watcher, not just
     // the caller who asked, learns how the turn ended
     return this.#json(`/session/${encodeURIComponent(toNativeId(sessionID))}/abort`, { method: "POST" })
+  }
+
+  async agents(): Promise<AgentRef[]> {
+    return AGENTS
   }
 
   // The provider failure opencode named for this session but never surfaced as

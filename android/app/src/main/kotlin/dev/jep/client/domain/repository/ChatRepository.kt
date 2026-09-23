@@ -1,5 +1,6 @@
 package dev.jep.client.domain.repository
 
+import dev.jep.client.domain.model.AgentInfo
 import dev.jep.client.domain.model.Ask
 import dev.jep.client.domain.model.BrowseResult
 import dev.jep.client.domain.model.ChatMessage
@@ -105,6 +106,8 @@ interface ChatRepository {
     suspend fun setModel(sessionId: String, ref: String?): Boolean
     /** the conversation's primary agent (null = harness default) */
     suspend fun agent(sessionId: String): String?
+    /** the primary agents the conversation's harness offers, for a picker */
+    suspend fun agents(sessionId: String): List<AgentInfo>
     /** set (or clear) the conversation's primary agent */
     suspend fun setAgent(sessionId: String, agent: String?): Boolean
     /** what the conversation has spent */

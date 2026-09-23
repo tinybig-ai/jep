@@ -795,16 +795,34 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         return json(res, 200, { models: enriched, current: models.get(id) ?? null, default: resolvedDefault })
       }
 
-      // the primary agent a conversation runs under (build executes tools,
-      // plan is read-only) — a per-conversation choice like the model
+      // the primary agents this harness offers, plus the conversation's choice.
+      // The adapter owns the ids, so the phone renders whatever it declares
+      // instead of a list jep would have to keep in step.
+      if (path === "/agents") {
+        const list = adapter.agents ? await adapter.agents().catch(() => []) : []
+        return json(res, 200, {
+          agents: list,
+          current: agents.get(id) ?? null,
+          default: list.find((a) => a.default)?.id ?? null,
+        })
+      }
+
       if (path === "/agent") {
         return json(res, 200, { current: agents.get(id) ?? null })
       }
 
       if (path === "/setagent") {
         const agent = str("agent")
-        if (agent) agents.set(id, agent)
-        else agents.delete(id)
+        if (agent) {
+          // when the harness names its agents, refuse one it doesn't offer (a
+          // stale id from another harness); a harness that names none accepts
+          // the id and simply ignores it at run time (the adapter clamps)
+          const list = adapter.agents ? await adapter.agents().catch(() => []) : []
+          if (list.length && !list.some((a) => a.id === agent)) return json(res, 400, { error: "unknown agent" })
+          agents.set(id, agent)
+        } else {
+          agents.delete(id)
+        }
         await saveAgents(deps.dataHome, agents)
         return json(res, 200, { ok: true, agent: agent || null })
       }

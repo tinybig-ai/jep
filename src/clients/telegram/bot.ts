@@ -2748,7 +2748,7 @@ export class TelegramBot {
     const ws = this.#activeWs(chatID)
     const modelKey = this.#store.model(chatID, ws.adapter.id)
     const model = await this.#modelLabel(chatID, ws)
-    const agent = this.#store.agent(chatID) ?? "build"
+    const agent = this.#store.agent(chatID) ?? ""
     let tokensLine = "–"
     let spend = ""
     const sessionID = await this.#resolveSessionID(chatID)
@@ -3564,7 +3564,7 @@ export class TelegramBot {
       // one answer that lived only behind a typed command
       [btn("💬 Conversations", "set:ls")],
       [btn(`🤖 Model · ${model}`, "set:model")],
-      [btn(`🧭 Agent · ${this.#store.agent(chatID) ?? "build"}`, "set:agent")],
+      [btn(`🧭 Agent · ${this.#store.agent(chatID) ?? "default"}`, "set:agent")],
       // always shown, like 🗂 Workspace: hiding a row until a second option
       // exists is how the only route to something ends up undiscoverable, and
       // with one harness it still answers "what is actually running this?"
@@ -3861,20 +3861,22 @@ export class TelegramBot {
     await this.#settingsWorkspace(chatID, messageID)
   }
 
-  // 🧭 Agent: build (executes) vs plan (read-only, no edit tools) — a relay of
-  // opencode's own primary agents, not a mode jep invents.
+  // 🧭 Agent: the harness's own primary agents (opencode's build/plan), read
+  // from the adapter rather than a fixed list jep would have to keep in step.
   async #settingsAgent(chatID: number, messageID: number): Promise<void> {
-    const current = this.#store.agent(chatID) ?? "build"
-    const opt = (name: string, label: string): InlineButton => {
-      const b = btn(label, `agt:${name}`)
-      if (current === name) b.style = "success"
+    const ws = this.#activeWs(chatID)
+    const agents = (await ws.adapter.agents?.().catch(() => [])) ?? []
+    const current = this.#store.agent(chatID)
+    const opt = (id: string | null, label: string): InlineButton => {
+      const b = btn(label, id ? `agt:${id}` : "agt:")
+      if ((current ?? null) === id) b.style = "success"
       return b
     }
-    const rows: InlineButton[][] = [
-      [opt("build", "🔨 Build"), opt("plan", "📝 Plan")],
-      [btn("‹ Back", "set:root")],
-    ]
-    const lines = ["🧭 Agent", "", `current: ${current}`, "", "Build executes tools. Plan is read-only — no edits."]
+    const rows: InlineButton[][] = [[opt(null, "⭐ Default (harness)")]]
+    for (const a of agents) rows.push([opt(a.id, a.detail ? `${a.label} · ${a.detail}` : a.label)])
+    rows.push([btn("‹ Back", "set:root")])
+    const lines = ["🧭 Agent", "", `current: ${current ?? "default"}`]
+    if (!agents.length) lines.push("", `${ws.adapter.id} has no agent switch.`)
     await this.#menu(chatID, [...lines, ...rows], { messageID })
   }
 
@@ -4263,9 +4265,9 @@ export class TelegramBot {
         break
       }
       case "agt": {
-        this.#store.setAgent(chatID, rest)
+        this.#store.setAgent(chatID, rest || null)
         await this.#settingsAgent(chatID, msg.message_id)
-        await tg.answerCallbackQuery({ id: cq.id, text: `agent: ${rest}` })
+        await tg.answerCallbackQuery({ id: cq.id, text: `agent: ${rest || "default"}` })
         void this.#updateStatus(chatID).catch(logFail("status"))
         break
       }

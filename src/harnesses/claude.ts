@@ -5,8 +5,15 @@ import { existsSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import type { HarnessAdapter, ModelRef, ModelCaps } from "../core/ports.ts"
+import type { AgentRef, HarnessAdapter, ModelRef, ModelCaps } from "../core/ports.ts"
 import type { AskRequest, DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionHold, SessionSummary, SkillDirs } from "../core/types.ts"
+import { resolveAgent } from "../core/agents.ts"
+
+// claude's `--agent` takes a subagent type jep can't enumerate reliably, so it
+// offers no switch here. A requested id (opencode's "build", say, left over from
+// another harness) is ignored rather than forwarded, which is what used to fail
+// with "--agent 'build' not found".
+const AGENTS: AgentRef[] = []
 
 /**
  * Claude Code as a harness.
@@ -294,7 +301,8 @@ export class ClaudeAdapter implements HarnessAdapter {
 
     const args = ["-p", "--output-format", "stream-json", "--include-partial-messages", "--verbose"]
     if (opts?.model?.modelID) args.push("--model", opts.model.modelID)
-    if (opts?.agent) args.push("--agent", opts.agent)
+    const agent = resolveAgent(AGENTS, opts?.agent)
+    if (agent) args.push("--agent", agent)
     if (!pending) args.push("--resume", native)
     // attachments have no flag in print mode; naming the paths is what lets
     // the agent read them with its own tools
@@ -687,6 +695,10 @@ export class ClaudeAdapter implements HarnessAdapter {
       }
     }
     return null
+  }
+
+  async agents(): Promise<AgentRef[]> {
+    return AGENTS
   }
 
   async models(): Promise<ModelRef[]> {

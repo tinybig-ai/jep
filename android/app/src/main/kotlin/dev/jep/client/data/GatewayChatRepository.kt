@@ -1,6 +1,7 @@
 package dev.jep.client.data
 
 import dev.jep.client.data.dto.AgentRes
+import dev.jep.client.data.dto.AgentsRes
 import dev.jep.client.data.dto.AttachRes
 import dev.jep.client.data.dto.BrowseRes
 import dev.jep.client.data.dto.DiffRes
@@ -27,6 +28,7 @@ import dev.jep.client.domain.repository.HistoryBatch
 import dev.jep.client.domain.repository.ModelChoices
 import dev.jep.client.domain.repository.TurnAborted
 import dev.jep.client.domain.model.BrowseResult
+import dev.jep.client.domain.model.AgentInfo
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.FileDiff
 import dev.jep.client.domain.model.Harnesses
@@ -159,6 +161,9 @@ class GatewayChatRepository(
 
     override suspend fun agent(sessionId: String): String? =
         decode("/agent", AgentRes.serializer(), payload("id" to sessionId)).current
+
+    override suspend fun agents(sessionId: String): List<AgentInfo> =
+        decode("/agents", AgentsRes.serializer(), payload("id" to sessionId)).agents.map { it.toDomain() }
 
     override suspend fun setAgent(sessionId: String, agent: String?): Boolean =
         post("/setagent", payload("id" to sessionId, "agent" to (agent ?: ""))).first in 200..299

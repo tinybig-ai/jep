@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import dev.jep.client.data.dto.AskDto
+import dev.jep.client.data.dto.AgentDto
 import dev.jep.client.data.dto.BrowseRes
 import dev.jep.client.data.dto.DirEntryDto
 import dev.jep.client.data.dto.FileDiffDto
@@ -21,6 +22,7 @@ import dev.jep.client.data.dto.TokensDto
 import dev.jep.client.data.dto.UsageDto
 import dev.jep.client.data.dto.WorkspaceDto
 import dev.jep.client.domain.model.Ask
+import dev.jep.client.domain.model.AgentInfo
 import dev.jep.client.domain.model.AskOption
 import dev.jep.client.domain.model.BrowseResult
 import dev.jep.client.domain.model.ChatMessage
@@ -58,6 +60,8 @@ fun ImportableDto.toDomain() = ImportableSession(id, title, directory, updated, 
 fun BrowseRes.toDomain() = BrowseResult(cwd, root, parent, dirs.map { it.toDomain() })
 
 fun ModelDto.toDomain() = Model(providerID, modelID, image, attachment, contextLimit)
+
+fun AgentDto.toDomain() = AgentInfo(id, label, detail)
 
 fun TokensDto.toDomain() = TokenUsage(input, output, reasoning, cache.read, cache.write)
 

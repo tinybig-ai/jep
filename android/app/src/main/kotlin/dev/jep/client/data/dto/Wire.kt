@@ -142,6 +142,21 @@ data class SetModelRes(val ok: Boolean = false, val model: String? = null)
 data class AgentRes(val current: String? = null)
 
 @Serializable
+data class AgentDto(
+    val id: String = "",
+    val label: String = "",
+    val detail: String? = null,
+    val default: Boolean = false,
+)
+
+@Serializable
+data class AgentsRes(
+    val agents: List<AgentDto> = emptyList(),
+    val current: String? = null,
+    val default: String? = null,
+)
+
+@Serializable
 data class SkillDto(
     val name: String = "",
     val description: String = "",

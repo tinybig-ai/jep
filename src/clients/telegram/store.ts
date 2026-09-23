@@ -162,8 +162,9 @@ export class ChatStore {
     return this.#agents[String(chatID)] ?? null
   }
 
-  setAgent(chatID: number, name: string): void {
-    this.#agents[String(chatID)] = name
+  setAgent(chatID: number, name: string | null): void {
+    if (name) this.#agents[String(chatID)] = name
+    else delete this.#agents[String(chatID)]
     this.#save()
   }
 

@@ -6,6 +6,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.jep.client.domain.model.Ask
+import dev.jep.client.domain.model.AgentInfo
 import dev.jep.client.domain.repository.ChatEvent
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
@@ -78,8 +79,10 @@ class ChatViewModel(
         val loadingHistory: Boolean = false,
         /** models this conversation may run on; null until Settings asks */
         val models: ModelChoices? = null,
-        /** the primary agent (build/plan); null = harness default */
+        /** the primary agent; null = harness default */
         val agent: String? = null,
+        /** the primary agents the harness offers; empty until Settings asks */
+        val agents: List<AgentInfo> = emptyList(),
         /** loaded on demand for the Usage panel */
         val usage: Usage? = null,
         /** loaded on demand for the Changes panel */
@@ -392,6 +395,8 @@ class ChatViewModel(
         viewModelScope.launch {
             runCatching { repo.agent(sessionId) }
                 .onSuccess { a -> _state.update { it.copy(agent = a) } }
+            runCatching { repo.agents(sessionId) }
+                .onSuccess { list -> _state.update { it.copy(agents = list) } }
         }
     }
 

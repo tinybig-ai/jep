@@ -35,8 +35,9 @@ plain clients).
 | `POST /stop` | `{id}` | `{stopped}` |
 | `POST /models` | `{id}` | `{models[],current,default}`: the models this conversation's harness can run on, each with `image`/`attachment`/`contextLimit`; `current` is the set one (null = harness default); `default` is what "default" resolves to |
 | `POST /setmodel` | `{id,model?}` | `{ok,model}`: set (`"provider/model"`) or clear (omit) this conversation's model; persisted in `<DATA_HOME>/gateway-models.json`, applied to the next `/prompt` |
+| `POST /agents` | `{id}` | `{agents[],current,default}`: the primary agents this conversation's harness offers (`{id,label,detail,default?}`), the current choice, and the harness default; the adapter owns the ids, so the client renders whatever it declares |
 | `POST /agent` | `{id}` | `{current}`: the primary agent set for this conversation (null = harness default) |
-| `POST /setagent` | `{id,agent?}` | `{ok,agent}`: set (`"build"`/`"plan"`) or clear this conversation's primary agent; persisted in `<DATA_HOME>/gateway-agents.json`, applied to the next `/prompt` |
+| `POST /setagent` | `{id,agent?}` | `{ok,agent}`: set or clear this conversation's primary agent; a harness that names its agents refuses one it doesn't offer (400 `unknown agent`), one that names none accepts the id and ignores it. Persisted in `<DATA_HOME>/gateway-agents.json`, applied to the next `/prompt` |
 | `POST /usage` | `{id}` | `{usage}`: tokens (in/out/thinking/cache) and reported cost summed over the conversation, plus turns and models (`core/usage.ts`) |
 | `POST /diff` | `{id}` | `{files[]}`: files this conversation changed (`{file,additions,deletions,status?}`) |
 | `POST /term` | (none) | `{authorized}`: whether *this* device token may open a shell (see below) |
