@@ -99,8 +99,10 @@ Two minutes to your first agent reply from wherever you are.
 JEP_TG_TOKEN=<from @BotFather> npx --yes github:tinybig-ai/jep
 ```
 
-Runs the daemon straight from git against the current directory. The clone below
-is what you want for the launchd daemon, the Android build, or hacking on jep.
+This runs the Telegram bot. The same daemon serves the Android app and other
+clients through the [gateway](docs/GATEWAY.md) (set `JEP_GW_PORT`); the client
+guides are in [docs/clients](docs/clients/). For the launchd daemon, the Android
+build, or hacking on jep, clone below.
 
 ### 1. Install
 
@@ -317,11 +319,11 @@ jep is new, small, and built on a deliberate seam, so the surest way to help is
 to **implement the port for a harness you love**, or to **build a client** on
 top of the gateway. Issues and PRs welcome.
 
-- **[CONTRIBUTING.md](CONTRIBUTING.md)** — dev setup, the change loop, house
+- **[CONTRIBUTING.md](CONTRIBUTING.md)**: dev setup, the change loop, house
   rules, review and governance.
-- **[docs/ADD_A_HARNESS.md](docs/ADD_A_HARNESS.md)** — the harness-adapter
+- **[docs/ADD_A_HARNESS.md](docs/ADD_A_HARNESS.md)**: the harness-adapter
   on-ramp, start to proven PR.
-- **[docs/GATEWAY.md](docs/GATEWAY.md)** — build a client on the same ports.
+- **[docs/GATEWAY.md](docs/GATEWAY.md)**: build a client on the same ports.
 
 Before opening a PR, skim [docs/PHILOSOPHY.md](docs/PHILOSOPHY.md), because
 "never move on from a broken state" applies to the bot that runs on people's
@@ -329,8 +331,16 @@ devices.
 
 ## Security
 
-Please don't open a public issue for a vulnerability — see
+Please don't open a public issue for a vulnerability. See
 [SECURITY.md](SECURITY.md).
+
+## Contributors
+
+Thanks to everyone who helps build jep. This list updates itself.
+
+<a href="https://github.com/tinybig-ai/jep/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=tinybig-ai/jep" alt="jep contributors" />
+</a>
 
 ## License
 
