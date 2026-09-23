@@ -308,11 +308,17 @@ class ChatViewModel(
         val trimmed = text.trim()
         if (trimmed.isEmpty() || _state.value.sending) return
         val files = _state.value.attachments
+        // The optimistic row carries the prompt text and the attachments as
+        // separate parts, never the prompt plus an "[attached: …]" suffix the
+        // daemon would never produce. Refresh reconciles optimistic rows against
+        // the served message by text; a suffix there meant an attachment turn
+        // never matched, so the message showed twice and the echo landed after
+        // the reply.
         val pending = ChatMessage(
             id = "local-${System.nanoTime()}",
             role = Role.USER,
             time = System.currentTimeMillis(),
-            parts = listOf(ChatPart.Text(if (files.isEmpty()) trimmed else trimmed + "\n\n[attached: ${files.joinToString(", ") { it.name }}]")),
+            parts = listOf(ChatPart.Text(trimmed)) + files.map { ChatPart.File(path = it.name, name = it.name, mimeType = null) },
         )
         val seq = ++turn
         optimistic.add(pending)
