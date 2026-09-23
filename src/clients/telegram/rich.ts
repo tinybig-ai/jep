@@ -210,6 +210,10 @@ export function mdToRich(src: string): RichBlock[] {
   while (i < lines.length) {
     const line = lines[i]!
     if (!line.trim()) {
+      // a blank line ends the paragraph. Without this the blank lines are
+      // dropped and every block collapses into one paragraph with hard line
+      // breaks, which reads as an unbroken wall in the client.
+      flushPara()
       i++
       continue
     }

@@ -15,6 +15,21 @@ test("a paragraph is a paragraph", () => {
   assert.equal(b[0]!.text, "just text")
 })
 
+test("a blank line splits paragraphs, and they stay separate blocks", () => {
+  const b = mdToRich("one\n\ntwo\n\nthree")
+  assert.deepEqual(types(b), ["paragraph", "paragraph", "paragraph"])
+  assert.deepEqual(
+    b.map((x) => x.text),
+    ["one", "two", "three"],
+  )
+})
+
+test("a soft line break stays inside one paragraph", () => {
+  const b = mdToRich("one\ntwo")
+  assert.deepEqual(types(b), ["paragraph"])
+  assert.equal(b[0]!.text, "one\ntwo")
+})
+
 test("headings keep their level", () => {
   assert.deepEqual(mdToRich("# one")[0], { type: "heading", size: 1, text: "one" })
   assert.deepEqual(mdToRich("### three")[0], { type: "heading", size: 3, text: "three" })
