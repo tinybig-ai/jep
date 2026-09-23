@@ -90,6 +90,26 @@ function cleanForDisplay(m: Message): Message {
   return { ...m, parts }
 }
 
+// Content type for a file the phone fetches: enough for images to render
+// inline; anything else is served as octets.
+const IMAGE_MIME: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  webp: "image/webp",
+  gif: "image/gif",
+  svg: "image/svg+xml",
+  bmp: "image/bmp",
+  heic: "image/heic",
+  avif: "image/avif",
+}
+function mimeForPath(p: string): string {
+  const dot = p.lastIndexOf(".")
+  const ext = dot >= 0 ? p.slice(dot + 1).toLowerCase() : ""
+  return IMAGE_MIME[ext] ?? "application/octet-stream"
+}
+const FILE_MAX = 25 * 1024 * 1024
+
 async function loadTokens(dataHome: string): Promise<Map<string, number>> {
   try {
     const raw = JSON.parse(await readFile(join(dataHome, TOKEN_FILE), "utf8")) as Record<string, number>
@@ -505,6 +525,30 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           console.error(`[gw] stream closed (${clients.size} left)`)
         })
         return
+      }
+
+      // bytes for a file part, so the phone can render an image inline. The
+      // phone builds this from the part's filePath; only paths under jep's own
+      // data home or a served workspace are readable, so this is not a general
+      // file reader.
+      if (path === "/file" && req.method === "GET") {
+        const encoded = url.searchParams.get("p") ?? ""
+        const decoded = encoded ? Buffer.from(encoded, "base64url").toString("utf8") : ""
+        if (!decoded) return json(res, 400, { error: "p required" })
+        const abs = resolve(decoded)
+        const roots = [resolve(deps.dataHome), ...deps.adapters().map(({ adapter }) => resolve(adapter.workspace))]
+        if (!roots.some((r) => abs === r || abs.startsWith(r + sep))) {
+          return json(res, 403, { error: "outside the served roots" })
+        }
+        try {
+          const info = await stat(abs)
+          if (!info.isFile() || info.size > FILE_MAX) return json(res, 404, { error: "no such file" })
+          const body = await readFile(abs)
+          res.writeHead(200, { "content-type": mimeForPath(abs), "cache-control": "private, max-age=300" })
+          res.end(body)
+        } catch {
+          return json(res, 404, { error: "no such file" })
+        }
       }
 
       // attach carries raw octets, not JSON — handle before the body gate
@@ -986,6 +1030,11 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         active.add(id)
         try {
           const message = await adapter.prompt(id, text, {
+            // no absolute deadline. A real turn can run far longer than the
+            // adapter's default ceiling, and that ceiling was severing Android
+            // turns mid-work with no client involved (the bot opts out for the
+            // same reason). A stuck turn is the client's to stop.
+            timeoutMs: 0,
             filePaths,
             ...(model ? { model } : {}),
             ...(agent ? { agent } : {}),

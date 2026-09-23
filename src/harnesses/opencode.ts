@@ -182,6 +182,35 @@ function mapPart(part: any, workspace: string): Part {
   }
 }
 
+// opencode stores a user attachment as an inline data: URL with no name, and
+// marks its own scaffolding `synthetic`. That scaffolding is a
+// "Called the Read tool with the following input: {\"filePath\":…}" text naming
+// the exact file jep handed over. Recover the real path (and name) from it and
+// drop the scaffolding, rather than showing it to anyone or decoding the bytes.
+function mapParts(parts: any[] | undefined, workspace: string): Part[] {
+  const rows = parts ?? []
+  const attached = rows
+    .filter((p) => p?.synthetic === true && typeof p?.text === "string")
+    .flatMap((p) => [...String(p.text).matchAll(/"filePath"\s*:\s*"([^"]+)"/g)].map((m) => m[1] as string))
+  let next = 0
+  return rows
+    .filter((p) => p?.synthetic !== true)
+    .map((p): Part => {
+      const isDataFile = p?.type === "file" && typeof p?.url === "string" && (p.url as string).startsWith("data:")
+      const fp = isDataFile ? attached[next] : undefined
+      if (fp) {
+        next++
+        return {
+          kind: "file",
+          filePath: fp,
+          fileName: p.file_name ?? p.filename ?? path.basename(fp),
+          mimeType: p.mime_type ?? p.mime,
+        }
+      }
+      return mapPart(p, workspace)
+    })
+}
+
 function mapMessage(info: any, parts: any[] | undefined, workspace: string): Message {
   const time = info.time && typeof info.time === "object" ? info.time.created : info.time
   const t = info.tokens
@@ -191,7 +220,7 @@ function mapMessage(info: any, parts: any[] | undefined, workspace: string): Mes
     sessionID: toInternalId(info.sessionID ?? ""),
     role: info.role === "user" ? "user" : "assistant",
     time: typeof time === "number" ? time : Date.now(),
-    parts: (parts ?? []).filter((p) => p?.synthetic !== true).map((p) => mapPart(p, workspace)),
+    parts: mapParts(parts, workspace),
     ...(typeof info.cost === "number" ? { cost: info.cost } : {}),
     ...(model ? { model } : {}),
     ...(t
@@ -518,7 +547,16 @@ export class OpenCodeAdapter implements HarnessAdapter {
     // for half an hour and any fixed ceiling eventually cuts one off mid-work,
     // so callers that watch the event stream (see the bot's idle watchdog)
     // opt out of this one and kill the turn on *inactivity* instead.
-    const timer = timeout > 0 ? setTimeout(onAbort, timeout) : null
+    const timer =
+      timeout > 0
+        ? setTimeout(() => {
+            // the one abort that is neither a stop nor a harness event: name it,
+            // or a turn cut off by this deadline reads as having died for no
+            // reason (which is exactly how the gateway's 3-minute ceiling hid)
+            console.error(`[stop] origin=prompt-timeout (session ${sessionID}, ${timeout}ms)`)
+            onAbort()
+          }, timeout)
+        : null
 
     try {
       const [defaultProvider, defaultModel] = MODEL_REF.split("/")

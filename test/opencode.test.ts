@@ -102,13 +102,11 @@ test("listSessions falls back to the project list when the route is missing", as
   }
 })
 
-test("a user message drops opencode's synthetic part and names a data: attachment", async () => {
-  // What opencode really stores when a person attaches an image: their text, a
-  // `synthetic` text part that is opencode's own "read this file" scaffolding
-  // for the model, and the image as an inline data: URL. The first two fixes:
-  // the synthetic part must not reach a client as the user's words, and the
-  // data: URL must not be treated as a path (it used to become
-  // "<workspace>/data:image/jpeg;base64,…").
+test("recovers a user attachment's real path from opencode's synthetic part", async () => {
+  // opencode stores a user attachment as an inline data: URL with no name, and
+  // marks its own "Called the Read tool … {\"filePath\":…}" scaffolding
+  // `synthetic`. Recover the real path (and name) from that scaffolding and drop
+  // it, rather than showing it to anyone as the user's words.
   const srv = await serve((pathname) => {
     if (pathname !== "/session/ses_a/message") return undefined
     return [
@@ -128,24 +126,42 @@ test("a user message drops opencode's synthetic part and names a data: attachmen
   })
   try {
     const adapter = new OpenCodeAdapter({} as any, WS, srv.base)
-    const msgs = await adapter.messages("opencode://ses_a")
-    assert.equal(msgs.length, 1)
-    const parts = msgs[0]!.parts
-    assert.deepEqual(
-      parts.map((p) => p.kind),
-      ["text", "file"],
-      "the synthetic scaffolding part is gone",
-    )
+    const parts = (await adapter.messages("opencode://ses_a"))[0]!.parts
+    assert.deepEqual(parts.map((p) => p.kind), ["text", "file"], "the synthetic scaffolding is gone")
     const text = parts[0]!
     assert.equal(text.kind === "text" ? text.text : "", "see the attached file")
     const file = parts[1]!
-    assert.equal(file.kind === "file" ? file.fileName : "", "attached.jpeg")
+    assert.equal(file.kind === "file" ? file.filePath : "", "/tmp/x.jpg", "the real path, from the scaffolding")
+    assert.equal(file.kind === "file" ? file.fileName : "", "x.jpg")
     assert.equal(file.kind === "file" ? file.mimeType : "", "image/jpeg")
-    assert.equal(
-      file.kind === "file" ? file.filePath.startsWith(WS) || file.filePath.includes("data:") : true,
-      false,
-      "the data: URL is not path-joined to the workspace",
-    )
+  } finally {
+    await srv.close()
+  }
+})
+
+test("names a data: attachment from its mime when there is no scaffolding", async () => {
+  // fallback for a message with no synthetic part: still never treat the data:
+  // URL as a path (it used to become "<workspace>/data:image/jpeg;base64,…")
+  const srv = await serve((pathname) => {
+    if (pathname !== "/session/ses_a/message") return undefined
+    return [
+      {
+        info: { id: "msg_1", role: "user", time: { created: 10 } },
+        parts: [
+          { type: "text", text: "see the attached file" },
+          { type: "file", url: "data:image/jpeg;base64,AAAA", mime: "image/jpeg" },
+        ],
+      },
+    ]
+  })
+  try {
+    const adapter = new OpenCodeAdapter({} as any, WS, srv.base)
+    const parts = (await adapter.messages("opencode://ses_a"))[0]!.parts
+    const file = parts.find((p) => p.kind === "file")
+    assert.ok(file && file.kind === "file")
+    assert.equal(file.fileName, "attached.jpeg")
+    assert.equal(file.mimeType, "image/jpeg")
+    assert.equal(file.filePath.startsWith(WS) || file.filePath.includes("data:"), false)
   } finally {
     await srv.close()
   }
