@@ -131,9 +131,25 @@ is decided in the PR.
   (`0.1.x`), so a minor bump may carry a breaking change; it will be called out
   in the release notes.
 - Releases are cut from `main`. There are no long-lived branches.
-- **Known gap:** the Android client is currently built and installed by hand
-  (debug APK). Release automation, signing, and a tagged release process are
-  open work — a great thing to help with if build/release tooling is your bent.
+- **CI builds the Android debug APK** on every push and PR
+  (`.github/workflows/android.yml`) — proof the client compiles, nothing signed
+  or shipped. Debug builds need no secret.
+- **Releases are tagged.** Push a tag like `v0.2.0` and
+  `.github/workflows/release.yml` builds a **signed** release APK, stamps it
+  with the tag's version, and attaches it to the GitHub Release for that tag.
+- **Signing is a repository secret, never a file in the repo.** One-time setup:
+
+  1. Generate a release key and keep it out of the tree. Back it up somewhere
+     safe — losing it means you can't update the app again:
+     ```sh
+     keytool -genkeypair -v -keystore jep-release.jks -alias jep \
+       -keyalg RSA -keysize 4096 -validity 10000
+     ```
+  2. Add these under **Settings → Secrets and variables → Actions**:
+     - `ANDROID_KEYSTORE_BASE64` — the output of `base64 -i jep-release.jks`
+     - `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`
+  3. Push a `v*` tag. Without the secrets the release job fails with a clear
+     message rather than shipping an unsigned APK.
 
 ## Reporting security issues
 

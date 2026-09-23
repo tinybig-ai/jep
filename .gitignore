@@ -11,3 +11,9 @@ android/.gradle/
 android/build/
 android/app/build/
 android/local.properties
+
+# Signing material is a secret and must never be committed: the key file, the
+# keystore that holds it, and the properties CI writes from repository secrets.
+android/keystore.properties
+*.jks
+*.keystore

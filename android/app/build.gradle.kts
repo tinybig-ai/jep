@@ -1,8 +1,25 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
 }
+
+// A release build can stamp its version from the tag via
+// `-PreleaseVersionName=… -PreleaseVersionCode=…`; a local build keeps these
+// literals.
+val releaseVersionName = (project.findProperty("releaseVersionName") as String?) ?: "0.1.0"
+val releaseVersionCode = (project.findProperty("releaseVersionCode") as String?)?.toIntOrNull() ?: 1
+
+// Release signing is optional. With no `keystore.properties` (a PR, a fork, a
+// dev box) only debug builds are made. The keystore never lives in the repo —
+// CI writes this file from repository secrets at build time. See CONTRIBUTING.
+val keystoreProperties = Properties().apply {
+    val props = rootProject.file("keystore.properties")
+    if (props.exists()) props.inputStream().use { load(it) }
+}
+val hasReleaseSigning = keystoreProperties.getProperty("storeFile") != null
 
 android {
     namespace = "dev.jep.client"
@@ -12,15 +29,27 @@ android {
         applicationId = "dev.jep.client"
         minSdk = 29
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = releaseVersionCode
+        versionName = releaseVersionName
         // instrumented Compose UI tests (androidTest) run on a device/emulator
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (hasReleaseSigning) signingConfig = signingConfigs.getByName("release")
         }
     }
     compileOptions {

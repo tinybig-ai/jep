@@ -16,9 +16,8 @@ from **Telegram**, the **Android app**, or any client behind the
 [![](https://img.shields.io/badge/clients-Telegram%20%C2%B7%20Android-643891)](docs/GATEWAY.md)
 [![](https://img.shields.io/badge/license-mit-576b91)](LICENSE)
 
-<!-- CI badge: paste your GitHub Actions URL once CI exists:
-[![CI](https://github.com/<owner>/jep/actions/workflows/ci.yml/badge.svg)](https://github.com/<owner>/jep/actions/workflows/ci.yml)
--->
+[![check](https://github.com/tinybig-ai/jep/actions/workflows/check.yml/badge.svg)](https://github.com/tinybig-ai/jep/actions/workflows/check.yml)
+[![android](https://github.com/tinybig-ai/jep/actions/workflows/android.yml/badge.svg)](https://github.com/tinybig-ai/jep/actions/workflows/android.yml)
 
 </div>
 
