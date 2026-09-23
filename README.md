@@ -33,37 +33,18 @@ from **Telegram**, the **Android app**, or any client behind the
 
 ## What it looks like
 
-The same work, two clients. Telegram on the left, the Android app on the right.
-
 <table>
   <tr>
-    <td align="center" width="50%">
-      <img src="docs/images/screens/telegram-chat.jpg" alt="jep in Telegram: a rich reply with a markdown table and the cost chip pinned above" width="300" />
-      <br />
-      <sub>Telegram</sub>
-    </td>
-    <td align="center" width="50%">
-      <img src="docs/images/screens/android-chat.jpg" alt="The jep Android app: a streaming turn with thinking and tool calls" width="300" />
-      <br />
-      <sub>Android</sub>
-    </td>
-  </tr>
-</table>
-
-The Android app, beyond the chat.
-
-<table>
-  <tr>
-    <td align="center"><img src="docs/images/screens/android-sessions.jpg" alt="Conversations" width="220" /></td>
-    <td align="center"><img src="docs/images/screens/android-settings.jpg" alt="Settings: model, harness, agent, skills" width="220" /></td>
-    <td align="center"><img src="docs/images/screens/android-usage.jpg" alt="Usage: turns, tokens, spend" width="220" /></td>
-    <td align="center"><img src="docs/images/screens/android-diff.jpg" alt="A file diff" width="220" /></td>
+    <td align="center"><img src="docs/images/screens/telegram-chat.jpg" alt="jep in Telegram" width="200" /></td>
+    <td align="center"><img src="docs/images/screens/android-chat.jpg" alt="The jep Android app, a streaming turn" width="200" /></td>
+    <td align="center"><img src="docs/images/screens/android-settings.jpg" alt="Settings" width="200" /></td>
+    <td align="center"><img src="docs/images/screens/android-usage.jpg" alt="Usage" width="200" /></td>
   </tr>
   <tr>
-    <td align="center"><sub>Conversations</sub></td>
+    <td align="center"><sub>Telegram</sub></td>
+    <td align="center"><sub>Android</sub></td>
     <td align="center"><sub>Settings</sub></td>
     <td align="center"><sub>Usage</sub></td>
-    <td align="center"><sub>Diffs</sub></td>
   </tr>
 </table>
 
