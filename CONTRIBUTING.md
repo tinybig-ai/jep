@@ -47,6 +47,11 @@ loop `npm start` is all you need. Run the Telegram client in mock mode, or the
 Android client against the gateway — see [README](README.md) and
 [docs/clients/](docs/clients/).
 
+The daemon is also packaged as a `jep` command (`bin/jep.mjs`), so
+`npx --yes github:tinybig-ai/jep` runs it straight from git without a clone.
+That launcher only exists to add the Node flag npm's bin shim won't; treat it as
+the run entry point, and `npm start` as the dev one.
+
 ### The commands you'll live in
 
 ```sh

@@ -94,6 +94,15 @@ Two minutes to your first agent reply from wherever you are.
 - **Node ≥ 26** (the daemon runs native TypeScript, no build step)
 - at least one agent CLI installed: **opencode**, **codex**, or **claude**
 
+### 0. One command, no checkout
+
+```sh
+JEP_TG_TOKEN=<from @BotFather> npx --yes github:tinybig-ai/jep
+```
+
+Runs the daemon straight from git against the current directory. The clone below
+is what you want for the launchd daemon, the Android build, or hacking on jep.
+
 ### 1. Install
 
 ```sh
