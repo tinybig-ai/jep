@@ -1101,7 +1101,7 @@ private fun UserBubble(message: ChatMessage) {
                     when (part) {
                         is ChatPart.Text -> Text(part.text, color = MaterialTheme.colorScheme.onPrimaryContainer, fontSize = 15.sp)
                         is ChatPart.File -> if (isImagePart(part)) {
-                            ImageThumb(part, MaterialTheme.colorScheme.onPrimaryContainer)
+                            ImageThumb(part)
                         } else {
                             Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Filled.AttachFile, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onPrimaryContainer)
@@ -1197,25 +1197,23 @@ private fun isImagePart(part: ChatPart.File): Boolean {
     return (part.name ?: part.path).substringAfterLast('.', "").lowercase() in IMAGE_EXTS
 }
 
-// An image attachment as a thumbnail; tapping it opens the full picture. The
-// bytes come from the daemon (/file), so this works for an image sent from any
-// client, not only the one that attached it.
+// An image attachment as a small square thumbnail; tapping it opens the full
+// picture. The bytes come from the daemon (/file), so this works for an image
+// sent from any client, not only the one that attached it.
 @Composable
-private fun ImageThumb(part: ChatPart.File, labelColor: Color) {
+private fun ImageThumb(part: ChatPart.File) {
     var open by remember { mutableStateOf(false) }
     val url = LocalFileUrl.current(part.path)
     AsyncImage(
         model = url,
         contentDescription = part.name ?: "image",
-        contentScale = ContentScale.Fit,
+        contentScale = ContentScale.Crop,
         modifier = Modifier
             .padding(top = 4.dp)
-            .heightIn(max = 240.dp)
-            .widthIn(max = 260.dp)
+            .size(96.dp)
             .clip(RoundedCornerShape(10.dp))
             .clickable(enabled = url.isNotBlank()) { open = true },
     )
-    part.name?.let { Text(it, color = labelColor, fontSize = 11.sp, maxLines = 1, modifier = Modifier.padding(top = 2.dp)) }
     if (open) {
         Dialog(onDismissRequest = { open = false }) {
             AsyncImage(
@@ -1233,7 +1231,7 @@ private fun ImageThumb(part: ChatPart.File, labelColor: Color) {
 @Composable
 private fun FileRow(part: ChatPart.File) {
     if (isImagePart(part)) {
-        ImageThumb(part, MaterialTheme.colorScheme.onSurfaceVariant)
+        ImageThumb(part)
     } else {
         Surface(
             Modifier.fillMaxWidth(),
