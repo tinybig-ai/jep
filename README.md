@@ -307,15 +307,22 @@ docs/                   PHILOSOPHY · GATEWAY · PROCESSES · clients/
 
 jep is new, small, and built on a deliberate seam, so the surest way to help is
 to **implement the port for a harness you love**, or to **build a client** on
-top of the gateway. Issues and PRs welcome:
+top of the gateway. Issues and PRs welcome.
 
-1. Fork it, branch off `main`, keep changes to one concern.
-2. Add or update a unit test; the pure renderers and git grammars make this cheap.
-3. `npm run check` green, then open the PR.
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** — dev setup, the change loop, house
+  rules, review and governance.
+- **[docs/ADD_A_HARNESS.md](docs/ADD_A_HARNESS.md)** — the harness-adapter
+  on-ramp, start to proven PR.
+- **[docs/GATEWAY.md](docs/GATEWAY.md)** — build a client on the same ports.
 
 Before opening a PR, skim [docs/PHILOSOPHY.md](docs/PHILOSOPHY.md), because
 "never move on from a broken state" applies to the bot that runs on people's
 devices.
+
+## Security
+
+Please don't open a public issue for a vulnerability — see
+[SECURITY.md](SECURITY.md).
 
 ## License
 
