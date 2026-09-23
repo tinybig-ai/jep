@@ -3,14 +3,16 @@
 jep as a Telegram bot: pair it from your chat, then text it. Rich native
 messages, voice notes, git and usage screens, and a streaming stop/steer loop.
 
-<!--
-SCREENSHOTS: drop real captures here (1280 wide, up to 2).
-
-docs/images/telegram-pair.png     the pairing flow: /pair <code> → locked
-docs/images/telegram-chat.png     a streamed turn: thinking line, tool call,
-                                  markdown table, Stop button, cost chip
-docs/images/telegram-git.png      the /git screen: status · log · diff
--->
+<table>
+  <tr>
+    <td align="center"><img src="../images/screens/telegram-chat.jpg" alt="A rich reply, with the cost chip pinned above" width="240" /></td>
+    <td align="center"><img src="../images/screens/telegram-git.jpg" alt="The /git screen" width="240" /></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>A rich reply, cost chip pinned above</sub></td>
+    <td align="center"><sub>The /git screen</sub></td>
+  </tr>
+</table>
 
 ## Requirements
 

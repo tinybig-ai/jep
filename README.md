@@ -29,21 +29,43 @@ from **Telegram**, the **Android app**, or any client behind the
 
 </div>
 
-<!--
-HERO IMAGE: the single most important asset. A screenshot that captures the
-whole promise in ~5 seconds. Drop real captures from a client here:
+---
 
-docs/images/screens-telegram.png   a Telegram chat: a streamed turn with a
-                                   native Stop button, a 💭 thinking line,
-                                   collapsible tool calls, a markdown table
-docs/images/screens-android.png    an Android chat: the same turn, Compose UI,
-                                   the pinned conversation + notifications
-docs/images/screens-gateway.png    optional: a web dashboard pixel proof
+## What it looks like
 
-Pick one wide 16:9 crop (≈1280 wide) for the hero, or a 2-up side-by-side of
-the Telegram and Android chats. Everything else goes in the client READMEs
-(docs/clients/telegram.md, docs/clients/android.md).
--->
+The same work, two clients. Telegram on the left, the Android app on the right.
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/screens/telegram-chat.jpg" alt="jep in Telegram: a rich reply with a markdown table and the cost chip pinned above" width="300" />
+      <br />
+      <sub>Telegram</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/screens/android-chat.jpg" alt="The jep Android app: a streaming turn with thinking and tool calls" width="300" />
+      <br />
+      <sub>Android</sub>
+    </td>
+  </tr>
+</table>
+
+The Android app, beyond the chat.
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/images/screens/android-sessions.jpg" alt="Conversations" width="220" /></td>
+    <td align="center"><img src="docs/images/screens/android-settings.jpg" alt="Settings: model, harness, agent, skills" width="220" /></td>
+    <td align="center"><img src="docs/images/screens/android-usage.jpg" alt="Usage: turns, tokens, spend" width="220" /></td>
+    <td align="center"><img src="docs/images/screens/android-diff.jpg" alt="A file diff" width="220" /></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Conversations</sub></td>
+    <td align="center"><sub>Settings</sub></td>
+    <td align="center"><sub>Usage</sub></td>
+    <td align="center"><sub>Diffs</sub></td>
+  </tr>
+</table>
 
 ---
 

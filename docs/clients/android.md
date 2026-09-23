@@ -3,13 +3,28 @@
 jep as a native Android app (Jetpack Compose): your conversations, streaming
 turns, and notifications, talking to the daemon over the gateway.
 
-<!--
-SCREENSHOTS: drop real captures here (portrait, up to 3).
-
-docs/images/android-sessions.png  the conversation list
-docs/images/android-chat.png      a streamed turn with the terminal shuttle
-docs/images/android-settings.png  model · harness · MCP · skills · terminal
--->
+<table>
+  <tr>
+    <td align="center"><img src="../images/screens/android-sessions.jpg" alt="The conversation list" width="210" /></td>
+    <td align="center"><img src="../images/screens/android-chat.jpg" alt="A streaming turn with thinking and tool calls" width="210" /></td>
+    <td align="center"><img src="../images/screens/android-settings.jpg" alt="Settings: model, harness, agent, skills" width="210" /></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Conversations</sub></td>
+    <td align="center"><sub>A streaming turn</sub></td>
+    <td align="center"><sub>Settings</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="../images/screens/android-usage.jpg" alt="Usage: turns, tokens, spend" width="210" /></td>
+    <td align="center"><img src="../images/screens/android-diff.jpg" alt="A file diff" width="210" /></td>
+    <td align="center"><img src="../images/screens/android-pair.jpg" alt="Pairing with the gateway" width="210" /></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Usage</sub></td>
+    <td align="center"><sub>Diffs</sub></td>
+    <td align="center"><sub>Pairing</sub></td>
+  </tr>
+</table>
 
 ## Requirements
 
