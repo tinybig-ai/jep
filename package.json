@@ -6,6 +6,7 @@
   "bin": {
     "jep": "bin/jep.mjs"
   },
+  "engines": {"node": ">=22.6.0"},
   "description": "One interface for every coding agent: a hexagonal core with Telegram, Android and gateway clients (opencode, codex, claude)",
   "scripts": {
     "start": "node --experimental-strip-types src/app/tg.ts",
