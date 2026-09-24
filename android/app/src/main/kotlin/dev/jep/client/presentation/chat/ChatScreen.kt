@@ -249,6 +249,9 @@ fun ChatScreen(
     }
 
     var renameOpen by remember { mutableStateOf(false) }
+    var queuedMenuFor by remember { mutableStateOf<ChatViewModel.Queued?>(null) }
+    var queuedEditFor by remember { mutableStateOf<ChatViewModel.Queued?>(null) }
+    var queuedCancelFor by remember { mutableStateOf<ChatViewModel.Queued?>(null) }
     var deleteOpen by remember { mutableStateOf(false) }
     var forgetOpen by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
@@ -416,6 +419,11 @@ fun ChatScreen(
                         }
                     }
                 }
+                // queued messages ride at the end, like the real messages they are
+                val queuedDisplay = state.queued.asReversed()
+                items(queuedDisplay.size, key = { "queued-${queuedDisplay[it].id}" }) { i ->
+                    QueuedBubble(queuedDisplay[i]) { queuedMenuFor = queuedDisplay[i] }
+                }
                 val busy = state.sending || state.live != null
                 items(ordered.size, key = { ordered[it].id }) { i ->
                     CompositionLocalProvider(LocalFileUrl provides { path -> vm.fileUrl(path) }) {
@@ -449,6 +457,40 @@ fun ChatScreen(
     }
     if (termVisible) TerminalOverlay(vm, onClose = { termVisible = false })
     if (subsOpen) SubagentsDialog(vm, onOpen = { onOpenSession(it); subsOpen = false }, onDismiss = { subsOpen = false })
+    }
+
+    queuedMenuFor?.let { q ->
+        AlertDialog(
+            onDismissRequest = { queuedMenuFor = null },
+            title = { Text("Queued") },
+            text = { Text("The agent is busy. This steers in at its next tool call, or send it after this reply ends.") },
+            confirmButton = { TextButton(onClick = { queuedMenuFor = null; vm.forceSendQueued(q.id) }) { Text("Send now") } },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { queuedMenuFor = null; queuedEditFor = q }) { Text("Edit") }
+                    TextButton(onClick = { queuedMenuFor = null; queuedCancelFor = q }) { Text("Cancel") }
+                }
+            },
+        )
+    }
+    queuedEditFor?.let { q ->
+        var text by remember(q.id) { mutableStateOf(q.text) }
+        AlertDialog(
+            onDismissRequest = { queuedEditFor = null },
+            title = { Text("Edit queued message") },
+            text = { OutlinedTextField(value = text, onValueChange = { text = it }, Modifier.fillMaxWidth()) },
+            confirmButton = { TextButton(onClick = { vm.editQueued(q.id, text); queuedEditFor = null }) { Text("Save") } },
+            dismissButton = { TextButton(onClick = { queuedEditFor = null }) { Text("Back") } },
+        )
+    }
+    queuedCancelFor?.let { q ->
+        AlertDialog(
+            onDismissRequest = { queuedCancelFor = null },
+            title = { Text("Cancel this message?") },
+            text = { Text("It will not be sent.") },
+            confirmButton = { TextButton(onClick = { vm.cancelQueued(q.id); queuedCancelFor = null }) { Text("Cancel it") } },
+            dismissButton = { TextButton(onClick = { queuedCancelFor = null }) { Text("Keep") } },
+        )
     }
 
     if (renameOpen) RenameDialog(
@@ -1602,68 +1644,32 @@ private fun AskBar(ask: dev.jep.client.domain.model.Ask, vm: ChatViewModel) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun QueuedStrip(vm: ChatViewModel, queued: List<ChatViewModel.Queued>) {
-    if (queued.isEmpty()) return
-    var menuFor by remember { mutableStateOf<ChatViewModel.Queued?>(null) }
-    var editFor by remember { mutableStateOf<ChatViewModel.Queued?>(null) }
-    var cancelFor by remember { mutableStateOf<ChatViewModel.Queued?>(null) }
-    // A sent-but-not-yet-handed-over message: dimmed, hourglass on the left, one
-    // tap for edit / send now / cancel.
-    Column(Modifier.fillMaxWidth().padding(bottom = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        queued.forEach { q ->
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f))
-                    .clickable { menuFor = q }
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(Icons.Filled.HourglassEmpty, "queued", Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onPrimaryContainer)
-                Text(
-                    q.text,
-                    Modifier.padding(start = 8.dp).weight(1f),
-                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
-                    fontSize = 14.sp,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+private fun QueuedBubble(q: ChatViewModel.Queued, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // a queued message looks like a real one — same side, same bubble — only
+        // dimmed, with an hourglass to its left
+        Icon(
+            Icons.Filled.HourglassEmpty,
+            "queued",
+            Modifier.size(16.dp).padding(end = 6.dp),
+            tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
+        )
+        Surface(
+            Modifier.widthIn(max = 320.dp).clickable { onClick() },
+            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
+            shape = RoundedCornerShape(18.dp),
+        ) {
+            Text(
+                q.text,
+                Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f),
+                fontSize = 15.sp,
+            )
         }
-    }
-    menuFor?.let { q ->
-        AlertDialog(
-            onDismissRequest = { menuFor = null },
-            title = { Text("Queued") },
-            text = { Text("The agent is busy, so this sends when the current reply finishes.") },
-            confirmButton = { TextButton(onClick = { menuFor = null; vm.forceSendQueued(q.id) }) { Text("Send now") } },
-            dismissButton = {
-                Row {
-                    TextButton(onClick = { menuFor = null; editFor = q }) { Text("Edit") }
-                    TextButton(onClick = { menuFor = null; cancelFor = q }) { Text("Cancel") }
-                }
-            },
-        )
-    }
-    editFor?.let { q ->
-        var text by remember(q.id) { mutableStateOf(q.text) }
-        AlertDialog(
-            onDismissRequest = { editFor = null },
-            title = { Text("Edit queued message") },
-            text = { OutlinedTextField(value = text, onValueChange = { text = it }, Modifier.fillMaxWidth()) },
-            confirmButton = { TextButton(onClick = { vm.editQueued(q.id, text); editFor = null }) { Text("Save") } },
-            dismissButton = { TextButton(onClick = { editFor = null }) { Text("Back") } },
-        )
-    }
-    cancelFor?.let { q ->
-        AlertDialog(
-            onDismissRequest = { cancelFor = null },
-            title = { Text("Cancel this message?") },
-            text = { Text("It will not be sent.") },
-            confirmButton = { TextButton(onClick = { vm.cancelQueued(q.id); cancelFor = null }) { Text("Cancel it") } },
-            dismissButton = { TextButton(onClick = { cancelFor = null }) { Text("Keep") } },
-        )
     }
 }
 
@@ -1688,7 +1694,6 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
 
     Surface(tonalElevation = 2.dp, color = MaterialTheme.colorScheme.background) {
         Column(Modifier.fillMaxWidth().imePadding().padding(horizontal = 12.dp, vertical = 10.dp)) {
-            QueuedStrip(vm, state.queued)
             if (state.attachments.isNotEmpty()) {
                 FlowRow(
                     Modifier.fillMaxWidth().padding(bottom = 8.dp),
