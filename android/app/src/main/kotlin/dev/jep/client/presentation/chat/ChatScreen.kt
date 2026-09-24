@@ -1679,9 +1679,10 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
     val state by vm.state.collectAsState()
     val draft = remember { mutableStateOf("") }
     var sendMenu by remember { mutableStateOf(false) }
-    // Stop follows the turn THIS client started. Keying it off a live row
-    // instead let a stale row turn a Send tap into a Stop.
-    val busy = state.sending
+    // Stop shows whenever a turn is active for this conversation — this client's,
+    // or one started elsewhere (Telegram, a steer). Safe now that a tap on Send
+    // while busy queues instead of stopping.
+    val busy = state.sending || state.live != null
 
     val context = LocalContext.current
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
