@@ -317,5 +317,18 @@ class GatewayChatRepository(
     override suspend fun reject(askId: String): Boolean =
         post("/reject", payload("askID" to askId)).first in 200..299
 
+    override suspend fun readFile(path: String): String = withContext(Dispatchers.IO) {
+        val enc = Base64.encodeToString(
+            path.toByteArray(Charsets.UTF_8),
+            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+        )
+        val builder = Request.Builder().url("$base/file?p=$enc")
+        token()?.let { builder.header("authorization", "Bearer $it") }
+        http.newCall(builder.get().build()).execute().use { res ->
+            if (!res.isSuccessful) throw ApiFailure(res.code, "couldn't read $path")
+            res.body?.string().orEmpty()
+        }
+    }
+
     override fun events(): Flow<ChatEvent> = GatewayEventStream(base, token).open(http)
 }

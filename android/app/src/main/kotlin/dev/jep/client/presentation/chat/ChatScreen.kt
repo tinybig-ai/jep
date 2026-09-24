@@ -1365,8 +1365,12 @@ private fun AssistantBody(
 }
 
 @Composable
-private fun PartView(part: ChatPart, streaming: Boolean) {
+private fun PartView(part: ChatPart, streaming: Boolean, onOpenLink: (String) -> Unit = {}) {
     when (part) {
+        // The plumbing for a tappable link is here and has nothing to hand it
+        // to: multiplatform-markdown-renderer 0.43 dropped the old
+        // `onClickLink`, and its `markdownComponents()` has no `link` slot to
+        // override. See todo.md — "links in messages are not tappable".
         is ChatPart.Text -> Markdown(part.text + if (streaming) " ▍" else "")
         is ChatPart.Reasoning -> ReasoningRow(part, active = streaming)
         is ChatPart.Tool -> ToolRow(part)

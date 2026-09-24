@@ -167,6 +167,10 @@ interface ChatRepository {
      *  words. The harness holds the turn open on that ask, so this is what lets
      *  the turn finish instead of hanging until it is stopped by hand. */
     suspend fun reject(askId: String): Boolean
+
+    /** read a workspace file as text, for the in-app reader. Goes through the
+     *  gateway's own /file route, so the roots check still applies. */
+    suspend fun readFile(path: String): String
     suspend fun rename(sessionId: String, title: String): Boolean
     suspend fun delete(sessionId: String): Boolean
     /** upload a file to the gateway; returns the id to pass in the next prompt */

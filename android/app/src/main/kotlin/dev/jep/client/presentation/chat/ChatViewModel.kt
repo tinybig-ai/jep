@@ -71,8 +71,16 @@ class ChatViewModel(
         val parts: LinkedHashMap<String, ChatPart> = LinkedHashMap(),
     )
 
-    data class UiState(
-        val messages: List<ChatMessage> = emptyList(),
+    /** a workspace file opened from a link, and what the reader has of it */
+    data class OpenFile(
+        val path: String,
+        val loading: Boolean = true,
+        val text: String? = null,
+        val error: String? = null,
+        val tooBig: Boolean = false,
+    )
+
+    data class UiState(        val messages: List<ChatMessage> = emptyList(),
         val live: LiveTurn? = null,
         val ask: Ask? = null,
         /** when that ask was raised, so the card can sit in the transcript where
@@ -84,6 +92,8 @@ class ChatViewModel(
         /** the message that was streaming when the ask arrived — the tool call
          *  that raised it lives in there, so the card belongs just after it */
         val askAfter: String? = null,
+        /** a file opened from a link in the transcript, read into the reader */
+        val openFile: OpenFile? = null,
         val failure: String? = null,
         val sending: Boolean = false,
         val lost: Boolean = false,
@@ -746,6 +756,42 @@ class ChatViewModel(
                     }
                 }
         }
+    }
+
+    /**
+     * Open a file the transcript linked to, in the reader sheet.
+     *
+     * A relative markdown link is the web's own convention for "a file next to
+     * this document", so it needs no jep-specific scheme: the link carries the
+     * path, and the workspace it belongs to is the one this conversation is
+     * already in. Resolution and the roots check both happen in the daemon, so a
+     * link cannot be used to read outside the workspace.
+     */
+    fun openFile(path: String) {
+        val clean = path.trim().removePrefix("./")
+        if (clean.isEmpty() || clean.contains("://")) return
+        _state.update { it.copy(openFile = OpenFile(clean)) }
+        viewModelScope.launch {
+            runCatching { repo.readFile(clean) }
+                .onSuccess { text ->
+                    _state.update { st ->
+                        val open = st.openFile ?: return@update st
+                        if (open.path != clean) st
+                        else st.copy(openFile = open.copy(loading = false, text = text, tooBig = text.length > 400_000))
+                    }
+                }
+                .onFailure { err ->
+                    _state.update { st ->
+                        val open = st.openFile ?: return@update st
+                        if (open.path != clean) st
+                        else st.copy(openFile = open.copy(loading = false, error = err.message ?: "couldn't read it"))
+                    }
+                }
+        }
+    }
+
+    fun closeFile() {
+        _state.update { it.copy(openFile = null) }
     }
 
     /** The card's "Something else": the choices are spent and the ask stands
