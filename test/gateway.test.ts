@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { restartWhenQuiet, startGateway, type GatewayHandle } from "../src/clients/gateway/index.ts"
+import { positiveInt, restartWhenQuiet, startGateway, type GatewayHandle } from "../src/clients/gateway/index.ts"
 import type { HarnessAdapter } from "../src/core/ports.ts"
 import type { DomainEvent, Message, SessionSummary } from "../src/core/types.ts"
 import { TurnAbortedError } from "../src/core/types.ts"
@@ -988,6 +988,26 @@ test("the push feed carries harness events to every connected device", async () 
     assert.equal(res.status, 200)
   } finally {
     await g.close()
+  }
+})
+
+test("a restart's quiet window and cap are clamped, never NaN", () => {
+  // the route parses these from the query string or the JSON body, so a typo
+  // must not produce a NaN timer (which never fires) or an unbounded wait
+  const cases: [string | null, number, number, number][] = [
+    ["10", 5, 1, 60], // query/body value
+    [null, 5, 1, 60], // absent -> default
+    ["0", 5, 1, 60], // zero -> default
+    ["-3", 5, 1, 60], // negative -> default
+    ["abc", 5, 1, 60], // junk -> default
+    ["9999", 5, 1, 60], // clamped to hi
+    ["1", 5, 1, 60], // at lo
+    ["7.4", 5, 1, 60], // rounded
+  ]
+  for (const [raw, fallback, lo, hi] of cases) {
+    const got = positiveInt(raw, fallback, lo, hi)
+    assert.equal(Number.isFinite(got), true, `${raw} must not produce NaN`)
+    assert.ok(got >= lo && got <= hi, `${raw} -> ${got} must be within [${lo},${hi}]`)
   }
 })
 

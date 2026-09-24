@@ -300,6 +300,12 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
   }
 }
 
+/** a caller-supplied count: numbers only, clamped, with a sane default */
+export function positiveInt(raw: string | null, fallback: number, lo: number, hi: number): number {
+  const n = Number(raw)
+  return Number.isFinite(n) && n > 0 ? Math.min(Math.max(Math.round(n), lo), hi) : fallback
+}
+
 /**
  * A restart that waits for the work to finish.
  *
@@ -309,8 +315,7 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
  * once the daemon has been quiet for `quietMs` — no harness event from any
  * client, so no turn is mid-flight — with `maxWaitMs` as a hard cap, because a
  * restart must never be the thing that wedges a deploy. Returns a cancel.
- */
-export function restartWhenQuiet(opts: {
+ */export function restartWhenQuiet(opts: {
   quietMs: number
   maxWaitMs: number
   /** when the last harness event arrived */
@@ -902,12 +907,8 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       // deploy therefore never cuts a live turn off at the knees, and the user
       // is never left waking the agent up by hand afterwards.
       if (path === "/restart") {
-        const num = (k: string, fallback: number, lo: number, hi: number): number => {
-          const raw = Number(str(k))
-          return Number.isFinite(raw) && raw > 0 ? Math.min(Math.max(raw, lo), hi) : fallback
-        }
-        const quietMs = num("quiet", 5, 1, 60) * 1_000
-        const maxWaitMs = num("maxWait", 180, 5, 900) * 1_000
+        const quietMs = positiveInt(str("quiet") ?? url.searchParams.get("quiet"), 5, 1, 60) * 1_000
+        const maxWaitMs = positiveInt(str("maxWait") ?? url.searchParams.get("maxWait"), 180, 5, 900) * 1_000
         console.error(`[gw] restart armed — exits after ${quietMs / 1000}s quiet, at most ${maxWaitMs / 1000}s`)
         restartWhenQuiet({
           quietMs,
