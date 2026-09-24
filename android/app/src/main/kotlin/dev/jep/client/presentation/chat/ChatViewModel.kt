@@ -80,6 +80,9 @@ class ChatViewModel(
         /** the option tapped for that ask; set once it has been answered, which
          *  leaves the card in place with its choices spent */
         val askChoice: String? = null,
+        /** the message that was streaming when the ask arrived — the tool call
+         *  that raised it lives in there, so the card belongs just after it */
+        val askAfter: String? = null,
         val failure: String? = null,
         val sending: Boolean = false,
         val lost: Boolean = false,
@@ -207,7 +210,12 @@ class ChatViewModel(
                 }
             }
             is ChatEvent.Asked -> _state.update {
-                it.copy(ask = evt.ask, askAt = System.currentTimeMillis(), askChoice = null)
+                it.copy(
+                    ask = evt.ask,
+                    askAt = System.currentTimeMillis(),
+                    askChoice = null,
+                    askAfter = it.live?.messageId,
+                )
             }
             // a harness-reported failure ends the turn: it must clear the live
             // row too, or the spinner outlives the turn it belonged to. An

@@ -139,15 +139,15 @@ data class ChatMessage(
 
 data class AskOption(val id: String, val label: String, val danger: Boolean = false)
 
-data class Ask(
-    val id: String,
-    val title: String,
-    val detail: String? = null,
-    val options: List<AskOption> = emptyList(),
-    /** "permission" or "question": a permission ask answers once/always/reject,
-     *  a question one carries its own choices */
-    val kind: String? = null,
-)
+    data class Ask(
+        val id: String,
+        val title: String,
+        val detail: String? = null,
+        val options: List<AskOption> = emptyList(),
+        /** "permission" or "question": a permission ask answers once/always/reject,
+         *  a question one carries its own choices */
+        val kind: String? = null,
+    )
 
 /** what a conversation has spent, summed from the harness's own record */
 data class Usage(

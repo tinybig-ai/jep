@@ -70,6 +70,35 @@ class TranscriptRowsTest {
     }
 
     @Test
+    fun `the card lands under the tool call that raised it, not above it`() {
+        // The bug the screenshot showed: "Used question" is a part of the
+        // streaming assistant message, and that message's time is when it
+        // started — before the ask. Comparing times therefore floated the card
+        // above the question it answers, and above the user's own message from
+        // before it. The anchor wins: the card follows the message that was
+        // streaming when the ask arrived.
+        val ordered = listOf(
+            msg("live", Role.ASSISTANT, 0),
+            msg("m3", Role.USER, 25),
+            msg("m2", Role.ASSISTANT, 20),
+            msg("m1", Role.USER, 10),
+        )
+        assertEquals(
+            listOf("live", "ask-a1", "m3", "m2", "m1"),
+            keys(transcriptRows(ordered, ask, 30, liveMessageId = "live", askAfter = "live")),
+        )
+    }
+
+    @Test
+    fun `an anchor that has scrolled away falls back to the by-time rule`() {
+        val ordered = listOf(msg("m3", Role.USER, 40), msg("m2", Role.ASSISTANT, 20), msg("m1", Role.USER, 10))
+        assertEquals(
+            listOf("m3", "ask-a1", "m2", "m1"),
+            keys(transcriptRows(ordered, ask, 30, liveMessageId = null, askAfter = "gone")),
+        )
+    }
+
+    @Test
     fun `a turn in flight does not park the ask at the bottom`() {
         // The live row is always the bottom slot (it is appended last) but it
         // carries no usable timestamp — liveAsMessage gives it 0. Scanning by

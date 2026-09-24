@@ -178,25 +178,36 @@ internal sealed interface Row {
  * you had already answered. Placed by time, it is part of the conversation —
  * whatever you say next lands below it and carries it up the screen.
  *
- * `liveMessageId` is the row still streaming. It is always the bottom slot
- * (the live row is appended last) but it carries no usable timestamp, so the
- * scan must step over it: otherwise a turn in flight reads as the oldest thing
- * in the list and parks the ask underneath it for the whole turn, which is the
- * bug this replaced.
+ * `askAfter` is the message that was streaming when the ask arrived — the tool
+ * call that raised the ask is a part of it, so the card belongs immediately
+ * after that message and not above it. Comparing timestamps alone gets this
+ * wrong: a message's time is when it started, and the ask happened in the
+ * middle of it, so the by-time rule floats the card above the very question it
+ * answers. `liveMessageId` is the row still streaming, which carries no usable
+ * timestamp; when there is no anchor to follow, the scan steps over it.
  */
 internal fun transcriptRows(
     ordered: List<ChatMessage>,
     ask: Ask?,
     askAt: Long,
     liveMessageId: String? = null,
+    askAfter: String? = null,
 ): List<Row> {
     if (ask == null) return ordered.map { Row.Msg(it) }
     val out = ArrayList<Row>(ordered.size + 1)
     var placed = false
     for (m in ordered) {
-        // ordered is newest-first, so the first message that is neither live nor
-        // newer than the ask is the spot: everything after it is newer and
-        // renders below, pushing the ask up the transcript
+        // the anchor wins, and the card follows its message: the tool call that
+        // raised the ask is a part of that message, so the card comes after it
+        if (!placed && askAfter != null && m.id == askAfter) {
+            out += Row.Msg(m)
+            out += Row.Pending(ask)
+            placed = true
+            continue
+        }
+        // otherwise the first message that is neither live nor newer than the
+        // ask is the spot: it goes above the card, pushing the ask up as the
+        // turn says more below
         if (!placed && m.id != liveMessageId && m.time <= askAt) {
             out += Row.Pending(ask)
             placed = true
@@ -300,8 +311,8 @@ fun ChatScreen(
     val ordered = remember(rendered) { rendered.asReversed() }
     val ask = state.ask
     val liveMessageId = state.live?.messageId
-    val rows = remember(ordered, ask, state.askAt, liveMessageId) {
-        transcriptRows(ordered, ask, state.askAt, liveMessageId)
+    val rows = remember(ordered, ask, state.askAt, liveMessageId, state.askAfter) {
+        transcriptRows(ordered, ask, state.askAt, liveMessageId, state.askAfter)
     }
     val askAnswered = remember(rows, state.askAt, state.askChoice) {
         askIsSpent(ask, state.askChoice, rows, state.askAt)
