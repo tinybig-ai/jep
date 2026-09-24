@@ -129,6 +129,7 @@ import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import coil3.compose.AsyncImage
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -1036,6 +1037,20 @@ private fun codeBlocks(text: String): List<String> {
 }
 
 @OptIn(ExperimentalFoundationApi::class)
+// A decision the user made from this screen — an ask answered — is not a
+// message from anyone. It reads as a small centred line in the transcript, so
+// the tap leaves a durable trace instead of a card that simply disappears.
+@Composable
+private fun SystemLine(message: ChatMessage) {
+    val text = remember(message) { messageText(message) }
+    Box(
+        Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+    }
+}
+
 @Composable
 private fun MessageRow(
     message: ChatMessage,
@@ -1044,6 +1059,11 @@ private fun MessageRow(
     responding: Boolean = false,
     showActions: Boolean = true,
 ) {
+    // a decision made here is nobody's message: no bubble, no swipe, no actions
+    if (message.role == Role.SYSTEM) {
+        SystemLine(message)
+        return
+    }
     var menu by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
     val fullText = remember(message) { fullTurnText(message) }
@@ -1060,6 +1080,7 @@ private fun MessageRow(
         when (message.role) {
             Role.USER -> UserBubble(message)
             Role.ASSISTANT -> AssistantBody(message, onInfo, responding, showActions)
+            else -> Unit
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
             DropdownMenuItem(

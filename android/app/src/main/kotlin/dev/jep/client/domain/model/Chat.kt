@@ -1,6 +1,13 @@
 package dev.jep.client.domain.model
 
-enum class Role { USER, ASSISTANT }
+enum class Role {
+    USER,
+    ASSISTANT,
+
+    /** a line in the transcript that came from this screen, not the harness —
+     * a decision the user made (an ask answered), shown without a bubble */
+    SYSTEM,
+}
 
 data class SessionSummary(
     val id: String,
