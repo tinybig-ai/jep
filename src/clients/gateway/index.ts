@@ -427,7 +427,10 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       try {
         for await (const evt of adapter.events(signal)) {
           got = true
-          if (evt.type === "ask.requested") askSessions.set(evt.ask.id, evt.ask.sessionID)
+          if (evt.type === "ask.requested") {
+            askSessions.set(evt.ask.id, evt.ask.sessionID)
+            console.error(`[ask] surfaced ${evt.ask.id} (${evt.ask.title})`)
+          }
           // the turn is over and the record is settled: drop the snapshot so the
           // next read is the finished one
           if (evt.type === "session.idle" || evt.type === "turn.aborted") msgCache.delete(evt.sessionID)
@@ -1160,8 +1163,12 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         if (!askID || !optionID) return json(res, 400, { error: "askID and optionID required" })
         const sid = askSessions.get(askID) ?? id
         const owner = await ensureListed(sid)
-        if (!owner) return json(res, 404, { error: "unknown ask" })
+        if (!owner) {
+          console.error(`[ask] respond askID=${askID} option=${optionID} -> no session`)
+          return json(res, 404, { error: "unknown ask" })
+        }
         const ok = await owner.respondAsk(sid, askID, optionID).catch(() => false)
+        console.error(`[ask] respond askID=${askID} option=${optionID} -> ${ok ? "ok" : "failed"}`)
         return json(res, ok ? 200 : 409, ok ? { ok: true } : { error: "ask already answered" })
       }
 
