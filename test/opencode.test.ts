@@ -179,3 +179,55 @@ test("responding to an ask opencode has forgotten is a no-op, not an error", asy
     await srv.close()
   }
 })
+
+test("a question ask is answered by its label, on the questions route", async () => {
+  // The `question` tool parks the turn on a human. Its ask is NOT a permission:
+  // it is answered on a different route, and by LABEL — jep's option id carries
+  // a truncated label and a question index, which opencode would not recognise.
+  // Answering it through the permissions route failed, leaving the turn parked.
+  const asked = {
+    type: "question.asked",
+    properties: {
+      sessionID: "ses_a",
+      id: "que_1",
+      questions: [{ header: "Next up", question: "Which?", options: [{ label: "Yes, do that" }, { label: "No" }] }],
+    },
+  }
+  const posts: Array<{ path: string; body: string }> = []
+  const open: { feed?: import("node:http").ServerResponse } = {}
+  const server = createServer((req, res) => {
+    const url = new URL(req.url ?? "/", "http://127.0.0.1")
+    if (url.pathname === "/event") {
+      res.writeHead(200, { "content-type": "text/event-stream" })
+      res.write(`data: ${JSON.stringify(asked)}\n\n`)
+      open.feed = res // left open: the feed is a stream, not a response
+      return
+    }
+    let body = ""
+    req.on("data", (c) => (body += c))
+    req.on("end", () => {
+      posts.push({ path: url.pathname, body })
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end("{}")
+    })
+  })
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r))
+  const port = (server.address() as { port: number }).port
+  const adapter = new OpenCodeAdapter({} as any, WS, `http://127.0.0.1:${port}`)
+  const ac = new AbortController()
+  try {
+    // one event is enough: the ask surfaces, and its real labels are remembered
+    for await (const evt of adapter.events(ac.signal)) {
+      assert.equal(evt.type, "ask.requested")
+      break
+    }
+    assert.equal(await adapter.respondAsk("opencode://ses_a", "que_1", "0:Yes, do that"), true)
+    assert.equal(posts.length, 1, "the reply must be exactly one post")
+    assert.equal(posts[0]!.path, "/question/que_1/reply", "questions do not go through the permissions route")
+    assert.deepEqual(JSON.parse(posts[0]!.body), { answers: [["Yes, do that"]] }, "answered by label, whole")
+  } finally {
+    ac.abort()
+    open.feed?.end()
+    await new Promise<void>((r) => server.close(() => r()))
+  }
+})

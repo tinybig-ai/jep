@@ -281,6 +281,11 @@ export class OpenCodeAdapter implements HarnessAdapter {
   // permission request ids already surfaced, so an ask opencode re-emits (or
   // sends under both event names) is shown once, not three times
   #askedPermissions = new Set<string>()
+  // A question ask is answered by LABEL, not by jep's option id, and the ids
+  // carry a truncated label (and a question index) that opencode would not
+  // recognise. So the real label of each option is remembered here, keyed by
+  // the ask id, when the ask is surfaced — the reply needs it back.
+  #questionLabels = new Map<string, Map<string, string>>()
   // provider failures (429 / usage cap / upstream 5xx) parsed out of opencode's
   // own stderr, keyed by native session id. opencode logs these but never
   // emits a session.error for them, so without this a rate-limited turn just
@@ -645,10 +650,27 @@ export class OpenCodeAdapter implements HarnessAdapter {
   // beyond this call.
   async respondAsk(sessionID: string, askID: string, optionID: string): Promise<boolean> {
     try {
-      return await this.#json(
+      // Two kinds of ask, two different routes. A permission is answered on
+      // the session's permissions endpoint. A question — the `question` tool
+      // parking the turn on a human — is answered on the global questions
+      // endpoint, and by LABEL: jep's option id carries a truncated label and a
+      // question index, which opencode would not recognise. The real label was
+      // remembered when the ask was surfaced.
+      const labels = this.#questionLabels.get(askID)
+      if (labels) {
+        const label = labels.get(optionID) ?? optionID
+        this.#questionLabels.delete(askID)
+        await this.#json(`/question/${encodeURIComponent(askID)}/reply`, {
+          method: "POST",
+          body: JSON.stringify({ answers: [[label]] }),
+        })
+        return true
+      }
+      await this.#json(
         `/session/${encodeURIComponent(toNativeId(sessionID))}/permissions/${encodeURIComponent(askID)}`,
         { method: "POST", body: JSON.stringify({ response: optionID }) },
       )
+      return true
     } catch (err) {
       // The request is already gone: answered elsewhere, timed out, or re-issued
       // by opencode. There is nothing left to answer, and surfacing this as a
@@ -782,17 +804,27 @@ export class OpenCodeAdapter implements HarnessAdapter {
           options?: Array<{ label?: string }>
         }>
         const options: AskOption[] = []
+        const labels = new Map<string, string>()
         questions.forEach((q, qi) => {
           for (const o of q.options ?? []) {
             const label = String(o?.label ?? "").trim()
-            if (label) options.push({ id: `${qi}:${label.slice(0, 28)}`, label: label.slice(0, 64) })
+            if (label) {
+              const id = `${qi}:${label.slice(0, 28)}`
+              options.push({ id, label: label.slice(0, 64) })
+              labels.set(id, label)
+            }
           }
         })
+        const askID = (props.id as string) ?? ""
+        if (askID) {
+          if (this.#questionLabels.size > 2_000) this.#questionLabels.clear()
+          this.#questionLabels.set(askID, labels)
+        }
         return {
           type: "ask.requested",
           sessionID: sessionID ?? "",
           ask: {
-            id: (props.id as string) ?? "",
+            id: askID,
             sessionID: sessionID ?? "",
             kind: "question",
             title: questions[0]?.header || questions[0]?.question || "question",
