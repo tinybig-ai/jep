@@ -176,22 +176,20 @@ fun ChatScreen(
         if (live == null) {
             served
         } else {
+            // The live row is authoritative while it exists: it is the same
+            // message as the record's, and it can only exist while its turn is
+            // still streaming — deltas build it, and the turn-ending events
+            // (Quiet/Failed/Aborted) clear it. The old branch compared lengths
+            // and handed over to the record whenever `sending` was false — but
+            // `sending` only tracks prompts THIS device started, so a turn begun
+            // elsewhere (Telegram, another phone) was treated as over and Android
+            // reverted to a stale snapshot until that turn ended. Handover now
+            // happens exactly when the turn ends (the live row disappears), and
+            // history polling keeps the record pacing alongside, so there is
+            // nothing to rewind to.
             val twin = served.firstOrNull { it.id == live.id }
-            when {
-                // not in the record yet: the live row fills the gap
-                twin == null -> served + live
-                // While the turn is open the live row is the ONLY source for this
-                // message. Comparing the two and taking whichever is longer made
-                // the display flip between them as the poll and the deltas traded
-                // the lead — and each flip re-renders the whole reply (different
-                // parts, the caret gone), which is the flicker.
-                state.sending -> served.map { if (it.id == live.id) live else it }
-                // the turn is over: hand over to the record, but only once it has
-                // caught up (it also carries the tool/file parts and the settled
-                // thinking duration). Handing over early rewound the text.
-                messageText(twin).length >= messageText(live).length -> served
-                else -> served.map { if (it.id == live.id) live else it }
-            }
+            if (twin == null) served + live
+            else served.map { if (it.id == live.id) live else it }
         }
     }
     // A turn is one user message and however many assistant messages it takes to

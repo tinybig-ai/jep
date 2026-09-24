@@ -145,7 +145,10 @@ class ChatViewModel(
         viewModelScope.launch {
             while (true) {
                 delay(1_200)
-                if (_state.value.sending) refresh()
+                // follow the turn from history whether this device started it or
+                // not: `sending` only tracks our own prompts, and a turn begun
+                // elsewhere (Telegram, another phone) must grow on screen too
+                if (_state.value.sending || _state.value.live != null) refresh()
             }
         }
     }
@@ -273,7 +276,10 @@ class ChatViewModel(
                     _state.update { st ->
                         st.copy(
                             messages = batch.messages + optimistic.toList(),
-                            live = if (st.sending) st.live else null,
+                            // history is the record, not the stream: it must never
+                            // wipe a live row it has merely caught up with, even
+                            // when this device did not start the turn
+                            live = st.live,
                             hasMore = batch.hasMore,
                             loadingHistory = false,
                             // a queued message that now shows in the record has been
