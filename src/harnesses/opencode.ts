@@ -278,6 +278,9 @@ export class OpenCodeAdapter implements HarnessAdapter {
   // remember each part's type from its message.part.updated event (which always
   // precedes the deltas) to tell reasoning apart from answer text.
   #partTypes = new Map<string, string>()
+  // permission request ids already surfaced, so an ask opencode re-emits (or
+  // sends under both event names) is shown once, not three times
+  #askedPermissions = new Set<string>()
   // provider failures (429 / usage cap / upstream 5xx) parsed out of opencode's
   // own stderr, keyed by native session id. opencode logs these but never
   // emits a session.error for them, so without this a rate-limited turn just
@@ -641,13 +644,19 @@ export class OpenCodeAdapter implements HarnessAdapter {
   // boolean would throw away the only one of the three that changes anything
   // beyond this call.
   async respondAsk(sessionID: string, askID: string, optionID: string): Promise<boolean> {
-    return this.#json(
-      `/session/${encodeURIComponent(toNativeId(sessionID))}/permissions/${encodeURIComponent(askID)}`,
-      {
-        method: "POST",
-        body: JSON.stringify({ response: optionID }),
-      },
-    )
+    try {
+      return await this.#json(
+        `/session/${encodeURIComponent(toNativeId(sessionID))}/permissions/${encodeURIComponent(askID)}`,
+        { method: "POST", body: JSON.stringify({ response: optionID }) },
+      )
+    } catch (err) {
+      // The request is already gone: answered elsewhere, timed out, or re-issued
+      // by opencode. There is nothing left to answer, and surfacing this as a
+      // failure left the turn blocked on a prompt that no longer existed. A stale
+      // approval is a no-op, not an error.
+      if (err instanceof HttpError && err.status === 404) return true
+      throw err
+    }
   }
 
   // opencode auto-loads the cross-agent user dirs and its own project roots
@@ -794,6 +803,12 @@ export class OpenCodeAdapter implements HarnessAdapter {
       }
       case "permission.asked":
       case "permission.updated": {
+        const permID = (props.id as string) ?? ""
+        if (permID) {
+          if (this.#askedPermissions.has(permID)) return null
+          if (this.#askedPermissions.size > 2_000) this.#askedPermissions.clear()
+          this.#askedPermissions.add(permID)
+        }
         // The runtime sends this as "permission.asked"; "permission.updated"
         // is the same ask surfaced through the older event name. The id alone
         // used to be all jep passed on, so the prompt read "🔐 per_a1b2…" —

@@ -166,3 +166,16 @@ test("names a data: attachment from its mime when there is no scaffolding", asyn
     await srv.close()
   }
 })
+
+test("responding to an ask opencode has forgotten is a no-op, not an error", async () => {
+  // a 404 means the permission request is gone: answered elsewhere, timed out,
+  // or re-issued. Treating it as a failure left the turn blocked on a prompt
+  // that no longer existed.
+  const srv = await serve(() => undefined) // every route 404s
+  try {
+    const adapter = new OpenCodeAdapter({} as any, WS, srv.base)
+    assert.equal(await adapter.respondAsk("opencode://ses_a", "per_1", "always"), true)
+  } finally {
+    await srv.close()
+  }
+})
