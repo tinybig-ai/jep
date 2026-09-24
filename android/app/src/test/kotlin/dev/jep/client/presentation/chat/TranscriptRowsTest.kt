@@ -124,52 +124,39 @@ class TranscriptRowsTest {
     }
 
     @Test
-    fun `answering in chat puts the ask's own choices out of play`() {
-        val ordered = listOf(msg("m2", Role.USER, 40), msg("m1", Role.ASSISTANT, 20))
-        val rows = transcriptRows(ordered, ask, 30)
-        assertTrue("a user message after the ask retires its buttons", askAnsweredInChat(rows, 30))
-    }
-
-    @Test
-    fun `an unanswered ask keeps its choices`() {
-        val ordered = listOf(msg("m2", Role.ASSISTANT, 20), msg("m1", Role.USER, 10))
-        val rows = transcriptRows(ordered, ask, 30)
-        assertFalse(askAnsweredInChat(rows, 30))
-    }
-
-    @Test
-    fun `the user's own message before the ask does not retire its choices`() {
-        val ordered = listOf(msg("m2", Role.ASSISTANT, 40), msg("m1", Role.USER, 10))
-        val rows = transcriptRows(ordered, ask, 30)
-        assertFalse(askAnsweredInChat(rows, 30))
-    }
-
-    @Test
     fun `a tapped choice spends the ask, and the card stays in the transcript`() {
         // tapping used to clear the ask, which threw the card away and left a
         // thin receipt line hard-appended to the end of the transcript — a line
         // that never moved up either. The card is the record now.
         val ordered = listOf(msg("m2", Role.ASSISTANT, 20), msg("m1", Role.USER, 10))
         val rows = transcriptRows(ordered, ask, 30, liveMessageId = null)
-        assertTrue("a tap spends it", askIsSpent(ask, "always", rows, 30))
+        assertTrue("a tap spends it", askIsSpent(ask, "always"))
         assertTrue("and the card is still there", rows.any { it is Row.Pending && it.ask.id == "a1" })
     }
 
     @Test
-    fun `"Something else" spends the card without an answer`() {
-        // it stands the ask down and invalidates the other options, but sends
-        // nothing: the answer arrives as a message instead, which is the same
-        // state the card reaches on its own
-        val ordered = listOf(msg("m2", Role.ASSISTANT, 20), msg("m1", Role.USER, 10))
-        val rows = transcriptRows(ordered, ask, 30, liveMessageId = null)
-        assertTrue(askIsSpent(ask, SOMETHING_ELSE, rows, 30))
-        assertTrue(rows.any { it is Row.Pending && it.ask.id == "a1" })
+    fun `an unanswered ask keeps its choices`() {
+        assertFalse(askIsSpent(ask, null))
     }
 
     @Test
     fun `no ask means nothing is spent`() {
         val ordered = listOf(msg("m2", Role.USER, 40))
-        val rows = transcriptRows(ordered, null, 30)
-        assertFalse(askIsSpent(null, null, rows, 30))
+        assertFalse(askIsSpent(null, null))
+    }
+
+    @Test
+    fun `a card standing open holds the send button`() {
+        // a message typed during an ask used to queue silently behind a turn
+        // blocked on the very question being asked, which read as the app
+        // swallowing what you wrote
+        assertTrue("nothing to answer", canSend(null, null))
+        assertFalse("card is up, nothing chosen", canSend(ask, null))
+    }
+
+    @Test
+    fun `answering the card, or saying it in words, brings sending back`() {
+        assertTrue("tapped an option", canSend(ask, "always"))
+        assertTrue("said it in words", canSend(ask, SOMETHING_ELSE))
     }
 }

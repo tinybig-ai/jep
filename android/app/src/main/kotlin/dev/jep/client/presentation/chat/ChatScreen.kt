@@ -219,18 +219,25 @@ internal fun transcriptRows(
 }
 
 /**
- * True once the ask has been answered — by a tap, or by you saying the answer
- * in your own words. Either way the card stays as a record with its choices
- * spent, rather than offering a second answer to a question already behind you.
+ * True once the ask has been answered: a tap, the card's "Something else", or a
+ * message sent in place of an answer. The card then stays as a record with its
+ * choices spent.
+ *
+ * What this deliberately does not do is compare message timestamps against the
+ * ask's — those come from two different clocks (the phone's, and the harness's
+ * on the Mac), so the comparison is only ever accidentally right. What actually
+ * happened is recorded when it happens, in `askChoice`.
  */
-internal fun askIsSpent(ask: Ask?, askChoice: String?, rows: List<Row>, askAt: Long): Boolean =
-    ask != null && (askChoice != null || askAnsweredInChat(rows, askAt))
+internal fun askIsSpent(ask: Ask?, askChoice: String?): Boolean = ask != null && askChoice != null
 
 /**
- * True once you have answered in your own words.
+ * Whether the composer will send. A card standing open takes the send button
+ * with it: a message typed during an ask used to queue silently behind a turn
+ * that was blocked on the very question being asked, which read as the app
+ * swallowing what you wrote. Answer the card, or tap "Something else" to say you
+ * are answering in words, and sending comes back.
  */
-internal fun askAnsweredInChat(rows: List<Row>, askAt: Long): Boolean =
-    rows.any { it is Row.Msg && it.m.role == Role.USER && it.m.time > askAt }
+internal fun canSend(ask: Ask?, askChoice: String?): Boolean = ask == null || askIsSpent(ask, askChoice)
 
 // The conversation. Reads like the reference: the harness speaks in marked-up
 // paragraphs, tool calls collapse to one quiet row each, the person answers
@@ -314,9 +321,7 @@ fun ChatScreen(
     val rows = remember(ordered, ask, state.askAt, liveMessageId, state.askAfter) {
         transcriptRows(ordered, ask, state.askAt, liveMessageId, state.askAfter)
     }
-    val askAnswered = remember(rows, state.askAt, state.askChoice) {
-        askIsSpent(ask, state.askChoice, rows, state.askAt)
-    }
+    val askAnswered = remember(ask, state.askChoice) { askIsSpent(ask, state.askChoice) }
     // the newest message, which carries the "still working" mark; the ask can sit
     // between it and the bottom, so this is a lookup rather than an index
     val newestMsgId = remember(rows) { rows.firstOrNull { it is Row.Msg }?.let { (it as Row.Msg).m.id } }
@@ -527,7 +532,7 @@ fun ChatScreen(
                                 row.ask.options.firstOrNull { it.id == id }?.label
                                     ?: "Something else".takeIf { id == SOMETHING_ELSE }
                             },
-                            answeredInChat = askAnswered && state.askChoice == null,
+                            answeredInChat = askAnswered && state.askChoice == SOMETHING_ELSE,
                         )
                         is Row.Msg -> CompositionLocalProvider(LocalFileUrl provides { path -> vm.fileUrl(path) }) {
                             MessageRow(
@@ -1830,6 +1835,10 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
     // or one started elsewhere (Telegram, a steer). Safe now that a tap on Send
     // while busy queues instead of stopping.
     val busy = state.sending || state.live != null
+    // A card standing open holds the send button. Answering in words is allowed,
+    // but it is said out loud by tapping "Something else" first, so a message can
+    // never disappear into a queue behind the question that is waiting for you.
+    val sendable = canSend(state.ask, state.askChoice)
 
     val context = LocalContext.current
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -1896,6 +1905,7 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
                     Modifier
                         .size(48.dp)
                         .combinedClickable(
+                            enabled = sendable,
                             onClick = {
                                 // a swipe-armed reply rides along as a quoted block
                                 val quote = replyTo?.let { m ->
@@ -1914,7 +1924,11 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
                         Icons.AutoMirrored.Filled.Send,
                         "send",
                         Modifier.size(26.dp),
-                        tint = if (draft.value.isBlank() && state.attachments.isEmpty()) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.primary,
+                        tint = when {
+                            !sendable -> MaterialTheme.colorScheme.surfaceVariant
+                            draft.value.isBlank() && state.attachments.isEmpty() -> MaterialTheme.colorScheme.surfaceVariant
+                            else -> MaterialTheme.colorScheme.primary
+                        },
                     )
                 }
                 if (sendMenu) {

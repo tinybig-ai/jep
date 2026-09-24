@@ -391,7 +391,18 @@ class ChatViewModel(
         )
         val seq = ++turn
         optimistic.add(pending)
-        _state.update { it.copy(messages = it.messages + pending, sending = true, live = null, failure = null, attachments = emptyList()) }
+        _state.update {
+            it.copy(
+                messages = it.messages + pending,
+                sending = true,
+                live = null,
+                failure = null,
+                attachments = emptyList(),
+                // a message sent in place of an answer is the answer: the card
+                // stands down, and nothing is sent back for it
+                askChoice = if (it.ask != null && it.askChoice == null) SOMETHING_ELSE else it.askChoice,
+            )
+        }
         viewModelScope.launch {
             runCatching { repo.prompt(sessionId, body, files.map { it.id }) }
                 .onSuccess { final ->
