@@ -78,6 +78,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -525,14 +526,7 @@ fun ChatScreen(
                 val busy = state.sending || state.live != null
                 items(rows.size, key = { rows[it].key }) { i ->
                     when (val row = rows[i]) {
-                        is Row.Pending -> AskBar(
-                            row.ask,
-                            vm,
-                            spent = askAnswered,
-                            // a real choice is named; "Something else" is shown by
-                            // its own button sitting spent in the row
-                            choice = row.ask.options.firstOrNull { it.id == state.askChoice }?.label,
-                        )
+                        is Row.Pending -> AskBar(row.ask, vm, spent = askAnswered, choiceId = state.askChoice)
                         is Row.Msg -> CompositionLocalProvider(LocalFileUrl provides { path -> vm.fileUrl(path) }) {
                             MessageRow(
                                 row.m,
@@ -1720,7 +1714,7 @@ private fun toolBody(part: ChatPart.Tool): String? {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun AskBar(ask: Ask, vm: ChatViewModel, spent: Boolean, choice: String?) {
+private fun AskBar(ask: Ask, vm: ChatViewModel, spent: Boolean, choiceId: String?) {
     // The card is the record: it stays where it was raised, rides up the chat as
     // the turn continues below it, and keeps every choice on show — spent, not
     // removed — once it has been answered.
@@ -1748,12 +1742,31 @@ private fun AskBar(ask: Ask, vm: ChatViewModel, spent: Boolean, choice: String?)
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 ask.options.forEach { option ->
-                    OutlinedButton(
-                        onClick = { vm.respond(ask.id, option.id) },
-                        enabled = !spent,
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 4.dp),
-                    ) {
-                        Text(option.label, fontSize = 14.sp, maxLines = 1)
+                    val picked = option.id == choiceId
+                    if (picked) {
+                        // the one you chose is filled, in the app's own accent: a
+                        // spent card that still shows every choice, with this one
+                        // unmistakably the answer
+                        Button(
+                            onClick = {},
+                            enabled = false,
+                            colors = ButtonDefaults.buttonColors(
+                                disabledContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                disabledContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                            ),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 4.dp),
+                            modifier = Modifier.semantics { contentDescription = "${option.label}, chosen" },
+                        ) {
+                            Text(option.label, fontSize = 14.sp, maxLines = 1)
+                        }
+                    } else {
+                        OutlinedButton(
+                            onClick = { vm.respond(ask.id, option.id) },
+                            enabled = !spent,
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 4.dp),
+                        ) {
+                            Text(option.label, fontSize = 14.sp, maxLines = 1)
+                        }
                     }
                 }
                 // A question asked in the open does not have to be answered with
@@ -1769,13 +1782,6 @@ private fun AskBar(ask: Ask, vm: ChatViewModel, spent: Boolean, choice: String?)
                         Text("Something else", fontSize = 14.sp, maxLines = 1)
                     }
                 }
-            }
-            if (choice != null) {
-                Text(
-                    "answered · $choice",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
             }
         }
     }
