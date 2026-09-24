@@ -145,9 +145,57 @@ import kotlin.math.roundToLong
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
 import dev.jep.client.domain.model.Role
+import dev.jep.client.domain.model.Ask
 import dev.jep.client.domain.model.SessionSummary
 import dev.jep.client.domain.model.ToolStatus
 import dev.jep.client.domain.repository.ModelChoices
+
+/** one row of the transcript: a message, or the ask the harness is blocked on */
+internal sealed interface Row {
+    val key: String
+
+    data class Msg(val m: ChatMessage) : Row {
+        override val key: String get() = m.id
+    }
+
+    data class Pending(val ask: Ask) : Row {
+        override val key: String get() = "ask-${ask.id}"
+    }
+}
+
+/**
+ * The transcript with the ask spliced in where it was raised, newest first.
+ *
+ * Docked above the composer, an ask could never move: it sat at the bottom of
+ * the pane for the whole turn, and once you answered in your own words instead
+ * of tapping a choice it stayed there, still offering buttons for a question
+ * you had already answered. Placed by time, it is part of the conversation —
+ * whatever the turn streams next lands below it and carries it up the screen.
+ */
+internal fun transcriptRows(ordered: List<ChatMessage>, ask: Ask?, askAt: Long): List<Row> {
+    if (ask == null) return ordered.map { Row.Msg(it) }
+    val out = ArrayList<Row>(ordered.size + 1)
+    var placed = false
+    for (m in ordered) {
+        // ordered is newest-first, so the first message that is not newer than
+        // the ask is the spot: everything after it is newer and renders below
+        if (!placed && m.time <= askAt) {
+            out += Row.Pending(ask)
+            placed = true
+        }
+        out += Row.Msg(m)
+    }
+    if (!placed) out += Row.Pending(ask)
+    return out
+}
+
+/**
+ * True once you have answered in your own words. The ask's own choices are then
+ * spent: the card stays as a record, inert, rather than offering a second answer
+ * to a question that is already behind you.
+ */
+internal fun askAnsweredInChat(rows: List<Row>, askAt: Long): Boolean =
+    rows.any { it is Row.Msg && it.m.role == Role.USER && it.m.time > askAt }
 
 // The conversation. Reads like the reference: the harness speaks in marked-up
 // paragraphs, tool calls collapse to one quiet row each, the person answers
@@ -226,6 +274,12 @@ fun ChatScreen(
     // "am I near the bottom?" heuristics (which cannot work when one message is
     // taller than the viewport).
     val ordered = remember(rendered) { rendered.asReversed() }
+    val ask = state.ask
+    val rows = remember(ordered, ask, state.askAt) { transcriptRows(ordered, ask, state.askAt) }
+    val askAnswered = remember(rows, state.askAt) { ask != null && askAnsweredInChat(rows, state.askAt) }
+    // the newest message, which carries the "still working" mark; the ask can sit
+    // between it and the bottom, so this is a lookup rather than an index
+    val newestMsgId = remember(rows) { rows.firstOrNull { it is Row.Msg }?.let { (it as Row.Msg).m.id } }
     // At the bottom iff the sentinel below is the first thing on screen. Exact,
     // cheap, and stable while the answer streams.
     val atBottom by remember {
@@ -424,18 +478,21 @@ fun ChatScreen(
                     QueuedBubble(queuedDisplay[i]) { queuedMenuFor = queuedDisplay[i] }
                 }
                 val busy = state.sending || state.live != null
-                items(ordered.size, key = { ordered[it].id }) { i ->
-                    CompositionLocalProvider(LocalFileUrl provides { path -> vm.fileUrl(path) }) {
-                        MessageRow(
-                            ordered[i],
-                            onInfo = { infoMsg = it },
-                            onReply = { replyTo = it },
-                            // the newest reply carries the "still working" mark: a
-                            // pause between parts (thinking, a tool call) must not
-                            // read as finished. Index 0 is the newest, at the bottom.
-                            responding = busy && i == 0 && ordered[i].role == Role.ASSISTANT,
-                            showActions = ordered[i].id in actionIds,
-                        )
+                items(rows.size, key = { rows[it].key }) { i ->
+                    when (val row = rows[i]) {
+                        is Row.Pending -> AskBar(row.ask, vm, answered = askAnswered)
+                        is Row.Msg -> CompositionLocalProvider(LocalFileUrl provides { path -> vm.fileUrl(path) }) {
+                            MessageRow(
+                                row.m,
+                                onInfo = { infoMsg = it },
+                                onReply = { replyTo = it },
+                                // the newest reply carries the "still working" mark: a
+                                // pause between parts (thinking, a tool call) must not
+                                // read as finished.
+                                responding = busy && row.m.id == newestMsgId && row.m.role == Role.ASSISTANT,
+                                showActions = row.m.id in actionIds,
+                            )
+                        }
                     }
                 }
             }
@@ -450,7 +507,6 @@ fun ChatScreen(
                 }
             }
         }
-        state.ask?.let { ask -> AskBar(ask, vm) }
         replyTo?.let { ReplyBanner(it) { replyTo = null } }
         Composer(vm, replyTo) { replyTo = null }
     }
@@ -1627,10 +1683,13 @@ private fun toolBody(part: ChatPart.Tool): String? {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun AskBar(ask: dev.jep.client.domain.model.Ask, vm: ChatViewModel) {
+private fun AskBar(ask: Ask, vm: ChatViewModel, answered: Boolean) {
     Card(
         Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        colors = CardDefaults.cardColors(
+            containerColor = if (answered) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            else MaterialTheme.colorScheme.surface,
+        ),
         shape = RoundedCornerShape(16.dp),
     ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1651,11 +1710,19 @@ private fun AskBar(ask: dev.jep.client.domain.model.Ask, vm: ChatViewModel) {
                 ask.options.forEach { option ->
                     OutlinedButton(
                         onClick = { vm.respond(ask.id, option.id) },
+                        enabled = !answered,
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 4.dp),
                     ) {
                         Text(option.label, fontSize = 14.sp, maxLines = 1)
                     }
                 }
+            }
+            if (answered) {
+                Text(
+                    "answered in chat",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }

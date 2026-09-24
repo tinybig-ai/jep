@@ -72,6 +72,9 @@ class ChatViewModel(
         val messages: List<ChatMessage> = emptyList(),
         val live: LiveTurn? = null,
         val ask: Ask? = null,
+        /** when that ask was raised, so the card can sit in the transcript where
+         *  it happened instead of being pinned to the bottom of the pane */
+        val askAt: Long = 0L,
         val failure: String? = null,
         val sending: Boolean = false,
         val lost: Boolean = false,
@@ -204,7 +207,7 @@ class ChatViewModel(
                     st.copy(live = live.copy(parts = LinkedHashMap(live.parts).apply { put(key, evt.part) }))
                 }
             }
-            is ChatEvent.Asked -> _state.update { it.copy(ask = evt.ask) }
+            is ChatEvent.Asked -> _state.update { it.copy(ask = evt.ask, askAt = System.currentTimeMillis()) }
             // a harness-reported failure ends the turn: it must clear the live
             // row too, or the spinner outlives the turn it belonged to. An
             // abort is the user's own stop coming back around, not an error.
