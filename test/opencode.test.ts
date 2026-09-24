@@ -262,3 +262,79 @@ test("a question ask is answered by its label, on the questions route", async ()
     await new Promise<void>((r) => server.close(() => r()))
   }
 })
+
+test("standing a question ask down cancels it, so the turn can finish", async () => {
+  // The person answered in their own words instead of choosing. The question
+  // tool is still holding the turn open, so the ask has to actually be rejected:
+  // left pending, the turn never ends and the phone has to stop it by hand.
+  const asked = {
+    type: "question.asked",
+    properties: {
+      sessionID: "ses_a",
+      id: "que_2",
+      questions: [{ header: "Next up", question: "Which?", options: [{ label: "Yes" }, { label: "No" }] }],
+    },
+  }
+  const posts: Array<{ path: string; body: string }> = []
+  const open: { feed?: import("node:http").ServerResponse } = {}
+  const server = createServer((req, res) => {
+    const url = new URL(req.url ?? "/", "http://127.0.0.1")
+    if (url.pathname === "/event") {
+      res.writeHead(200, { "content-type": "text/event-stream" })
+      res.write(`data: ${JSON.stringify(asked)}\n\n`)
+      open.feed = res
+      return
+    }
+    let body = ""
+    req.on("data", (c) => (body += c))
+    req.on("end", () => {
+      posts.push({ path: url.pathname, body })
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end("{}")
+    })
+  })
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r))
+  const port = (server.address() as { port: number }).port
+  const adapter = new OpenCodeAdapter({} as any, WS, `http://127.0.0.1:${port}`)
+  const ac = new AbortController()
+  try {
+    for await (const evt of adapter.events(ac.signal)) {
+      assert.equal(evt.type, "ask.requested")
+      break
+    }
+    assert.equal(await adapter.rejectAsk("opencode://ses_a", "que_2"), true)
+    assert.equal(posts.length, 1)
+    assert.equal(posts[0]!.path, "/question/que_2/reject", "a question is cancelled, not answered")
+  } finally {
+    ac.abort()
+    open.feed?.end()
+    await new Promise<void>((r) => server.close(() => r()))
+  }
+})
+
+test("standing a permission ask down answers it reject", async () => {
+  // no question was surfaced, so this is a permission: opencode has no separate
+  // cancel route for one, and "reject" is how it is stood down
+  const posts: Record<string, string> = {}
+  const server = createServer((req, res) => {
+    const url = new URL(req.url ?? "/", "http://127.0.0.1")
+    let body = ""
+    req.on("data", (c) => (body += c))
+    req.on("end", () => {
+      posts[url.pathname] = body
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end("{}")
+    })
+  })
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r))
+  const port = (server.address() as { port: number }).port
+  const adapter = new OpenCodeAdapter({} as any, WS, `http://127.0.0.1:${port}`)
+  try {
+    assert.equal(await adapter.rejectAsk("opencode://ses_a", "per_1"), true)
+    const path = "/session/ses_a/permissions/per_1"
+    assert.ok(posts[path], `expected ${path}, got ${Object.keys(posts).join(", ")}`)
+    assert.deepEqual(JSON.parse(posts[path]), { response: "reject" })
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()))
+  }
+})

@@ -944,6 +944,22 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         return json(res, ok ? 200 : 409, ok ? { ok: true } : { error: "ask already answered" })
       }
 
+      // Standing an ask down: the person answered in their own words instead of
+      // choosing. The harness is holding the turn open on that ask, so this is
+      // what lets the turn finish — without it the phone shows a turn that never
+      // ends until someone hits stop.
+      if (path === "/reject") {
+        const askID = str("askID")
+        if (!askID) return json(res, 400, { error: "askID required" })
+        const sid = askSessions.get(askID) ?? str("id") ?? ""
+        if (!sid) return json(res, 404, { error: "unknown ask" })
+        const owner = await ensureListed(sid)
+        if (!owner) return json(res, 404, { error: "unknown ask" })
+        const ok = await owner.rejectAsk(sid, askID).catch(() => false)
+        console.error(`[ask] reject askID=${askID} -> ${ok ? "ok" : "failed"}`)
+        return json(res, ok ? 200 : 409, ok ? { ok: true } : { error: "ask already answered" })
+      }
+
       const id = str("id")
       if (!id) return json(res, 400, { error: "id required" })
       const adapter = await ensureListed(id)

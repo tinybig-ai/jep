@@ -583,6 +583,12 @@ export class CodexAdapter implements HarnessAdapter {
     return false
   }
 
+  // likewise: this adapter never raises an ask, so there is never one to stand
+  // down
+  async rejectAsk(_sessionID: string, _askID: string): Promise<boolean> {
+    return false
+  }
+
   // The port wants one long-lived stream; Codex only streams inside a turn.
   // Subscribers therefore attach to an in-process bus that prompt() feeds as
   // it parses each turn's stdout.

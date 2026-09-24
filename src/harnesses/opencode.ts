@@ -681,6 +681,29 @@ export class OpenCodeAdapter implements HarnessAdapter {
     }
   }
 
+  // Standing an ask down: the person answered in their own words, so the ask
+  // itself is cancelled rather than answered. A question has its own reject
+  // route; a permission is answered "reject", which is the same thing said in
+  // opencode's vocabulary. Without this the turn stays parked on the ask — the
+  // question tool never returns — until it is stopped by hand.
+  async rejectAsk(sessionID: string, askID: string): Promise<boolean> {
+    try {
+      if (this.#questionLabels.has(askID)) {
+        this.#questionLabels.delete(askID)
+        await this.#json(`/question/${encodeURIComponent(askID)}/reject`, { method: "POST" })
+        return true
+      }
+      await this.#json(
+        `/session/${encodeURIComponent(toNativeId(sessionID))}/permissions/${encodeURIComponent(askID)}`,
+        { method: "POST", body: JSON.stringify({ response: "reject" }) },
+      )
+      return true
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 404) return true
+      throw err
+    }
+  }
+
   // opencode auto-loads the cross-agent user dirs and its own project roots
   // (verified against its own loader: `.opencode/skill(s)/<name>/SKILL.md`)
   skillDirs(): SkillDirs {

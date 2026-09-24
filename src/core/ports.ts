@@ -74,6 +74,11 @@ export interface HarnessAdapter {
    * is unknown or already answered — it may have timed out in the harness, or
    * been answered from somewhere else. */
   respondAsk(sessionID: string, askID: string, optionID: string): Promise<boolean>
+  /** stand an ask down without answering it: the person replied in their own
+   * words instead. The harness is holding the turn open on that ask, so leaving
+   * it pending wedges the turn until someone hits stop — this is what releases
+   * it. False when the ask is unknown or already answered. */
+  rejectAsk(sessionID: string, askID: string): Promise<boolean>
   events(signal?: AbortSignal): AsyncIterable<DomainEvent>
   /** The last provider failure the harness named for this session (a rate
    * limit, a usage cap) when it never surfaced as a normal event — so a turn

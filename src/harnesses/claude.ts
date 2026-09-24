@@ -502,6 +502,16 @@ export class ClaudeAdapter implements HarnessAdapter {
     return true
   }
 
+  // stood down rather than answered: the same denial, without a decision the
+  // model could mistake for an answer
+  async rejectAsk(_sessionID: string, askID: string): Promise<boolean> {
+    const waiter = this.#askWaiters.get(askID)
+    if (!waiter) return false
+    this.#askWaiters.delete(askID)
+    waiter({ decision: "deny", message: "answered in chat" })
+    return true
+  }
+
   // One socket per adapter, opened lazily and never announced anywhere: the
   // path only reaches the MCP server we spawn, through its environment.
   async #askChannel(): Promise<string | null> {

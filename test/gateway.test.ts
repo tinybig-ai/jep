@@ -52,6 +52,9 @@ async prompt(_sessionID, text) {
     async respondAsk() {
       return true
     },
+    async rejectAsk() {
+      return true
+    },
     async *events() {
       yield { type: "message.created", sessionID: "s1", messageID: "m1", role: "assistant" } as DomainEvent
       yield { type: "part.delta", sessionID: "s1", messageID: "m1", partID: "p1", text: "hel" } as DomainEvent
@@ -1045,6 +1048,51 @@ test("an ask is answered by its own id, with no session id — what the phone se
       method: "POST",
       headers,
       body: JSON.stringify({ askID: "per_never", optionID: "always" }),
+    })
+    assert.equal(unknown.status, 404)
+    assert.equal(((await unknown.json()) as { error: string }).error, "unknown ask")
+  } finally {
+    await g.close()
+  }
+})
+
+test("standing an ask down needs only its id, and tells the harness", async () => {
+  // Answering in your own words spends the card, but the harness is still holding
+  // the turn open on the ask — the question tool has not returned. Without this
+  // the turn never ends and the phone has to stop it by hand, which is exactly
+  // what a spent card must never need.
+  const a = stallable()
+  const rejected: string[] = []
+  a.adapter.rejectAsk = async (_sid, askID) => {
+    rejected.push(askID)
+    return true
+  }
+  const { base, headers, g } = await startWith(a)
+  try {
+    a.feed({
+      type: "ask.requested",
+      sessionID: "s1",
+      ask: {
+        id: "que_ask1",
+        sessionID: "s1",
+        title: "Next up",
+        kind: "question",
+        options: [{ id: "0:Yes", label: "Yes" }],
+      },
+    } as DomainEvent)
+    await sleep(60)
+    const res = await fetch(`${base}/reject`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ askID: "que_ask1" }),
+    })
+    assert.equal(res.status, 200, `the ask must be standable without a session id, got ${res.status}`)
+    assert.deepEqual(rejected, ["que_ask1"], "the ask must reach the harness, or the turn stays parked")
+
+    const unknown = await fetch(`${base}/reject`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ askID: "que_never" }),
     })
     assert.equal(unknown.status, 404)
     assert.equal(((await unknown.json()) as { error: string }).error, "unknown ask")
