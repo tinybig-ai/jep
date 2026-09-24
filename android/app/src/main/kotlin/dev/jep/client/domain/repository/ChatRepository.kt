@@ -162,6 +162,11 @@ interface ChatRepository {
      * `/file` route, so a client can render an image it did not attach itself */
     fun fileUrl(path: String): String
     suspend fun respond(askId: String, optionId: String): Boolean
+
+    /** stand an ask down without answering it — the person replied in their own
+     *  words. The harness holds the turn open on that ask, so this is what lets
+     *  the turn finish instead of hanging until it is stopped by hand. */
+    suspend fun reject(askId: String): Boolean
     suspend fun rename(sessionId: String, title: String): Boolean
     suspend fun delete(sessionId: String): Boolean
     /** upload a file to the gateway; returns the id to pass in the next prompt */

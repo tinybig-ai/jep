@@ -314,5 +314,8 @@ class GatewayChatRepository(
     override suspend fun respond(askId: String, optionId: String): Boolean =
         post("/respond", payload("askID" to askId, "optionID" to optionId)).first in 200..299
 
+    override suspend fun reject(askId: String): Boolean =
+        post("/reject", payload("askID" to askId)).first in 200..299
+
     override fun events(): Flow<ChatEvent> = GatewayEventStream(base, token).open(http)
 }

@@ -391,6 +391,7 @@ class ChatViewModel(
         )
         val seq = ++turn
         optimistic.add(pending)
+        supersedeAsk()
         _state.update {
             it.copy(
                 messages = it.messages + pending,
@@ -398,9 +399,6 @@ class ChatViewModel(
                 live = null,
                 failure = null,
                 attachments = emptyList(),
-                // a message sent in place of an answer is the answer: the card
-                // stands down, and nothing is sent back for it
-                askChoice = if (it.ask != null && it.askChoice == null) SOMETHING_ELSE else it.askChoice,
             )
         }
         viewModelScope.launch {
@@ -660,10 +658,22 @@ class ChatViewModel(
     }
 
     /** The card's "Something else": the choices are spent and the ask stands
-     *  down, but nothing is sent — the answer comes as a message instead. */
+     *  down, and the harness is told so — otherwise the turn stays parked on the
+     *  ask and never ends without a manual stop. The answer comes as a message. */
     fun spendAsk(askId: String) {
-        _state.update { st ->
-            if (st.ask?.id != askId || st.askChoice != null) st else st.copy(askChoice = SOMETHING_ELSE)
-        }
+        val st = _state.value
+        if (st.ask?.id != askId || st.askChoice != null) return
+        _state.update { it.copy(askChoice = SOMETHING_ELSE) }
+        viewModelScope.launch { runCatching { repo.reject(askId) } }
+    }
+
+    /** A message sent in place of an answer is the answer: stand the ask down so
+     *  the turn can finish, and spend the card. */
+    private fun supersedeAsk() {
+        val st = _state.value
+        val ask = st.ask
+        if (ask == null || st.askChoice != null) return
+        _state.update { it.copy(askChoice = SOMETHING_ELSE) }
+        viewModelScope.launch { runCatching { repo.reject(ask.id) } }
     }
 }

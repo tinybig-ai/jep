@@ -528,11 +528,10 @@ fun ChatScreen(
                         is Row.Pending -> AskBar(
                             row.ask,
                             vm,
-                            choice = state.askChoice?.let { id ->
-                                row.ask.options.firstOrNull { it.id == id }?.label
-                                    ?: "Something else".takeIf { id == SOMETHING_ELSE }
-                            },
-                            answeredInChat = askAnswered && state.askChoice == SOMETHING_ELSE,
+                            spent = askAnswered,
+                            // a real choice is named; "Something else" is shown by
+                            // its own button sitting spent in the row
+                            choice = row.ask.options.firstOrNull { it.id == state.askChoice }?.label,
                         )
                         is Row.Msg -> CompositionLocalProvider(LocalFileUrl provides { path -> vm.fileUrl(path) }) {
                             MessageRow(
@@ -542,8 +541,10 @@ fun ChatScreen(
                                 // the newest reply carries the "still working" mark: a
                                 // pause between parts (thinking, a tool call) must not
                                 // read as finished.
-                                responding = busy && row.m.id == newestMsgId && row.m.role == Role.ASSISTANT,
-                                waitingOnYou = ask != null && !askAnswered,
+                                // an unanswered card is the signal, in its own
+                                // right: a spinner under it would only add noise
+                                responding = busy && askAnswered &&
+                                    row.m.id == newestMsgId && row.m.role == Role.ASSISTANT,
                                 showActions = row.m.id in actionIds,
                             )
                         }
@@ -1152,7 +1153,6 @@ private fun MessageRow(
     onInfo: (ChatMessage) -> Unit,
     onReply: (ChatMessage) -> Unit,
     responding: Boolean = false,
-    waitingOnYou: Boolean = false,
     showActions: Boolean = true,
 ) {
     var menu by remember { mutableStateOf(false) }
@@ -1170,7 +1170,7 @@ private fun MessageRow(
     ) {
         when (message.role) {
             Role.USER -> UserBubble(message)
-            Role.ASSISTANT -> AssistantBody(message, onInfo, responding, waitingOnYou, showActions)
+            Role.ASSISTANT -> AssistantBody(message, onInfo, responding, showActions)
             else -> Unit
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -1290,7 +1290,6 @@ private fun AssistantBody(
     message: ChatMessage,
     onInfo: (ChatMessage) -> Unit,
     responding: Boolean = false,
-    waitingOnYou: Boolean = false,
     showActions: Boolean = true,
 ) {
     // the per-turn accounting lives behind a quiet hollow "i", not printed under
@@ -1304,24 +1303,12 @@ private fun AssistantBody(
             PartView(part, streaming = isLast && message.time == 0L)
         }
         // still working: a quiet spinner at the end of the reply, so a pause
-        // between parts (thinking, a tool call) never looks like an ending.
-        // Blocked on an ask it is not responding at all — it is waiting on you,
-        // and anything you type in the meantime queues behind it, so saying
-        // "responding" there is just wrong.
+        // between parts (thinking, a tool call) never looks like an ending
         if (responding) {
-            val tone = if (waitingOnYou) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (waitingOnYou) {
-                    Icon(Icons.Filled.HourglassEmpty, null, Modifier.size(13.dp), tint = tone)
-                } else {
-                    CircularProgressIndicator(Modifier.size(13.dp), strokeWidth = 2.dp)
-                }
+                CircularProgressIndicator(Modifier.size(13.dp), strokeWidth = 2.dp)
                 Spacer(Modifier.size(8.dp))
-                Text(
-                    if (waitingOnYou) "waiting for you…" else "responding…",
-                    fontSize = 12.sp,
-                    color = tone,
-                )
+                Text("responding…", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         message.error?.let {
@@ -1733,15 +1720,14 @@ private fun toolBody(part: ChatPart.Tool): String? {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun AskBar(ask: Ask, vm: ChatViewModel, choice: String?, answeredInChat: Boolean) {
+private fun AskBar(ask: Ask, vm: ChatViewModel, spent: Boolean, choice: String?) {
     // The card is the record: it stays where it was raised, rides up the chat as
-    // the turn continues below it, and keeps its choices on show but spent once
-    // it has been answered — by a tap, or by you simply saying the answer.
-    val answered = choice != null || answeredInChat
+    // the turn continues below it, and keeps every choice on show — spent, not
+    // removed — once it has been answered.
     Card(
         Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (answered) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            containerColor = if (spent) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
             else MaterialTheme.colorScheme.surface,
         ),
         shape = RoundedCornerShape(16.dp),
@@ -1764,7 +1750,7 @@ private fun AskBar(ask: Ask, vm: ChatViewModel, choice: String?, answeredInChat:
                 ask.options.forEach { option ->
                     OutlinedButton(
                         onClick = { vm.respond(ask.id, option.id) },
-                        enabled = !answered,
+                        enabled = !spent,
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 4.dp),
                     ) {
                         Text(option.label, fontSize = 14.sp, maxLines = 1)
@@ -1774,18 +1760,19 @@ private fun AskBar(ask: Ask, vm: ChatViewModel, choice: String?, answeredInChat:
                 // one of the labels I wrote. This spends the card the way saying
                 // the answer in chat does, and sends nothing: the ask stands down
                 // and the reply comes as a message.
-                if (ask.kind == "question" && !answered) {
+                if (ask.kind == "question") {
                     OutlinedButton(
                         onClick = { vm.spendAsk(ask.id) },
+                        enabled = !spent,
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 4.dp),
                     ) {
                         Text("Something else", fontSize = 14.sp, maxLines = 1)
                     }
                 }
             }
-            if (answered) {
+            if (choice != null) {
                 Text(
-                    choice?.let { "answered · $it" } ?: "answered in chat",
+                    "answered · $choice",
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
