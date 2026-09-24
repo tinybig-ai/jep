@@ -128,6 +128,9 @@ data class ChatMessage(
     val time: Long,
     val parts: List<ChatPart>,
     val error: String? = null,
+    /** a local send the harness never accepted — it is drawn queued, dimmed, and
+     *  can be sent again, because "on screen" is not "delivered" */
+    val undelivered: Boolean = false,
     /** the model that answered this turn (as reported by the harness) */
     val model: String? = null,
     /** reported cost of this turn in USD; null when the harness didn't price it */

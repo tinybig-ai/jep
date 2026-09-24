@@ -129,6 +129,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import coil3.compose.AsyncImage
@@ -540,6 +541,7 @@ fun ChatScreen(
                                 responding = busy && askAnswered &&
                                     row.m.id == newestMsgId && row.m.role == Role.ASSISTANT,
                                 showActions = row.m.id in actionIds,
+                                onRetrySend = { vm.retrySend(it) },
                             )
                         }
                     }
@@ -1148,6 +1150,7 @@ private fun MessageRow(
     onReply: (ChatMessage) -> Unit,
     responding: Boolean = false,
     showActions: Boolean = true,
+    onRetrySend: (String) -> Unit = {},
 ) {
     var menu by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
@@ -1163,7 +1166,7 @@ private fun MessageRow(
             .combinedClickable(onClick = {}, onLongClick = { menu = true }),
     ) {
         when (message.role) {
-            Role.USER -> UserBubble(message)
+            Role.USER -> UserBubble(message) { onRetrySend(message.id) }
             Role.ASSISTANT -> AssistantBody(message, onInfo, responding, showActions)
             else -> Unit
         }
@@ -1244,10 +1247,32 @@ private fun ReplyBanner(message: ChatMessage, onCancel: () -> Unit) {
 }
 
 @Composable
-private fun UserBubble(message: ChatMessage) {
+private fun UserBubble(message: ChatMessage, onRetry: () -> Unit = {}) {
+    // A send the daemon never took. It is drawn the way a queued message is —
+    // dimmed, with an hourglass — because on screen is not delivered, and a
+    // normal-looking bubble is a claim the harness never received. Tap to try
+    // again.
+    val pending = message.undelivered
     Box(Modifier.fillMaxWidth()) {
+        if (pending) {
+            Row(
+                Modifier.align(Alignment.CenterEnd).padding(end = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Filled.HourglassEmpty,
+                    "not delivered — tap to send again",
+                    Modifier.size(15.dp).clickable(onClick = onRetry),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
         Surface(
-            Modifier.align(Alignment.CenterEnd).widthIn(max = 320.dp),
+            Modifier
+                .align(Alignment.CenterEnd)
+                .widthIn(max = 320.dp)
+                .then(if (pending) Modifier.alpha(0.55f) else Modifier)
+                .then(if (pending) Modifier.clickable(onClick = onRetry) else Modifier),
             color = MaterialTheme.colorScheme.primaryContainer,
             shape = RoundedCornerShape(18.dp),
         ) {

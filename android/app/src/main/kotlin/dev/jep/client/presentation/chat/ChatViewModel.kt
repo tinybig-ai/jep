@@ -23,6 +23,7 @@ import dev.jep.client.domain.model.Role
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -116,6 +117,11 @@ class ChatViewModel(
     // sends land optimistically and are reconciled by the next history read
     private val optimistic = mutableListOf<ChatMessage>()
 
+    /** Sends the daemon never took, kept with enough to try again. A message
+     *  that failed on the way out is the one case where the transcript is ahead
+     *  of the truth, so it has to be recoverable rather than decorative. */
+    private val outbox = mutableMapOf<String, Pair<String, List<Attachment>>>()
+
     // who said what, from the harness's message events: a user message's parts
     // are echoed back during the turn and must never stream into the agent's row
     private val roles = mutableMapOf<String, Role>()
@@ -140,14 +146,33 @@ class ChatViewModel(
         // updating is worse than one that reconnects a moment late, so we
         // resubscribe forever and catch up from history after every drop.
         viewModelScope.launch {
-            while (true) {
+            // One collector owns the stream; a second stage takes everything that
+            // has already arrived and applies it in a single pass. A turn's worth
+            // of events lands as a burst, and applying them one at a time
+            // published one state per event — so a finished answer arrived in the
+            // transcript one piece per frame instead of all at once.
+            val incoming = Channel<ChatEvent>(Channel.UNLIMITED)
+            launch {
                 repo.events().collect { evt ->
-                    if (evt.sessionId == sessionId || evt is ChatEvent.Lost) apply(evt)
+                    if (evt.sessionId == sessionId || evt is ChatEvent.Lost) incoming.send(evt)
                 }
-                // the feed ended: say so, wait a beat, resubscribe, catch up
-                _state.update { it.copy(lost = true) }
-                delay(1_000)
-                refresh()
+            }
+            while (true) {
+                val first = incoming.receive()
+                val batch = ArrayList<ChatEvent>(8).apply { add(first) }
+                while (batch.size < 512) {
+                    val next = incoming.tryReceive().getOrNull() ?: break
+                    batch.add(next)
+                }
+                // no suspension inside the loop: StateFlow conflates, so the whole
+                // burst reaches the screen as one update
+                batch.forEach { apply(it) }
+                if (batch.any { it is ChatEvent.Lost }) {
+                    // the feed ended: say so, wait a beat, resubscribe, catch up
+                    _state.update { it.copy(lost = true) }
+                    delay(1_000)
+                    refresh()
+                }
             }
         }
         // And while a turn is in flight, follow it from history as well. Even
@@ -391,6 +416,7 @@ class ChatViewModel(
         )
         val seq = ++turn
         optimistic.add(pending)
+        outbox[pending.id] = body to files
         supersedeAsk()
         _state.update {
             it.copy(
@@ -406,6 +432,7 @@ class ChatViewModel(
                 .onSuccess { final ->
                     if (seq != turn) return@onSuccess
                     optimistic.removeAll { it.id == pending.id }
+                    outbox.remove(pending.id)
                     // polling may already have served this message; replace by
                     // id rather than append, or the answer lands twice
                     _state.update { st ->
@@ -429,6 +456,21 @@ class ChatViewModel(
                     // A stop ends the turn. A steer also aborts this prompt, but
                     // only because a queued message takes over: keep the turn shown
                     // as active until that one finishes, or the reply looks idle.
+                    //
+                    // A send that never reached the daemon is NOT sent. It stays
+                    // where it was put, drawn dimmed with an hourglass and
+                    // retryable — the alternative was a normal-looking bubble
+                    // that the harness never saw and nobody could tell apart from
+                    // a delivered one.
+                    if (err !is TurnAborted) {
+                        _state.update { st ->
+                            st.copy(
+                                messages = st.messages.map {
+                                    if (it.id == pending.id) it.copy(undelivered = true) else it
+                                },
+                            )
+                        }
+                    }
                     _state.update {
                         it.copy(
                             sending = it.queued.isNotEmpty(),
@@ -644,16 +686,65 @@ class ChatViewModel(
     fun respond(askId: String, optionId: String) {
         viewModelScope.launch {
             val st = _state.value
-            // the card stays in the transcript either way: it is the record of
-            // what was asked and what came back, and it rides up the chat with
-            // everything the turn says after it
+            // The card only goes spent when the harness confirms the answer
+            // resolved. If it did not, the choices come back: a card that reads
+            // "answered" over a turn that is still parked is worse than no
+            // acknowledgement at all, because it looks like the work moved on.
             if (st.ask?.id != askId || st.askChoice != null) return@launch
             runCatching { repo.respond(askId, optionId) }
                 .onSuccess { ok ->
-                    if (ok) _state.update { it.copy(askChoice = optionId) }
-                    else _state.update { it.copy(notice = "that ask was already answered") }
+                    if (ok) _state.update { it.copy(askChoice = optionId, notice = null) }
+                    else _state.update {
+                        it.copy(notice = "that one didn't land — the ask is still open, try again")
+                    }
                 }
-                .onFailure { err -> _state.update { it.copy(failure = "the ask didn't take: ${err.message}") } }
+                .onFailure { err ->
+                    _state.update {
+                        it.copy(askChoice = null, notice = "the ask didn't take: ${err.message}")
+                    }
+                }
+        }
+    }
+
+    /** Send an undelivered message again. Tapping the dimmed bubble is the
+     *  affordance: a message the harness never saw is not a message yet. */
+    fun retrySend(id: String) {
+        val (body, files) = outbox[id] ?: return
+        val st = _state.value
+        if (st.messages.none { it.id == id && it.undelivered }) return
+        // put it back in flight: the bubble loses its dimmed state the moment the
+        // send is on its way, exactly as a first attempt did
+        _state.update { s ->
+            s.copy(
+                messages = s.messages.map { if (it.id == id) it.copy(undelivered = false) else it },
+                failure = null,
+                sending = true,
+            )
+        }
+        val seq = ++turn
+        viewModelScope.launch {
+            runCatching { repo.prompt(sessionId, body, files.map { it.id }) }
+                .onSuccess { final ->
+                    if (seq != turn) return@onSuccess
+                    optimistic.removeAll { it.id == id }
+                    outbox.remove(id)
+                    _state.update { s ->
+                        s.copy(
+                            messages = s.messages.filterNot { it.id == id || it.id == final.id } + final,
+                            sending = false,
+                        )
+                    }
+                    refresh()
+                }
+                .onFailure { err ->
+                    _state.update { s ->
+                        s.copy(
+                            messages = s.messages.map { if (it.id == id) it.copy(undelivered = true) else it },
+                            sending = false,
+                            failure = err.message ?: "still no connection",
+                        )
+                    }
+                }
         }
     }
 
