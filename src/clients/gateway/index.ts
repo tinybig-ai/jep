@@ -300,6 +300,39 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
   }
 }
 
+/**
+ * A restart that waits for the work to finish.
+ *
+ * Restarting a daemon is how a change reaches the machine, but a restart taken
+ * at the wrong moment cuts a live turn in half and leaves the user to wake the
+ * agent up again by hand. So the restart is armed rather than fired: it exits
+ * once the daemon has been quiet for `quietMs` — no harness event from any
+ * client, so no turn is mid-flight — with `maxWaitMs` as a hard cap, because a
+ * restart must never be the thing that wedges a deploy. Returns a cancel.
+ */
+export function restartWhenQuiet(opts: {
+  quietMs: number
+  maxWaitMs: number
+  /** when the last harness event arrived */
+  activity: () => number
+  exit: () => void
+  intervalMs?: number
+  log?: (msg: string) => void
+}): () => void {
+  const { quietMs, maxWaitMs, activity, exit, intervalMs = 500, log } = opts
+  const started = Date.now()
+  const tick = setInterval(() => {
+    const idleFor = Date.now() - activity()
+    if (idleFor >= quietMs || Date.now() - started >= maxWaitMs) {
+      clearInterval(tick)
+      log?.(`restart: idle ${Math.round(idleFor / 1000)}s — exiting for launchd`)
+      exit()
+    }
+  }, intervalMs)
+  tick.unref?.()
+  return () => clearInterval(tick)
+}
+
 // attachments are handed over as raw octets, not JSON
 const ATTACH_MAX = 32 << 20
 async function readRaw(req: IncomingMessage, cap: number): Promise<Buffer | null> {
@@ -419,6 +452,11 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     }
   }
 
+  // when the last harness event arrived, from any client. A turn in flight is
+  // always making events, so "quiet" means "nobody is mid-turn" — which is what
+  // a restart waits for before it exits.
+  let lastActivity = Date.now()
+
   const pumps = new Map<HarnessAdapter, AbortController>()
   async function pump(adapter: HarnessAdapter, signal: AbortSignal): Promise<void> {
     let backoff = 2_000
@@ -427,6 +465,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       try {
         for await (const evt of adapter.events(signal)) {
           got = true
+          lastActivity = Date.now()
           if (evt.type === "ask.requested") {
             askSessions.set(evt.ask.id, evt.ask.sessionID)
             console.error(`[ask] surfaced ${evt.ask.id} (${evt.ask.title})`)
@@ -856,6 +895,28 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         else pushTokens.delete(deviceToken)
         await savePushTokens(deps.dataHome, pushTokens)
         return json(res, 200, { ok: true, devices: pushTokens.size })
+      }
+
+      // Arm a restart instead of taking one: the daemon exits by itself once it
+      // has been quiet for a beat (no turn is mid-flight), or at the cap. A
+      // deploy therefore never cuts a live turn off at the knees, and the user
+      // is never left waking the agent up by hand afterwards.
+      if (path === "/restart") {
+        const num = (k: string, fallback: number, lo: number, hi: number): number => {
+          const raw = Number(str(k))
+          return Number.isFinite(raw) && raw > 0 ? Math.min(Math.max(raw, lo), hi) : fallback
+        }
+        const quietMs = num("quiet", 5, 1, 60) * 1_000
+        const maxWaitMs = num("maxWait", 180, 5, 900) * 1_000
+        console.error(`[gw] restart armed — exits after ${quietMs / 1000}s quiet, at most ${maxWaitMs / 1000}s`)
+        restartWhenQuiet({
+          quietMs,
+          maxWaitMs,
+          activity: () => lastActivity,
+          exit: () => process.exit(0),
+          log: (msg) => console.error(`[gw] ${msg}`),
+        })
+        return json(res, 200, { ok: true, quietMs, maxWaitMs })
       }
 
       // Answering an ask is keyed by the ask id, not a session id: the ask

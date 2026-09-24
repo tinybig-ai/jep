@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { startGateway, type GatewayHandle } from "../src/clients/gateway/index.ts"
+import { restartWhenQuiet, startGateway, type GatewayHandle } from "../src/clients/gateway/index.ts"
 import type { HarnessAdapter } from "../src/core/ports.ts"
 import type { DomainEvent, Message, SessionSummary } from "../src/core/types.ts"
 import { TurnAbortedError } from "../src/core/types.ts"
@@ -1030,5 +1030,55 @@ test("an ask is answered by its own id, with no session id — what the phone se
     assert.equal(((await unknown.json()) as { error: string }).error, "unknown ask")
   } finally {
     await g.close()
+  }
+})
+
+test("a restart waits for quiet instead of cutting a live turn off", async () => {
+  // Restarting at the wrong moment kills a turn in flight and leaves the user
+  // to wake the agent up by hand. So the restart is armed: it waits until the
+  // daemon is quiet, and only then exits.
+  let last = Date.now()
+  let exited = false
+  const cancel = restartWhenQuiet({
+    quietMs: 300,
+    maxWaitMs: 10_000,
+    activity: () => last,
+    exit: () => {
+      exited = true
+    },
+    intervalMs: 20,
+  })
+  try {
+    // a turn is running: events keep arriving, so the restart must not fire
+    for (let i = 0; i < 6; i++) {
+      await sleep(60)
+      last = Date.now()
+      assert.equal(exited, false, "a busy daemon must not restart")
+    }
+    await sleep(500) // the turn ends and the daemon goes quiet
+    assert.equal(exited, true, "a quiet daemon must restart")
+  } finally {
+    cancel()
+  }
+})
+
+test("a restart gives up waiting rather than wedging the deploy forever", async () => {
+  // the cap is the safety net: even a daemon that never goes quiet restarts,
+  // because a restart must never be what makes things worse
+  let exited = false
+  const cancel = restartWhenQuiet({
+    quietMs: 60_000,
+    maxWaitMs: 200,
+    activity: () => Date.now(), // never quiet
+    exit: () => {
+      exited = true
+    },
+    intervalMs: 20,
+  })
+  try {
+    await sleep(450)
+    assert.equal(exited, true, "the cap must fire even when never quiet")
+  } finally {
+    cancel()
   }
 })
