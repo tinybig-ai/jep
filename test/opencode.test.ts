@@ -180,6 +180,37 @@ test("responding to an ask opencode has forgotten is a no-op, not an error", asy
   }
 })
 
+test("close() returns even when an event feed is parked on a stream that never ends", async () => {
+  // This is what wedged the daemon's shutdown: a reader blocked in read() on a
+  // feed that never sends a frame left reader.cancel() pending forever, so
+  // "stopping N workspace server(s)" was the last line in the log and the
+  // process never exited. close() must return regardless.
+  let open: { feed?: import("node:http").ServerResponse } = {}
+  const server = createServer((req, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" })
+    res.write(": keepalive\n\n") // headers only: the reader parks in read()
+    open.feed = res
+  })
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r))
+  const port = (server.address() as { port: number }).port
+  const child = { kill: () => true, exitCode: 0, once: () => true } as any
+  const adapter = new OpenCodeAdapter(child, WS, `http://127.0.0.1:${port}`)
+  const ac = new AbortController()
+  try {
+    // take the reader: events() is now blocked waiting for a frame
+    const stream = adapter.events(ac.signal) as AsyncGenerator<import("../src/core/types.ts").DomainEvent>
+    void stream.next() // parked in read(): no frame will ever arrive
+    await new Promise((r) => setTimeout(r, 100)) // let it subscribe and park
+    const started = Date.now()
+    await adapter.close()
+    assert.ok(Date.now() - started < 5_000, `close() must be bounded, took ${Date.now() - started}ms`)
+  } finally {
+    ac.abort()
+    open.feed?.end()
+    await new Promise<void>((r) => server.close(() => r()))
+  }
+})
+
 test("a question ask is answered by its label, on the questions route", async () => {
   // The `question` tool parks the turn on a human. Its ask is NOT a permission:
   // it is answered on a different route, and by LABEL — jep's option id carries

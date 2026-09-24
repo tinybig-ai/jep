@@ -894,7 +894,14 @@ export class OpenCodeAdapter implements HarnessAdapter {
   }
 
   async close(): Promise<void> {
-    for (const reader of this.#eventReaders) await reader.cancel().catch(() => {})
+    // A reader parked in read() on a stream that never ends can leave cancel()
+    // pending forever, and an unbounded await there is what wedged the daemon's
+    // shutdown: the gateway closed, then "stopping N workspace server(s)" was
+    // the last line in the log and the process never exited. Every wait in here
+    // is bounded, so close() always returns.
+    for (const reader of this.#eventReaders) {
+      await Promise.race([reader.cancel().catch(() => {}), new Promise<void>((r) => setTimeout(r, 1_000))])
+    }
     this.#eventReaders.clear()
     this.#child.kill("SIGTERM")
     await new Promise<void>((resolve) => {

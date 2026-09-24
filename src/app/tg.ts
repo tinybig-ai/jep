@@ -344,8 +344,20 @@ async function main() {
     if (stopping) return
     stopping = true
     console.error(`${sig} — stopping ${workspaces.length} workspace server(s)`)
+    // A shutdown that waits forever is worse than one that gives up: launchd
+    // restarts us either way, and a process that never exits keeps the gateway
+    // closed and the phone disconnected. So the sweep is bounded and the exit
+    // is unconditional — a harness that will not die is left for launchd.
+    const giveUp = setTimeout(() => {
+      console.error(`${sig} — shutdown budget spent; exiting anyway`)
+      process.exit(0)
+    }, 12_000)
     await gwClose?.().catch(() => {})
-    await Promise.all(workspaces.map((w) => w.adapter.close().catch(() => {})))
+    await Promise.race([
+      Promise.all(workspaces.map((w) => w.adapter.close().catch(() => {}))),
+      sleep(8_000),
+    ])
+    clearTimeout(giveUp)
     process.exit(0)
   }
   process.once("SIGTERM", () => void shutdown("SIGTERM"))
