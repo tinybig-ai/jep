@@ -644,6 +644,27 @@ export class OpenCodeAdapter implements HarnessAdapter {
     return this.#providerErrors.get(toNativeId(sessionID))?.error ?? null
   }
 
+  /**
+   * Is this ask still waiting on the harness?
+   *
+   * A 404 from a reply does not mean the ask was handled — it can equally mean
+   * the id is stale and a different ask is the one now parked. opencode drops an
+   * unknown permission id and answers 200-shaped nothing, so "the call did not
+   * fail" was never proof that anything resolved, and the card would sit there
+   * reading "answered" over a turn that never finished.
+   *
+   * When the harness cannot be asked, assume the ask is gone: refusing to answer
+   * on a network blip would be worse than the stale case this guards.
+   */
+  async #askStillPending(askID: string): Promise<boolean> {
+    const [permissions, questions] = await Promise.all([
+      this.#json<unknown[]>("/permission").catch(() => null),
+      this.#json<unknown[]>("/question").catch(() => null),
+    ])
+    if (permissions === null && questions === null) return false
+    return [...(permissions ?? []), ...(questions ?? [])].some((r) => (r as { id?: string })?.id === askID)
+  }
+
   // opencode's own three answers, passed straight through: "always" is a
   // standing rule it saves, not a second "once", so collapsing them into a
   // boolean would throw away the only one of the three that changes anything
@@ -672,11 +693,11 @@ export class OpenCodeAdapter implements HarnessAdapter {
       )
       return true
     } catch (err) {
-      // The request is already gone: answered elsewhere, timed out, or re-issued
-      // by opencode. There is nothing left to answer, and surfacing this as a
-      // failure left the turn blocked on a prompt that no longer existed. A stale
-      // approval is a no-op, not an error.
-      if (err instanceof HttpError && err.status === 404) return true
+      // The request is already gone — answered elsewhere, timed out, or re-issued
+      // by opencode. That is only "already handled" if nothing is still waiting:
+      // reporting a stale approval as a success is what let a card claim an
+      // answer that resolved nothing while its turn stayed parked.
+      if (err instanceof HttpError && err.status === 404) return !(await this.#askStillPending(askID))
       throw err
     }
   }
@@ -699,7 +720,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
       )
       return true
     } catch (err) {
-      if (err instanceof HttpError && err.status === 404) return true
+      if (err instanceof HttpError && err.status === 404) return !(await this.#askStillPending(askID))
       throw err
     }
   }

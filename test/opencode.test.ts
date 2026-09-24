@@ -263,6 +263,41 @@ test("a question ask is answered by its label, on the questions route", async ()
   }
 })
 
+test("an answer that did not resolve is reported as a failure, not a success", async () => {
+  // opencode 404s a permission id it does not know and drops it. Treating that
+  // as "already handled" is what let a card read "answered" over a turn that was
+  // still parked on a different ask: the phone believed it had answered, and
+  // nothing was ever resolved. So a 404 is only a success when nothing is still
+  // waiting under that id.
+  const pending: Array<{ id: string }> = [{ id: "per_live" }]
+  const seen: string[] = []
+  const server = createServer((req, res) => {
+    const url = new URL(req.url ?? "/", "http://127.0.0.1")
+    seen.push(url.pathname)
+    if (url.pathname === "/permission" || url.pathname === "/question") {
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify(url.pathname === "/permission" ? pending : []))
+      return
+    }
+    res.writeHead(404, { "content-type": "application/json" })
+    res.end("{}")
+  })
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r))
+  const port = (server.address() as { port: number }).port
+  const adapter = new OpenCodeAdapter({} as any, WS, `http://127.0.0.1:${port}`)
+  try {
+    // the id the card holds is stale, and per_live is the ask now parked
+    assert.equal(await adapter.respondAsk("opencode://ses_a", "per_live", "once"), false)
+    assert.ok(seen.includes("/permission"), "the pending list must be consulted")
+
+    // an ask that is genuinely gone is still a no-op, not an error
+    pending.length = 0
+    assert.equal(await adapter.respondAsk("opencode://ses_a", "per_old", "once"), true)
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()))
+  }
+})
+
 test("standing a question ask down cancels it, so the turn can finish", async () => {
   // The person answered in their own words instead of choosing. The question
   // tool is still holding the turn open, so the ask has to actually be rejected:
