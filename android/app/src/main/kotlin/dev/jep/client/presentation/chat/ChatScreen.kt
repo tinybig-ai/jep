@@ -898,52 +898,137 @@ private fun SubagentsDialog(vm: ChatViewModel, onOpen: (SessionSummary) -> Unit,
     )
 }
 
-// A file the user tapped in a message, read in a sheet. Plain text first: a
-// reader that shows the bytes honestly is worth more than one that guesses at
-// formats, and markdown and code both read fine as text.
+/** How the reader shows a file. The store is small and pure on purpose — a path
+ *  in, an engine and two defaults out — so what the reader does with any file is
+ *  testable without a screen, and adding a format is one line here. */
+internal enum class FileEngine { Markdown, Code, Text }
+
+internal data class FileKind(
+    val engine: FileEngine,
+    /** whether it opens rendered rather than as source */
+    val renderByDefault: Boolean,
+    /** prose wraps; code and diffs keep their lines and scroll sideways */
+    val wrapByDefault: Boolean,
+)
+
+private val MARKDOWN_EXT = setOf("md", "markdown", "mdx")
+private val DIFF_EXT = setOf("diff", "patch")
+private val CODE_EXT = setOf(
+    "kt", "kts", "java", "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "rb", "go", "rs", "swift",
+    "c", "h", "cc", "cpp", "hpp", "cs", "php", "sh", "zsh", "bash", "zsh", "sql", "toml", "yaml",
+    "yml", "ini", "gradle", "lua", "pl", "r", "scala", "dart", "ex", "exs", "erl", "hs", "clj",
+    "vue", "svelte", "css", "scss", "less", "html", "htm", "xml", "json", "csv", "tsv", "lock",
+)
+private val TEXT_EXT = setOf("txt", "text", "log", "out", "err", "env")
+
+internal fun fileKindFor(path: String): FileKind {
+    val ext = path.substringAfterLast('.', "").lowercase()
+    return when (ext) {
+        in MARKDOWN_EXT -> FileKind(FileEngine.Markdown, renderByDefault = true, wrapByDefault = true)
+        in DIFF_EXT -> FileKind(FileEngine.Code, renderByDefault = false, wrapByDefault = false)
+        in CODE_EXT -> FileKind(FileEngine.Code, renderByDefault = false, wrapByDefault = false)
+        // anything unrecognised is prose: readable beats clever, and a file with
+        // no extension at all is far more often notes than binary
+        else -> FileKind(FileEngine.Text, renderByDefault = false, wrapByDefault = true)
+    }
+}
+
+// A file the user tapped in a message, read in a sheet. The defaults come from
+// the engine store; the two toggles are for when it guessed wrong, which is the
+// only reason they exist.
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FileSheet(open: ChatViewModel.OpenFile, onClose: () -> Unit) {
+    val kind = remember(open.path) { fileKindFor(open.path) }
+    var render by remember(open.path) { mutableStateOf(kind.renderByDefault) }
+    var wrap by remember(open.path) { mutableStateOf(kind.wrapByDefault) }
+    var options by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(onDismissRequest = onClose, sheetState = sheetState) {
         Column(
-            Modifier
-                .fillMaxWidth()
-                .heightIn(max = 520.dp)
-                .padding(horizontal = 18.dp)
-                .padding(bottom = 24.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 18.dp).padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Text(
-                open.path,
-                fontSize = 15.sp,
-                fontFamily = FontFamily.Monospace,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            HorizontalDivider()
-            when {
-                open.loading -> Text(
-                    "reading…",
-                    fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                open.error != null -> Text(
-                    open.error,
-                    fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.error,
-                )
-                open.tooBig -> Text(
-                    "too large to read here — ${open.text?.length ?: 0} characters",
-                    fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                else -> Text(
-                    open.text.orEmpty(),
-                    Modifier.verticalScroll(rememberScrollState()),
-                    fontSize = 13.sp,
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    open.path,
+                    Modifier.weight(1f),
+                    fontSize = 15.sp,
                     fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
+                Box {
+                    IconButton(onClick = { options = true }) {
+                        Icon(
+                            Icons.Filled.Settings,
+                            "reader options",
+                            Modifier.size(20.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    DropdownMenu(expanded = options, onDismissRequest = { options = false }) {
+                        if (kind.engine == FileEngine.Markdown) {
+                            // the whole row is the target; the switch only shows state
+                            DropdownMenuItem(
+                                text = { Text("Render") },
+                                trailingIcon = { Switch(checked = render, onCheckedChange = null) },
+                                onClick = { render = !render },
+                            )
+                        }
+                        DropdownMenuItem(
+                            text = { Text("Word wrap") },
+                            trailingIcon = { Switch(checked = wrap, onCheckedChange = null) },
+                            onClick = { wrap = !wrap },
+                        )
+                    }
+                }
+            }
+            HorizontalDivider()
+            Box(Modifier.fillMaxWidth().heightIn(max = 520.dp)) {
+                when {
+                    open.loading -> Text(
+                        "reading…",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    open.error != null -> Text(
+                        open.error,
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    open.tooBig -> Text(
+                        "too large to read here — ${open.text?.length ?: 0} characters",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    render && kind.engine == FileEngine.Markdown -> Markdown(
+                        open.text.orEmpty(),
+                        typography = markdownTypography(
+                            textLink = TextLinkStyles(
+                                style = SpanStyle(
+                                    color = MaterialTheme.colorScheme.primary,
+                                    textDecoration = TextDecoration.Underline,
+                                ),
+                            ),
+                        ),
+                        modifier = Modifier.verticalScroll(rememberScrollState()),
+                    )
+                    else -> {
+                        val body = Text(
+                            open.text.orEmpty(),
+                            Modifier
+                                .verticalScroll(rememberScrollState())
+                                .then(if (wrap) Modifier else Modifier.horizontalScroll(rememberScrollState())),
+                            fontSize = 13.sp,
+                            fontFamily = if (kind.engine == FileEngine.Code) FontFamily.Monospace else FontFamily.Default,
+                            softWrap = wrap,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        if (wrap) body else body
+                    }
+                }
             }
             TextButton(onClick = onClose, modifier = Modifier.align(Alignment.End)) { Text("Close") }
         }
