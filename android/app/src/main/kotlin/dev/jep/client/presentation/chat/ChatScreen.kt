@@ -898,6 +898,32 @@ private fun SubagentsDialog(vm: ChatViewModel, onOpen: (SessionSummary) -> Unit,
     )
 }
 
+/**
+ * The reader's markdown is calmer than the transcript's. A transcript is
+ * scanned — the display-sized headings are what you notice from arm's length. A
+ * file is read, at reading distance, on a phone, where those headings shout and
+ * cost a third of the screen each.
+ */
+@Composable
+private fun readerTypography() = markdownTypography(
+    h1 = MaterialTheme.typography.titleLarge,
+    h2 = MaterialTheme.typography.titleMedium,
+    h3 = MaterialTheme.typography.titleSmall,
+    h4 = MaterialTheme.typography.bodyLarge,
+    h5 = MaterialTheme.typography.bodyMedium,
+    h6 = MaterialTheme.typography.bodyMedium,
+    text = MaterialTheme.typography.bodyMedium,
+    paragraph = MaterialTheme.typography.bodyMedium.copy(lineHeight = 21.sp),
+    code = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+    inlineCode = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+    textLink = TextLinkStyles(
+        style = SpanStyle(
+            color = MaterialTheme.colorScheme.primary,
+            textDecoration = TextDecoration.Underline,
+        ),
+    ),
+)
+
 /** How the reader shows a file. The store is small and pure on purpose — a path
  *  in, an engine and two defaults out — so what the reader does with any file is
  *  testable without a screen, and adding a format is one line here. */
@@ -946,6 +972,10 @@ private fun FileSheet(open: ChatViewModel.OpenFile, onClose: () -> Unit) {
     var render by remember(open.path) { mutableStateOf(kind.renderByDefault) }
     var wrap by remember(open.path) { mutableStateOf(kind.wrapByDefault) }
     var options by remember { mutableStateOf(false) }
+    // both axes, always: unwrapping a line must not cost the ability to scroll
+    // down the file
+    val down = rememberScrollState()
+    val across = rememberScrollState()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(onDismissRequest = onClose, sheetState = sheetState) {
         Column(
@@ -1008,22 +1038,24 @@ private fun FileSheet(open: ChatViewModel.OpenFile, onClose: () -> Unit) {
                     )
                     render && kind.engine == FileEngine.Markdown -> Markdown(
                         open.text.orEmpty(),
-                        typography = markdownTypography(
-                            textLink = TextLinkStyles(
-                                style = SpanStyle(
-                                    color = MaterialTheme.colorScheme.primary,
-                                    textDecoration = TextDecoration.Underline,
-                                ),
-                            ),
-                        ),
-                        modifier = Modifier.verticalScroll(rememberScrollState()),
+                        typography = readerTypography(),
+                        // Word wrap has to be asked for by width here: the renderer
+                        // fills whatever box it is given, so an unwrapped line only
+                        // survives if the box is wider than the phone. Generous on
+                        // purpose — too wide costs a little sideways travel, too
+                        // narrow silently wraps a line the toggle says is not wrapped.
+                        modifier = if (wrap) {
+                            Modifier.verticalScroll(down)
+                        } else {
+                            Modifier.verticalScroll(down).horizontalScroll(across).widthIn(min = 2400.dp)
+                        },
                     )
                     else -> {
                         val body = Text(
                             open.text.orEmpty(),
                             Modifier
-                                .verticalScroll(rememberScrollState())
-                                .then(if (wrap) Modifier else Modifier.horizontalScroll(rememberScrollState())),
+                                .verticalScroll(down)
+                                .then(if (wrap) Modifier else Modifier.horizontalScroll(across)),
                             fontSize = 13.sp,
                             fontFamily = if (kind.engine == FileEngine.Code) FontFamily.Monospace else FontFamily.Default,
                             softWrap = wrap,
