@@ -168,9 +168,10 @@ interface ChatRepository {
      *  the turn finish instead of hanging until it is stopped by hand. */
     suspend fun reject(askId: String): Boolean
 
-    /** read a workspace file as text, for the in-app reader. Goes through the
-     *  gateway's own /file route, so the roots check still applies. */
-    suspend fun readFile(path: String): String
+    /** read a file as text for the in-app reader. A relative path is resolved by
+     *  the daemon against this session's own workspace, so the client never has
+     *  to know a directory and the roots check stays authoritative. */
+    suspend fun readFile(sessionId: String, path: String): String
     suspend fun rename(sessionId: String, title: String): Boolean
     suspend fun delete(sessionId: String): Boolean
     /** upload a file to the gateway; returns the id to pass in the next prompt */

@@ -5,7 +5,7 @@ import type { HarnessAdapter } from "../src/core/ports.ts"
 import type { DomainEvent, Message, SessionSummary } from "../src/core/types.ts"
 import { TurnAbortedError } from "../src/core/types.ts"
 import { JEP_CONTEXT, JEP_CONTEXT_FOOTER } from "../src/core/transcript.ts"
-import { existsSync, mkdtempSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -139,9 +139,14 @@ function stallable() {
   }
 }
 
-async function startWith(a: ReturnType<typeof stallable>): Promise<{ base: string; headers: Record<string, string>; g: GatewayHandle }> {
+async function startWith(
+  a: ReturnType<typeof stallable>,
+  workspace = a.adapter.workspace,
+): Promise<{ base: string; headers: Record<string, string>; g: GatewayHandle }> {
   const g = await startGateway({
-    adapters: () => [{ name: "fake-ws", adapter: a.adapter }],
+    // the workspace the served roots are built from, so a test can point the
+    // adapter at a real directory when resolution matters
+    adapters: () => [{ name: "fake-ws", adapter: { ...a.adapter, workspace } }],
     dataHome: mkdtempSync(join(tmpdir(), "gw-q-")),
     port: 0,
     pairCode: "TESTCODE",
@@ -1096,6 +1101,42 @@ test("standing an ask down needs only its id, and tells the harness", async () =
     })
     assert.equal(unknown.status, 404)
     assert.equal(((await unknown.json()) as { error: string }).error, "unknown ask")
+  } finally {
+    await g.close()
+  }
+})
+
+test("a relative link is read from the session's own workspace", async () => {
+  // The transcript links `[notes](docs/notes.md)`. "docs/notes.md" only means
+  // something relative to the workspace that session belongs to — resolved here,
+  // by the process that knows which workspace that is, and then held to the same
+  // roots check as everything else. Resolving it against the daemon's own
+  // working directory (the first attempt) made every link unreadable.
+  const ws = mkdtempSync(join(tmpdir(), "gw-ws-"))
+  mkdirSync(join(ws, "docs"))
+  writeFileSync(join(ws, "docs", "notes.md"), "# notes\n\nhello from the workspace\n")
+  const a = stallable()
+  const { base, headers, g } = await startWith(a, ws)
+  try {
+    const read = async (path: string) => {
+      const res = await fetch(`${base}/read`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ id: "s1", path }),
+      })
+      return { status: res.status, body: (await res.json()) as { text?: string; error?: string } }
+    }
+
+    const ok = await read("docs/notes.md")
+    assert.equal(ok.status, 200, `expected the file to be readable, got ${ok.status} ${ok.body.error ?? ""}`)
+    assert.match(ok.body.text ?? "", /hello from the workspace/)
+
+    // a path that escapes the workspace is still refused
+    const escape = await read("../../../../etc/hosts")
+    assert.equal(escape.status, 403, "the roots check still applies to a relative path")
+
+    const missing = await read("docs/nope.md")
+    assert.equal(missing.status, 404)
   } finally {
     await g.close()
   }

@@ -772,7 +772,7 @@ class ChatViewModel(
         if (clean.isEmpty() || clean.contains("://")) return
         _state.update { it.copy(openFile = OpenFile(clean)) }
         viewModelScope.launch {
-            runCatching { repo.readFile(clean) }
+            runCatching { repo.readFile(sessionId, clean) }
                 .onSuccess { text ->
                     _state.update { st ->
                         val open = st.openFile ?: return@update st

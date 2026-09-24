@@ -43,6 +43,7 @@ import dev.jep.client.domain.model.Workspace
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
@@ -66,7 +67,10 @@ class GatewayChatRepository(
     private val onNextCode: (String?) -> Unit = {},
 ) : ChatRepository {
 
-    private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+    @Serializable
+data class ReadRes(val text: String)
+
+private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     private val jsonMedia = "application/json".toMediaType()
 
     class ApiFailure(val status: Int, message: String?) : RuntimeException(message ?: "gateway said $status")
@@ -317,17 +321,13 @@ class GatewayChatRepository(
     override suspend fun reject(askId: String): Boolean =
         post("/reject", payload("askID" to askId)).first in 200..299
 
-    override suspend fun readFile(path: String): String = withContext(Dispatchers.IO) {
-        val enc = Base64.encodeToString(
-            path.toByteArray(Charsets.UTF_8),
-            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
-        )
-        val builder = Request.Builder().url("$base/file?p=$enc")
-        token()?.let { builder.header("authorization", "Bearer $it") }
-        http.newCall(builder.get().build()).execute().use { res ->
-            if (!res.isSuccessful) throw ApiFailure(res.code, "couldn't read $path")
-            res.body?.string().orEmpty()
+    override suspend fun readFile(sessionId: String, path: String): String = withContext(Dispatchers.IO) {
+        val res = post("/read", payload("id" to sessionId, "path" to path))
+        if (res.first !in 200..299) {
+            val err = runCatching { json.decodeFromString(ErrorDto.serializer(), res.second) }.getOrNull()
+            throw ApiFailure(res.first, err?.message ?: err?.error ?: "the gateway said ${res.first}")
         }
+        json.decodeFromString(ReadRes.serializer(), res.second).text
     }
 
     override fun events(): Flow<ChatEvent> = GatewayEventStream(base, token).open(http)

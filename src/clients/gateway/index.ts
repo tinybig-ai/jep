@@ -8,7 +8,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
-import { dirname, join, resolve, sep } from "node:path"
+import { dirname, isAbsolute, join, resolve, sep } from "node:path"
 import type { HarnessAdapter, SessionImport, Terminal } from "../../core/ports.ts"
 import type { PairingAdmin } from "../../core/pairing.ts"
 import { pushFor, UnregisteredToken, type PushNotifier } from "../../core/push.ts"
@@ -584,6 +584,12 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     }
   }
 
+  // the only directories a client may read: our own data, and any workspace a
+  // harness is serving
+  const rootsFor = (): string[] => [resolve(deps.dataHome), ...deps.adapters().map(({ adapter }) => resolve(adapter.workspace))]
+  /** a reader shows text; a whole 200 MB file in a sheet helps nobody */
+  const READ_MAX = 2 << 20
+
   const tokenOf = (req: IncomingMessage, url: URL): string | null => {
     const head = req.headers.authorization ?? ""
     if (head.startsWith("Bearer ")) return head.slice(7).trim()
@@ -647,8 +653,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const decoded = encoded ? Buffer.from(encoded, "base64url").toString("utf8") : ""
         if (!decoded) return json(res, 400, { error: "p required" })
         const abs = resolve(decoded)
-        const roots = [resolve(deps.dataHome), ...deps.adapters().map(({ adapter }) => resolve(adapter.workspace))]
-        if (!roots.some((r) => abs === r || abs.startsWith(r + sep))) {
+        if (!rootsFor().some((r) => abs === r || abs.startsWith(r + sep))) {
           return json(res, 403, { error: "outside the served roots" })
         }
         try {
@@ -964,6 +969,29 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       if (!id) return json(res, 400, { error: "id required" })
       const adapter = await ensureListed(id)
       if (!adapter) return json(res, 404, { error: "unknown session" })
+
+      if (path === "/read") {
+        // A file the transcript linked to, read as text. A relative path means
+        // "in this conversation's workspace" — resolved here, by the one process
+        // that knows which workspace a session belongs to, rather than guessing
+        // a directory on the client and then having the roots check second-guess it.
+        const readPath = str("path")
+        if (!readPath) return json(res, 400, { error: "path required" })
+        const abs = isAbsolute(readPath)
+          ? resolve(readPath)
+          : resolve(adapter.workspace, readPath)
+        if (!rootsFor().some((r) => abs === r || abs.startsWith(r + sep))) {
+          return json(res, 403, { error: "outside the served roots" })
+        }
+        try {
+          const info = await stat(abs)
+          if (!info.isFile()) return json(res, 404, { error: "no such file" })
+          if (info.size > READ_MAX) return json(res, 413, { error: "too large to read here" })
+          return json(res, 200, { path: readPath, text: (await readFile(abs)).toString("utf8") })
+        } catch {
+          return json(res, 404, { error: "no such file" })
+        }
+      }
 
       if (path === "/rename") {
         const name = str("title")
