@@ -466,4 +466,26 @@ class ChatScreenTest {
         rule.waitUntil(5_000) { vm.state.value.queued.isEmpty() }
         gate.complete(Unit)
     }
+
+    @Test
+    fun a_queued_message_survives_the_same_words_being_sent_before() {
+        // The queued bubble clears when its message shows in the record. Matching
+        // by text alone cleared it at once when the same words had ever been sent
+        // before — the bug the first queue test missed.
+        val repo = FakeChatRepository(
+            messages = listOf(ChatMessage("u0", Role.USER, 1, listOf(ChatPart.Text("hello")))),
+        )
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        repo.promptGate = gate
+        val vm = ChatViewModel(repo, "s1", "T", "jep", "opencode")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("hello").fetchSemanticsNodes().isNotEmpty() }
+        rule.runOnUiThread { vm.send("first") }
+        rule.waitUntil(5_000) { vm.state.value.sending }
+        rule.runOnUiThread { vm.send("hello") }
+        rule.waitUntil(5_000) { vm.state.value.queued.size == 1 }
+        rule.waitForIdle()
+        rule.onNodeWithContentDescription("queued").assertExists()
+        gate.complete(Unit)
+    }
 }

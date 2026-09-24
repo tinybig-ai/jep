@@ -57,7 +57,7 @@ class ChatViewModel(
 
     /** a message typed while the agent was busy: held, shown as queued, handed
      * over when the current turn ends */
-    data class Queued(val id: String, val text: String, val attachments: List<Attachment> = emptyList(), val steer: Boolean = true)
+    data class Queued(val id: String, val text: String, val attachments: List<Attachment> = emptyList(), val steer: Boolean = true, /** served user message ids already present when this was queued, so an older message with the same words cannot clear it */ val seen: Set<String> = emptySet())
 
     /** the turn being written right now, unit = streaming part */
     data class LiveTurn(
@@ -269,7 +269,7 @@ class ChatViewModel(
                             false
                         }
                     }
-                    val servedNow = batch.messages.filter { it.role == Role.USER }.map { textOf(it) }
+                    val servedNow = batch.messages.filter { it.role == Role.USER }
                     _state.update { st ->
                         st.copy(
                             messages = batch.messages + optimistic.toList(),
@@ -277,8 +277,10 @@ class ChatViewModel(
                             hasMore = batch.hasMore,
                             loadingHistory = false,
                             // a queued message that now shows in the record has been
-                            // picked up: it is no longer waiting, it is the turn
-                            queued = st.queued.filterNot { q -> servedNow.contains(q.text) },
+                            // picked up: it is no longer waiting, it is the turn. A
+                            // NEW record entry only — an older message with the same
+                            // words must not clear it.
+                            queued = st.queued.filterNot { q -> servedNow.any { m -> m.id !in q.seen && textOf(m) == q.text } },
                         )
                     }
                 }
@@ -334,7 +336,8 @@ class ChatViewModel(
     // is picked up.
     private fun enqueue(body: String, files: List<Attachment>, steer: Boolean) {
         val clientID = "q-${System.nanoTime()}"
-        _state.update { it.copy(queued = it.queued + Queued(clientID, body, files, steer), attachments = emptyList()) }
+        val seen = _state.value.messages.filter { it.role == Role.USER }.map { it.id }.toSet()
+        _state.update { it.copy(queued = it.queued + Queued(clientID, body, files, steer, seen), attachments = emptyList()) }
         viewModelScope.launch {
             // resolves when the steered turn finishes, or at once if cancelled
             runCatching { repo.prompt(sessionId, body, files.map { it.id }, clientID, steer) }
