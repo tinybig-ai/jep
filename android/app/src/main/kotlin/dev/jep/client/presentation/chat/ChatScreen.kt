@@ -55,7 +55,8 @@ import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.AttachFile
-import androidx.compose.material.icons.filled.HourglassEmpty
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -1248,32 +1249,17 @@ private fun ReplyBanner(message: ChatMessage, onCancel: () -> Unit) {
 
 @Composable
 private fun UserBubble(message: ChatMessage, onRetry: () -> Unit = {}) {
-    // A send the daemon never took. It is drawn the way a queued message is —
-    // dimmed, with an hourglass — because on screen is not delivered, and a
-    // normal-looking bubble is a claim the harness never received. Tap to try
-    // again.
+    // A send the daemon never took. This is not a waiting state — nothing is
+    // queued, the send simply failed — so it is drawn as a problem rather than a
+    // clock: the bubble takes the error tone, says so, and sends again on a tap.
     val pending = message.undelivered
     Box(Modifier.fillMaxWidth()) {
-        if (pending) {
-            Row(
-                Modifier.align(Alignment.CenterEnd).padding(end = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(
-                    Icons.Filled.HourglassEmpty,
-                    "not delivered — tap to send again",
-                    Modifier.size(15.dp).clickable(onClick = onRetry),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
         Surface(
             Modifier
                 .align(Alignment.CenterEnd)
                 .widthIn(max = 320.dp)
-                .then(if (pending) Modifier.alpha(0.55f) else Modifier)
                 .then(if (pending) Modifier.clickable(onClick = onRetry) else Modifier),
-            color = MaterialTheme.colorScheme.primaryContainer,
+            color = if (pending) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.primaryContainer,
             shape = RoundedCornerShape(18.dp),
         ) {
             Column(Modifier.padding(horizontal = 14.dp, vertical = 9.dp)) {
@@ -1281,22 +1267,45 @@ private fun UserBubble(message: ChatMessage, onRetry: () -> Unit = {}) {
                 // sent from another client (Telegram) is invisible here
                 message.parts.forEach { part ->
                     when (part) {
-                        is ChatPart.Text -> Text(part.text, color = MaterialTheme.colorScheme.onPrimaryContainer, fontSize = 15.sp)
+                        is ChatPart.Text -> Text(
+                            part.text,
+                            color = if (pending) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onPrimaryContainer,
+                            fontSize = 15.sp,
+                        )
                         is ChatPart.File -> if (isImagePart(part)) {
                             ImageThumb(part)
                         } else {
                             Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Filled.AttachFile, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onPrimaryContainer)
+                                Icon(Icons.Filled.AttachFile, null, Modifier.size(16.dp), tint = if (pending) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onPrimaryContainer)
                                 Text(
                                     part.name ?: part.path.substringAfterLast('/'),
                                     Modifier.padding(start = 6.dp),
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    color = if (pending) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onPrimaryContainer,
                                     fontSize = 13.sp,
                                     maxLines = 1,
                                 )
                             }
                         }
                         else -> Unit
+                    }
+                    if (pending) {
+                        Row(
+                            Modifier.padding(top = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                Icons.Filled.ErrorOutline,
+                                null,
+                                Modifier.size(14.dp),
+                                tint = MaterialTheme.colorScheme.onErrorContainer,
+                            )
+                            Text(
+                                "Not sent — tap to retry",
+                                Modifier.padding(start = 5.dp),
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                            )
+                        }
                     }
                 }
             }
@@ -1821,12 +1830,13 @@ private fun QueuedBubble(q: ChatViewModel.Queued, onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // a queued message looks like a real one — same side, same bubble — only
-        // dimmed, with an hourglass to its left
+        // dimmed, with a clock beside it: it is waiting its turn, not broken. A
+        // clock face reads at this size; an hourglass was a smudge.
         Icon(
-            Icons.Filled.HourglassEmpty,
+            Icons.Filled.Schedule,
             "queued",
-            Modifier.size(16.dp).padding(end = 6.dp),
-            tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
+            Modifier.size(20.dp).padding(end = 7.dp),
+            tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f),
         )
         Surface(
             Modifier.widthIn(max = 320.dp).clickable { onClick() },
