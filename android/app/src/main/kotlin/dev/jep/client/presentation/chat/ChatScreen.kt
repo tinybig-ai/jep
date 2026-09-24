@@ -151,7 +151,10 @@ import dev.jep.client.domain.model.Ask
 import dev.jep.client.domain.model.SessionSummary
 import dev.jep.client.domain.model.ToolStatus
 import dev.jep.client.domain.repository.ModelChoices
-import dev.jep.client.presentation.theme.LocalSuccess
+
+/** the ask card's own "Something else": spends the card without answering the
+ *  harness, exactly as saying the answer in chat does */
+internal const val SOMETHING_ELSE = "something-else"
 
 /** one row of the transcript: a message, or the ask the harness is blocked on */
 internal sealed interface Row {
@@ -509,7 +512,10 @@ fun ChatScreen(
                         is Row.Pending -> AskBar(
                             row.ask,
                             vm,
-                            choice = state.askChoice?.let { id -> row.ask.options.firstOrNull { it.id == id }?.label },
+                            choice = state.askChoice?.let { id ->
+                                row.ask.options.firstOrNull { it.id == id }?.label
+                                    ?: "Something else".takeIf { id == SOMETHING_ELSE }
+                            },
                             answeredInChat = askAnswered && state.askChoice == null,
                         )
                         is Row.Msg -> CompositionLocalProvider(LocalFileUrl provides { path -> vm.fileUrl(path) }) {
@@ -1725,27 +1731,24 @@ private fun AskBar(ask: Ask, vm: ChatViewModel, choice: String?, answeredInChat:
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 ask.options.forEach { option ->
-                    val picked = option.id == choice
-                    val green = LocalSuccess.current
                     OutlinedButton(
                         onClick = { vm.respond(ask.id, option.id) },
                         enabled = !answered,
-                        // the one you picked keeps its colour once the card is
-                        // spent, so the record says what you chose at a glance
-                        colors = if (picked) {
-                            ButtonDefaults.outlinedButtonColors(
-                                containerColor = green.copy(alpha = 0.18f),
-                                contentColor = green,
-                                disabledContainerColor = green.copy(alpha = 0.18f),
-                                disabledContentColor = green,
-                            )
-                        } else {
-                            ButtonDefaults.outlinedButtonColors()
-                        },
-                        border = if (picked) BorderStroke(1.dp, green) else null,
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 4.dp),
                     ) {
                         Text(option.label, fontSize = 14.sp, maxLines = 1)
+                    }
+                }
+                // A question asked in the open does not have to be answered with
+                // one of the labels I wrote. This spends the card the way saying
+                // the answer in chat does, and sends nothing: the ask stands down
+                // and the reply comes as a message.
+                if (ask.kind == "question" && !answered) {
+                    OutlinedButton(
+                        onClick = { vm.spendAsk(ask.id) },
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 4.dp),
+                    ) {
+                        Text("Something else", fontSize = 14.sp, maxLines = 1)
                     }
                 }
             }
@@ -1755,25 +1758,6 @@ private fun AskBar(ask: Ask, vm: ChatViewModel, choice: String?, answeredInChat:
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            } else if (ask.kind == "question") {
-                // opencode's question API takes a free-form answer as well as the
-                // offered labels; the field is here, and sending it is a no-op
-                // until that route is wired up
-                var draft by remember(ask.id) { mutableStateOf("") }
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    OutlinedTextField(
-                        value = draft,
-                        onValueChange = { draft = it },
-                        modifier = Modifier.weight(1f),
-                        placeholder = { Text("Something else", fontSize = 14.sp) },
-                        singleLine = true,
-                    )
-                    TextButton(onClick = {}) { Text("Send", fontSize = 14.sp) }
-                }
             }
         }
     }

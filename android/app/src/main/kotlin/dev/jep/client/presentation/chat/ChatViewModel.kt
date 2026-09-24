@@ -639,4 +639,12 @@ class ChatViewModel(
                 .onFailure { err -> _state.update { it.copy(failure = "the ask didn't take: ${err.message}") } }
         }
     }
+
+    /** The card's "Something else": the choices are spent and the ask stands
+     *  down, but nothing is sent — the answer comes as a message instead. */
+    fun spendAsk(askId: String) {
+        _state.update { st ->
+            if (st.ask?.id != askId || st.askChoice != null) st else st.copy(askChoice = SOMETHING_ELSE)
+        }
+    }
 }

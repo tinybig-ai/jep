@@ -127,6 +127,17 @@ class TranscriptRowsTest {
     }
 
     @Test
+    fun `"Something else" spends the card without an answer`() {
+        // it stands the ask down and invalidates the other options, but sends
+        // nothing: the answer arrives as a message instead, which is the same
+        // state the card reaches on its own
+        val ordered = listOf(msg("m2", Role.ASSISTANT, 20), msg("m1", Role.USER, 10))
+        val rows = transcriptRows(ordered, ask, 30, liveMessageId = null)
+        assertTrue(askIsSpent(ask, SOMETHING_ELSE, rows, 30))
+        assertTrue(rows.any { it is Row.Pending && it.ask.id == "a1" })
+    }
+
+    @Test
     fun `no ask means nothing is spent`() {
         val ordered = listOf(msg("m2", Role.USER, 40))
         val rows = transcriptRows(ordered, null, 30)
