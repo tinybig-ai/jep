@@ -858,6 +858,30 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         return json(res, 200, { ok: true, devices: pushTokens.size })
       }
 
+      // Answering an ask is keyed by the ask id, not a session id: the ask
+      // already names its session, and demanding a session id here is what
+      // silently 400'd every approval from the phone (the app posts only
+      // askID + optionID). So this route sits above the id gate, and takes the
+      // session id only as a fallback for an ask this process never surfaced.
+      if (path === "/respond") {
+        const askID = str("askID")
+        const optionID = str("optionID")
+        if (!askID || !optionID) return json(res, 400, { error: "askID and optionID required" })
+        const sid = askSessions.get(askID) ?? str("id") ?? ""
+        if (!sid) {
+          console.error(`[ask] respond askID=${askID} option=${optionID} -> no session for this ask`)
+          return json(res, 404, { error: "unknown ask" })
+        }
+        const owner = await ensureListed(sid)
+        if (!owner) {
+          console.error(`[ask] respond askID=${askID} option=${optionID} -> no session`)
+          return json(res, 404, { error: "unknown ask" })
+        }
+        const ok = await owner.respondAsk(sid, askID, optionID).catch(() => false)
+        console.error(`[ask] respond askID=${askID} option=${optionID} -> ${ok ? "ok" : "failed"}`)
+        return json(res, ok ? 200 : 409, ok ? { ok: true } : { error: "ask already answered" })
+      }
+
       const id = str("id")
       if (!id) return json(res, 400, { error: "id required" })
       const adapter = await ensureListed(id)
@@ -1155,21 +1179,6 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         st.waiting.unshift(entry)
         st.signal?.abort()
         return json(res, 200, { ok: true })
-      }
-
-      if (path === "/respond") {
-        const askID = str("askID")
-        const optionID = str("optionID")
-        if (!askID || !optionID) return json(res, 400, { error: "askID and optionID required" })
-        const sid = askSessions.get(askID) ?? id
-        const owner = await ensureListed(sid)
-        if (!owner) {
-          console.error(`[ask] respond askID=${askID} option=${optionID} -> no session`)
-          return json(res, 404, { error: "unknown ask" })
-        }
-        const ok = await owner.respondAsk(sid, askID, optionID).catch(() => false)
-        console.error(`[ask] respond askID=${askID} option=${optionID} -> ${ok ? "ok" : "failed"}`)
-        return json(res, ok ? 200 : 409, ok ? { ok: true } : { error: "ask already answered" })
       }
 
       return json(res, 404, { error: "no such route" })

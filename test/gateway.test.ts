@@ -990,3 +990,45 @@ test("the push feed carries harness events to every connected device", async () 
     await g.close()
   }
 })
+
+test("an ask is answered by its own id, with no session id — what the phone sends", async () => {
+  const a = stallable()
+  const { base, headers, g } = await startWith(a)
+  try {
+    // the pump surfaces the ask and remembers which session it belongs to
+    a.feed({
+      type: "ask.requested",
+      sessionID: "s1",
+      ask: {
+        id: "per_ask1",
+        sessionID: "s1",
+        title: "external_directory",
+        detail: "ls /etc",
+        options: [{ id: "always", label: "Always allow" }],
+      },
+    } as DomainEvent)
+    await sleep(60)
+
+    // The app posts only askID + optionID. Demanding a session id here is what
+    // silently 400'd every approval from the phone: the card cleared, the turn
+    // stayed blocked, and nothing was logged.
+    const res = await fetch(`${base}/respond`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ askID: "per_ask1", optionID: "always" }),
+    })
+    assert.equal(res.status, 200, `the ask must be answerable without a session id, got ${res.status}`)
+
+    // an ask this process never surfaced still fails cleanly — as an unknown
+    // ask, not as a missing session id
+    const unknown = await fetch(`${base}/respond`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ askID: "per_never", optionID: "always" }),
+    })
+    assert.equal(unknown.status, 404)
+    assert.equal(((await unknown.json()) as { error: string }).error, "unknown ask")
+  } finally {
+    await g.close()
+  }
+})
