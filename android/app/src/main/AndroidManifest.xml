@@ -25,6 +25,16 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- An address only this app answers, used to hand a tapped relative
+                 link back to the reader. It is an Android implementation detail:
+                 messages carry plain relative links, the daemon never sees this,
+                 and no other client is expected to understand it. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="jep" android:host="file" />
+            </intent-filter>
         </activity>
 
         <service

@@ -41,6 +41,7 @@ class MainActivity : ComponentActivity() {
         // the terminal. TopAppBar/Scaffold already handle the system bars.
         enableEdgeToEdge()
         ensureNotificationPermission()
+        fileFrom(intent)
 
         // the socket outlives screens; the service is what keeps it alive —
         // unless the person has turned background streaming off, in which case
@@ -72,6 +73,19 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         intent.getStringExtra(EXTRA_SESSION)?.let { app.openSessionById(it) }
+        fileFrom(intent)
+    }
+
+    /**
+     * A tapped relative link, rewritten to an address only this app answers.
+     * The path is parked; whichever conversation is on screen takes it and
+     * resolves it against its own workspace, which is the only thing that can
+     * know what a relative path means.
+     */
+    private fun fileFrom(intent: Intent) {
+        val data = intent.data ?: return
+        if (data.scheme != "jep" || data.host != "file") return
+        data.getQueryParameter("path")?.let { dev.jep.client.presentation.chat.OpenedFile.offer(it) }
     }
 
     private fun ensureNotificationPermission() {

@@ -147,6 +147,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
+import java.net.URLEncoder
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
 import dev.jep.client.domain.model.Role
@@ -258,6 +259,15 @@ fun ChatScreen(
     subagentCount: Int = 0,
 ) {
     val state by vm.state.collectAsState()
+    // a file tapped in a message: this conversation is the one that can resolve
+    // a relative path against its own workspace, so it takes the hand-off
+    val tappedFile by OpenedFile.pending.collectAsState()
+    LaunchedEffect(tappedFile) {
+        tappedFile?.let {
+            vm.openFile(it)
+            OpenedFile.take(it)
+        }
+    }
 
     // The live row and the harness's record are the same message (both carry the
     // raw message id), so one replaces the other in place. Which one to show is
@@ -562,6 +572,7 @@ fun ChatScreen(
         replyTo?.let { ReplyBanner(it) { replyTo = null } }
         Composer(vm, replyTo) { replyTo = null }
     }
+    state.openFile?.let { open -> FileSheet(open, onClose = { vm.closeFile() }) }
     if (termVisible) TerminalOverlay(vm, onClose = { termVisible = false })
     if (subsOpen) SubagentsDialog(vm, onOpen = { onOpenSession(it); subsOpen = false }, onDismiss = { subsOpen = false })
     }
@@ -882,6 +893,58 @@ private fun SubagentsDialog(vm: ChatViewModel, onOpen: (SessionSummary) -> Unit,
         },
         confirmButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Done") } },
     )
+}
+
+// A file the user tapped in a message, read in a sheet. Plain text first: a
+// reader that shows the bytes honestly is worth more than one that guesses at
+// formats, and markdown and code both read fine as text.
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FileSheet(open: ChatViewModel.OpenFile, onClose: () -> Unit) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onClose, sheetState = sheetState) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(max = 520.dp)
+                .padding(horizontal = 18.dp)
+                .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                open.path,
+                fontSize = 15.sp,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            HorizontalDivider()
+            when {
+                open.loading -> Text(
+                    "reading…",
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                open.error != null -> Text(
+                    open.error,
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                open.tooBig -> Text(
+                    "too large to read here — ${open.text?.length ?: 0} characters",
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                else -> Text(
+                    open.text.orEmpty(),
+                    Modifier.verticalScroll(rememberScrollState()),
+                    fontSize = 13.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+            TextButton(onClick = onClose, modifier = Modifier.align(Alignment.End)) { Text("Close") }
+        }
+    }
 }
 
 // The terminal fills this window rather than a Dialog — a Dialog is its own
@@ -1364,14 +1427,45 @@ private fun AssistantBody(
     }
 }
 
+/**
+ * Where a link in a message should point.
+ *
+ * The domain concept is a plain relative markdown link — a file in this
+ * conversation's workspace — and that is what other clients implement too. This
+ * app needs an address Android can route, because a bare path routes nowhere:
+ * taps on relative links did nothing at all. So relative targets are rewritten to
+ * an address only this app answers. The scheme appears in neither the stored
+ * message nor the daemon, and copying a message still yields the original text.
+ */
+internal fun linkDestination(raw: String): String? {
+    val target = raw.trim()
+    if (target.isEmpty()) return null
+    // already addressed: http, mailto, jep, or protocol-relative
+    if (target.startsWith("//")) return target
+    val colon = target.indexOf(':')
+    val slash = target.indexOf('/')
+    if (colon > 0 && (slash < 0 || colon < slash)) return target
+    // an in-document anchor is the renderer's business, not ours
+    if (target.startsWith("#")) return null
+    val path = target.substringBefore('#').substringBefore('?').removePrefix("./")
+    if (path.isEmpty()) return null
+    return "jep://file?path=" + URLEncoder.encode(path, "UTF-8")
+}
+
+// `[label](target)`, and images `![alt](target)`. Only the destination is
+// touched, and only when it is relative, so a quoted title after it survives.
+private val LINK_TARGET = Regex("""(!?\[[^\]]*\])\(([^)\s]+)((?:\s+"[^"]*")?)\)""")
+
+internal fun withLocalLinks(markdown: String): String =
+    LINK_TARGET.replace(markdown) { m ->
+        val dest = linkDestination(m.groupValues[2]) ?: return@replace m.value
+        "${m.groupValues[1]}($dest${m.groupValues[3]})"
+    }
+
 @Composable
 private fun PartView(part: ChatPart, streaming: Boolean, onOpenLink: (String) -> Unit = {}) {
     when (part) {
-        // The plumbing for a tappable link is here and has nothing to hand it
-        // to: multiplatform-markdown-renderer 0.43 dropped the old
-        // `onClickLink`, and its `markdownComponents()` has no `link` slot to
-        // override. See todo.md — "links in messages are not tappable".
-        is ChatPart.Text -> Markdown(part.text + if (streaming) " ▍" else "")
+        is ChatPart.Text -> Markdown(withLocalLinks(part.text + if (streaming) " ▍" else ""))
         is ChatPart.Reasoning -> ReasoningRow(part, active = streaming)
         is ChatPart.Tool -> ToolRow(part)
         is ChatPart.File -> FileRow(part)
