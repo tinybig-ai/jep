@@ -106,7 +106,16 @@ sealed interface ChatPart {
     data class Reasoning(val text: String, val durationMs: Long? = null) : ChatPart
 
     /** a file the agent produced or read (images, patches, attachments) */
-    data class File(val path: String, val name: String?, val mimeType: String?) : ChatPart
+    // `localUri` is the phone's own copy of a file it has just attached, still
+    // waiting to be ingested by the harness. Rendering from it means a thumbnail
+    // appears the moment you send, instead of a blank bubble until the record
+    // catches up — the image is already here, so nothing should be waiting on it.
+    data class File(
+        val path: String,
+        val name: String?,
+        val mimeType: String?,
+        val localUri: String? = null,
+    ) : ChatPart
 
     data class Unsupported(val kind: String) : ChatPart
 }
@@ -135,6 +144,9 @@ data class Ask(
     val title: String,
     val detail: String? = null,
     val options: List<AskOption> = emptyList(),
+    /** "permission" or "question": a permission ask answers once/always/reject,
+     *  a question one carries its own choices */
+    val kind: String? = null,
 )
 
 /** what a conversation has spent, summed from the harness's own record */

@@ -53,7 +53,9 @@ class ChatViewModel(
     var title by mutableStateOf(initialTitle)
         private set
 
-    data class Attachment(val id: String, val name: String)
+    /** where the file is on this phone, so it can be shown before the harness
+     *  has ingested the message it belongs to */
+    data class Attachment(val id: String, val name: String, val localUri: String? = null, val mimeType: String? = null)
 
     /** a message typed while the agent was busy: held, shown as queued, handed
      * over when the current turn ends */
@@ -372,7 +374,12 @@ class ChatViewModel(
             id = "local-${System.nanoTime()}",
             role = Role.USER,
             time = System.currentTimeMillis(),
-            parts = listOf(ChatPart.Text(body)) + files.map { ChatPart.File(path = it.name, name = it.name, mimeType = null) },
+            // the phone's own copy rides along, so an image shows in the bubble
+            // straight away rather than as a blank space until the harness
+            // ingests the message and hands back a path to fetch
+            parts = listOf(ChatPart.Text(body)) + files.map {
+                ChatPart.File(path = it.name, name = it.name, mimeType = it.mimeType, localUri = it.localUri)
+            },
         )
         val seq = ++turn
         optimistic.add(pending)
@@ -440,11 +447,11 @@ class ChatViewModel(
         viewModelScope.launch { runCatching { repo.queueForce(sessionId, id) } }
     }
 
-    fun attach(filename: String, bytes: ByteArray) {
+    fun attach(filename: String, bytes: ByteArray, localUri: String? = null, mimeType: String? = null) {
         viewModelScope.launch {
             runCatching { repo.attach(sessionId, filename, bytes) }
                 .onSuccess { id ->
-                    _state.update { it.copy(attachments = it.attachments + Attachment(id, filename)) }
+                    _state.update { it.copy(attachments = it.attachments + Attachment(id, filename, localUri, mimeType)) }
                 }
                 .onFailure { err -> _state.update { it.copy(notice = "couldn't attach \"$filename\": ${err.message}") } }
         }

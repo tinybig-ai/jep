@@ -42,6 +42,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Reply
@@ -77,6 +78,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.FloatingActionButton
@@ -149,6 +151,7 @@ import dev.jep.client.domain.model.Ask
 import dev.jep.client.domain.model.SessionSummary
 import dev.jep.client.domain.model.ToolStatus
 import dev.jep.client.domain.repository.ModelChoices
+import dev.jep.client.presentation.theme.LocalSuccess
 
 /** one row of the transcript: a message, or the ask the harness is blocked on */
 internal sealed interface Row {
@@ -1334,12 +1337,14 @@ private fun isImagePart(part: ChatPart.File): Boolean {
 }
 
 // An image attachment as a small square thumbnail; tapping it opens the full
-// picture. The bytes come from the daemon (/file), so this works for an image
-// sent from any client, not only the one that attached it.
+// picture. A file this phone has just attached is shown from its own copy, so
+// the thumbnail appears the moment you send instead of waiting for the harness
+// to ingest the message; everything else comes from the daemon (/file), which is
+// what makes an image sent from another client (Telegram) work here too.
 @Composable
 private fun ImageThumb(part: ChatPart.File) {
     var open by remember { mutableStateOf(false) }
-    val url = LocalFileUrl.current(part.path)
+    val url = part.localUri ?: LocalFileUrl.current(part.path)
     AsyncImage(
         model = url,
         contentDescription = part.name ?: "image",
@@ -1720,9 +1725,24 @@ private fun AskBar(ask: Ask, vm: ChatViewModel, choice: String?, answeredInChat:
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 ask.options.forEach { option ->
+                    val picked = option.id == choice
+                    val green = LocalSuccess.current
                     OutlinedButton(
                         onClick = { vm.respond(ask.id, option.id) },
                         enabled = !answered,
+                        // the one you picked keeps its colour once the card is
+                        // spent, so the record says what you chose at a glance
+                        colors = if (picked) {
+                            ButtonDefaults.outlinedButtonColors(
+                                containerColor = green.copy(alpha = 0.18f),
+                                contentColor = green,
+                                disabledContainerColor = green.copy(alpha = 0.18f),
+                                disabledContentColor = green,
+                            )
+                        } else {
+                            ButtonDefaults.outlinedButtonColors()
+                        },
+                        border = if (picked) BorderStroke(1.dp, green) else null,
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 4.dp),
                     ) {
                         Text(option.label, fontSize = 14.sp, maxLines = 1)
@@ -1735,6 +1755,25 @@ private fun AskBar(ask: Ask, vm: ChatViewModel, choice: String?, answeredInChat:
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            } else if (ask.kind == "question") {
+                // opencode's question API takes a free-form answer as well as the
+                // offered labels; the field is here, and sending it is a no-op
+                // until that route is wired up
+                var draft by remember(ask.id) { mutableStateOf("") }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedTextField(
+                        value = draft,
+                        onValueChange = { draft = it },
+                        modifier = Modifier.weight(1f),
+                        placeholder = { Text("Something else", fontSize = 14.sp) },
+                        singleLine = true,
+                    )
+                    TextButton(onClick = {}) { Text("Send", fontSize = 14.sp) }
+                }
             }
         }
     }
@@ -1786,8 +1825,9 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             val name = displayName(context, uri) ?: "file"
+            val mime = context.contentResolver.getType(uri)
             val bytes = runCatching { context.contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
-            if (bytes != null) vm.attach(name, bytes)
+            if (bytes != null) vm.attach(name, bytes, uri.toString(), mime)
         }
     }
 

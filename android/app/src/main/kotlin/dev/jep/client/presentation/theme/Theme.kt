@@ -9,6 +9,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.graphics.Color
 
 // The palette reads like the reference app: near-black field, quiet surfaces,
@@ -43,6 +45,14 @@ private val light = lightColorScheme(
     error = Color(0xFFB3402E),
 )
 
+// Material's scheme has no success slot, but a decision wants one: the option
+// you picked stays painted green once the card is spent, so the record reads at
+// a glance instead of leaving every choice the same dead grey.
+private val greenDark = Color(0xFF8FBF7F)
+private val greenLight = Color(0xFF3E7C46)
+
+val LocalSuccess = compositionLocalOf { greenDark }
+
 @Composable
 fun JepTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
     // The status and navigation bar icons must follow the APP's theme, not the
@@ -59,8 +69,10 @@ fun JepTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable ()
             }
         }
     }
-    MaterialTheme(
-        colorScheme = if (darkTheme) dark else light,
-        content = content,
-    )
+    CompositionLocalProvider(LocalSuccess provides if (darkTheme) greenDark else greenLight) {
+        MaterialTheme(
+            colorScheme = if (darkTheme) dark else light,
+            content = content,
+        )
+    }
 }

@@ -98,6 +98,7 @@ fun AskDto.toDomain() = Ask(
     title = title,
     detail = detail,
     options = options.map { AskOption(it.id, it.label, it.style == "danger") },
+    kind = kind,
 )
 
 // What an edit changed, counted from the call's own arguments. opencode hands
