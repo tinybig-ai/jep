@@ -122,6 +122,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.IntOffset
@@ -142,6 +144,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import androidx.compose.ui.unit.sp
 import com.mikepenz.markdown.m3.Markdown
+import com.mikepenz.markdown.m3.markdownTypography
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -1465,7 +1468,21 @@ internal fun withLocalLinks(markdown: String): String =
 @Composable
 private fun PartView(part: ChatPart, streaming: Boolean, onOpenLink: (String) -> Unit = {}) {
     when (part) {
-        is ChatPart.Text -> Markdown(withLocalLinks(part.text + if (streaming) " ▍" else ""))
+        is ChatPart.Text -> Markdown(
+            withLocalLinks(part.text + if (streaming) " ▍" else ""),
+            // A link has to look like one before anyone taps it. 0.43 has no
+            // colour slot for links anywhere — markdownColor covers text, code,
+            // tables and dividers — so the style comes from the typography's
+            // textLink, and the app's own accent is what it should be.
+            typography = markdownTypography(
+                textLink = TextLinkStyles(
+                    style = SpanStyle(
+                        color = MaterialTheme.colorScheme.primary,
+                        textDecoration = TextDecoration.Underline,
+                    ),
+                ),
+            ),
+        )
         is ChatPart.Reasoning -> ReasoningRow(part, active = streaming)
         is ChatPart.Tool -> ToolRow(part)
         is ChatPart.File -> FileRow(part)
