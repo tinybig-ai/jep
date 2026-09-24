@@ -907,7 +907,11 @@ internal data class FileKind(
     val engine: FileEngine,
     /** whether it opens rendered rather than as source */
     val renderByDefault: Boolean,
-    /** prose wraps; code and diffs keep their lines and scroll sideways */
+    /** Everything wraps by default, code and diffs included. On a phone a long
+     *  line is unreadable either way, and a horizontal scroll inside a
+     *  vertically scrolling sheet fights the sheet for the gesture. The toggle
+     *  is there for the rare file you want to scan line by line, not because
+     *  sideways is the better default. */
     val wrapByDefault: Boolean,
 )
 
@@ -925,8 +929,7 @@ internal fun fileKindFor(path: String): FileKind {
     val ext = path.substringAfterLast('.', "").lowercase()
     return when (ext) {
         in MARKDOWN_EXT -> FileKind(FileEngine.Markdown, renderByDefault = true, wrapByDefault = true)
-        in DIFF_EXT -> FileKind(FileEngine.Code, renderByDefault = false, wrapByDefault = false)
-        in CODE_EXT -> FileKind(FileEngine.Code, renderByDefault = false, wrapByDefault = false)
+        in DIFF_EXT, in CODE_EXT -> FileKind(FileEngine.Code, renderByDefault = false, wrapByDefault = true)
         // anything unrecognised is prose: readable beats clever, and a file with
         // no extension at all is far more often notes than binary
         else -> FileKind(FileEngine.Text, renderByDefault = false, wrapByDefault = true)

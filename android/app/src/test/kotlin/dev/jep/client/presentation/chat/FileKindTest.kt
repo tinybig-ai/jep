@@ -25,20 +25,20 @@ class FileKindTest {
     }
 
     @Test
-    fun `code opens as source, unwrapped, so long lines keep their shape`() {
+    fun `code opens as source, and still wraps`() {
         for (path in listOf("src/app/tg.ts", "build.gradle.kts", "main.py", "styles.css", "a.json")) {
             val kind = fileKindFor(path)
             assertEquals(path, FileEngine.Code, kind.engine)
             assertFalse(path, kind.renderByDefault)
-            assertFalse(path, kind.wrapByDefault)
+            assertTrue(path, kind.wrapByDefault)
         }
     }
 
     @Test
-    fun `a diff reads as code, unwrapped`() {
+    fun `a diff reads as code, and wraps too`() {
         val kind = fileKindFor("changes.diff")
         assertEquals(FileEngine.Code, kind.engine)
-        assertFalse(kind.wrapByDefault)
+        assertTrue(kind.wrapByDefault)
     }
 
     @Test
