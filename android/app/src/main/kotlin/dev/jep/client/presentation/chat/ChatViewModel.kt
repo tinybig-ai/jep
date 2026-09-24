@@ -339,9 +339,13 @@ class ChatViewModel(
         val seen = _state.value.messages.filter { it.role == Role.USER }.map { it.id }.toSet()
         _state.update { it.copy(queued = it.queued + Queued(clientID, body, files, steer, seen), attachments = emptyList()) }
         viewModelScope.launch {
-            // resolves when the steered turn finishes, or at once if cancelled
+            // resolves when its turn finishes, or at once if it was cancelled
             runCatching { repo.prompt(sessionId, body, files.map { it.id }, clientID, steer) }
-            _state.update { st -> st.copy(queued = st.queued.filterNot { q -> q.id == clientID }) }
+            _state.update { st ->
+                val rest = st.queued.filterNot { q -> q.id == clientID }
+                // this one is done; a turn is still active only if another waits
+                st.copy(queued = rest, sending = if (rest.isEmpty()) false else st.sending)
+            }
             refresh()
         }
     }
@@ -384,11 +388,15 @@ class ChatViewModel(
                 }
                 .onFailure { err ->
                     if (seq != turn) return@onFailure
-                    // the live row is this turn's; an abort must clear it or it
-                    // dangles as a spinner forever — the "freak-out". A stop the
-                    // user asked for, or a steer, is not a failure to shout about.
+                    // A stop ends the turn. A steer also aborts this prompt, but
+                    // only because a queued message takes over: keep the turn shown
+                    // as active until that one finishes, or the reply looks idle.
                     _state.update {
-                        it.copy(sending = false, live = null, failure = if (err is TurnAborted) null else (err.message ?: "the turn failed"))
+                        it.copy(
+                            sending = it.queued.isNotEmpty(),
+                            live = null,
+                            failure = if (err is TurnAborted) null else (err.message ?: "the turn failed"),
+                        )
                     }
                 }
         }
