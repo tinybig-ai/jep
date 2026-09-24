@@ -170,16 +170,28 @@ internal sealed interface Row {
  * the pane for the whole turn, and once you answered in your own words instead
  * of tapping a choice it stayed there, still offering buttons for a question
  * you had already answered. Placed by time, it is part of the conversation —
- * whatever the turn streams next lands below it and carries it up the screen.
+ * whatever you say next lands below it and carries it up the screen.
+ *
+ * `liveMessageId` is the row still streaming. It is always the bottom slot
+ * (the live row is appended last) but it carries no usable timestamp, so the
+ * scan must step over it: otherwise a turn in flight reads as the oldest thing
+ * in the list and parks the ask underneath it for the whole turn, which is the
+ * bug this replaced.
  */
-internal fun transcriptRows(ordered: List<ChatMessage>, ask: Ask?, askAt: Long): List<Row> {
+internal fun transcriptRows(
+    ordered: List<ChatMessage>,
+    ask: Ask?,
+    askAt: Long,
+    liveMessageId: String? = null,
+): List<Row> {
     if (ask == null) return ordered.map { Row.Msg(it) }
     val out = ArrayList<Row>(ordered.size + 1)
     var placed = false
     for (m in ordered) {
-        // ordered is newest-first, so the first message that is not newer than
-        // the ask is the spot: everything after it is newer and renders below
-        if (!placed && m.time <= askAt) {
+        // ordered is newest-first, so the first message that is neither live nor
+        // newer than the ask is the spot: everything after it is newer and
+        // renders below, pushing the ask up the transcript
+        if (!placed && m.id != liveMessageId && m.time <= askAt) {
             out += Row.Pending(ask)
             placed = true
         }
@@ -190,9 +202,15 @@ internal fun transcriptRows(ordered: List<ChatMessage>, ask: Ask?, askAt: Long):
 }
 
 /**
- * True once you have answered in your own words. The ask's own choices are then
- * spent: the card stays as a record, inert, rather than offering a second answer
- * to a question that is already behind you.
+ * True once the ask has been answered — by a tap, or by you saying the answer
+ * in your own words. Either way the card stays as a record with its choices
+ * spent, rather than offering a second answer to a question already behind you.
+ */
+internal fun askIsSpent(ask: Ask?, askChoice: String?, rows: List<Row>, askAt: Long): Boolean =
+    ask != null && (askChoice != null || askAnsweredInChat(rows, askAt))
+
+/**
+ * True once you have answered in your own words.
  */
 internal fun askAnsweredInChat(rows: List<Row>, askAt: Long): Boolean =
     rows.any { it is Row.Msg && it.m.role == Role.USER && it.m.time > askAt }
@@ -275,8 +293,13 @@ fun ChatScreen(
     // taller than the viewport).
     val ordered = remember(rendered) { rendered.asReversed() }
     val ask = state.ask
-    val rows = remember(ordered, ask, state.askAt) { transcriptRows(ordered, ask, state.askAt) }
-    val askAnswered = remember(rows, state.askAt) { ask != null && askAnsweredInChat(rows, state.askAt) }
+    val liveMessageId = state.live?.messageId
+    val rows = remember(ordered, ask, state.askAt, liveMessageId) {
+        transcriptRows(ordered, ask, state.askAt, liveMessageId)
+    }
+    val askAnswered = remember(rows, state.askAt, state.askChoice) {
+        askIsSpent(ask, state.askChoice, rows, state.askAt)
+    }
     // the newest message, which carries the "still working" mark; the ask can sit
     // between it and the bottom, so this is a lookup rather than an index
     val newestMsgId = remember(rows) { rows.firstOrNull { it is Row.Msg }?.let { (it as Row.Msg).m.id } }
@@ -480,7 +503,12 @@ fun ChatScreen(
                 val busy = state.sending || state.live != null
                 items(rows.size, key = { rows[it].key }) { i ->
                     when (val row = rows[i]) {
-                        is Row.Pending -> AskBar(row.ask, vm, answered = askAnswered)
+                        is Row.Pending -> AskBar(
+                            row.ask,
+                            vm,
+                            choice = state.askChoice?.let { id -> row.ask.options.firstOrNull { it.id == id }?.label },
+                            answeredInChat = askAnswered && state.askChoice == null,
+                        )
                         is Row.Msg -> CompositionLocalProvider(LocalFileUrl provides { path -> vm.fileUrl(path) }) {
                             MessageRow(
                                 row.m,
@@ -1092,21 +1120,6 @@ private fun codeBlocks(text: String): List<String> {
         inline.findAll(text).map { it.groupValues[1] }).toList()
 }
 
-@OptIn(ExperimentalFoundationApi::class)
-// A decision the user made from this screen — an ask answered — is not a
-// message from anyone. It reads as a small centred line in the transcript, so
-// the tap leaves a durable trace instead of a card that simply disappears.
-@Composable
-private fun SystemLine(message: ChatMessage) {
-    val text = remember(message) { messageText(message) }
-    Box(
-        Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(text, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
-    }
-}
-
 @Composable
 private fun MessageRow(
     message: ChatMessage,
@@ -1115,11 +1128,6 @@ private fun MessageRow(
     responding: Boolean = false,
     showActions: Boolean = true,
 ) {
-    // a decision made here is nobody's message: no bubble, no swipe, no actions
-    if (message.role == Role.SYSTEM) {
-        SystemLine(message)
-        return
-    }
     var menu by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
     val fullText = remember(message) { fullTurnText(message) }
@@ -1683,7 +1691,11 @@ private fun toolBody(part: ChatPart.Tool): String? {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun AskBar(ask: Ask, vm: ChatViewModel, answered: Boolean) {
+private fun AskBar(ask: Ask, vm: ChatViewModel, choice: String?, answeredInChat: Boolean) {
+    // The card is the record: it stays where it was raised, rides up the chat as
+    // the turn continues below it, and keeps its choices on show but spent once
+    // it has been answered — by a tap, or by you simply saying the answer.
+    val answered = choice != null || answeredInChat
     Card(
         Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
         colors = CardDefaults.cardColors(
@@ -1719,7 +1731,7 @@ private fun AskBar(ask: Ask, vm: ChatViewModel, answered: Boolean) {
             }
             if (answered) {
                 Text(
-                    "answered in chat",
+                    choice?.let { "answered · $it" } ?: "answered in chat",
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

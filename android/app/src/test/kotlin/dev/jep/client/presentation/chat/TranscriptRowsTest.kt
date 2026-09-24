@@ -70,6 +70,31 @@ class TranscriptRowsTest {
     }
 
     @Test
+    fun `a turn in flight does not park the ask at the bottom`() {
+        // The live row is always the bottom slot (it is appended last) but it
+        // carries no usable timestamp — liveAsMessage gives it 0. Scanning by
+        // time alone therefore met it first, read it as the oldest thing in the
+        // list, and planted the ask underneath it: the card sat at the bottom of
+        // the pane for the whole turn, exactly the bug being fixed.
+        val ordered = listOf(
+            msg("live", Role.ASSISTANT, 0),
+            msg("m3", Role.USER, 40),
+            msg("m2", Role.ASSISTANT, 20),
+            msg("m1", Role.USER, 10),
+        )
+        assertEquals(
+            listOf("live", "m3", "ask-a1", "m2", "m1"),
+            keys(transcriptRows(ordered, ask, 30, liveMessageId = "live")),
+        )
+    }
+
+    @Test
+    fun `with no live row the same transcript places the ask the same way`() {
+        val ordered = listOf(msg("m3", Role.USER, 40), msg("m2", Role.ASSISTANT, 20), msg("m1", Role.USER, 10))
+        assertEquals(listOf("m3", "ask-a1", "m2", "m1"), keys(transcriptRows(ordered, ask, 30)))
+    }
+
+    @Test
     fun `answering in chat puts the ask's own choices out of play`() {
         val ordered = listOf(msg("m2", Role.USER, 40), msg("m1", Role.ASSISTANT, 20))
         val rows = transcriptRows(ordered, ask, 30)
@@ -88,5 +113,23 @@ class TranscriptRowsTest {
         val ordered = listOf(msg("m2", Role.ASSISTANT, 40), msg("m1", Role.USER, 10))
         val rows = transcriptRows(ordered, ask, 30)
         assertFalse(askAnsweredInChat(rows, 30))
+    }
+
+    @Test
+    fun `a tapped choice spends the ask, and the card stays in the transcript`() {
+        // tapping used to clear the ask, which threw the card away and left a
+        // thin receipt line hard-appended to the end of the transcript — a line
+        // that never moved up either. The card is the record now.
+        val ordered = listOf(msg("m2", Role.ASSISTANT, 20), msg("m1", Role.USER, 10))
+        val rows = transcriptRows(ordered, ask, 30, liveMessageId = null)
+        assertTrue("a tap spends it", askIsSpent(ask, "always", rows, 30))
+        assertTrue("and the card is still there", rows.any { it is Row.Pending && it.ask.id == "a1" })
+    }
+
+    @Test
+    fun `no ask means nothing is spent`() {
+        val ordered = listOf(msg("m2", Role.USER, 40))
+        val rows = transcriptRows(ordered, null, 30)
+        assertFalse(askIsSpent(null, null, rows, 30))
     }
 }

@@ -75,6 +75,9 @@ class ChatViewModel(
         /** when that ask was raised, so the card can sit in the transcript where
          *  it happened instead of being pinned to the bottom of the pane */
         val askAt: Long = 0L,
+        /** the option tapped for that ask; set once it has been answered, which
+         *  leaves the card in place with its choices spent */
+        val askChoice: String? = null,
         val failure: String? = null,
         val sending: Boolean = false,
         val lost: Boolean = false,
@@ -107,12 +110,6 @@ class ChatViewModel(
 
     // sends land optimistically and are reconciled by the next history read
     private val optimistic = mutableListOf<ChatMessage>()
-
-    // Decisions made from this screen are not part of the harness's record, so
-    // they are held here and folded into the transcript on every read: a receipt
-    // that scrolls away with the conversation instead of a card that just
-    // vanishes. Session-local — reopening the chat re-reads only the harness.
-    private val receipts = mutableListOf<ChatMessage>()
 
     // who said what, from the harness's message events: a user message's parts
     // are echoed back during the turn and must never stream into the agent's row
@@ -207,7 +204,9 @@ class ChatViewModel(
                     st.copy(live = live.copy(parts = LinkedHashMap(live.parts).apply { put(key, evt.part) }))
                 }
             }
-            is ChatEvent.Asked -> _state.update { it.copy(ask = evt.ask, askAt = System.currentTimeMillis()) }
+            is ChatEvent.Asked -> _state.update {
+                it.copy(ask = evt.ask, askAt = System.currentTimeMillis(), askChoice = null)
+            }
             // a harness-reported failure ends the turn: it must clear the live
             // row too, or the spinner outlives the turn it belonged to. An
             // abort is the user's own stop coming back around, not an error.
@@ -284,7 +283,7 @@ class ChatViewModel(
                     val servedNow = batch.messages.filter { it.role == Role.USER }
                     _state.update { st ->
                         st.copy(
-                            messages = batch.messages + optimistic.toList() + receipts.toList(),
+                            messages = batch.messages + optimistic.toList(),
                             // history is the record, not the stream: it must never
                             // wipe a live row it has merely caught up with, even
                             // when this device did not start the turn
@@ -620,29 +619,17 @@ class ChatViewModel(
 
     fun respond(askId: String, optionId: String) {
         viewModelScope.launch {
-            val ask = _state.value.ask ?: return@launch
-            _state.update { it.copy(ask = null) }
+            val st = _state.value
+            // the card stays in the transcript either way: it is the record of
+            // what was asked and what came back, and it rides up the chat with
+            // everything the turn says after it
+            if (st.ask?.id != askId || st.askChoice != null) return@launch
             runCatching { repo.respond(askId, optionId) }
                 .onSuccess { ok ->
-                    // the card vanishing was the only sign a tap had landed,
-                    // which reads as nothing having happened: leave a receipt
-                    if (ok) noteDecision(ask, optionId)
+                    if (ok) _state.update { it.copy(askChoice = optionId) }
                     else _state.update { it.copy(notice = "that ask was already answered") }
                 }
-                .onFailure { err -> _state.update { it.copy(ask = ask, failure = "the ask didn't take: ${err.message}") } }
+                .onFailure { err -> _state.update { it.copy(failure = "the ask didn't take: ${err.message}") } }
         }
-    }
-
-    /** the ask decision as a line in the transcript, e.g. "🔐 external_directory · Always allow" */
-    private fun noteDecision(ask: Ask, optionId: String) {
-        val label = ask.options.firstOrNull { it.id == optionId }?.label ?: optionId
-        val receipt = ChatMessage(
-            id = "ask-${ask.id}-$optionId",
-            role = Role.SYSTEM,
-            time = System.currentTimeMillis(),
-            parts = listOf(ChatPart.Text("🔐 ${ask.title} · $label")),
-        )
-        if (receipts.none { it.id == receipt.id }) receipts.add(receipt)
-        _state.update { st -> st.copy(messages = st.messages + receipt) }
     }
 }
