@@ -538,6 +538,7 @@ fun ChatScreen(
                                 // pause between parts (thinking, a tool call) must not
                                 // read as finished.
                                 responding = busy && row.m.id == newestMsgId && row.m.role == Role.ASSISTANT,
+                                waitingOnYou = ask != null && !askAnswered,
                                 showActions = row.m.id in actionIds,
                             )
                         }
@@ -1146,6 +1147,7 @@ private fun MessageRow(
     onInfo: (ChatMessage) -> Unit,
     onReply: (ChatMessage) -> Unit,
     responding: Boolean = false,
+    waitingOnYou: Boolean = false,
     showActions: Boolean = true,
 ) {
     var menu by remember { mutableStateOf(false) }
@@ -1163,7 +1165,7 @@ private fun MessageRow(
     ) {
         when (message.role) {
             Role.USER -> UserBubble(message)
-            Role.ASSISTANT -> AssistantBody(message, onInfo, responding, showActions)
+            Role.ASSISTANT -> AssistantBody(message, onInfo, responding, waitingOnYou, showActions)
             else -> Unit
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -1283,6 +1285,7 @@ private fun AssistantBody(
     message: ChatMessage,
     onInfo: (ChatMessage) -> Unit,
     responding: Boolean = false,
+    waitingOnYou: Boolean = false,
     showActions: Boolean = true,
 ) {
     // the per-turn accounting lives behind a quiet hollow "i", not printed under
@@ -1296,12 +1299,24 @@ private fun AssistantBody(
             PartView(part, streaming = isLast && message.time == 0L)
         }
         // still working: a quiet spinner at the end of the reply, so a pause
-        // between parts (thinking, a tool call) never looks like an ending
+        // between parts (thinking, a tool call) never looks like an ending.
+        // Blocked on an ask it is not responding at all — it is waiting on you,
+        // and anything you type in the meantime queues behind it, so saying
+        // "responding" there is just wrong.
         if (responding) {
+            val tone = if (waitingOnYou) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
             Row(verticalAlignment = Alignment.CenterVertically) {
-                CircularProgressIndicator(Modifier.size(13.dp), strokeWidth = 2.dp)
+                if (waitingOnYou) {
+                    Icon(Icons.Filled.HourglassEmpty, null, Modifier.size(13.dp), tint = tone)
+                } else {
+                    CircularProgressIndicator(Modifier.size(13.dp), strokeWidth = 2.dp)
+                }
                 Spacer(Modifier.size(8.dp))
-                Text("responding…", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    if (waitingOnYou) "waiting for you…" else "responding…",
+                    fontSize = 12.sp,
+                    color = tone,
+                )
             }
         }
         message.error?.let {
