@@ -1617,51 +1617,44 @@ internal fun withLocalLinks(markdown: String): String =
  * the work is still all there, it is just not spelled out in full while you are
  * reading around it.
  */
+/**
+ * A run of the same tool call, as one line — styled exactly like the call rows
+ * it stands for, because it is one of them. It opens to those calls, which are
+ * themselves ordinary rows, so nothing about the expanded state looks like a
+ * different kind of thing.
+ */
 @Composable
 private fun ToolGroupRow(tools: List<ChatPart.Tool>) {
     var open by remember(tools) { mutableStateOf(false) }
     val anyFailed = tools.any { it.status == ToolStatus.ERROR }
     val anyRunning = tools.any { it.status == ToolStatus.RUNNING || it.status == ToolStatus.PENDING }
-    Column(Modifier.fillMaxWidth().padding(vertical = 1.dp)) {
+    val added = tools.sumOf { it.added ?: 0 }
+    val removed = tools.sumOf { it.removed ?: 0 }
+    val tint = when {
+        anyFailed -> MaterialTheme.colorScheme.error
+        anyRunning -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Column(Modifier.fillMaxWidth()) {
         Row(
-            Modifier
-                .fillMaxWidth()
-                .combinedClickable(onClick = { open = !open })
-                .padding(horizontal = 14.dp, vertical = 5.dp),
+            Modifier.fillMaxWidth().clickable { open = !open },
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            Text(toolGroupSummary(tools), style = MaterialTheme.typography.labelMedium, color = tint)
+            if (added > 0) {
+                Text("+$added", style = MaterialTheme.typography.labelMedium, fontFamily = FontFamily.Monospace, color = LineAdded, modifier = Modifier.padding(start = 6.dp))
+            }
+            if (removed > 0) {
+                Text("-$removed", style = MaterialTheme.typography.labelMedium, fontFamily = FontFamily.Monospace, color = LineRemoved, modifier = Modifier.padding(start = 4.dp))
+            }
             Icon(
                 if (open) Icons.Filled.ArrowDropUp else Icons.Filled.ArrowDropDown,
                 if (open) "hide these calls" else "show these calls",
-                Modifier.size(18.dp),
-                tint = when {
-                    anyFailed -> MaterialTheme.colorScheme.error
-                    anyRunning -> MaterialTheme.colorScheme.primary
-                    else -> MaterialTheme.colorScheme.onSurfaceVariant
-                },
-            )
-            Text(
-                toolGroupSummary(tools),
-                Modifier.padding(start = 6.dp),
-                fontSize = 13.sp,
-                fontFamily = FontFamily.Monospace,
-                color = when {
-                    anyFailed -> MaterialTheme.colorScheme.error
-                    anyRunning -> MaterialTheme.colorScheme.primary
-                    else -> MaterialTheme.colorScheme.onSurfaceVariant
-                },
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+                Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (open) {
-            // A tool row is flush left by design, so an unindented child sits to
-            // the LEFT of the group it belongs to — which reads as a layout
-            // mistake rather than as nesting. Line the calls up under the label.
-            Column(Modifier.padding(start = 30.dp)) {
-                tools.forEach { ToolRow(it) }
-            }
-        }
+        if (open) tools.forEach { ToolRow(it) }
     }
 }
 
