@@ -255,6 +255,9 @@ export class ClaudeAdapter implements HarnessAdapter {
       return []
     }
     const out: Message[] = []
+    // every tool call seen so far, so a result arriving in a later turn can be
+    // folded back onto the call it belongs to
+    const toolsByID = new Map<string, Part & { kind: "tool" }>()
     for (const line of raw.split("\n")) {
       if (!line.trim()) continue
       let d: any
@@ -269,8 +272,12 @@ export class ClaudeAdapter implements HarnessAdapter {
       // and neither is Claude Code talking to itself — the local-command
       // caveat, a slash command's name/args, its stdout
       if (d.isMeta || isLocalCommandWrapper(d.message?.content)) continue
-      const parts = contentParts(d.message?.content)
+      const parts = foldResults(contentParts(d.message?.content), toolsByID)
+      // A turn whose whole content was tool results has nothing left to say:
+      // every part folded onto an earlier call. Emitting it anyway is what put
+      // an empty purple bubble on the phone after every single tool call.
       if (!parts.length) continue
+      for (const p of parts) if (p.kind === "tool") toolsByID.set(p.id, p)
       out.push({
         id: toInternalId(`${native}:${d.uuid ?? out.length}`),
         sessionID: toInternalId(native),
@@ -418,6 +425,7 @@ export class ClaudeAdapter implements HarnessAdapter {
               // the settled message: tool_use blocks only appear here
               for (const block of d.message.content) {
                 if (block?.type !== "tool_use") continue
+                const title = toolTitle(block.input)
                 const part: Part = {
                   kind: "tool",
                   id: String(block.id ?? ""),
@@ -425,12 +433,36 @@ export class ClaudeAdapter implements HarnessAdapter {
                   input: block.input ?? {},
                   output: "",
                   status: "running",
+                  ...(title ? { title } : {}),
+                  // a running tool shows a live elapsed time, and a watchdog
+                  // needs to know how long one has been quiet
+                  startedAt: Date.now(),
                 }
                 parts.push(part)
                 this.#emit({ type: "part.updated", sessionID: sid, messageID: sid, partID: part.id, partType: "tool", part })
               }
               if (d.message.usage) tokens = mapUsage(d.message.usage)
               if (typeof d.message.model === "string") model = d.message.model
+              continue
+            }
+
+            // A tool's output comes back as a *user* turn carrying tool_result
+            // blocks. It is not conversation — it is the call's result — so it
+            // folds onto the call it belongs to rather than becoming a message
+            // of its own. Without this every tool part stayed "running" for the
+            // life of the turn: the phone kept spinning on finished work, and a
+            // watchdog counting running tools could never tell a live tool from
+            // a finished one.
+            if (d.type === "user" && Array.isArray(d.message?.content)) {
+              for (const block of d.message.content) {
+                if (block?.type !== "tool_result") continue
+                const callID = String(block.tool_use_id ?? "")
+                const call = parts.find((p): p is Part & { kind: "tool" } => p.kind === "tool" && p.id === callID)
+                if (!call) continue
+                call.output = contentText(block.content)
+                call.status = block.is_error ? "error" : "completed"
+                this.#emit({ type: "part.updated", sessionID: sid, messageID: sid, partID: call.id, partType: "tool", part: call })
+              }
               continue
             }
 
@@ -757,6 +789,28 @@ export class ClaudeAdapter implements HarnessAdapter {
   }
 }
 
+// opencode hands us a display hint per tool call (its parts carry
+// `state.title`); Claude Code does not, so derive one from the call's own
+// input — the command a Bash call runs, the file a read or edit touches, the
+// pattern a search looks for. Without it the phone has nothing to show under
+// the row and can only ever say "Ran a command" with a blank line beneath it.
+// Ordered by how well each key identifies its call: a Bash call is its
+// command, not its description; a Task is its description, not its prompt.
+const TITLE_KEYS = ["command", "file_path", "notebook_path", "pattern", "url", "query", "description", "path", "prompt"]
+const TITLE_MAX = 200
+
+export function toolTitle(input: unknown): string | undefined {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return undefined
+  const rec = input as Record<string, unknown>
+  for (const key of TITLE_KEYS) {
+    const v = rec[key]
+    if (typeof v !== "string" || !v.trim()) continue
+    const title = v.trim()
+    return title.length > TITLE_MAX ? `${title.slice(0, TITLE_MAX)}…` : title
+  }
+  return undefined
+}
+
 function startBlock(block: any): Part | null {
   switch (block?.type) {
     case "text":
@@ -781,11 +835,23 @@ function contentParts(content: any): Part[] {
       case "thinking":
         if (String(b.thinking ?? "").trim()) out.push({ kind: "reasoning", text: String(b.thinking), id: String(b.signature ?? "") })
         break
-      case "tool_use":
-        out.push({ kind: "tool", id: String(b.id ?? ""), name: String(b.name ?? "tool"), input: b.input ?? {}, output: "", status: "completed" })
+      case "tool_use": {
+        const title = toolTitle(b.input)
+        out.push({
+          kind: "tool",
+          id: String(b.id ?? ""),
+          name: String(b.name ?? "tool"),
+          input: b.input ?? {},
+          output: "",
+          status: "completed",
+          ...(title ? { title } : {}),
+        })
         break
+      }
       case "tool_result":
-        // folded onto its call by id, so it doesn't render as a loose part
+        // Carried out as a placeholder for the assembler to fold onto the call
+        // with this id; it never survives into a rendered message. `name` marks
+        // it as such — see the fold in messages().
         out.push({ kind: "tool", id: String(b.tool_use_id ?? ""), name: "result", input: {}, output: contentText(b.content), status: b.is_error ? "error" : "completed" })
         break
       default:
@@ -793,6 +859,27 @@ function contentParts(content: any): Part[] {
     }
   }
   return out
+}
+
+// Folds every tool_result placeholder onto the call it names, and drops it
+// from the message. What is left is the conversation: an assistant turn that
+// made calls, and nothing at all for the turn that merely carried their
+// output. A result whose call we never saw (a truncated transcript, a
+// sidechain we skipped) is dropped rather than shown as a stray "result" row.
+export function foldResults(parts: Part[], toolsByID: Map<string, Part & { kind: "tool" }>): Part[] {
+  const kept: Part[] = []
+  for (const part of parts) {
+    if (part.kind === "tool" && part.name === "result") {
+      const call = toolsByID.get(part.id)
+      if (call) {
+        call.output = part.output
+        call.status = part.status
+      }
+      continue
+    }
+    kept.push(part)
+  }
+  return kept
 }
 
 // Claude Code writes its own bookkeeping into the transcript as user turns:
