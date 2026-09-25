@@ -62,4 +62,17 @@ class FileKindTest {
         assertEquals(FileEngine.Markdown, fileKindFor("Docs/Processes.MD").engine)
         assertEquals(FileEngine.Code, fileKindFor("a/b/c/My.File.KT").engine)
     }
+
+    @Test
+    fun `word wrap is only offered where it works`() {
+        // The renderer fills whatever box it is given, so unwrapped rendered
+        // markdown has to be faked with a very wide box — and that fake crashed
+        // the app. The option is now offered only for source, so there is no
+        // switch that switches nothing, and nothing that can crash.
+        val markdown = FileEngine.Markdown
+        assertEquals(setOf(ReaderOption.Render), readerOptions(markdown, render = true))
+        assertEquals(setOf(ReaderOption.Render, ReaderOption.Wrap), readerOptions(markdown, render = false))
+        assertEquals(setOf(ReaderOption.Wrap), readerOptions(FileEngine.Code, render = false))
+        assertEquals(setOf(ReaderOption.Wrap), readerOptions(FileEngine.Text, render = false))
+    }
 }

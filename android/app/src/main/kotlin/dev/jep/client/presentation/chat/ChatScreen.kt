@@ -951,6 +951,19 @@ private val CODE_EXT = setOf(
 )
 private val TEXT_EXT = setOf("txt", "text", "log", "out", "err", "env")
 
+/** What the sheet's menu offers. Word wrap is a source-mode option: the
+ *  markdown renderer fills whatever box it is given and there is no way to ask
+ *  it to leave a line unbroken, so unwrapping rendered markdown has to be faked
+ *  with a very wide box — and that fake crashed the app when the toggle was
+ *  used. Rather than ship a switch that switches nothing, the option is only
+ *  offered where it works: to see a line unbroken, turn Render off. */
+internal enum class ReaderOption { Render, Wrap }
+
+internal fun readerOptions(engine: FileEngine, render: Boolean): Set<ReaderOption> = buildSet {
+    if (engine == FileEngine.Markdown) add(ReaderOption.Render)
+    if (!(render && engine == FileEngine.Markdown)) add(ReaderOption.Wrap)
+}
+
 internal fun fileKindFor(path: String): FileKind {
     val ext = path.substringAfterLast('.', "").lowercase()
     return when (ext) {
@@ -976,6 +989,7 @@ private fun FileSheet(open: ChatViewModel.OpenFile, onClose: () -> Unit) {
     // down the file
     val down = rememberScrollState()
     val across = rememberScrollState()
+    val offered = remember(kind.engine, render) { readerOptions(kind.engine, render) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(onDismissRequest = onClose, sheetState = sheetState) {
         Column(
@@ -1002,7 +1016,7 @@ private fun FileSheet(open: ChatViewModel.OpenFile, onClose: () -> Unit) {
                         )
                     }
                     DropdownMenu(expanded = options, onDismissRequest = { options = false }) {
-                        if (kind.engine == FileEngine.Markdown) {
+                        if (ReaderOption.Render in offered) {
                             // the whole row is the target; the switch only shows state
                             DropdownMenuItem(
                                 text = { Text("Render") },
@@ -1010,11 +1024,13 @@ private fun FileSheet(open: ChatViewModel.OpenFile, onClose: () -> Unit) {
                                 onClick = { render = !render },
                             )
                         }
-                        DropdownMenuItem(
-                            text = { Text("Word wrap") },
-                            trailingIcon = { Switch(checked = wrap, onCheckedChange = null) },
-                            onClick = { wrap = !wrap },
-                        )
+                        if (ReaderOption.Wrap in offered) {
+                            DropdownMenuItem(
+                                text = { Text("Word wrap") },
+                                trailingIcon = { Switch(checked = wrap, onCheckedChange = null) },
+                                onClick = { wrap = !wrap },
+                            )
+                        }
                     }
                 }
             }
@@ -1039,16 +1055,7 @@ private fun FileSheet(open: ChatViewModel.OpenFile, onClose: () -> Unit) {
                     render && kind.engine == FileEngine.Markdown -> Markdown(
                         open.text.orEmpty(),
                         typography = readerTypography(),
-                        // Word wrap has to be asked for by width here: the renderer
-                        // fills whatever box it is given, so an unwrapped line only
-                        // survives if the box is wider than the phone. Generous on
-                        // purpose — too wide costs a little sideways travel, too
-                        // narrow silently wraps a line the toggle says is not wrapped.
-                        modifier = if (wrap) {
-                            Modifier.verticalScroll(down)
-                        } else {
-                            Modifier.verticalScroll(down).horizontalScroll(across).widthIn(min = 2400.dp)
-                        },
+                        modifier = Modifier.verticalScroll(down),
                     )
                     else -> {
                         val body = Text(
