@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -145,6 +146,7 @@ import kotlinx.serialization.json.contentOrNull
 import androidx.compose.ui.unit.sp
 import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.m3.markdownTypography
+import com.mikepenz.markdown.model.rememberMarkdownState
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -990,6 +992,10 @@ private fun FileSheet(open: ChatViewModel.OpenFile, onClose: () -> Unit) {
     val down = rememberScrollState()
     val across = rememberScrollState()
     val offered = remember(kind.engine, render) { readerOptions(kind.engine, render) }
+    // Retaining the parsed state is what stops Render from blanking the sheet:
+    // without it the reader reparses, shows nothing while it does, and a sheet
+    // with no content minimizes itself — which is what you saw.
+    val rendered = rememberMarkdownState(open.text.orEmpty(), retainState = true)
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(onDismissRequest = onClose, sheetState = sheetState) {
         Column(
@@ -1035,7 +1041,9 @@ private fun FileSheet(open: ChatViewModel.OpenFile, onClose: () -> Unit) {
                 }
             }
             HorizontalDivider()
-            Box(Modifier.fillMaxWidth().heightIn(max = 520.dp)) {
+            // a floor as well as a ceiling: a sheet sized purely by its content
+            // shrinks to nothing the instant the content is momentarily gone
+            Box(Modifier.fillMaxWidth().fillMaxHeight(0.62f).heightIn(min = 120.dp)) {
                 when {
                     open.loading -> Text(
                         "reading…",
@@ -1053,7 +1061,7 @@ private fun FileSheet(open: ChatViewModel.OpenFile, onClose: () -> Unit) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     render && kind.engine == FileEngine.Markdown -> Markdown(
-                        open.text.orEmpty(),
+                        markdownState = rendered,
                         typography = readerTypography(),
                         modifier = Modifier.verticalScroll(down),
                     )
@@ -1072,7 +1080,6 @@ private fun FileSheet(open: ChatViewModel.OpenFile, onClose: () -> Unit) {
                     }
                 }
             }
-            TextButton(onClick = onClose, modifier = Modifier.align(Alignment.End)) { Text("Close") }
         }
     }
 }
