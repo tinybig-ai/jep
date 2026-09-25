@@ -1654,7 +1654,14 @@ private fun ToolGroupRow(tools: List<ChatPart.Tool>) {
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        if (open) tools.forEach { ToolRow(it) }
+        if (open) {
+            // A tool row is flush left by design, so an unindented child sits to
+            // the LEFT of the group it belongs to — which reads as a layout
+            // mistake rather than as nesting. Line the calls up under the label.
+            Column(Modifier.padding(start = 30.dp)) {
+                tools.forEach { ToolRow(it) }
+            }
+        }
     }
 }
 
