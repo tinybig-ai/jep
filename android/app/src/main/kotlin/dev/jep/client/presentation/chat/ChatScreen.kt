@@ -176,6 +176,58 @@ internal sealed interface Row {
     data class Pending(val ask: Ask) : Row {
         override val key: String get() = "ask-${ask.id}"
     }
+
+    /** several tool-only messages standing in for one line */
+    data class Tools(val tools: List<ChatPart.Tool>) : Row {
+        override val key: String get() = "tools-${tools.firstOrNull()?.id ?: "run"}"
+    }
+}
+
+/**
+ * The tool calls of a message that carries nothing else, or null when it says
+ * something. opencode emits one message per step, so a turn's tool calls arrive
+ * as a run of messages that each hold one call and a step marker — which is why
+ * grouping inside a message never saw them, and why the run has to be found
+ * across messages.
+ */
+internal fun toolOnlyCalls(m: ChatMessage): List<ChatPart.Tool>? {
+    val tools = m.parts.filterIsInstance<ChatPart.Tool>()
+    if (tools.isEmpty()) return null
+    val onlyToolsOrMarkers = m.parts.all { it is ChatPart.Tool || it is ChatPart.Unsupported }
+    return if (onlyToolsOrMarkers) tools else null
+}
+
+/** Collapse a run of tool-only messages of the same kind into one row. */
+internal fun groupToolRuns(rows: List<Row>): List<Row> {
+    val out = ArrayList<Row>(rows.size)
+    var run = mutableListOf<Row.Msg>()
+    fun flush() {
+        // three is where the noise starts; one or two still read as themselves
+        if (run.size > 2) {
+            out += Row.Tools(run.flatMap { toolOnlyCalls(it.m) ?: emptyList() })
+        } else {
+            out += run
+        }
+        run = mutableListOf()
+    }
+    for (row in rows) {
+        val calls = (row as? Row.Msg)?.let { toolOnlyCalls(it.m) }
+        when {
+            calls == null -> {
+                flush()
+                out += row
+            }
+            // only a run of the same tool collapses: an alternation is the order
+            // the work happened in
+            run.isNotEmpty() && toolOnlyCalls(run[0].m)?.firstOrNull()?.name != calls.firstOrNull()?.name -> {
+                flush()
+                run.add(row as Row.Msg)
+            }
+            else -> run.add(row as Row.Msg)
+        }
+    }
+    flush()
+    return out
 }
 
 /**
@@ -337,7 +389,7 @@ fun ChatScreen(
     val ask = state.ask
     val liveMessageId = state.live?.messageId
     val rows = remember(ordered, ask, state.askAt, liveMessageId, state.askAfter) {
-        transcriptRows(ordered, ask, state.askAt, liveMessageId, state.askAfter)
+        groupToolRuns(transcriptRows(ordered, ask, state.askAt, liveMessageId, state.askAfter))
     }
     val askAnswered = remember(ask, state.askChoice) { askIsSpent(ask, state.askChoice) }
     // the newest message, which carries the "still working" mark; the ask can sit
@@ -543,6 +595,7 @@ fun ChatScreen(
                 val busy = state.sending || state.live != null
                 items(rows.size, key = { rows[it].key }) { i ->
                     when (val row = rows[i]) {
+                        is Row.Tools -> ToolGroupRow(row.tools)
                         is Row.Pending -> AskBar(row.ask, vm, spent = askAnswered, choiceId = state.askChoice)
                         is Row.Msg -> CompositionLocalProvider(LocalFileUrl provides { path -> vm.fileUrl(path) }) {
                             MessageRow(

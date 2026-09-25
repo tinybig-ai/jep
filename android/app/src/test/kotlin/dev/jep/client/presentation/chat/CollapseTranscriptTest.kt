@@ -1,6 +1,8 @@
 package dev.jep.client.presentation.chat
 
+import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
+import dev.jep.client.domain.model.Role
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -95,5 +97,71 @@ class CollapseTranscriptTest {
     fun `an unfamiliar tool still reads as a run`() {
         val summary = toolGroupSummary(listOf(tool("weird", "1"), tool("weird", "2")))
         assertTrue(summary, summary.startsWith("Weird 2 "))
+    }
+
+    // ---- across messages, which is where opencode actually puts them ----
+
+    private fun toolMsg(id: String, name: String, added: Int? = null, removed: Int? = null) =
+        Row.Msg(
+            ChatMessage(
+                id,
+                Role.ASSISTANT,
+                0,
+                listOf(ChatPart.Unsupported("step-finish"), tool(name, id, added, removed)),
+            ),
+        )
+
+    private fun sayMsg(id: String) = Row.Msg(ChatMessage(id, Role.ASSISTANT, 0, listOf(text("done"))))
+
+    private fun shapeRows(rows: List<Row>): List<String> = rows.map { row ->
+        when (row) {
+            is Row.Tools -> "tools:" + row.tools.joinToString(",") { it.id.orEmpty() }
+            is Row.Msg -> "msg:" + row.m.id
+            is Row.Pending -> "ask:" + row.ask.id
+        }
+    }
+
+    @Test
+    fun `a run of tool-only messages collapses, which is how the harness reports them`() {
+        // opencode emits one message per step, so four reads are four messages
+        val rows = groupToolRuns(listOf(toolMsg("m1", "read"), toolMsg("m2", "read"), toolMsg("m3", "read"), sayMsg("m4")))
+        assertEquals(listOf("tools:m1,m2,m3", "msg:m4"), shapeRows(rows))
+    }
+
+    @Test
+    fun `two tool messages are not worth a disclosure`() {
+        val rows = groupToolRuns(listOf(toolMsg("m1", "read"), toolMsg("m2", "read")))
+        assertEquals(listOf("msg:m1", "msg:m2"), shapeRows(rows))
+    }
+
+    @Test
+    fun `a message that says something is never swallowed into a group`() {
+        val says = Row.Msg(
+            ChatMessage("m2", Role.ASSISTANT, 0, listOf(text("looking now"), tool("read", "t1"))),
+        )
+        val rows = groupToolRuns(listOf(toolMsg("m1", "read"), says, toolMsg("m3", "read")))
+        assertEquals(listOf("msg:m1", "msg:m2", "msg:m3"), shapeRows(rows))
+    }
+
+    @Test
+    fun `an alternation of tool messages keeps its order`() {
+        val rows = groupToolRuns(
+            listOf(toolMsg("m1", "read"), toolMsg("m2", "read"), toolMsg("m3", "read"),
+                   toolMsg("m4", "edit"), toolMsg("m5", "edit"), toolMsg("m6", "edit")),
+        )
+        assertEquals(listOf("tools:m1,m2,m3", "tools:m4,m5,m6"), shapeRows(rows))
+    }
+
+    @Test
+    fun `the grouped row carries the totals of everything in it`() {
+        val rows = groupToolRuns(
+            listOf(
+                toolMsg("m1", "edit", added = 10, removed = 1),
+                toolMsg("m2", "edit", added = 5, removed = 2),
+                toolMsg("m3", "edit", added = 1, removed = 0),
+            ),
+        )
+        val group = rows.filterIsInstance<Row.Tools>().single()
+        assertEquals("Edited 3 files +16 -3", toolGroupSummary(group.tools))
     }
 }
