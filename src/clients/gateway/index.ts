@@ -14,8 +14,9 @@ import type { PairingAdmin } from "../../core/pairing.ts"
 import { pushFor, UnregisteredToken, type PushNotifier } from "../../core/push.ts"
 import { readClaudeMcp, readCodexMcp, readOpencodeMcp, writeClaudeProjectEnabled, writeCodexMcpEnabled, writeOpencodeMcpEnabled } from "../../core/mcpconfig.ts"
 import { listSkills, skillDirsFor, writeSkillModelInvocation } from "../../core/skills.ts"
-import type { DomainEvent, Message } from "../../core/types.ts"
-import { isAborted } from "../../core/types.ts"
+import type { DomainEvent, HarnessError, Message } from "../../core/types.ts"
+import { eventSession, isAborted } from "../../core/types.ts"
+import { describeError } from "../../core/errors.ts"
 import { usageOf } from "../../core/usage.ts"
 import { transcriptText } from "../../core/transcript.ts"
 import { newPairCode } from "../telegram/pair.ts"
@@ -52,6 +53,10 @@ export interface GatewayDeps {
   /** attempts per address per minute before the pair gate slams shut; a
    * production default, loosened by tests that must pair repeatedly */
   pairLimit?: number
+  /** turn-liveness ceilings, for an operator who wants them shorter or longer
+   * than the JEP_TURN_IDLE_MS / JEP_TOOL_IDLE_MS defaults (and for tests, which
+   * cannot wait out five real minutes) */
+  liveness?: { turnIdleMs?: number; toolIdleMs?: number; idleGraceMs?: number; tickMs?: number }
 }
 
 export interface GatewayHandle {
@@ -72,6 +77,20 @@ const TERMINAL_FILE = "gateway-terminal.json"
 const ARCHIVED_FILE = "gateway-archived.json"
 const PUSH_FILE = "gateway-push.json"
 const BODY_MAX = 1 << 20
+
+// Turn liveness. A gateway turn runs with no absolute deadline (timeoutMs: 0),
+// because any fixed ceiling eventually cuts a real half-hour turn off mid-work.
+// What replaces it is inactivity: these are the same ceilings — and the same
+// env knobs — the Telegram client uses, so both presentation adapters give up
+// on a stalled turn at the same moment.
+const TURN_IDLE_MS = Number(process.env.JEP_TURN_IDLE_MS ?? "") || 5 * 60_000
+// a running tool is allowed to be silent for far longer than a turn waiting on
+// tokens: a build or a test run legitimately says nothing for many minutes
+const TOOL_IDLE_MS = Number(process.env.JEP_TOOL_IDLE_MS ?? "") || 20 * 60_000
+// how long after the harness's "session.idle" to keep waiting for the blocking
+// prompt() call before finalizing from the transcript instead
+const IDLE_GRACE_MS = 5_000
+const WATCHDOG_TICK_MS = 15_000
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
@@ -387,6 +406,25 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   // help-files the phone needs, resolved as events and commands arrive
   const sessionAdapters = new Map<string, HarnessAdapter>()
   const askSessions = new Map<string, string>()
+  const turnIdleMs = deps.liveness?.turnIdleMs ?? TURN_IDLE_MS
+  const toolIdleMs = deps.liveness?.toolIdleMs ?? TOOL_IDLE_MS
+  const idleGraceMs = deps.liveness?.idleGraceMs ?? IDLE_GRACE_MS
+  const watchdogTickMs = deps.liveness?.tickMs ?? WATCHDOG_TICK_MS
+  // Asks still waiting on a human, per session. A turn parked on a permission
+  // prompt is not stalled — it is being polite — so the watchdog holds its fire
+  // until the ask is answered or stood down.
+  const asksBySession = new Map<string, Set<string>>()
+  const openAsks = (sessionID: string): Set<string> => {
+    const hit = asksBySession.get(sessionID)
+    if (hit) return hit
+    const fresh = new Set<string>()
+    asksBySession.set(sessionID, fresh)
+    return fresh
+  }
+  const closeAsk = (askID: string): void => {
+    const sid = askSessions.get(askID)
+    if (sid) asksBySession.get(sid)?.delete(askID)
+  }
   // uploads land in <dataHome>/attachments, remembered by id for the next prompt
   const attachments = new Map<string, { path: string; name: string; sessionID: string }>()
   const attachmentRoot = join(deps.dataHome, "attachments")
@@ -471,13 +509,46 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         for await (const evt of adapter.events(signal)) {
           got = true
           lastActivity = Date.now()
+          // every event on a session pushes that session's watchdog deadline
+          // out: a turn producing anything at all has not stalled
+          const sid = eventSession(evt)
+          const live = sid ? turns.get(sid) : undefined
+          if (live) live.lastActivity = Date.now()
           if (evt.type === "ask.requested") {
             askSessions.set(evt.ask.id, evt.ask.sessionID)
+            openAsks(evt.ask.sessionID).add(evt.ask.id)
             console.error(`[ask] surfaced ${evt.ask.id} (${evt.ask.title})`)
+          }
+          // what the turn is doing decides which ceiling applies, so track the
+          // tools the harness reports as running (and when each one started)
+          if (evt.type === "part.updated" && evt.part?.kind === "tool" && live) {
+            if (evt.part.status === "running") {
+              if (!live.runningTools.has(evt.partID)) {
+                live.runningTools.set(evt.partID, { name: evt.part.name, startedAt: evt.part.startedAt ?? Date.now() })
+              }
+            } else live.runningTools.delete(evt.partID)
           }
           // the turn is over and the record is settled: drop the snapshot so the
           // next read is the finished one
           if (evt.type === "session.idle" || evt.type === "turn.aborted") msgCache.delete(evt.sessionID)
+          // The harness says the turn is done. prompt() normally returns right
+          // about now — but that POST can hang even with the answer fully
+          // streamed, which pinned the turn (and everything queued behind it)
+          // forever. Give it a grace period, then finalize from the transcript.
+          if (evt.type === "session.idle" && live?.running && !live.ending && live.idleGrace === undefined) {
+            live.idleGrace = setTimeout(() => {
+              live.idleGrace = undefined
+              endTurn(evt.sessionID, live, { kind: "idle" }, "idle-grace")
+            }, idleGraceMs)
+          }
+          // The harness's own account of a failed turn, delivered on the stream
+          // rather than by prompt() rejecting. Left unhandled it vanished and the
+          // turn sat until somebody hit stop.
+          if (evt.type === "session.error" && live?.running) {
+            console.error(`[turn] session.error (gateway session ${evt.sessionID}): ${evt.message}`)
+            endTurn(evt.sessionID, live, { kind: "error", message: evt.message || "the harness reported an error" }, "session-error")
+            void adapter.abort(evt.sessionID).catch(() => {})
+          }
           // steer: a prompt waiting behind this turn is folded in at the next tool
           // boundary — abort here, and the runner starts the waiting prompt
           if (evt.type === "part.updated" && evt.part?.kind === "other" && evt.part.nativeType === "step-finish") {
@@ -541,9 +612,91 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     clientID?: string
     resolve: (r: TurnResult) => void
   }
-  type TurnState = { running: PendingTurn | null; waiting: PendingTurn[]; signal?: AbortController }
+  // How a turn ended when something other than prompt() decided it. The runner
+  // reads this after the abort lands, so a stalled or failed turn reports what
+  // actually happened instead of the bare "aborted" every abort used to become.
+  type TurnEnd =
+    /** the harness said session.idle; the answer is streamed, prompt() just hung */
+    | { kind: "idle" }
+    /** a provider failure the harness logged but never put on the event stream */
+    | { kind: "provider"; error: HarnessError }
+    /** the harness's own session.error */
+    | { kind: "error"; message: string }
+    /** nothing came back at all for a whole ceiling */
+    | { kind: "stall"; elapsedMs: number; tool?: string }
+  type TurnState = {
+    running: PendingTurn | null
+    waiting: PendingTurn[]
+    signal?: AbortController
+    /** when this session last produced any harness event — the watchdog's clock */
+    lastActivity: number
+    /** tools the harness says are running now, so a stall can name the culprit */
+    runningTools: Map<string, { name: string; startedAt: number }>
+    /** set by the watchdog or the event stream, read by the runner */
+    ending?: TurnEnd
+    /** armed by session.idle, cleared when the turn settles */
+    idleGrace?: ReturnType<typeof setTimeout>
+  }
+  const newTurnState = (): TurnState => ({ running: null, waiting: [], lastActivity: Date.now(), runningTools: new Map() })
   const turns = new Map<string, TurnState>()
   const isActive = (id: string): boolean => turns.get(id)?.running != null
+
+  // End the running turn for a reason that is not a client stop. The abort is
+  // what unblocks prompt(); `ending` is what tells the runner why, so the phone
+  // gets a named failure rather than a silent stop.
+  const endTurn = (id: string, st: TurnState, end: TurnEnd, origin: string): void => {
+    if (!st.running || st.ending) return
+    st.ending = end
+    console.error(`[stop] origin=${origin} (gateway session ${id})`)
+    st.signal?.abort()
+  }
+
+  // The liveness the gateway used to be missing entirely. Every turn runs with
+  // timeoutMs: 0, so without this a turn whose harness went silent — a 429, a
+  // usage cap, a dropped upstream socket — stayed "running" forever, and every
+  // prompt queued behind it waited with it. The only way out was the human
+  // hitting stop.
+  const watchdogTimer = setInterval(() => {
+    for (const [id, st] of turns) {
+      if (!st.running || !st.signal || st.ending) continue
+      const adapter = sessionAdapters.get(id)
+      // A provider failure opencode logs to its own stderr and never emits as an
+      // event (a 429, a usage cap). This is the one place that failure is
+      // legible, so prefer it over waiting out the ceiling for an unexplained
+      // stall: the turn is not coming back, and now we can say why.
+      const pe = adapter?.providerError?.(id)
+      if (pe) {
+        console.error(`[watchdog] provider error (gateway session ${id}): ${describeError(pe)}`)
+        endTurn(id, st, { kind: "provider", error: pe }, "watchdog-provider-error")
+        void adapter?.abort(id).catch(() => {})
+        continue
+      }
+      // parked on a permission ask: waiting on the human, not stalled
+      if ((asksBySession.get(id)?.size ?? 0) > 0) continue
+      const elapsed = Date.now() - st.lastActivity
+      // the ceiling depends on what the turn is doing: a running tool may
+      // legitimately be silent for many minutes, a turn awaiting tokens may not
+      let tool: string | undefined
+      let ceiling = turnIdleMs
+      if (st.runningTools.size > 0) {
+        ceiling = toolIdleMs
+        // the longest-running one is the culprit worth naming
+        let oldest = Infinity
+        for (const t of st.runningTools.values()) {
+          if (t.startedAt >= oldest) continue
+          oldest = t.startedAt
+          tool = t.name
+        }
+      }
+      if (elapsed < ceiling) continue
+      console.error(
+        `[watchdog] turn stalled ${Math.round(elapsed / 1000)}s (ceiling ${Math.round(ceiling / 1000)}s, tools=${st.runningTools.size}, gateway session ${id})`,
+      )
+      endTurn(id, st, { kind: "stall", elapsedMs: elapsed, ...(tool ? { tool } : {}) }, "watchdog-stall")
+      void adapter?.abort(id).catch(() => {})
+    }
+  }, watchdogTickMs)
+  watchdogTimer.unref()
 
   async function runNext(id: string): Promise<void> {
     const st = turns.get(id)
@@ -560,6 +713,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       return
     }
     st.running = next
+    st.ending = undefined
+    st.runningTools.clear()
+    st.lastActivity = Date.now()
     const ac = new AbortController()
     st.signal = ac
     try {
@@ -572,15 +728,48 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       })
       next.resolve({ status: 200, message })
     } catch (err) {
+      // An abort with a reason behind it is not a client stop: the watchdog or
+      // the event stream ended this turn, and the reason is the whole point.
+      const end = st.ending
+      if (end && isAborted(err)) next.resolve(await settleEnded(adapter, id, end))
       // a stop is not a failure: it is the turn ending because somebody asked
-      if (isAborted(err)) next.resolve({ status: 200, aborted: true })
+      else if (isAborted(err)) next.resolve({ status: 200, aborted: true })
       else next.resolve({ status: 502, error: String((err as Error)?.message ?? err) })
     } finally {
       st.running = null
       st.signal = undefined
+      st.ending = undefined
+      st.runningTools.clear()
+      if (st.idleGrace) clearTimeout(st.idleGrace)
+      st.idleGrace = undefined
       // the turn wrote to the record; a snapshot from during it must not outlive it
       msgCache.delete(id)
       void runNext(id)
+    }
+  }
+
+  // Turn a watchdog/stream ending into the answer the phone gets. `idle` is a
+  // success — the harness finished and only the blocking POST hung, so the
+  // streamed answer is read back off the transcript. The rest are real
+  // failures, named as precisely as the harness let us name them.
+  async function settleEnded(adapter: HarnessAdapter, id: string, end: TurnEnd): Promise<TurnResult> {
+    if (end.kind === "idle") {
+      msgCache.delete(id)
+      const rows = await adapter.messages(id, { limit: 8 }).catch(() => [] as Message[])
+      const last = [...rows].reverse().find((m) => m.role === "assistant")
+      // the harness said the turn is done; if the record somehow has no
+      // assistant message, a bare stop is still truer than inventing one
+      return last ? { status: 200, message: last } : { status: 200, aborted: true }
+    }
+    if (end.kind === "provider") return { status: 502, error: describeError(end.error) }
+    if (end.kind === "error") return { status: 502, error: end.message }
+    const secs = Math.round(end.elapsedMs / 1000)
+    const forHowLong = secs >= 60 ? `${Math.round(secs / 60)}m` : `${secs}s`
+    return {
+      status: 504,
+      error: end.tool
+        ? `tool ${end.tool} ran ${forHowLong} with no progress — turn abandoned`
+        : `no activity for ${forHowLong} — turn abandoned`,
     }
   }
 
@@ -945,6 +1134,11 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           return json(res, 404, { error: "unknown ask" })
         }
         const ok = await owner.respondAsk(sid, askID, optionID).catch(() => false)
+        // answered: the turn is the model's problem again, so the watchdog's
+        // clock starts running on it once more
+        closeAsk(askID)
+        const live = turns.get(sid)
+        if (live) live.lastActivity = Date.now()
         console.error(`[ask] respond askID=${askID} option=${optionID} -> ${ok ? "ok" : "failed"}`)
         return json(res, ok ? 200 : 409, ok ? { ok: true } : { error: "ask already answered" })
       }
@@ -961,6 +1155,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const owner = await ensureListed(sid)
         if (!owner) return json(res, 404, { error: "unknown ask" })
         const ok = await owner.rejectAsk(sid, askID).catch(() => false)
+        closeAsk(askID)
+        const live = turns.get(sid)
+        if (live) live.lastActivity = Date.now()
         console.error(`[ask] reject askID=${askID} -> ${ok ? "ok" : "failed"}`)
         return json(res, ok ? 200 : 409, ok ? { ok: true } : { error: "ask already answered" })
       }
@@ -1020,6 +1217,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         archived.delete(id)
         await saveArchived(deps.dataHome, archived)
         const gone = await adapter.deleteSession(id).catch(() => false)
+        if (gone) asksBySession.delete(id)
         return json(res, gone ? 200 : 404, gone ? { ok: true } : { error: "couldn't delete" })
       }
 
@@ -1234,7 +1432,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           clientID: str("clientID") ?? undefined,
           resolve: settle,
         }
-        const st = turns.get(id) ?? { running: null, waiting: [] }
+        const st = turns.get(id) ?? newTurnState()
         turns.set(id, st)
         if (b.force === true) {
           // force: run this next, and if a turn is in flight, abort it so it can
@@ -1306,6 +1504,8 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     close: async () => {
       clearInterval(pumpTimer)
       clearInterval(pingTimer)
+      clearInterval(watchdogTimer)
+      for (const st of turns.values()) if (st.idleGrace) clearTimeout(st.idleGrace)
       for (const signal of pumps.values()) signal.abort()
       for (const res of clients) res.end()
       await new Promise<void>((resolve) => server.close(() => resolve()))

@@ -142,6 +142,7 @@ function stallable() {
 async function startWith(
   a: ReturnType<typeof stallable>,
   workspace = a.adapter.workspace,
+  liveness?: { turnIdleMs?: number; toolIdleMs?: number; idleGraceMs?: number; tickMs?: number },
 ): Promise<{ base: string; headers: Record<string, string>; g: GatewayHandle }> {
   const g = await startGateway({
     // the workspace the served roots are built from, so a test can point the
@@ -151,6 +152,7 @@ async function startWith(
     port: 0,
     pairCode: "TESTCODE",
     pairLimit: 100,
+    ...(liveness ? { liveness } : {}),
   })
   const base = `http://127.0.0.1:${g.port}`
   const token = await pair(base, "TESTCODE")
@@ -293,6 +295,158 @@ test("a queued prompt can be forced to run now", async () => {
     assert.equal(j1.aborted, true, "the running turn is stopped")
     const j2 = (await (await second).json()) as { message?: Message }
     assert.equal(textOf(j2), "echo: second")
+  } finally {
+    await g.close()
+  }
+})
+
+// ── turn liveness ────────────────────────────────────────────────────────────
+// Every gateway turn runs with no absolute deadline, so these are the only
+// things that end a turn whose harness went quiet. Without them a stalled turn
+// stayed "running" forever and every prompt behind it waited with it — the bug
+// that had the phone's stop button as its only cure.
+const FAST = { turnIdleMs: 120, toolIdleMs: 600, idleGraceMs: 40, tickMs: 20 }
+
+test("the watchdog ends a turn whose harness went silent, and says so", async () => {
+  const a = stallable()
+  const { base, headers, g } = await startWith(a, a.adapter.workspace, FAST)
+  try {
+    const first = fetch(`${base}/prompt`, { method: "POST", headers, body: JSON.stringify({ id: "s1", text: "first" }) })
+    // nothing is fed: no events at all, which is exactly the stall
+    const j = (await (await first).json()) as { error?: string }
+    assert.match(j.error ?? "", /no activity for/, "the stall names itself instead of reading as a stop")
+  } finally {
+    await g.close()
+  }
+})
+
+test("a stalled turn releases the queue behind it", async () => {
+  const a = stallable()
+  const { base, headers, g } = await startWith(a, a.adapter.workspace, FAST)
+  try {
+    const post = (text: string) =>
+      fetch(`${base}/prompt`, { method: "POST", headers, body: JSON.stringify({ id: "s1", text }) })
+    const first = post("first")
+    await sleep(20)
+    const second = post("second")
+    // the stalled turn is given up on, and the prompt waiting behind it runs
+    const j2 = (await (await second).json()) as { message?: Message }
+    assert.equal(textOf(j2), "echo: second", "the queue is not pinned by a dead turn")
+    await first
+    assert.deepEqual(a.calls, ["first", "second"])
+  } finally {
+    await g.close()
+  }
+})
+
+test("session.error ends the turn in the harness's own words", async () => {
+  const a = stallable()
+  // ceilings far out of reach: the event, not a timeout, must be what ends this
+  const { base, headers, g } = await startWith(a, a.adapter.workspace, { ...FAST, turnIdleMs: 60_000 })
+  try {
+    const first = fetch(`${base}/prompt`, { method: "POST", headers, body: JSON.stringify({ id: "s1", text: "first" }) })
+    await sleep(50)
+    a.feed({ type: "session.error", sessionID: "s1", message: "every candidate model failed" } as DomainEvent)
+    const j = (await (await first).json()) as { error?: string }
+    assert.equal(j.error, "every candidate model failed")
+  } finally {
+    await g.close()
+  }
+})
+
+test("a named provider failure beats a silent stall", async () => {
+  const a = stallable()
+  // the adapter knows why the turn died — opencode logged a usage cap that never
+  // reached the event stream — so the watchdog must report that, not "no activity"
+  const withError: ReturnType<typeof stallable> = {
+    ...a,
+    adapter: {
+      ...a.adapter,
+      providerError: () => ({ name: "AI_APICallError", message: "Go usage limit exceeded", provider: "opencode-go", model: "glm-5.3-flash" }),
+    },
+  }
+  const { base, headers, g } = await startWith(withError, withError.adapter.workspace, FAST)
+  try {
+    const first = fetch(`${base}/prompt`, { method: "POST", headers, body: JSON.stringify({ id: "s1", text: "first" }) })
+    const j = (await (await first).json()) as { error?: string }
+    assert.match(j.error ?? "", /Go usage limit exceeded/)
+    assert.match(j.error ?? "", /opencode-go\/glm-5\.3-flash/, "the failure names the endpoint that produced it")
+    assert.doesNotMatch(j.error ?? "", /no activity/, "a known cause is never reported as an unexplained stall")
+  } finally {
+    await g.close()
+  }
+})
+
+test("session.idle finalizes a turn whose prompt() hangs, from the transcript", async () => {
+  const a = stallable()
+  const finished: Message = { id: "m9", sessionID: "s1", role: "assistant", time: 9, parts: [{ kind: "text", text: "all done" }] }
+  const withRecord: ReturnType<typeof stallable> = {
+    ...a,
+    adapter: { ...a.adapter, async messages() { return [finished] } },
+  }
+  // the ceiling is unreachable: session.idle plus the grace period is what ends this
+  const { base, headers, g } = await startWith(withRecord, withRecord.adapter.workspace, { ...FAST, turnIdleMs: 60_000 })
+  try {
+    const first = fetch(`${base}/prompt`, { method: "POST", headers, body: JSON.stringify({ id: "s1", text: "first" }) })
+    await sleep(50)
+    // the harness says the turn is over while the blocking POST never returns
+    a.feed({ type: "session.idle", sessionID: "s1" } as DomainEvent)
+    const j = (await (await first).json()) as { message?: Message; aborted?: boolean; error?: string }
+    assert.equal(textOf(j), "all done", "a finished turn reads as success, not as a stop")
+    assert.ok(!j.aborted && !j.error)
+  } finally {
+    await g.close()
+  }
+})
+
+test("a turn parked on a permission ask is not a stalled turn", async () => {
+  const a = stallable()
+  const { base, headers, g } = await startWith(a, a.adapter.workspace, FAST)
+  try {
+    const first = fetch(`${base}/prompt`, { method: "POST", headers, body: JSON.stringify({ id: "s1", text: "first" }) })
+    await sleep(20)
+    a.feed({
+      type: "ask.requested",
+      sessionID: "s1",
+      ask: { id: "ask1", sessionID: "s1", title: "Run rm -rf?", options: [{ id: "yes", label: "Yes" }] },
+    } as DomainEvent)
+    let settled = false
+    void first.then(() => { settled = true })
+    // well past turnIdleMs: waiting on a human is not stalling
+    await sleep(300)
+    assert.equal(settled, false, "the watchdog holds its fire while the ask is unanswered")
+    // answering hands the turn back to the model, and the clock starts again
+    await fetch(`${base}/respond`, { method: "POST", headers, body: JSON.stringify({ askID: "ask1", optionID: "yes" }) })
+    const j = (await (await first).json()) as { error?: string; aborted?: boolean }
+    assert.match(j.error ?? "", /no activity for/, "once answered, an unresponsive turn is subject to the ceiling again")
+  } finally {
+    await g.close()
+  }
+})
+
+test("a running tool buys the longer ceiling", async () => {
+  const a = stallable()
+  // turnIdleMs would have killed this several times over; the tool ceiling holds
+  const { base, headers, g } = await startWith(a, a.adapter.workspace, { ...FAST, turnIdleMs: 60, toolIdleMs: 60_000 })
+  try {
+    const first = fetch(`${base}/prompt`, { method: "POST", headers, body: JSON.stringify({ id: "s1", text: "first" }) })
+    await sleep(20)
+    a.feed({
+      type: "part.updated",
+      sessionID: "s1",
+      messageID: "m1",
+      partID: "t1",
+      partType: "tool",
+      part: { kind: "tool", id: "t1", name: "bash", input: {}, output: null, status: "running", startedAt: Date.now() },
+    } as DomainEvent)
+    await sleep(250)
+    let settled = false
+    void first.then(() => { settled = true })
+    await sleep(50)
+    assert.equal(settled, false, "a silent but running tool is working, not wedged")
+    a.release("first")
+    const j = (await (await first).json()) as { message?: Message }
+    assert.equal(textOf(j), "echo: first")
   } finally {
     await g.close()
   }

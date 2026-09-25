@@ -30,7 +30,7 @@ plain clients).
 | `POST /browse` | `{path?}` | `{cwd,root,parent,dirs[]}`: folders under `cwd` (`{name,git}`), bounded to `JEP_BROWSE_ROOT` (default `$HOME`); `parent` is null at the root |
 | `POST /new` | `{title?,workspace?,path?,harness?}` | `{session}`: created in a named workspace, at an absolute `path` (spawning that workspace under `harness` if it isn't served yet), and/or under a harness; with none, the first served workspace. The returned session carries `adapter`+`harness` |
 | `POST /history` | `{id,limit?,before?}` | `{messages[],hasMore}`: the newest `limit` messages (or, when `before` is a time, the newest `limit` older than it); `hasMore` says older pages exist |
-| `POST /prompt` | `{id,text,files?}` | `{message}` resolves when the turn ends; `files` are `attach` ids sent to the harness as `filePaths`; runs on the session's model if one was set |
+| `POST /prompt` | `{id,text,files?}` | `{message}` resolves when the turn ends; `files` are `attach` ids sent to the harness as `filePaths`; runs on the session's model if one was set. A turn has no absolute deadline — see [Turn liveness](#turn-liveness) for what ends one that goes quiet |
 | `POST /respond` | `{askID,optionID}` | `{ok}` |
 | `POST /stop` | `{id}` | `{stopped}` |
 | `POST /models` | `{id}` | `{models[],current,default}`: the models this conversation's harness can run on, each with `image`/`attachment`/`contextLimit`; `current` is the set one (null = harness default); `default` is what "default" resolves to |
@@ -62,6 +62,31 @@ plain clients).
 
 Errors are a bare `{error}` with a fitting status. A second prompt into a
 running session answers `409 {error:"busy"}`.
+
+## Turn liveness
+
+A `/prompt` turn runs with **no absolute deadline** (`timeoutMs: 0`): a real
+agent turn can legitimately work for half an hour, and any fixed ceiling
+eventually cuts one off mid-task. Liveness is owned by inactivity instead, and
+four things can end a turn the harness stopped talking about:
+
+| what | the client sees |
+| --- | --- |
+| a provider failure the harness logged but never emitted as an event (a 429, a usage cap) | `502 {error}`, the failure named with its provider/model |
+| the harness's own `session.error` | `502 {error}`, the harness's words |
+| `session.idle` while the blocking POST hangs | `200 {message}` — the turn *finished*; the answer is read back off the transcript |
+| nothing at all for a whole ceiling | `504 {error}` naming how long it was silent, and the tool if one was running |
+
+The ceilings: `JEP_TURN_IDLE_MS` (default 5m) for a turn awaiting tokens, and
+`JEP_TOOL_IDLE_MS` (default 20m) while the harness reports a running tool,
+because a build or a test run is legitimately silent for minutes. Both are the
+same knobs the Telegram client uses, so the two clients give up at the same
+moment. A turn parked on an unanswered permission ask is *not* stalled — it is
+waiting on a human — and no ceiling applies until the ask is answered or stood
+down.
+
+Every event on a session pushes its deadline out, so only a genuinely silent
+turn is ever abandoned.
 
 ## Stream (SSE, GET /stream)
 
