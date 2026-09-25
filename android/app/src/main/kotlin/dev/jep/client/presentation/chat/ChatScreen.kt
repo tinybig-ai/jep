@@ -1484,9 +1484,11 @@ private fun AssistantBody(
     val clipboard = LocalClipboardManager.current
     val fullText = remember(message) { messageText(message) }
     Column(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        message.parts.forEachIndexed { idx, part ->
-            val isLast = idx == message.parts.lastIndex
-            PartView(part, streaming = isLast && message.time == 0L)
+        collapseTranscript(message.parts).forEach { row ->
+            when (row) {
+                is TranscriptRow.Group -> ToolGroupRow(row.tools)
+                is TranscriptRow.One -> PartView(row.part, streaming = row.part === message.parts.last())
+            }
         }
         // still working: a quiet spinner at the end of the reply, so a pause
         // between parts (thinking, a tool call) never looks like an ending
@@ -1556,6 +1558,114 @@ internal fun withLocalLinks(markdown: String): String =
         val dest = linkDestination(m.groupValues[2]) ?: return@replace m.value
         "${m.groupValues[1]}($dest${m.groupValues[3]})"
     }
+
+/**
+ * A run of the same tool call, as one line. It opens to the calls it stands for —
+ * the work is still all there, it is just not spelled out in full while you are
+ * reading around it.
+ */
+@Composable
+private fun ToolGroupRow(tools: List<ChatPart.Tool>) {
+    var open by remember(tools) { mutableStateOf(false) }
+    val anyFailed = tools.any { it.status == ToolStatus.ERROR }
+    val anyRunning = tools.any { it.status == ToolStatus.RUNNING || it.status == ToolStatus.PENDING }
+    Column(Modifier.fillMaxWidth().padding(vertical = 1.dp)) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .combinedClickable(onClick = { open = !open })
+                .padding(horizontal = 14.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                if (open) Icons.Filled.ArrowDropUp else Icons.Filled.ArrowDropDown,
+                if (open) "hide these calls" else "show these calls",
+                Modifier.size(18.dp),
+                tint = when {
+                    anyFailed -> MaterialTheme.colorScheme.error
+                    anyRunning -> MaterialTheme.colorScheme.primary
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
+            Text(
+                toolGroupSummary(tools),
+                Modifier.padding(start = 6.dp),
+                fontSize = 13.sp,
+                fontFamily = FontFamily.Monospace,
+                color = when {
+                    anyFailed -> MaterialTheme.colorScheme.error
+                    anyRunning -> MaterialTheme.colorScheme.primary
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (open) tools.forEach { ToolRow(it) }
+    }
+}
+
+/**
+ * Consecutive tool calls of the same kind collapse into one row.
+ *
+ * A turn that reads seventeen files, or edits six of them, was seventeen or six
+ * identical-looking lines in the transcript — noise that made a turn expensive to
+ * read and to review. Grouping is by consecutive runs of the same tool, never
+ * across kinds: a read/edit/test alternation is the order the work happened in,
+ * and collapsing that would throw away the thing you were reading for.
+ */
+internal sealed interface TranscriptRow {
+    data class One(val part: ChatPart) : TranscriptRow
+    data class Group(val tools: List<ChatPart.Tool>) : TranscriptRow
+}
+
+internal fun collapseTranscript(parts: List<ChatPart>): List<TranscriptRow> {
+    val out = ArrayList<TranscriptRow>(parts.size)
+    var run = mutableListOf<ChatPart.Tool>()
+    fun flush() {
+        // Three is where the noise starts. One or two calls side by side still
+        // read as themselves, and wrapping them in a disclosure costs a tap for
+        // no gain.
+        if (run.size > 2) out += TranscriptRow.Group(run.toList()) else run.forEach { out += TranscriptRow.One(it) }
+        run = mutableListOf()
+    }
+    for (part in parts) {
+        val tool = part as? ChatPart.Tool
+        if (tool == null) {
+            flush()
+            out += TranscriptRow.One(part)
+        } else if (run.isNotEmpty() && run[0].name != tool.name) {
+            flush()
+            run.add(tool)
+        } else {
+            run.add(tool)
+        }
+    }
+    flush()
+    return out
+}
+
+private val TOOL_VERB = mapOf(
+    "read" to "Read", "edit" to "Edited", "write" to "Wrote", "bash" to "Ran",
+    "grep" to "Searched", "glob" to "Found", "list" to "Listed", "patch" to "Patched",
+)
+
+/** "Read 17 files", "Edited 6 files +128 -94", "Ran 3 commands" */
+internal fun toolGroupSummary(tools: List<ChatPart.Tool>): String {
+    val kind = tools[0].name.lowercase()
+    val verb = TOOL_VERB[kind] ?: kind.replaceFirstChar { it.uppercase() }
+    val noun = when (kind) {
+        "read", "edit", "write", "patch" -> "files"
+        "bash" -> "commands"
+        "grep" -> "searches"
+        "glob" -> "matches"
+        else -> "calls"
+    }
+    val added = tools.sumOf { it.added ?: 0 }
+    val removed = tools.sumOf { it.removed ?: 0 }
+    val delta = if (added == 0 && removed == 0) "" else " +$added -$removed"
+    return "$verb ${tools.size} $noun$delta"
+}
 
 @Composable
 private fun PartView(part: ChatPart, streaming: Boolean, onOpenLink: (String) -> Unit = {}) {
