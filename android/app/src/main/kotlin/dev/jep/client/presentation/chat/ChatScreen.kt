@@ -931,18 +931,6 @@ private fun readerTypography() = markdownTypography(
  *  testable without a screen, and adding a format is one line here. */
 internal enum class FileEngine { Markdown, Code, Text }
 
-internal data class FileKind(
-    val engine: FileEngine,
-    /** whether it opens rendered rather than as source */
-    val renderByDefault: Boolean,
-    /** Everything wraps by default, code and diffs included. On a phone a long
-     *  line is unreadable either way, and a horizontal scroll inside a
-     *  vertically scrolling sheet fights the sheet for the gesture. The toggle
-     *  is there for the rare file you want to scan line by line, not because
-     *  sideways is the better default. */
-    val wrapByDefault: Boolean,
-)
-
 private val MARKDOWN_EXT = setOf("md", "markdown", "mdx")
 private val DIFF_EXT = setOf("diff", "patch")
 private val CODE_EXT = setOf(
@@ -951,47 +939,32 @@ private val CODE_EXT = setOf(
     "yml", "ini", "gradle", "lua", "pl", "r", "scala", "dart", "ex", "exs", "erl", "hs", "clj",
     "vue", "svelte", "css", "scss", "less", "html", "htm", "xml", "json", "csv", "tsv", "lock",
 )
-private val TEXT_EXT = setOf("txt", "text", "log", "out", "err", "env")
 
-/** What the sheet's menu offers. Word wrap is a source-mode option: the
- *  markdown renderer fills whatever box it is given and there is no way to ask
- *  it to leave a line unbroken, so unwrapping rendered markdown has to be faked
- *  with a very wide box — and that fake crashed the app when the toggle was
- *  used. Rather than ship a switch that switches nothing, the option is only
- *  offered where it works: to see a line unbroken, turn Render off. */
-internal enum class ReaderOption { Render, Wrap }
-
-internal fun readerOptions(engine: FileEngine, render: Boolean): Set<ReaderOption> = buildSet {
-    if (engine == FileEngine.Markdown) add(ReaderOption.Render)
-    if (!(render && engine == FileEngine.Markdown)) add(ReaderOption.Wrap)
-}
-
-internal fun fileKindFor(path: String): FileKind {
+internal fun fileEngineFor(path: String): FileEngine {
     val ext = path.substringAfterLast('.', "").lowercase()
     return when (ext) {
-        in MARKDOWN_EXT -> FileKind(FileEngine.Markdown, renderByDefault = true, wrapByDefault = true)
-        in DIFF_EXT, in CODE_EXT -> FileKind(FileEngine.Code, renderByDefault = false, wrapByDefault = true)
+        in MARKDOWN_EXT -> FileEngine.Markdown
+        in DIFF_EXT, in CODE_EXT -> FileEngine.Code
         // anything unrecognised is prose: readable beats clever, and a file with
         // no extension at all is far more often notes than binary
-        else -> FileKind(FileEngine.Text, renderByDefault = false, wrapByDefault = true)
+        else -> FileEngine.Text
     }
 }
 
-// A file the user tapped in a message, read in a sheet. The defaults come from
-// the engine store; the two toggles are for when it guessed wrong, which is the
-// only reason they exist.
+// A file the user tapped in a message, read in a sheet. The engine comes from
+// the store, and the only option is whether a markdown file is shown rendered —
+// set it wrong once and the settings affordance is right there.
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FileSheet(open: ChatViewModel.OpenFile, onClose: () -> Unit) {
-    val kind = remember(open.path) { fileKindFor(open.path) }
-    var render by remember(open.path) { mutableStateOf(kind.renderByDefault) }
-    var wrap by remember(open.path) { mutableStateOf(kind.wrapByDefault) }
+    val engine = remember(open.path) { fileEngineFor(open.path) }
+    // one option, and it belongs to markdown: there is nothing to configure
+    // about prose or source, and a menu that changes shape as you use it is worse
+    // than a menu with one entry. Everything wraps — this is a phone.
+    val canRender = engine == FileEngine.Markdown
+    var render by remember(open.path) { mutableStateOf(canRender) }
     var options by remember { mutableStateOf(false) }
-    // both axes, always: unwrapping a line must not cost the ability to scroll
-    // down the file
     val down = rememberScrollState()
-    val across = rememberScrollState()
-    val offered = remember(kind.engine, render) { readerOptions(kind.engine, render) }
     // Retaining the parsed state is what stops Render from blanking the sheet:
     // without it the reader reparses, shows nothing while it does, and a sheet
     // with no content minimizes itself — which is what you saw.
@@ -1012,7 +985,7 @@ private fun FileSheet(open: ChatViewModel.OpenFile, onClose: () -> Unit) {
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Box {
+                if (canRender) Box {
                     IconButton(onClick = { options = true }) {
                         Icon(
                             Icons.Filled.Settings,
@@ -1022,21 +995,12 @@ private fun FileSheet(open: ChatViewModel.OpenFile, onClose: () -> Unit) {
                         )
                     }
                     DropdownMenu(expanded = options, onDismissRequest = { options = false }) {
-                        if (ReaderOption.Render in offered) {
-                            // the whole row is the target; the switch only shows state
-                            DropdownMenuItem(
-                                text = { Text("Render") },
-                                trailingIcon = { Switch(checked = render, onCheckedChange = null) },
-                                onClick = { render = !render },
-                            )
-                        }
-                        if (ReaderOption.Wrap in offered) {
-                            DropdownMenuItem(
-                                text = { Text("Word wrap") },
-                                trailingIcon = { Switch(checked = wrap, onCheckedChange = null) },
-                                onClick = { wrap = !wrap },
-                            )
-                        }
+                        // the whole row is the target; the switch only shows state
+                        DropdownMenuItem(
+                            text = { Text("Render") },
+                            trailingIcon = { Switch(checked = render, onCheckedChange = null) },
+                            onClick = { render = !render },
+                        )
                     }
                 }
             }
@@ -1060,24 +1024,18 @@ private fun FileSheet(open: ChatViewModel.OpenFile, onClose: () -> Unit) {
                         fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    render && kind.engine == FileEngine.Markdown -> Markdown(
+                    render && engine == FileEngine.Markdown -> Markdown(
                         markdownState = rendered,
                         typography = readerTypography(),
                         modifier = Modifier.verticalScroll(down),
                     )
-                    else -> {
-                        val body = Text(
-                            open.text.orEmpty(),
-                            Modifier
-                                .verticalScroll(down)
-                                .then(if (wrap) Modifier else Modifier.horizontalScroll(across)),
-                            fontSize = 13.sp,
-                            fontFamily = if (kind.engine == FileEngine.Code) FontFamily.Monospace else FontFamily.Default,
-                            softWrap = wrap,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                        if (wrap) body else body
-                    }
+                    else -> Text(
+                        open.text.orEmpty(),
+                        Modifier.verticalScroll(down),
+                        fontSize = 13.sp,
+                        fontFamily = if (engine == FileEngine.Code) FontFamily.Monospace else FontFamily.Default,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
                 }
             }
         }
