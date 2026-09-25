@@ -37,6 +37,19 @@ import kotlinx.coroutines.launch
 // and handing megabytes of JSON to the UI thread crashed the app.
 const val WINDOW = 30
 
+/**
+ * Has the harness's own record already settled the message we are streaming?
+ *
+ * A live row is only ever closed by a turn-ending event, and the transcript
+ * always prefers the live row over its twin in the record — so one missed event
+ * (a dropped stream, a backgrounded app) stranded a finished answer under a
+ * stale row that still believed it was streaming, cursor and all. Live rows carry
+ * time 0 by construction, so a real timestamp in the record is what says the
+ * harness has finished with it and the row can go.
+ */
+internal fun liveRowIsSettled(liveMessageId: String?, served: List<ChatMessage>): Boolean =
+    liveMessageId != null && served.any { it.id == liveMessageId && it.time > 0L }
+
 class ChatViewModel(
     private val repo: ChatRepository,
     val sessionId: String,
@@ -300,6 +313,8 @@ class ChatViewModel(
 
     private fun isUserMessage(messageId: String): Boolean = roles[messageId] == Role.USER
 
+    // liveRowIsSettled, below
+
     // the harness's own record is authoritative once served; optimistic rows
     // survive only until they show up there. History is paged: the newest
     // window only, then older pages on demand via loadOlder().
@@ -331,8 +346,10 @@ class ChatViewModel(
                             messages = batch.messages + optimistic.toList(),
                             // history is the record, not the stream: it must never
                             // wipe a live row it has merely caught up with, even
-                            // when this device did not start the turn
-                            live = st.live,
+                            // when this device did not start the turn — unless the
+                            // record shows the turn is actually over, in which case
+                            // keeping it would strand a finished answer
+                            live = if (liveRowIsSettled(st.live?.messageId, batch.messages)) null else st.live,
                             hasMore = batch.hasMore,
                             loadingHistory = false,
                             // a queued message that now shows in the record has been

@@ -392,6 +392,10 @@ fun ChatScreen(
         groupToolRuns(transcriptRows(ordered, ask, state.askAt, liveMessageId, state.askAfter))
     }
     val askAnswered = remember(ask, state.askChoice) { askIsSpent(ask, state.askChoice) }
+    // An unanswered card is the signal in its own right; the spinner is not. This
+    // is "a card is waiting", not "a card was answered" — asking the latter
+    // silenced the spinner in every turn that never happened to raise an ask.
+    val askPending = ask != null && !askAnswered
     // the newest message, which carries the "still working" mark; the ask can sit
     // between it and the bottom, so this is a lookup rather than an index
     val newestMsgId = remember(rows) { rows.firstOrNull { it is Row.Msg }?.let { (it as Row.Msg).m.id } }
@@ -607,7 +611,7 @@ fun ChatScreen(
                                 // read as finished.
                                 // an unanswered card is the signal, in its own
                                 // right: a spinner under it would only add noise
-                                responding = busy && askAnswered &&
+                                responding = busy && !askPending &&
                                     row.m.id == newestMsgId && row.m.role == Role.ASSISTANT,
                                 showActions = row.m.id in actionIds,
                                 onRetrySend = { vm.retrySend(it) },
