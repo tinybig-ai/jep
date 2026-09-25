@@ -16,6 +16,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Spacer
@@ -34,11 +35,14 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -148,6 +152,7 @@ import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.m3.markdownTypography
 import com.mikepenz.markdown.model.rememberMarkdownState
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -554,6 +559,7 @@ fun ChatScreen(
             }
         }
         val scope = rememberCoroutineScope()
+        val anchor = remember(listState, scope) { TranscriptAnchor(listState, scope) }
         // there is content below the fold: one tap and you are back at the end
         val showJump = !atBottom && rendered.isNotEmpty()
         Box(Modifier.weight(1f)) {
@@ -564,7 +570,7 @@ fun ChatScreen(
                 ) {
                     CircularProgressIndicator(Modifier.size(30.dp), strokeWidth = 3.dp)
                 }
-            } else LazyColumn(
+            } else CompositionLocalProvider(LocalTranscriptAnchor provides anchor) { LazyColumn(
                 Modifier.fillMaxSize().testTag("chat-list"),
                 state = listState,
                 // bottom-up: index 0 is the bottom of the screen
@@ -619,7 +625,7 @@ fun ChatScreen(
                         }
                     }
                 }
-            }
+            } }
             if (showJump) {
                 FloatingActionButton(
                     onClick = { scope.launch { listState.animateScrollToItem(0) } },
@@ -1639,9 +1645,48 @@ internal fun withLocalLinks(markdown: String): String =
  * themselves ordinary rows, so nothing about the expanded state looks like a
  * different kind of thing.
  */
+/**
+ * Holds a disclosure's header still on screen while the block changes height.
+ *
+ * The transcript runs bottom-up, so the edge that holds still when a block opens
+ * is the *bottom* of its item: the height the block adds comes out of the top,
+ * which slides the content above it up and walks the header you tapped out from
+ * under your finger. It reads as the block opening the wrong way. That height
+ * has to be spent downwards instead.
+ *
+ * So the header reports where it is, and the list is given back exactly however
+ * far it moved. The header keeps its place; the content below it is what moves,
+ * which is the way a fold is expected to open.
+ */
+private class TranscriptAnchor(
+    private val listState: LazyListState,
+    private val scope: CoroutineScope,
+) {
+    private var height = 0f
+
+    /**
+     * The block changed height. Give the list back exactly that much.
+     *
+     * Driven by the height itself rather than by polling where the header ended
+     * up: an opening block reports its size once per frame of its own animation,
+     * so each step is handed straight back and the header never drifts. Polling
+     * for the header instead races the animation and lands wherever it happened
+     * to be when it was measured.
+     */
+    fun resized(value: Float) {
+        val delta = value - height
+        height = value
+        if (delta != 0f) scope.launch { listState.scrollBy(delta) }
+    }
+}
+
+private val LocalTranscriptAnchor = compositionLocalOf<TranscriptAnchor?> { null }
+
 @Composable
 private fun ToolGroupRow(tools: List<ChatPart.Tool>) {
     var open by remember(tools) { mutableStateOf(false) }
+    val anchor = LocalTranscriptAnchor.current
+    val flip = { open = !open }
     val anyFailed = tools.any { it.status == ToolStatus.ERROR }
     val anyRunning = tools.any { it.status == ToolStatus.RUNNING || it.status == ToolStatus.PENDING }
     val added = tools.sumOf { it.added ?: 0 }
@@ -1651,9 +1696,13 @@ private fun ToolGroupRow(tools: List<ChatPart.Tool>) {
         anyRunning -> MaterialTheme.colorScheme.primary
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
-    Column(Modifier.fillMaxWidth().padding(horizontal = RowInset, vertical = RowVInset)) {
+    Column(
+        Modifier.fillMaxWidth()
+            .padding(horizontal = RowInset, vertical = RowVInset)
+            .onSizeChanged { anchor?.resized(it.height.toFloat()) },
+    ) {
         Row(
-            Modifier.fillMaxWidth().clickable { open = !open },
+            Modifier.fillMaxWidth().clickable { flip() },
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(toolGroupSummary(tools), style = MaterialTheme.typography.labelMedium, color = tint)
@@ -1838,6 +1887,8 @@ private fun FileRow(part: ChatPart.File) {
 @Composable
 private fun ReasoningRow(part: ChatPart.Reasoning, active: Boolean = false) {
     var open by remember { mutableStateOf(false) }
+    val anchor = LocalTranscriptAnchor.current
+    val flip = { open = !open }
     // While it is still thinking the seconds must tick, or a frozen "1s" reads
     // as stuck. Driven by an infinite animation rather than a delay loop in the
     // composition: a loop there keeps the screen "busy" forever, which also
@@ -1850,7 +1901,11 @@ private fun ReasoningRow(part: ChatPart.Reasoning, active: Boolean = false) {
         label = "seconds",
     )
     val secs = elapsed.toInt()
-    Column(Modifier.fillMaxWidth().combinedClickable(onClick = { open = !open }, onLongClick = {})) {
+    Column(
+        Modifier.fillMaxWidth()
+            .onSizeChanged { anchor?.resized(it.height.toFloat()) }
+            .combinedClickable(onClick = flip, onLongClick = {}),
+    ) {
         Row(
             Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,

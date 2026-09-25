@@ -524,4 +524,46 @@ class ChatScreenTest {
             1f,
         )
     }
+
+    /**
+     * A block that opens must not walk out from under the finger that opened it.
+     *
+     * The transcript is bottom-up, so an item's bottom edge is what holds still:
+     * the height a block adds comes out of the top of the item and the content
+     * above slides up. The header has to keep its place and the content below it
+     * has to be what moves. This is a layout position, so no JVM test can see it.
+     *
+     * The tool group, not the thinking block: the thinking block's seconds tick on
+     * an infinite transition, which never lets an instrumented test go idle.
+     */
+    @Test
+    fun opening_a_block_leaves_its_header_where_it_was() {
+        fun read(file: String) = ChatPart.Tool(id = "t-$file", name = "read", status = null, title = "src/$file")
+        // the group has to sit in a transcript with room to scroll: the height it
+        // adds is spent by scrolling the list, and a list whose whole content fits
+        // on screen has nothing to give
+        val messages = manyMessages(30) + listOf(
+            ChatMessage(
+                "a1", Role.ASSISTANT, 10,
+                listOf(read("one.ts"), read("two.ts"), read("three.ts")),
+            ),
+        )
+        val vm = ChatViewModel(FakeChatRepository(messages = messages), "s1", "T", "jep", "opencode")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(10_000) {
+            rule.onAllNodesWithText("Read 3 files").fetchSemanticsNodes().isNotEmpty()
+        }
+        val before = rule.onNodeWithText("Read 3 files").fetchSemanticsNode().boundsInRoot.top
+        rule.onNodeWithText("Read 3 files").performClick()
+        // the correction is spent over a few frames, so wait for the header to
+        // come to rest rather than assuming one frame is enough
+        rule.waitUntil(10_000) {
+            val now = rule.onNodeWithText("Read 3 files").fetchSemanticsNode().boundsInRoot.top
+            kotlin.math.abs(now - before) < 2f
+        }
+        // it really did open: a call it stands for is now on screen
+        rule.onNodeWithText("Read one.ts").assertExists()
+        val after = rule.onNodeWithText("Read 3 files").fetchSemanticsNode().boundsInRoot.top
+        assertEquals("the header must hold its place on screen", before, after, 2f)
+    }
 }
