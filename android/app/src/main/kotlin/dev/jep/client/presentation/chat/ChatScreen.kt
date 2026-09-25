@@ -983,6 +983,18 @@ private fun readerTypography() = markdownTypography(
     ),
 )
 
+/**
+ * The transcript's own inset.
+ *
+ * A message row's chrome — this padding and the long-press menu around it — is
+ * applied by MessageRow, so anything rendered as a row in its own right (a
+ * collapsed tool run, an ask card) has to carry the same inset itself. Two
+ * copies of this number is how a group row ended up flush left beside inset rows
+ * and read as misaligned, so there is one.
+ */
+private val RowInset = 14.dp
+private val RowVInset = 4.dp
+
 /** How the reader shows a file. The store is small and pure on purpose — a path
  *  in, an engine and two defaults out — so what the reader does with any file is
  *  testable without a screen, and adding a format is one line here. */
@@ -1378,7 +1390,7 @@ private fun MessageRow(
     Box(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 4.dp)
+            .padding(horizontal = RowInset, vertical = RowVInset)
             .combinedClickable(onClick = {}, onLongClick = { menu = true }),
     ) {
         when (message.role) {
@@ -1639,7 +1651,7 @@ private fun ToolGroupRow(tools: List<ChatPart.Tool>) {
         anyRunning -> MaterialTheme.colorScheme.primary
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
-    Column(Modifier.fillMaxWidth()) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = RowInset, vertical = RowVInset)) {
         Row(
             Modifier.fillMaxWidth().clickable { open = !open },
             verticalAlignment = Alignment.CenterVertically,

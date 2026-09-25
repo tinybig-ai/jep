@@ -488,4 +488,40 @@ class ChatScreenTest {
         rule.onNodeWithContentDescription("queued").assertExists()
         gate.complete(Unit)
     }
+
+    /**
+     * A collapsed tool run must line up with the call rows beside it.
+     *
+     * A tool row is rendered inside a message, which supplies the transcript's
+     * inset. A collapsed run is a row in its own right and was rendered without
+     * one, so it sat flush left against inset rows and read as misaligned — the
+     * one thing a folded row must never look like. Every JVM test in this project
+     * passes straight through that: none of them lay a row out.
+     */
+    @Test
+    fun a_collapsed_tool_run_lines_up_with_the_call_rows_beside_it() {
+        fun read(file: String) = ChatPart.Tool(id = "t-$file", name = "read", status = null, title = "src/$file")
+        val messages = listOf(
+            // a message that says something and calls a tool: rendered as a
+            // message, with the call row inside it
+            ChatMessage("a1", Role.ASSISTANT, 10, listOf(ChatPart.Text("Thought for 3s"), read("agents.ts"))),
+            // three that carry nothing but the call and a step marker: these group
+            ChatMessage("b1", Role.ASSISTANT, 20, listOf(ChatPart.Unsupported("step-finish"), read("one.ts"))),
+            ChatMessage("b2", Role.ASSISTANT, 21, listOf(ChatPart.Unsupported("step-finish"), read("two.ts"))),
+            ChatMessage("b3", Role.ASSISTANT, 22, listOf(ChatPart.Unsupported("step-finish"), read("three.ts"))),
+        )
+        val vm = ChatViewModel(FakeChatRepository(messages = messages), "s1", "T", "jep", "opencode")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(10_000) {
+            rule.onAllNodesWithText("Read 3 files").fetchSemanticsNodes().isNotEmpty()
+        }
+        val grouped = rule.onNodeWithText("Read 3 files").fetchSemanticsNode().boundsInRoot
+        val single = rule.onNodeWithText("Read agents.ts").fetchSemanticsNode().boundsInRoot
+        assertEquals(
+            "a folded run must share the transcript's inset",
+            single.left,
+            grouped.left,
+            1f,
+        )
+    }
 }
