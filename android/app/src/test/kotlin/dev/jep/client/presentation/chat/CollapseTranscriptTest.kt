@@ -167,4 +167,35 @@ class CollapseTranscriptTest {
         val group = rows.filterIsInstance<Row.Tools>().single()
         assertEquals("Edited 3 files +16 -3", toolGroupSummary(group.tools))
     }
+
+    @Test
+    fun `back-to-back thinking opens as one disclosure`() {
+        val a = ChatPart.Reasoning("first thought", 1_000)
+        val b = ChatPart.Reasoning("second thought", 2_000)
+        val rows = collapseTranscript(listOf(a, b, text("answer")))
+        assertEquals(2, rows.size)
+        val merged = (rows[0] as TranscriptRow.One).part as ChatPart.Reasoning
+        assertEquals("first thought\n\nsecond thought", merged.text)
+        assertEquals(3_000L, merged.durationMs)
+        // the merged row still knows the part that streams last
+        assertTrue((rows[0] as TranscriptRow.One).sources.last() === b)
+    }
+
+    @Test
+    fun `an action between two thoughts keeps them apart, and a blank one is invisible`() {
+        val rows = collapseTranscript(
+            listOf(ChatPart.Reasoning("one"), ChatPart.Reasoning("  "), tool("bash", "t1"), ChatPart.Reasoning("two")),
+        )
+        assertEquals(
+            listOf("one", "t1", "two"),
+            rows.map { r -> when (val p = (r as TranscriptRow.One).part) { is ChatPart.Reasoning -> p.text; is ChatPart.Tool -> p.id.orEmpty(); else -> "?" } },
+        )
+    }
+
+    @Test
+    fun `a thought with no recorded duration makes the merged one unknown, not short`() {
+        val merged = (collapseTranscript(listOf(ChatPart.Reasoning("a", 1_000), ChatPart.Reasoning("b"))).single() as TranscriptRow.One).part
+        assertEquals(null, (merged as ChatPart.Reasoning).durationMs)
+    }
 }
+

@@ -203,6 +203,9 @@ class ChatViewModel(
         // the banner needs the model's name and context window up front, not
         // only when Settings is opened
         loadModels()
+        // the status line's spend is the whole conversation's, from the same
+        // place the usage sheet reads it
+        refreshUsage()
         // The push feed is a convenience, not the record: it drops on a daemon
         // restart, a network change, a backgrounded radio. A chat that stops
         // updating is worse than one that reconnects a moment late, so we
@@ -337,6 +340,7 @@ class ChatViewModel(
             is ChatEvent.Quiet -> {
                 onRead()
                 refresh()
+                refreshUsage()
                 _state.update { it.copy(sending = false, live = null).standDownAsk() }
             }
             is ChatEvent.Lost -> _state.update { it.copy(lost = true) }
@@ -655,6 +659,13 @@ class ChatViewModel(
                 .onFailure { err ->
                     _state.update { it.copy(agent = before, notice = "couldn't set the agent: ${err.message}") }
                 }
+        }
+    }
+
+    /** quietly: the status line can do without it, and says nothing when absent */
+    private fun refreshUsage() {
+        viewModelScope.launch {
+            runCatching { repo.usage(sessionId) }.onSuccess { u -> _state.update { it.copy(usage = u) } }
         }
     }
 

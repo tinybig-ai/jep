@@ -434,7 +434,7 @@ fun ChatScreen(
 ) {
     val state by vm.state.collectAsState()
     var retainedStatus by remember(vm.sessionId) { mutableStateOf(StatusSummary()) }
-    val currentStatus = remember(state.messages, state.models) { statusSummary(state) }
+    val currentStatus = remember(state.messages, state.models, state.usage) { statusSummary(state) }
     val visibleStatus = retainStatus(retainedStatus, currentStatus)
     SideEffect {
         if (retainedStatus != visibleStatus) retainedStatus = visibleStatus
@@ -1939,7 +1939,7 @@ private fun AssistantBody(
                 is TranscriptRow.Group -> ToolGroupRow(row.tools)
                 is TranscriptRow.One -> PartView(
                     row.part,
-                    streaming = responding && row.part === message.parts.last(),
+                    streaming = responding && row.sources.last() === message.parts.last(),
                 )
             }
         }
@@ -2081,7 +2081,9 @@ private fun ToolGroupRow(tools: List<ChatPart.Tool>) {
  * and collapsing that would throw away the thing you were reading for.
  */
 internal sealed interface TranscriptRow {
-    data class One(val part: ChatPart) : TranscriptRow
+    /** `sources` are the parts it stands for: itself, or the run of thinking
+     *  blocks it merged (so "is this the part still streaming" can be asked) */
+    data class One(val part: ChatPart, val sources: List<ChatPart> = listOf(part)) : TranscriptRow
     data class Group(val tools: List<ChatPart.Tool>) : TranscriptRow
 }
 
@@ -2095,8 +2097,35 @@ internal fun collapseTranscript(parts: List<ChatPart>): List<TranscriptRow> {
         if (run.size > 2) out += TranscriptRow.Group(run.toList()) else run.forEach { out += TranscriptRow.One(it) }
         run = mutableListOf()
     }
+    // Back-to-back thinking is one thought: a model that reasons in several
+    // blocks between two actions showed a stack of "Thought for 2s" rows, each
+    // to be opened on its own. They open as one disclosure now.
+    var thinking = mutableListOf<ChatPart.Reasoning>()
+    fun flushThinking() {
+        when (thinking.size) {
+            0 -> Unit
+            1 -> out += TranscriptRow.One(thinking[0])
+            else -> {
+                val took = thinking.mapNotNull { it.durationMs }
+                val merged = ChatPart.Reasoning(
+                    thinking.joinToString("\n\n") { it.text.trim() },
+                    if (took.size == thinking.size) took.sum() else null,
+                )
+                out += TranscriptRow.One(merged, thinking.toList())
+            }
+        }
+        thinking = mutableListOf()
+    }
     for (part in parts) {
         val tool = part as? ChatPart.Tool
+        if (part is ChatPart.Reasoning) {
+            flush()
+            // a blank block (reasoning tokens with no readable text) neither
+            // shows nor breaks a run
+            if (part.text.isNotBlank()) thinking.add(part)
+            continue
+        }
+        flushThinking()
         if (tool == null) {
             flush()
             out += TranscriptRow.One(part)
@@ -2107,6 +2136,7 @@ internal fun collapseTranscript(parts: List<ChatPart>): List<TranscriptRow> {
             run.add(tool)
         }
     }
+    flushThinking()
     flush()
     return out
 }
@@ -2114,6 +2144,9 @@ internal fun collapseTranscript(parts: List<ChatPart>): List<TranscriptRow> {
 private val TOOL_VERB = mapOf(
     "read" to "Read", "edit" to "Edited", "write" to "Wrote", "bash" to "Ran",
     "grep" to "Searched", "glob" to "Found", "list" to "Listed", "patch" to "Patched",
+    // Claude Code's MultiEdit lowercases to "multiedit"; opencode spells it
+    // "multi-edit". Both are edits.
+    "multiedit" to "Edited", "multi-edit" to "Edited",
 )
 
 /** "Read 17 files", "Edited 6 files +128 -94", "Ran 3 commands" */
@@ -2121,7 +2154,7 @@ internal fun toolGroupSummary(tools: List<ChatPart.Tool>): String {
     val kind = tools[0].name.lowercase()
     val verb = TOOL_VERB[kind] ?: kind.replaceFirstChar { it.uppercase() }
     val noun = when (kind) {
-        "read", "edit", "write", "patch" -> "files"
+        "read", "edit", "write", "patch", "multiedit", "multi-edit" -> "files"
         "bash" -> "commands"
         "grep" -> "searches"
         "glob" -> "matches"
@@ -2344,7 +2377,7 @@ private fun ToolRow(part: ChatPart.Tool) {
         ) {
             Text(
                 when (part.name.lowercase()) {
-                    "write", "edit", "multi-edit" -> "Edited " + (title?.substringAfterLast('/') ?: "file")
+                    "write", "edit", "multi-edit", "multiedit" -> "Edited " + (title?.substringAfterLast('/') ?: "file")
                     "read" -> "Read " + (title?.substringAfterLast('/') ?: "file")
                     "bash", "run" -> "Ran a command"
                     else -> "Used ${part.name.ifEmpty { "tool" }}"
@@ -2898,8 +2931,13 @@ internal fun statusSummary(state: ChatViewModel.UiState): StatusSummary {
         c.all.firstOrNull { it.ref == ref }?.contextLimit?.takeIf { it > 0 }
             ?: c.contextLimit.takeIf { it > 0 }
     }
+    // Spend is the conversation's, not the window's: summing only the messages
+    // loaded here read $0.04 beside a usage sheet saying $1.01. The gateway's
+    // /usage (the sheet's source) is the one answer; the window is only a
+    // stand-in until it arrives.
     val costs = turns.mapNotNull { it.cost }
-    val spend = costs.sum().takeIf { costs.isNotEmpty() && it > 0.0 }
+    val spend = state.usage?.cost?.takeIf { it > 0.0 }
+        ?: costs.sum().takeIf { costs.isNotEmpty() && it > 0.0 }
     return StatusSummary(model?.takeIf { it.isNotBlank() }, used, limit, spend)
 }
 
@@ -2909,11 +2947,9 @@ internal fun retainStatus(previous: StatusSummary, current: StatusSummary): Stat
         model = current.model ?: previous.model,
         used = current.used ?: previous.used,
         limit = current.limit ?: previous.limit,
-        spend = when {
-            current.spend == null -> previous.spend
-            previous.spend == null -> current.spend
-            else -> maxOf(previous.spend, current.spend)
-        },
+        // the latest answer stands; keeping the largest ever seen is what
+        // pinned a stale figure once a bigger one had flashed past
+        spend = current.spend ?: previous.spend,
     )
 
 /**
