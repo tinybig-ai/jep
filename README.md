@@ -109,9 +109,10 @@ npm start
 > [docs/PROCESSES.md](docs/PROCESSES.md). For a quick dev loop, `npm start`
 > is all you need.
 
-> The daemon itself is plain Node and runs on Linux as well: CI boots it on
-> Debian in mock mode on every push. Only the auto-installer above is
-> macOS-specific — on Linux, run `npm start` under your own service manager.
+> On Linux, `sh scripts/install-linux.sh` installs it as a **systemd user
+> service** that restarts on a crash and, with `loginctl enable-linger`, comes
+> back after a reboot. Logs: `journalctl --user -u jep-tg -f`. CI boots the
+> daemon on Debian in mock mode, and has systemd verify the unit, on every push.
 
 ### 3. Pick a client
 

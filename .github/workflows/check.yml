@@ -58,3 +58,23 @@ jobs:
             grep -q "mode: MOCK" /tmp/mock.log
             grep -q "Paired" /tmp/mock.log
             echo "clean-machine run OK"
+
+  linux-unit:
+    # scripts/install-linux.sh writes a systemd user unit; systemd itself checks
+    # it here, since the machines it is written on (macOS) have no systemd
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+      - name: Render the unit and verify it
+        run: |
+          set -e
+          out=$(JEP_DRY_RUN=1 JEP_TG_TOKEN=0:ci sh scripts/install-linux.sh)
+          mkdir -p "$HOME/.local/share/jep-tg"
+          printf '%s\n' "$out" | awk '/^# .*jep-tg\.service$/{f=1;next} /^# .*jep-tg\.env/{f=0} f' > /tmp/jep-tg.service
+          printf 'JEP_TG_TOKEN=0:ci\n' > "$HOME/.local/share/jep-tg/jep-tg.env"
+          cat /tmp/jep-tg.service
+          systemd-analyze verify /tmp/jep-tg.service

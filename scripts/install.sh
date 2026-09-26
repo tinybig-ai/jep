@@ -28,7 +28,7 @@ token="${JEP_TG_TOKEN:-}"
 say() { printf '%s\n' "$*"; }
 die() { printf 'install: %s\n' "$*" >&2; exit 1; }
 
-[ "$(uname -s)" = "Darwin" ] || die "launchd is macOS-only; run src/app/tg.ts under your own supervisor instead"
+[ "$(uname -s)" = "Darwin" ] || die "launchd is macOS-only; on Linux run scripts/install-linux.sh (a systemd user service)"
 [ -n "$node" ] || die "no node on PATH — set JEP_NODE=/path/to/node"
 case $("$node" -p 'process.versions.node.split(".")[0]') in
   1[0-9]|2[01]) die "node $("$node" -p 'process.versions.node') is too old for --experimental-strip-types (need 22+)" ;;
