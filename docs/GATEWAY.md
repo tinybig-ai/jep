@@ -96,9 +96,11 @@ four things can end a turn the harness stopped talking about:
 
 The ceilings: `JEP_TURN_IDLE_MS` (default 5m) for a turn awaiting tokens, and
 `JEP_TOOL_IDLE_MS` (default 20m) while the harness reports a running tool,
-because a build or a test run is legitimately silent for minutes. Both are the
-same knobs the Telegram client uses, so the two clients give up at the same
-moment. A turn parked on an unanswered permission ask is *not* stalled — it is
+because a build or a test run is legitimately silent for minutes. A tool that
+has run for `JEP_TOOL_WILDERNESS_MS` (default 6m) with no event at all is
+wedged, and the turn is given up on then, naming it. The rule lives in
+`core/liveness.ts`, which the Telegram client uses too, so the two give up at
+the same moment. A turn parked on an unanswered permission ask is *not* stalled — it is
 waiting on a human — and no ceiling applies until the ask is answered or stood
 down.
 

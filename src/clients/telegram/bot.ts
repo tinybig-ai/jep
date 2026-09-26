@@ -29,6 +29,7 @@ import { IMAGE_RE, VOICE_MAX_SEC, audioOf, imageExt, sniffAudioExt, sniffImageEx
 import type { AudioIn } from "./media.ts"
 import { commits as gitCommits, fileDiff, fullDiff, isRepo, push as gitPush, repoStatus } from "../../core/git.ts"
 import type { GitFile, GitStatus } from "../../core/git.ts"
+import { judgeTurn, LIVENESS } from "../../core/liveness.ts"
 import { clipTitle, fmtCount, fmtDuration, fmtHome, fmtWsPath, timeAgo } from "./fmt.ts"
 import {
   GIT_COMMITS,
@@ -190,28 +191,9 @@ interface GitView {
 
 const MAX_MSG = 4000
 const MAX_LIST = 10
-// How long a turn may go without producing *anything* before we call it wedged.
-// This replaces an absolute ceiling: a long agent turn is normal — a refactor
-// can stream tool calls for half an hour and every one of those resets the
-// clock — but total silence is not. Only a turn that has emitted no events at
-// all for this long gets abandoned.
-const TURN_IDLE_MS = Number(process.env.JEP_TURN_IDLE_MS ?? "") || 5 * 60_000
-// While a tool part is in `running` status the harness is executing known-live
-// work — tests, builds, subagents — that may sit quiet far longer than a
-// generating model ever would. Silence behind a running tool is not a stall,
-// so it gets its own, much longer ceiling.
-const TOOL_IDLE_MS = Number(process.env.JEP_TOOL_IDLE_MS ?? "") || 20 * 60_000
-// The exception: a tool that has been `running` for this long WITHOUT emitting
-// anything at all is wedged, not working — e.g. opencode's bash tool hanging on
-// a launchctl subprocess (seen twice), or a git op stuck on a failed remote.
-// Streaming output keeps the idle clock reset, so a legit long tool never trips
-// this; only a tool that is both old and perfectly silent does. Lower than
-// TOOL_IDLE_MS so the failure fails fast, and it names the tool it killed.
-const TOOL_WILDERNESS_MS = Number(process.env.JEP_TOOL_WILDERNESS_MS ?? "") || 6 * 60_000
-// How long after the harness's "session.idle" to wait for the blocking prompt()
-// call to return before finalizing from the streamed parts. Idle means the turn
-// is done, so a hung request shouldn't get more than this to come back.
-const IDLE_GRACE_MS = 5_000
+// When a quiet turn is given up on — the turn and tool ceilings, and when a
+// silent tool counts as wedged — is core/liveness.ts, shared with the gateway.
+const IDLE_GRACE_MS = LIVENESS.idleGraceMs
 // a shallow clone of anything sane is well under this; past it, assume the
 // remote is wedged rather than leaving the chat waiting indefinitely
 const CLONE_TIMEOUT_MS = 10 * 60_000
@@ -2069,7 +2051,7 @@ export class TelegramBot {
     // depends on what the turn is doing (see the two ceilings below).
     let lastActivity = Date.now()
     let idleAbort = false
-    let stalledAfter = TURN_IDLE_MS
+    let stalledAfter = LIVENESS.turnIdleMs
     // set when the watchdog aborts a wilderness-stalled tool, so the abandon
     // notice can name the wedged tool instead of a generic stall
     let wildernessReason = ""
@@ -2086,26 +2068,23 @@ export class TelegramBot {
         ac.abort()
         return
       }
-      // a pending permission ask means the turn is waiting on the human, not
-      // stalled — no ceiling applies until it is answered
-      if (c.pending.size > 0) return
-      const toolRunning = liveParts.some((p) => p.kind === "tool" && p.status === "running")
-      let ceiling = toolRunning ? TOOL_IDLE_MS : TURN_IDLE_MS
-      const elapsed = Date.now() - lastActivity
-      // wilderness: a running tool that is both old and perfectly silent is
-      // wedged; failing fast names the culprit instead of burning TOOL_IDLE_MS
-      if (toolRunning) {
-        for (const p of liveParts) {
-          if (p.kind !== "tool" || p.status !== "running" || typeof p.startedAt !== "number") continue
-          const age = Date.now() - p.startedAt
-          if (age >= TOOL_WILDERNESS_MS && elapsed >= TOOL_WILDERNESS_MS) {
-            wildernessReason = `⚠️ tool ${p.name} ran ${Math.round(age / 60_000)}m with no progress — turn abandoned`
-            ceiling = Math.min(ceiling, TOOL_WILDERNESS_MS)
-            break
-          }
-        }
+      const running = liveParts.flatMap((p) =>
+        p.kind === "tool" && p.status === "running" ? [{ name: p.name, ...(typeof p.startedAt === "number" ? { startedAt: p.startedAt } : {}) }] : [],
+      )
+      const toolRunning = running.length > 0
+      const v = judgeTurn({
+        now: Date.now(),
+        lastActivity,
+        // a pending permission ask means the turn is waiting on the human
+        waitingOnHuman: c.pending.size > 0,
+        tools: running,
+      })
+      if (!v.stalled) return
+      const elapsed = v.elapsedMs
+      const ceiling = v.ceilingMs
+      if (v.wedgedMs !== undefined) {
+        wildernessReason = `⚠️ tool ${v.tool} ran ${Math.round(v.wedgedMs / 60_000)}m with no progress — turn abandoned`
       }
-      if (elapsed < ceiling) return
       stalledAfter = ceiling
       idleAbort = true
       // this only fires when NOTHING came back from the event stream for the

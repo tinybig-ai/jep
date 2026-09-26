@@ -13,6 +13,7 @@ import { dirname, isAbsolute, join, resolve, sep } from "node:path"
 import type { HarnessAdapter, HarnessSettingSpec, SessionImport, Terminal } from "../../core/ports.ts"
 import type { PairingAdmin } from "../../core/pairing.ts"
 import { pushFor, UnregisteredToken, type PushNotifier } from "../../core/push.ts"
+import { judgeTurn, LIVENESS, type LivenessConfig } from "../../core/liveness.ts"
 import { readClaudeMcp, readCodexMcp, readOpencodeMcp, writeClaudeProjectEnabled, writeCodexMcpEnabled, writeOpencodeMcpEnabled } from "../../core/mcpconfig.ts"
 import { listSkills, skillDirsFor, writeSkillModelInvocation } from "../../core/skills.ts"
 import type { AskRequest, DomainEvent, HarnessError, Message } from "../../core/types.ts"
@@ -59,7 +60,7 @@ export interface GatewayDeps {
   /** turn-liveness ceilings, for an operator who wants them shorter or longer
    * than the JEP_TURN_IDLE_MS / JEP_TOOL_IDLE_MS defaults (and for tests, which
    * cannot wait out five real minutes) */
-  liveness?: { turnIdleMs?: number; toolIdleMs?: number; idleGraceMs?: number; tickMs?: number }
+  liveness?: Partial<LivenessConfig>
 }
 
 export interface GatewayHandle {
@@ -85,19 +86,8 @@ const HARNESS_SETTINGS_FILE = "gateway-harness-settings.json"
 const ASK_LEDGER_MAX = 50
 const BODY_MAX = 1 << 20
 
-// Turn liveness. A gateway turn runs with no absolute deadline (timeoutMs: 0),
-// because any fixed ceiling eventually cuts a real half-hour turn off mid-work.
-// What replaces it is inactivity: these are the same ceilings — and the same
-// env knobs — the Telegram client uses, so both presentation adapters give up
-// on a stalled turn at the same moment.
-const TURN_IDLE_MS = Number(process.env.JEP_TURN_IDLE_MS ?? "") || 5 * 60_000
-// a running tool is allowed to be silent for far longer than a turn waiting on
-// tokens: a build or a test run legitimately says nothing for many minutes
-const TOOL_IDLE_MS = Number(process.env.JEP_TOOL_IDLE_MS ?? "") || 20 * 60_000
-// how long after the harness's "session.idle" to keep waiting for the blocking
-// prompt() call before finalizing from the transcript instead
-const IDLE_GRACE_MS = 5_000
-const WATCHDOG_TICK_MS = 15_000
+// Turn liveness — when a quiet turn is given up on — is core/liveness.ts,
+// shared with the Telegram client so both give up at the same moment.
 
 interface AskRecord {
   ask: AskRequest
@@ -509,10 +499,8 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   // help-files the phone needs, resolved as events and commands arrive
   const sessionAdapters = new Map<string, HarnessAdapter>()
   const askSessions = new Map<string, string>()
-  const turnIdleMs = deps.liveness?.turnIdleMs ?? TURN_IDLE_MS
-  const toolIdleMs = deps.liveness?.toolIdleMs ?? TOOL_IDLE_MS
-  const idleGraceMs = deps.liveness?.idleGraceMs ?? IDLE_GRACE_MS
-  const watchdogTickMs = deps.liveness?.tickMs ?? WATCHDOG_TICK_MS
+  const liveness: LivenessConfig = { ...LIVENESS, ...deps.liveness }
+  const idleGraceMs = liveness.idleGraceMs
   // Asks still waiting on a human, per session. A turn parked on a permission
   // prompt is not stalled — it is being polite — so the watchdog holds its fire
   // until the ask is answered or stood down.
@@ -814,31 +802,22 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         void adapter?.abort(id).catch(() => {})
         continue
       }
-      // parked on a permission ask: waiting on the human, not stalled
-      if ((asksBySession.get(id)?.size ?? 0) > 0) continue
-      const elapsed = Date.now() - st.lastActivity
-      // the ceiling depends on what the turn is doing: a running tool may
-      // legitimately be silent for many minutes, a turn awaiting tokens may not
-      let tool: string | undefined
-      let ceiling = turnIdleMs
-      if (st.runningTools.size > 0) {
-        ceiling = toolIdleMs
-        // the longest-running one is the culprit worth naming
-        let oldest = Infinity
-        for (const t of st.runningTools.values()) {
-          if (t.startedAt >= oldest) continue
-          oldest = t.startedAt
-          tool = t.name
-        }
-      }
-      if (elapsed < ceiling) continue
+      const v = judgeTurn({
+        now: Date.now(),
+        lastActivity: st.lastActivity,
+        // parked on a permission ask: waiting on the human, not stalled
+        waitingOnHuman: (asksBySession.get(id)?.size ?? 0) > 0,
+        tools: [...st.runningTools.values()],
+        config: liveness,
+      })
+      if (!v.stalled) continue
       console.error(
-        `[watchdog] turn stalled ${Math.round(elapsed / 1000)}s (ceiling ${Math.round(ceiling / 1000)}s, tools=${st.runningTools.size}, gateway session ${id})`,
+        `[watchdog] turn stalled ${Math.round(v.elapsedMs / 1000)}s (ceiling ${Math.round(v.ceilingMs / 1000)}s, tools=${st.runningTools.size}${v.wedgedMs !== undefined ? `, ${v.tool} wedged ${Math.round(v.wedgedMs / 60_000)}m` : ""}, gateway session ${id})`,
       )
-      endTurn(id, st, { kind: "stall", elapsedMs: elapsed, ...(tool ? { tool } : {}) }, "watchdog-stall")
+      endTurn(id, st, { kind: "stall", elapsedMs: v.elapsedMs, ...(v.tool ? { tool: v.tool } : {}) }, "watchdog-stall")
       void adapter?.abort(id).catch(() => {})
     }
-  }, watchdogTickMs)
+  }, liveness.tickMs)
   watchdogTimer.unref()
 
   async function runNext(id: string): Promise<void> {
