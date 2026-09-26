@@ -209,6 +209,10 @@ export type DomainEvent =
   | { type: "part.updated"; sessionID: string; messageID: string; partID: string; partType: string; part?: Part }
   | { type: "part.delta"; sessionID: string; messageID: string; partID: string; text: string; partType?: string }
   | { type: "session.idle"; sessionID: string }
+  /** The conversation's record changed outside a turn this daemon is running —
+   *  written from the desktop, say. A client showing it reads it again; the
+   *  event carries nothing else, so it costs next to nothing to send. */
+  | { type: "session.changed"; sessionID: string }
   | { type: "ask.requested"; sessionID: string; ask: AskRequest }
   /** That ask is over — answered (here or on another client), withdrawn, or
    *  outlived by the turn that raised it. Without this, `ask.requested` was the

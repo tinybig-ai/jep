@@ -1040,5 +1040,19 @@ class ChatScreenTest {
         rule.onNodeWithTag("composer").assertIsNotFocused()
         gate.complete(Unit)
     }
+
+    @Test
+    fun a_conversation_continued_elsewhere_appears_without_a_new_message() {
+        // The desktop answered in this conversation while the phone had it open.
+        // Nothing was sent from here, so nothing polls: the daemon's
+        // session.changed is what brings it in.
+        val repo = FakeChatRepository(messages = manyMessages(2))
+        val vm = ChatViewModel(repo, "s1", "T")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(5_000) { repo.subscribed && vm.state.value.messages.isNotEmpty() }
+        repo.historyOverride = manyMessages(2) + ChatMessage("d1", Role.ASSISTANT, 10, listOf(ChatPart.Text("written on the desktop")))
+        rule.runOnUiThread { repo.emitEvent(ChatEvent.Changed("s1")) }
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("written on the desktop").fetchSemanticsNodes().isNotEmpty() }
+    }
 }
 

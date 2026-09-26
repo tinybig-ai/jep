@@ -73,6 +73,7 @@ class GatewayEventStream(
                 ChatEvent.MessageSeen(sid, mid, role?.let { if (it == "user") dev.jep.client.domain.model.Role.USER else dev.jep.client.domain.model.Role.ASSISTANT })
             }
             "session.idle" -> ChatEvent.Quiet(sid)
+            "session.changed" -> ChatEvent.Changed(sid)
             "ask.requested" -> ask?.let { ChatEvent.Asked(it.sessionID.ifEmpty { sid }, it.toDomain()) }
             "ask.resolved" -> askID?.let { ChatEvent.AskResolved(sid, it) }
             "session.error" -> ChatEvent.Failed(sid, message ?: "the harness failed")

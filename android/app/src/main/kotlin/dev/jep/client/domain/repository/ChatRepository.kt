@@ -73,6 +73,10 @@ sealed interface ChatEvent {
 
     data class Quiet(override val sessionId: String) : ChatEvent
 
+    /** the record changed outside a turn this client follows (the desktop
+     * continued the conversation): read it again */
+    data class Changed(override val sessionId: String) : ChatEvent
+
     data class Asked(override val sessionId: String, val ask: Ask) : ChatEvent
 
     /** that ask is over — answered here or anywhere else, withdrawn, or

@@ -1,7 +1,7 @@
 import { spawn, execFile, type ChildProcess } from "node:child_process"
 import net from "node:net"
 import { mkdir, readFile, readdir, rm, mkdtemp, writeFile } from "node:fs/promises"
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, readFileSync, watch, type FSWatcher } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -83,6 +83,8 @@ export const CLAUDE_SETTINGS: HarnessSettingSpec[] = [
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude"
 const CLAUDE_HOME = process.env.CLAUDE_HOME ?? path.join(os.homedir(), ".claude")
 const PROJECTS_DIR = path.join(CLAUDE_HOME, "projects")
+// how long a transcript must stay quiet before its change is announced
+const CHANGE_QUIET_MS = Number(process.env.JEP_CHANGE_QUIET_MS ?? "") || 800
 
 // The MCP server Claude Code calls in place of a permission prompt (see
 // claude-ask-mcp.mjs). Spawned by Claude Code, not by us, which is why it is a
@@ -117,6 +119,10 @@ export class ClaudeAdapter implements HarnessAdapter {
   #running = new Map<string, ChildProcess>()
   #bus = new Set<(evt: DomainEvent) => void>()
   #closed = false
+  // the transcripts directory, watched once something is listening, so a
+  // conversation continued elsewhere (the desktop) reaches the phone on its own
+  #watcher: FSWatcher | null = null
+  #changed = new Map<string, ReturnType<typeof setTimeout>>()
   // parsed transcript heads, keyed by file — re-reading every session on each
   // listSessions would make /ls crawl once a project has a few hundred
   #metaCache = new Map<string, { mtime: number; meta: TranscriptMeta | null }>()
@@ -769,6 +775,7 @@ export class ClaudeAdapter implements HarnessAdapter {
       wake?.()
     }
     this.#bus.add(push)
+    this.#watchTranscripts()
     try {
       while (!this.#closed && !signal?.aborted) {
         while (queue.length) {
@@ -784,6 +791,38 @@ export class ClaudeAdapter implements HarnessAdapter {
       }
     } finally {
       this.#bus.delete(push)
+    }
+  }
+
+  // A transcript written by anything but a turn this adapter is running is
+  // news to a client that has the conversation open: say so, once per burst
+  // of writes. Claude Code appends a line per event, so a desktop turn is
+  // hundreds of writes; the quiet period folds them into a few notices.
+  #watchTranscripts(): void {
+    if (this.#watcher || this.#closed || !existsSync(PROJECTS_DIR)) return
+    try {
+      this.#watcher = watch(PROJECTS_DIR, { recursive: true }, (_event, file) => {
+        const name = file ? path.basename(String(file)) : ""
+        if (!name.endsWith(".jsonl")) return
+        const native = name.slice(0, -".jsonl".length)
+        // our own turn streams live already; its writes are not news
+        if (this.#running.has(native)) return
+        clearTimeout(this.#changed.get(native))
+        this.#changed.set(
+          native,
+          setTimeout(() => {
+            this.#changed.delete(native)
+            this.#metaCache.clear()
+            this.#emit({ type: "session.changed", sessionID: toInternalId(native) })
+          }, CHANGE_QUIET_MS),
+        )
+      })
+      this.#watcher.on("error", () => {
+        this.#watcher?.close()
+        this.#watcher = null
+      })
+    } catch (err) {
+      console.error(`[claude] cannot watch ${PROJECTS_DIR}: ${(err as Error)?.message ?? err}`)
     }
   }
 
@@ -924,6 +963,10 @@ export class ClaudeAdapter implements HarnessAdapter {
 
   async close(): Promise<void> {
     this.#closed = true
+    this.#watcher?.close()
+    this.#watcher = null
+    for (const t of this.#changed.values()) clearTimeout(t)
+    this.#changed.clear()
     for (const child of this.#running.values()) child.kill("SIGTERM")
     this.#running.clear()
     // an unanswered ask outlives nothing: the socket goes, and every parked

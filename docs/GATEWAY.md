@@ -116,6 +116,9 @@ forwarded as-is:
 - `part.delta`: live streaming text (append to the part it names)
 - `part.updated`: a part finalized (tool call landed, text settled)
 - `session.idle`: the harness went quiet (turn root stop marker)
+- `session.changed`: the conversation's record changed outside a turn this
+  daemon runs (a Claude conversation continued on the desktop); read `/history`
+  again
 - `ask.requested`: an ask; options ride along, answer via `/respond`. It may
   carry `messageID`/`callID` (the tool call it holds up, for placing the card)
   and `at` (when it was raised, on the harness's clock)

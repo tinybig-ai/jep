@@ -353,6 +353,14 @@ class ChatViewModel(
                 _state.update { it.copy(sending = false, live = null).standDownAsk() }
             }
             is ChatEvent.Lost -> _state.update { it.copy(lost = true) }
+            // written elsewhere (a desktop turn in the same conversation): the
+            // record is the news, so read it — the hash guard makes a read that
+            // finds nothing new cost a few bytes. A turn this screen is
+            // following refreshes on its own.
+            is ChatEvent.Changed -> if (!_state.value.sending && _state.value.live == null) {
+                refresh()
+                refreshUsage()
+            }
             is ChatEvent.MessageSeen -> {
                 evt.role?.let { roles[evt.messageId] = it }
                 // learning mid-turn that the row we're streaming is the user's

@@ -670,7 +670,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           }
           // the turn is over and the record is settled: drop the snapshot so the
           // next read is the finished one
-          if (evt.type === "session.idle" || evt.type === "turn.aborted") msgCache.delete(evt.sessionID)
+          if (evt.type === "session.idle" || evt.type === "turn.aborted" || evt.type === "session.changed") msgCache.delete(evt.sessionID)
           // The harness says the turn is done. prompt() normally returns right
           // about now — but that POST can hang even with the answer fully
           // streamed, which pinned the turn (and everything queued behind it)
