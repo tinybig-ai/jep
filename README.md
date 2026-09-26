@@ -109,6 +109,12 @@ npm start
 > [docs/PROCESSES.md](docs/PROCESSES.md). For a quick dev loop, `npm start`
 > is all you need.
 
+> Both installers also register a small Claude Code hook
+> (`scripts/claude-handoff-hook.mjs`): when you continue a Claude conversation
+> from your phone, a desktop window that still has it open stops your next
+> message and says to run `claude -c`, instead of forking the conversation.
+> `JEP_NO_CLAUDE_HOOK=1` skips it.
+
 > On Linux, `sh scripts/install-linux.sh` installs it as a **systemd user
 > service** that restarts on a crash and, with `loginctl enable-linger`, comes
 > back after a reboot. Logs: `journalctl --user -u jep-tg -f`. CI boots the

@@ -98,6 +98,9 @@ if ! loginctl show-user "$(id -un)" -p Linger 2>/dev/null | grep -q yes; then
   say "  sudo loginctl enable-linger $(id -un)"
 fi
 
+# a desktop Claude Code window that missed a turn sent from the phone says so
+JEP_NODE="$node" "$node" "$root/scripts/install-claude-hook.mjs" || say "note: could not register the Claude Code hook"
+
 sleep 2
 if systemctl --user is-active --quiet "$unit"; then
   say "jep is running. Logs: journalctl --user -u $unit -f"

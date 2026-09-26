@@ -164,6 +164,9 @@ while ! launchctl bootstrap "gui/$uid" "$plist" 2>/dev/null; do
   sleep 1
 done
 
+# a desktop Claude Code window that missed a turn sent from the phone says so
+JEP_NODE="$node" "$node" "$root/scripts/install-claude-hook.mjs" || say "note: could not register the Claude Code hook"
+
 n=0
 while [ "$(wc -c < "$log" 2>/dev/null || echo 0)" -le "$before" ] && [ "$n" -lt 20 ]; do sleep 1; n=$((n + 1)); done
 say ""
