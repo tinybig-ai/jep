@@ -304,6 +304,24 @@ test("a question ask is answered by its label, on the questions route", async ()
   }
 })
 
+test("another harness's session id is not ours, and is never sent to opencode", async () => {
+  let hits = 0
+  const server = createServer((_req, res) => {
+    hits++
+    res.writeHead(500)
+    res.end()
+  })
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r))
+  const port = (server.address() as { port: number }).port
+  try {
+    const adapter = new OpenCodeAdapter({} as any, WS, `http://127.0.0.1:${port}`)
+    assert.equal(await adapter.getSession("claude://9f93ad52-b349-4545-8aa5-78f240d48c1f"), null)
+    assert.equal(hits, 0)
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()))
+  }
+})
+
 test("an ask settled anywhere reaches the clients as ask.resolved", async () => {
   // Answered in opencode's own TUI, on another client, or rejected by opencode
   // when the turn ended: without this the card stood on the phone, holding the

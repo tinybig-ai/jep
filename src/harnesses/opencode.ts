@@ -476,6 +476,10 @@ export class OpenCodeAdapter implements HarnessAdapter {
   }
 
   async getSession(id: string): Promise<SessionSummary | null> {
+    // the gateway finds a session's owner by asking every adapter; another
+    // harness's id is simply not ours, and sending it on made opencode log an
+    // error per workspace on every lookup
+    if (id.includes("://") && !id.startsWith(`${HARNESS_NS}://`)) return null
     try {
       const s = await this.#json(`/session/${encodeURIComponent(toNativeId(id))}`)
       return this.#toSummary(s)
