@@ -44,19 +44,18 @@ await writeFile(bin, `#!/bin/sh\n[ "$1" = "--help" ] && exit 0\ncat <<'EOF'\n${l
 await chmod(bin, 0o755)
 process.env.CLAUDE_BIN = bin
 process.env.CLAUDE_HOME = dir // no settings.json: nothing configured
-process.env.JEP_DATA_HOME = dir // turn stamps land here, never in the real data home
 
 const { ClaudeAdapter } = await import("../src/harnesses/claude.ts")
 
 test("the last call's usage is the context, not the turn's sum", async () => {
-  const a = new ClaudeAdapter(dir)
+  const a = new ClaudeAdapter(dir, { dataHome: dir })
   const s = await a.createSession("t")
   const m = await a.prompt(s.id, "hi")
   assert.equal(m.tokens?.cache.read, 40_000)
 })
 
 test("a model's context window is learned from the turn that ran on it", async () => {
-  const a = new ClaudeAdapter(dir)
+  const a = new ClaudeAdapter(dir, { dataHome: dir })
   const before = await a.capabilities()
   assert.equal(before.get("claude/claude-haiku-4-5")?.contextLimit, 200_000, "the 200K default before any turn")
   assert.equal(await a.defaultModel(), null)
@@ -74,7 +73,7 @@ test("a model's context window is learned from the turn that ran on it", async (
 test("a 1M variant says so in its id", async () => {
   process.env.JEP_CLAUDE_MODELS = "claude-opus-5[1m]"
   try {
-    const caps = await new ClaudeAdapter(dir).capabilities()
+    const caps = await new ClaudeAdapter(dir, { dataHome: dir }).capabilities()
     assert.equal(caps.get("claude/claude-opus-5[1m]")?.contextLimit, 1_000_000)
   } finally {
     delete process.env.JEP_CLAUDE_MODELS

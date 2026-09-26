@@ -35,7 +35,8 @@ export interface HarnessInfo extends HarnessDef {
 }
 
 export interface HarnessOpts {
-  /** isolated XDG_DATA_HOME, so a harness's sessions never mix with the user's CLI */
+  /** jep's data home: opencode's isolated XDG_DATA_HOME (so its sessions never
+   *  mix with the user's CLI), and where the Claude adapter keeps its state */
   dataHome?: string
 }
 
@@ -98,7 +99,7 @@ function defineHarnesses(opts: HarnessOpts): HarnessDef[] {
       icon: "🔶",
       settings: () => CLAUDE_SETTINGS,
       async start(workspace: string): Promise<HarnessAdapter> {
-        return startClaudeAdapter(workspace)
+        return startClaudeAdapter(workspace, opts.dataHome ? { dataHome: opts.dataHome } : {})
       },
       async available(): Promise<boolean> {
         try {

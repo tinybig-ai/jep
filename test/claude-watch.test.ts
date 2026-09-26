@@ -10,7 +10,6 @@ const home = await mkdtemp(path.join(os.tmpdir(), "jep-claude-watch-"))
 const project = path.join(home, "projects", "-some-project")
 await mkdir(project, { recursive: true })
 process.env.CLAUDE_HOME = home
-process.env.JEP_DATA_HOME = home
 process.env.JEP_CHANGE_QUIET_MS = "100"
 
 const { ClaudeAdapter } = await import("../src/harnesses/claude.ts")

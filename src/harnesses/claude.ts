@@ -19,43 +19,43 @@ const AGENTS: AgentRef[] = []
 // Context windows Claude Code reported, shared by every workspace and kept on
 // disk. Only a finished turn reports one, so held in memory alone they were
 // lost on every daemon restart, and until the next turn ended the status line
-// fell back to 200K and read "461K/200K 231%" for a 1M model.
-const WINDOWS_FILE = process.env.JEP_DATA_HOME ? path.join(process.env.JEP_DATA_HOME, "claude-context-windows.json") : null
-let windows: Map<string, number> | null = null
+// fell back to 200K and read "461K/200K 231%" for a 1M model. One map per file,
+// shared by every adapter on the same data home; with no data home (a probe,
+// a test) they live in memory only.
+const windowStores = new Map<string, Map<string, number>>()
 
-function learnedWindows(): Map<string, number> {
-  if (windows) return windows
-  windows = new Map()
-  if (WINDOWS_FILE) {
-    try {
-      const raw = JSON.parse(readFileSync(WINDOWS_FILE, "utf8")) as Record<string, unknown>
-      for (const [id, w] of Object.entries(raw)) if (typeof w === "number" && w > 0) windows.set(id, w)
-    } catch {
-      /* nothing learned yet */
-    }
+function learnedWindows(file: string | null): Map<string, number> {
+  if (!file) return new Map()
+  const known = windowStores.get(file)
+  if (known) return known
+  const windows = new Map<string, number>()
+  try {
+    const raw = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>
+    for (const [id, w] of Object.entries(raw)) if (typeof w === "number" && w > 0) windows.set(id, w)
+  } catch {
+    /* nothing learned yet */
   }
+  windowStores.set(file, windows)
   return windows
 }
 
-function saveLearnedWindows(): void {
-  if (!WINDOWS_FILE || !windows) return
-  writeFile(WINDOWS_FILE, JSON.stringify(Object.fromEntries(windows), null, 1)).catch(() => {})
+function saveLearnedWindows(file: string | null, windows: Map<string, number>): void {
+  if (!file) return
+  writeFile(file, JSON.stringify(Object.fromEntries(windows), null, 1)).catch(() => {})
 }
 
 // When jep last ran a turn in a Claude conversation, one small file per
-// conversation. The desktop Claude Code hook (scripts/claude-handoff-hook.mjs)
-// reads it: a window that loaded the conversation before this time has not
-// seen what the phone did, and is told to reopen instead of forking the
-// transcript. Best effort: a failed stamp only loses the warning.
-export const REMOTE_TURNS_DIR = path.join(process.env.JEP_DATA_HOME ?? path.join(os.homedir(), ".local", "share", "jep-tg"), "claude-turns")
-
-async function markRemoteTurn(sessionID: string): Promise<void> {
-  if (!/^[\w-]+$/.test(sessionID)) return
+// conversation (<data home>/claude-turns/<session id>). The desktop Claude Code
+// hook (scripts/claude-handoff-hook.mjs) reads it: a window that loaded the
+// conversation before this time has not seen what the phone did, and catches
+// up. Best effort: a failed stamp only loses the catch-up.
+async function markRemoteTurn(dir: string | null, sessionID: string): Promise<void> {
+  if (!dir || !/^[\w-]+$/.test(sessionID)) return
   try {
-    await mkdir(REMOTE_TURNS_DIR, { recursive: true })
-    await writeFile(path.join(REMOTE_TURNS_DIR, sessionID), String(Date.now()))
+    await mkdir(dir, { recursive: true })
+    await writeFile(path.join(dir, sessionID), String(Date.now()))
   } catch {
-    /* only the desktop warning depends on it */
+    /* only the desktop catch-up depends on it */
   }
 }
 
@@ -139,13 +139,21 @@ export class ClaudeAdapter implements HarnessAdapter {
   // context windows Claude Code reported for the models it actually ran, keyed
   // by the id it ran and the id (or alias) the turn asked for; it knows these
   // and jep does not, so they are learned from each turn's result
-  #contextWindows = learnedWindows()
+  #contextWindows: Map<string, number>
   // the model the CLI resolved to on the last turn, for when nothing is configured
   #lastModel: string | null = null
 
-  constructor(workspace: string) {
+  // jep's own state, from the composition root: the learned context windows
+  // and the phone-turn stamps. Null means keep nothing on disk.
+  #windowsFile: string | null
+  #turnsDir: string | null
+
+  constructor(workspace: string, opts: { dataHome?: string } = {}) {
     this.workspace = workspace
     this.endpoint = `claude-cli:${workspace}`
+    this.#windowsFile = opts.dataHome ? path.join(opts.dataHome, "claude-context-windows.json") : null
+    this.#turnsDir = opts.dataHome ? path.join(opts.dataHome, "claude-turns") : null
+    this.#contextWindows = learnedWindows(this.#windowsFile)
   }
 
   #emit(evt: DomainEvent): void {
@@ -423,7 +431,7 @@ export class ClaudeAdapter implements HarnessAdapter {
     const asked = opts?.model?.modelID ?? (await this.#configuredModel())
     const child = spawn(CLAUDE_BIN, args, { cwd: this.workspace, stdio: ["ignore", "pipe", "pipe"] })
     this.#running.set(native, child)
-    if (!pending) void markRemoteTurn(native)
+    if (!pending) void markRemoteTurn(this.#turnsDir, native)
 
     let realID = pending ? "" : native
     const parts: Part[] = []
@@ -577,7 +585,7 @@ export class ClaudeAdapter implements HarnessAdapter {
       if (realID) this.#running.delete(realID)
       // stamped again at the end: the desktop window must count everything
       // this turn wrote, not only that it began
-      if (realID || !pending) void markRemoteTurn(realID || native)
+      if (realID || !pending) void markRemoteTurn(this.#turnsDir, realID || native)
       // the turn is over, so any card it raised is unanswerable now — say so
       // rather than leaving it standing on whatever client is showing it
       this.#standDownAsks(realID || native, "the turn ended before this was answered")
@@ -945,7 +953,7 @@ export class ClaudeAdapter implements HarnessAdapter {
     if (!main) return
     this.#lastModel = main.id
     if (asked) this.#contextWindows.set(asked, main.window)
-    saveLearnedWindows()
+    saveLearnedWindows(this.#windowsFile, this.#contextWindows)
   }
 
   async listProjects(): Promise<ProjectSummary[]> {
@@ -1110,8 +1118,8 @@ const clip = (t: string, max = 48): string => {
   return flat.length > max ? `${flat.slice(0, max)}…` : flat
 }
 
-export async function startClaudeAdapter(workspace: string): Promise<ClaudeAdapter> {
-  const adapter = new ClaudeAdapter(workspace)
+export async function startClaudeAdapter(workspace: string, opts: { dataHome?: string } = {}): Promise<ClaudeAdapter> {
+  const adapter = new ClaudeAdapter(workspace, opts)
   const h = await adapter.health()
   if (!h.healthy) throw new Error(`claude not runnable: ${h.version}`)
   return adapter
