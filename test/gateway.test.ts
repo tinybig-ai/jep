@@ -1390,3 +1390,46 @@ test("a restart gives up waiting rather than wedging the deploy forever", async 
     cancel()
   }
 })
+
+test("/history carries every ask the conversation raised, and how each ended", async () => {
+  // An ask is part of the record. When it only lived in the event stream, the
+  // next ask replaced its card, and a phone that was offline when one arrived
+  // never learned the turn was parked on it.
+  const a = stallable()
+  const { base, headers, g } = await startWith(a)
+  const ask = (id: string, at: number) =>
+    ({
+      type: "ask.requested",
+      sessionID: "s1",
+      ask: { id, sessionID: "s1", title: "bash", options: [{ id: "once", label: "Allow once" }], messageID: "m1", at },
+    }) as DomainEvent
+  try {
+    a.feed(ask("per_1", 10))
+    a.feed(ask("per_2", 20))
+    a.feed(ask("per_3", 30))
+    a.feed(ask("per_1", 10)) // the same ask surfaced twice is still one ask
+    await sleep(60)
+    const answered = await fetch(`${base}/respond`, { method: "POST", headers, body: JSON.stringify({ askID: "per_1", optionID: "once" }) })
+    assert.equal(answered.status, 200)
+    // settled somewhere else — another client, the harness's own UI, a turn that ended
+    a.feed({ type: "ask.resolved", sessionID: "s1", askID: "per_2" } as DomainEvent)
+    // and the harness confirming the answer /respond gave must not erase which option it was
+    a.feed({ type: "ask.resolved", sessionID: "s1", askID: "per_1" } as DomainEvent)
+    await sleep(60)
+
+    const res = await fetch(`${base}/history`, { method: "POST", headers, body: JSON.stringify({ id: "s1" }) })
+    const { asks } = (await res.json()) as { asks: Array<{ id: string; state: string; answer?: string; messageID?: string; at?: number }> }
+    assert.deepEqual(
+      asks.map((x) => [x.id, x.state, x.answer ?? null]),
+      [
+        ["per_1", "answered", "once"],
+        ["per_2", "closed", null],
+        ["per_3", "pending", null],
+      ],
+    )
+    assert.equal(asks[2]!.messageID, "m1", "the anchor rides along, so the card can be placed")
+    assert.equal(asks[2]!.at, 30)
+  } finally {
+    await g.close()
+  }
+})

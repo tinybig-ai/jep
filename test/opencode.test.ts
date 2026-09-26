@@ -304,6 +304,43 @@ test("a question ask is answered by its label, on the questions route", async ()
   }
 })
 
+test("an ask settled anywhere reaches the clients as ask.resolved", async () => {
+  // Answered in opencode's own TUI, on another client, or rejected by opencode
+  // when the turn ended: without this the card stood on the phone, holding the
+  // send button, long after nothing could answer it.
+  const frames = [
+    { type: "permission.replied", properties: { sessionID: "ses_a", requestID: "per_1", reply: "once" } },
+    { type: "question.replied", properties: { sessionID: "ses_a", requestID: "que_1", answers: [["Yes"]] } },
+    { type: "question.rejected", properties: { sessionID: "ses_a", requestID: "que_2" } },
+  ]
+  const open: { feed?: import("node:http").ServerResponse } = {}
+  const server = createServer((req, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" })
+    for (const f of frames) res.write(`data: ${JSON.stringify(f)}\n\n`)
+    open.feed = res
+  })
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r))
+  const port = (server.address() as { port: number }).port
+  const adapter = new OpenCodeAdapter({} as any, WS, `http://127.0.0.1:${port}`)
+  const ac = new AbortController()
+  const seen: unknown[] = []
+  try {
+    for await (const evt of adapter.events(ac.signal)) {
+      seen.push(evt)
+      if (seen.length === 3) break
+    }
+    assert.deepEqual(seen, [
+      { type: "ask.resolved", sessionID: "opencode://ses_a", askID: "per_1" },
+      { type: "ask.resolved", sessionID: "opencode://ses_a", askID: "que_1" },
+      { type: "ask.resolved", sessionID: "opencode://ses_a", askID: "que_2" },
+    ])
+  } finally {
+    ac.abort()
+    open.feed?.end()
+    await new Promise<void>((r) => server.close(() => r()))
+  }
+})
+
 test("an answer that did not resolve is reported as a failure, not a success", async () => {
   // opencode 404s a permission id it does not know and drops it. Treating that
   // as "already handled" is what let a card read "answered" over a turn that was

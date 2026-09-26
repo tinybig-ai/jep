@@ -15,7 +15,7 @@ import type { PairingAdmin } from "../../core/pairing.ts"
 import { pushFor, UnregisteredToken, type PushNotifier } from "../../core/push.ts"
 import { readClaudeMcp, readCodexMcp, readOpencodeMcp, writeClaudeProjectEnabled, writeCodexMcpEnabled, writeOpencodeMcpEnabled } from "../../core/mcpconfig.ts"
 import { listSkills, skillDirsFor, writeSkillModelInvocation } from "../../core/skills.ts"
-import type { DomainEvent, HarnessError, Message } from "../../core/types.ts"
+import type { AskRequest, DomainEvent, HarnessError, Message } from "../../core/types.ts"
 import { eventSession, isAborted } from "../../core/types.ts"
 import { describeError } from "../../core/errors.ts"
 import { usageOf } from "../../core/usage.ts"
@@ -80,6 +80,8 @@ const TERMINAL_FILE = "gateway-terminal.json"
 const ARCHIVED_FILE = "gateway-archived.json"
 const PUSH_FILE = "gateway-push.json"
 const HARNESS_SETTINGS_FILE = "gateway-harness-settings.json"
+// asks remembered per conversation for /history; pending ones are never dropped
+const ASK_LEDGER_MAX = 50
 const BODY_MAX = 1 << 20
 
 // Turn liveness. A gateway turn runs with no absolute deadline (timeoutMs: 0),
@@ -95,6 +97,15 @@ const TOOL_IDLE_MS = Number(process.env.JEP_TOOL_IDLE_MS ?? "") || 20 * 60_000
 // prompt() call before finalizing from the transcript instead
 const IDLE_GRACE_MS = 5_000
 const WATCHDOG_TICK_MS = 15_000
+
+interface AskRecord {
+  ask: AskRequest
+  /** pending: waiting on a human. answered: a client chose `answer`. closed:
+   * settled some other way — answered elsewhere, stood down, or outlived by
+   * the turn that raised it */
+  state: "pending" | "answered" | "closed"
+  answer?: string
+}
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
@@ -479,13 +490,13 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   // help-files the phone needs, resolved as events and commands arrive
   const sessionAdapters = new Map<string, HarnessAdapter>()
   const askSessions = new Map<string, string>()
-  // Asks still waiting on a human, per session. A turn parked on a permission
-  // prompt is not stalled — it is being polite — so the watchdog holds its fire
-  // until the ask is answered or stood down.
   const turnIdleMs = deps.liveness?.turnIdleMs ?? TURN_IDLE_MS
   const toolIdleMs = deps.liveness?.toolIdleMs ?? TOOL_IDLE_MS
   const idleGraceMs = deps.liveness?.idleGraceMs ?? IDLE_GRACE_MS
   const watchdogTickMs = deps.liveness?.tickMs ?? WATCHDOG_TICK_MS
+  // Asks still waiting on a human, per session. A turn parked on a permission
+  // prompt is not stalled — it is being polite — so the watchdog holds its fire
+  // until the ask is answered or stood down.
   const asksBySession = new Map<string, Set<string>>()
   const openAsks = (sessionID: string): Set<string> => {
     const hit = asksBySession.get(sessionID)
@@ -497,6 +508,36 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   const closeAsk = (askID: string): void => {
     const sid = askSessions.get(askID)
     if (sid) asksBySession.get(sid)?.delete(askID)
+  }
+  // Every ask a conversation raised, and how it ended, served with /history.
+  // An ask is part of the conversation's record: a card that only lived in the
+  // event stream vanished when the next ask replaced it, and a phone that was
+  // disconnected when one arrived never learned a turn was waiting on it.
+  const askLedger = new Map<string, AskRecord[]>()
+  const askRecords = new Map<string, AskRecord>()
+  const recordAsk = (ask: AskRequest): void => {
+    if (askRecords.has(ask.id)) return
+    const rec: AskRecord = { ask, state: "pending" }
+    askRecords.set(ask.id, rec)
+    const list = askLedger.get(ask.sessionID) ?? []
+    list.push(rec)
+    // bounded: the oldest settled ones go first, a pending one never does
+    while (list.length > ASK_LEDGER_MAX) {
+      const i = list.findIndex((r) => r.state !== "pending")
+      if (i < 0) break
+      askRecords.delete(list[i]!.ask.id)
+      list.splice(i, 1)
+    }
+    askLedger.set(ask.sessionID, list)
+  }
+  // "answered" (with the option) wins over "closed": a harness announces the
+  // resolution of the very answer /respond just gave, sometimes before
+  // /respond gets to record which option it was
+  const settleAsk = (askID: string, state: "answered" | "closed", answer?: string): void => {
+    const rec = askRecords.get(askID)
+    if (!rec || rec.state === "answered") return
+    rec.state = state
+    if (answer) rec.answer = answer
   }
   // uploads land in <dataHome>/attachments, remembered by id for the next prompt
   const attachments = new Map<string, { path: string; name: string; sessionID: string }>()
@@ -590,6 +631,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           if (evt.type === "ask.requested") {
             askSessions.set(evt.ask.id, evt.ask.sessionID)
             openAsks(evt.ask.sessionID).add(evt.ask.id)
+            recordAsk(evt.ask)
             console.error(`[ask] surfaced ${evt.ask.id} (${evt.ask.title})`)
           }
           // the ask is spent, wherever it was answered: stop holding the
@@ -597,6 +639,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           // more would never be judged stalled
           if (evt.type === "ask.resolved") {
             closeAsk(evt.askID)
+            settleAsk(evt.askID, "closed")
             if (live) live.lastActivity = Date.now()
             console.error(`[ask] resolved ${evt.askID}`)
           }
@@ -1247,6 +1290,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         // answered: the turn is the model's problem again, so the watchdog's
         // clock starts running on it once more
         closeAsk(askID)
+        if (ok) settleAsk(askID, "answered", optionID)
         const live = turns.get(sid)
         if (live) live.lastActivity = Date.now()
         console.error(`[ask] respond askID=${askID} option=${optionID} -> ${ok ? "ok" : "failed"}`)
@@ -1266,6 +1310,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         if (!owner) return json(res, 404, { error: "unknown ask" })
         const ok = await owner.rejectAsk(sid, askID).catch(() => false)
         closeAsk(askID)
+        if (ok) settleAsk(askID, "closed")
         const live = turns.get(sid)
         if (live) live.lastActivity = Date.now()
         console.error(`[ask] reject askID=${askID} -> ${ok ? "ok" : "failed"}`)
@@ -1330,6 +1375,8 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         if (gone) {
           harnessSettings.delete(id)
           asksBySession.delete(id)
+          for (const r of askLedger.get(id) ?? []) askRecords.delete(r.ask.id)
+          askLedger.delete(id)
           await saveHarnessSettings(deps.dataHome, harnessSettings)
         }
         return json(res, gone ? 200 : 404, gone ? { ok: true } : { error: "couldn't delete" })
@@ -1567,7 +1614,10 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const messages = (limit > 0 ? window.slice(-limit) : window)
           .map(cleanForDisplay)
           .filter((m) => m.role !== "user" || m.parts.length > 0)
-        return json(res, 200, { messages, hasMore })
+        // the asks ride along whole (they are few): each is placed by its own
+        // anchor, and the pending one is what holds the composer
+        const asks = (askLedger.get(id) ?? []).map((r) => ({ ...r.ask, state: r.state, ...(r.answer ? { answer: r.answer } : {}) }))
+        return json(res, 200, { messages, hasMore, asks })
       }
 
       if (path === "/prompt") {

@@ -962,6 +962,16 @@ export class OpenCodeAdapter implements HarnessAdapter {
           },
         }
       }
+      // An ask is over, wherever it was settled: answered here, in opencode's
+      // own TUI, or by opencode itself when the turn that raised it ended. The
+      // requestID is the id the ask was surfaced under.
+      case "permission.replied":
+      case "question.replied":
+      case "question.rejected": {
+        const askID = (props.requestID as string | undefined) ?? ""
+        if (!askID) return null
+        return { type: "ask.resolved", sessionID: sessionID ?? "", askID }
+      }
       case "session.error": {
         const raw = props.error
         // a stop is reported as an error (MessageAbortedError / "Aborted") but
