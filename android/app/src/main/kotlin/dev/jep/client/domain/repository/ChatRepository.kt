@@ -2,6 +2,7 @@ package dev.jep.client.domain.repository
 
 import dev.jep.client.domain.model.AgentInfo
 import dev.jep.client.domain.model.Ask
+import dev.jep.client.domain.model.AskEntry
 import dev.jep.client.domain.model.BrowseResult
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
@@ -25,6 +26,8 @@ import kotlinx.coroutines.flow.Flow
 data class HistoryBatch(
     val messages: List<ChatMessage>,
     val hasMore: Boolean,
+    /** the conversation's asks and how each ended, oldest first */
+    val asks: List<AskEntry> = emptyList(),
 )
 
 /** the models a conversation may run on, the one it is set to (null = the

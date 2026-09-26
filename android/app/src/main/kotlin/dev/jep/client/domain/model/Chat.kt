@@ -164,21 +164,29 @@ data class ChatMessage(
 
 data class AskOption(val id: String, val label: String, val danger: Boolean = false)
 
-    data class Ask(
-        val id: String,
-        val title: String,
-        val detail: String? = null,
-        val options: List<AskOption> = emptyList(),
-        /** "permission" or "question": a permission ask answers once/always/reject,
-         *  a question one carries its own choices */
-        val kind: String? = null,
-        /** the message and tool call the ask is holding up, when the harness
-         *  says — the card goes right under that call */
-        val messageId: String? = null,
-        val callId: String? = null,
-        /** when it was raised, on the harness's clock (the one message times use) */
-        val at: Long? = null,
-    )
+data class Ask(
+    val id: String,
+    val title: String,
+    val detail: String? = null,
+    val options: List<AskOption> = emptyList(),
+    /** "permission" or "question": a permission ask answers once/always/reject,
+     *  a question one carries its own choices */
+    val kind: String? = null,
+    /** the message and tool call the ask is holding up, when the harness
+     *  says — the card goes right under that call */
+    val messageId: String? = null,
+    val callId: String? = null,
+    /** when it was raised, on the harness's clock (the one message times use) */
+    val at: Long? = null,
+)
+
+/**
+ * An ask as the conversation's record keeps it. `pending` is still waiting on a
+ * human; otherwise the card is spent, and `choice` is the option picked when a
+ * client picked one — null when it was settled elsewhere, stood down, or
+ * outlived by the turn that raised it.
+ */
+data class AskEntry(val ask: Ask, val pending: Boolean = false, val choice: String? = null)
 
 /** what a conversation has spent, summed from the harness's own record */
 data class Usage(

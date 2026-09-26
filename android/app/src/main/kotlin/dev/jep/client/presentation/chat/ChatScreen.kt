@@ -63,6 +63,7 @@ import androidx.compose.material.icons.filled.ArrowDropUp
 import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.ErrorOutline
@@ -111,6 +112,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -165,6 +167,7 @@ import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
 import dev.jep.client.domain.model.Role
 import dev.jep.client.domain.model.Ask
+import dev.jep.client.domain.model.AskEntry
 import dev.jep.client.domain.model.GitCommit
 import dev.jep.client.domain.model.GitSnapshot
 import dev.jep.client.domain.model.SessionSummary
@@ -186,6 +189,11 @@ internal sealed interface Row {
 
     data class Pending(val ask: Ask) : Row {
         override val key: String get() = "ask-${ask.id}"
+    }
+
+    /** an earlier card, spent: kept in place as the record of what was asked */
+    data class PastAsk(val entry: AskEntry) : Row {
+        override val key: String get() = "ask-${entry.ask.id}"
     }
 
     /** several tool-only messages standing in for one line */
@@ -287,37 +295,44 @@ internal fun transcriptRows(
     askAt: Long,
     liveMessageId: String? = null,
     askAfter: String? = null,
-): List<Row> = settleCompaction(
-    if (ask == null) {
-        ordered.map { rowFor(it) }
-    } else {
-        val anchor = ask.callId?.let { call ->
+    past: List<AskEntry> = emptyList(),
+): List<Row> {
+    // every card goes in by the same rule: the open one, and each spent one on
+    // the record (which has no "was streaming" message, only its own anchors)
+    class Card(val row: Row, val ask: Ask, val at: Long, val after: String?)
+    val cards = buildList {
+        past.forEach { add(Card(Row.PastAsk(it), it.ask, it.ask.at ?: 0L, null)) }
+        if (ask != null) add(Card(Row.Pending(ask), ask, askAt, askAfter))
+    }
+    if (cards.isEmpty()) return settleCompaction(ordered.map { rowFor(it) })
+    val anchors = cards.map { c ->
+        c.ask.callId?.let { call ->
             ordered.firstOrNull { m -> m.parts.any { it is ChatPart.Tool && it.id == call } }
         }
-            ?: ask.messageId?.let { id -> ordered.firstOrNull { it.id == id } }
-            ?: askAfter?.let { id -> ordered.firstOrNull { it.id == id } }
-        val out = ArrayList<Row>(ordered.size + 1)
-        var placed = false
-        for (m in ordered) {
-            // the card sits right under its message; nothing newer than the
-            // message is allowed to claim it first
-            if (!placed && anchor != null && m === anchor) {
-                out += Row.Pending(ask)
-                placed = true
-            }
-            // otherwise the first message that is neither live nor newer than the
-            // ask is the spot: it goes above the card, pushing the ask up as the
-            // turn says more below
-            if (!placed && anchor == null && m.id != liveMessageId && m.time <= askAt) {
-                out += Row.Pending(ask)
-                placed = true
-            }
-            out += rowFor(m)
+            ?: c.ask.messageId?.let { id -> ordered.firstOrNull { it.id == id } }
+            ?: c.after?.let { id -> ordered.firstOrNull { it.id == id } }
+    }
+    val placed = BooleanArray(cards.size)
+    val out = ArrayList<Row>(ordered.size + cards.size)
+    // several cards under one message: newest nearest the bottom, and the list
+    // is newest first
+    fun drop(pick: (Int) -> Boolean) {
+        cards.indices.filter { !placed[it] && pick(it) }.sortedByDescending { cards[it].at }.forEach {
+            out += cards[it].row
+            placed[it] = true
         }
-        if (!placed) out += Row.Pending(ask)
-        out
-    },
-)
+    }
+    for (m in ordered) {
+        // a card sits right under its message; nothing newer than the message
+        // may claim it first. With no anchor, the first message that is neither
+        // live nor newer than the ask is the spot, so the card rides up as the
+        // turn says more below it.
+        drop { i -> anchors[i]?.let { it === m } ?: (m.id != liveMessageId && m.time <= cards[i].at) }
+        out += rowFor(m)
+    }
+    drop { true }
+    return settleCompaction(out)
+}
 
 /**
  * A compaction marker arrives BEFORE the summarize reply that answers it, so a
@@ -496,8 +511,8 @@ fun ChatScreen(
     val ordered = remember(rendered) { rendered.asReversed() }
     val ask = state.ask
     val liveMessageId = state.live?.messageId
-    val rows = remember(ordered, ask, state.askAt, liveMessageId, state.askAfter) {
-        groupToolRuns(transcriptRows(ordered, ask, state.askAt, liveMessageId, state.askAfter))
+    val rows = remember(ordered, ask, state.askAt, liveMessageId, state.askAfter, state.pastAsks) {
+        groupToolRuns(transcriptRows(ordered, ask, state.askAt, liveMessageId, state.askAfter, state.pastAsks))
     }
     val displayRows = remember(rows) { rows.asReversed() }
     val askAnswered = remember(ask, state.askChoice) { askIsSpent(ask, state.askChoice) }
@@ -505,6 +520,13 @@ fun ChatScreen(
     // is "a card is waiting", not "a card was answered" — asking the latter
     // silenced the spinner in every turn that never happened to raise an ask.
     val askPending = ask != null && !askAnswered
+    // Whether the open card is on screen. A card above the fold is what made a
+    // parked turn look hung: no spinner, Send withheld, and nothing in view to
+    // say why. When it is out of sight, the composer says so and jumps to it.
+    val askKey = ask?.let { "ask-${it.id}" }
+    val askInView by remember(askKey) {
+        derivedStateOf { askKey != null && listState.layoutInfo.visibleItemsInfo.any { it.key == askKey } }
+    }
     // the newest message, which carries the "still working" mark; the ask can sit
     // between it and the bottom, so this is a lookup rather than an index
     val newestMsgId = remember(rows) { rows.firstOrNull { it is Row.Msg }?.let { (it as Row.Msg).m.id } }
@@ -813,6 +835,7 @@ fun ChatScreen(
                     when (val row = displayRows[i]) {
                         is Row.Tools -> ToolGroupRow(row.tools)
                         is Row.Pending -> AskBar(row.ask, vm, spent = askAnswered, choiceId = state.askChoice)
+                        is Row.PastAsk -> AskBar(row.entry.ask, vm, spent = true, choiceId = row.entry.choice)
                         is Row.Compaction -> CompactionRow(row.m)
                         is Row.AutoContinue -> AutoContinueRow(row.m)
                         is Row.Msg -> CompositionLocalProvider(LocalFileUrl provides { path -> vm.fileUrl(path) }) {
@@ -877,6 +900,15 @@ fun ChatScreen(
             }
         }
         replyTo?.let { ReplyBanner(it) { replyTo = null } }
+        if (askPending && !askInView) {
+            WaitingForYou(ask?.kind == "question") {
+                val at = displayRows.indexOfFirst { it is Row.Pending }
+                if (at >= 0) scope.launch {
+                    followLatest = false
+                    listState.animateScrollToItem(at + if (state.loadingOlder) 1 else 0)
+                }
+            }
+        }
         Composer(vm, replyTo) { replyTo = null }
     }
     state.openFile?.let { open -> FileSheet(open, onClose = { vm.closeFile() }) }
@@ -2547,9 +2579,14 @@ private fun AskBar(ask: Ask, vm: ChatViewModel, spent: Boolean, choiceId: String
                             Text(option.label, fontSize = 14.sp, maxLines = 1)
                         }
                     } else {
+                        // Deny reads as what it is: the harness marks it danger,
+                        // and a card is exactly where a slip is costly
                         OutlinedButton(
                             onClick = { vm.respond(ask.id, option.id) },
                             enabled = !spent,
+                            colors = if (option.danger) ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error,
+                            ) else ButtonDefaults.outlinedButtonColors(),
                             contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 4.dp),
                         ) {
                             Text(option.label, fontSize = 14.sp, maxLines = 1)
@@ -2570,6 +2607,30 @@ private fun AskBar(ask: Ask, vm: ChatViewModel, spent: Boolean, choiceId: String
                     }
                 }
             }
+        }
+    }
+}
+
+/** Above the composer while the turn is parked on a card that is out of view. */
+@Composable
+private fun WaitingForYou(question: Boolean, onJump: () -> Unit) {
+    Surface(
+        Modifier.fillMaxWidth()
+            .clickable(onClick = onJump)
+            .testTag("waiting-for-you"),
+        color = MaterialTheme.colorScheme.tertiaryContainer,
+    ) {
+        Row(
+            Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                if (question) "Waiting for your answer" else "Waiting for your approval",
+                Modifier.weight(1f),
+                color = MaterialTheme.colorScheme.onTertiaryContainer,
+                fontSize = 14.sp,
+            )
+            Icon(Icons.Filled.ArrowUpward, "show the card", tint = MaterialTheme.colorScheme.onTertiaryContainer)
         }
     }
 }

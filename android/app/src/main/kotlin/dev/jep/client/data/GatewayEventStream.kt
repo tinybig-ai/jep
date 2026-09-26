@@ -74,6 +74,7 @@ class GatewayEventStream(
             }
             "session.idle" -> ChatEvent.Quiet(sid)
             "ask.requested" -> ask?.let { ChatEvent.Asked(it.sessionID.ifEmpty { sid }, it.toDomain()) }
+            "ask.resolved" -> askID?.let { ChatEvent.AskResolved(sid, it) }
             "session.error" -> ChatEvent.Failed(sid, message ?: "the harness failed")
             "turn.aborted" -> ChatEvent.Aborted(sid)
             else -> null

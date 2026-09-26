@@ -34,6 +34,7 @@ import dev.jep.client.domain.model.AgentInfo
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.FileDiff
 import dev.jep.client.domain.model.Harnesses
+import dev.jep.client.domain.model.AskEntry
 import dev.jep.client.domain.model.HarnessSetting
 import dev.jep.client.domain.model.HarnessSettings
 import dev.jep.client.domain.model.ImportableSession
@@ -277,7 +278,11 @@ private val json = Json { ignoreUnknownKeys = true; isLenient = true }
                     if (have > 0) put("have", have)
                 }.toString(),
             )
-            HistoryBatch(res.messages.map { it.toDomain() }, res.hasMore)
+            HistoryBatch(
+                res.messages.map { it.toDomain() },
+                res.hasMore,
+                res.asks.map { AskEntry(it.toDomain(), pending = it.state == "pending", choice = it.answer) },
+            )
         }
 
     override suspend fun prompt(sessionId: String, text: String, files: List<String>, clientID: String?, steer: Boolean): ChatMessage {

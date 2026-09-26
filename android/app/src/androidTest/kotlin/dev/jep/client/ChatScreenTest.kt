@@ -928,4 +928,68 @@ class ChatScreenTest {
         assertEquals(listOf("dangerouslySkipPermissions" to true), repo.harnessWrites.toList())
     }
 
+
+    private fun bash(id: String, title: String, messageId: String? = null, at: Long? = null) =
+        dev.jep.client.domain.model.Ask(
+            id = id,
+            title = title,
+            options = listOf(
+                dev.jep.client.domain.model.AskOption("once", "Allow once"),
+                dev.jep.client.domain.model.AskOption("reject", "Deny", danger = true),
+            ),
+            messageId = messageId,
+            at = at,
+        )
+
+    @Test
+    fun a_card_out_of_view_is_announced_above_the_composer_and_jumps_to_it() {
+        // A turn parked on a card above the fold looked hung: no spinner, Send
+        // withheld, nothing in view to say why. Opening the chat later also has
+        // to find the card at all, which only the gateway's ask record can say.
+        val repo = FakeChatRepository(
+            messages = manyMessages(60),
+            asks = listOf(dev.jep.client.domain.model.AskEntry(bash("a1", "far-up-ask", messageId = "m5", at = 5), pending = true)),
+        )
+        val vm = ChatViewModel(repo, "s1", "T")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(10_000) { rule.onAllNodesWithTag("waiting-for-you").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("Waiting for your approval").assertIsDisplayed()
+        rule.onNodeWithTag("waiting-for-you").performClick()
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("far-up-ask").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("far-up-ask").assertIsDisplayed()
+        rule.waitUntil(5_000) { rule.onAllNodesWithTag("waiting-for-you").fetchSemanticsNodes().isEmpty() }
+    }
+
+    @Test
+    fun a_card_replaced_by_the_next_ask_stays_in_the_transcript() {
+        val repo = FakeChatRepository(messages = manyMessages(3))
+        val vm = ChatViewModel(repo, "s1", "T")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(5_000) { repo.subscribed && vm.state.value.messages.isNotEmpty() }
+        rule.runOnUiThread { repo.emitEvent(ChatEvent.Asked("s1", bash("a1", "first-ask", messageId = "m2", at = 2))) }
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("first-ask").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("Allow once").performClick()
+        rule.waitUntil(5_000) { vm.state.value.askChoice == "once" }
+        rule.runOnUiThread { repo.emitEvent(ChatEvent.Asked("s1", bash("a2", "second-ask", messageId = "m3", at = 3))) }
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("second-ask").fetchSemanticsNodes().isNotEmpty() }
+        // the first card is the record now: still there, its answer still filled
+        rule.onNodeWithText("first-ask").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Allow once, chosen").assertIsDisplayed()
+    }
+
+    @Test
+    fun a_card_settled_elsewhere_stops_holding_the_composer() {
+        val repo = FakeChatRepository(messages = manyMessages(3))
+        val vm = ChatViewModel(repo, "s1", "T")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(5_000) { repo.subscribed && vm.state.value.messages.isNotEmpty() }
+        rule.runOnUiThread { repo.emitEvent(ChatEvent.Asked("s1", bash("a1", "elsewhere-ask", messageId = "m3", at = 3))) }
+        rule.waitUntil(5_000) { vm.state.value.ask?.id == "a1" }
+        rule.runOnUiThread { repo.emitEvent(ChatEvent.AskResolved("s1", "a1")) }
+        rule.waitUntil(5_000) { vm.state.value.ask == null }
+        // the open slot is free (Send is back), and the card stays as the record
+        rule.onNodeWithText("elsewhere-ask").assertIsDisplayed()
+        assertEquals(listOf("a1"), vm.state.value.pastAsks.map { it.ask.id })
+    }
 }
+

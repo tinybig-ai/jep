@@ -96,7 +96,12 @@ data class MkdirRes(val ok: Boolean = false, val path: String = "")
 data class NextCodeRes(val ok: Boolean = false, val nextCode: String? = null)
 
 @Serializable
-data class HistoryRes(val messages: List<MessageDto> = emptyList(), val hasMore: Boolean = false)
+data class HistoryRes(
+    val messages: List<MessageDto> = emptyList(),
+    val hasMore: Boolean = false,
+    /** every ask the conversation raised, with how it ended */
+    val asks: List<AskDto> = emptyList(),
+)
 
 @Serializable
 data class NewSessionRes(val session: SessionDto)
@@ -275,6 +280,10 @@ data class AskDto(
     val messageID: String? = null,
     val callID: String? = null,
     val at: Long? = null,
+    /** in /history's ask record: pending, answered or closed */
+    val state: String? = null,
+    /** the option a client picked, when state is answered */
+    val answer: String? = null,
 )
 
 // one shape for every DomainEvent the gateway forwards; fields the event
@@ -290,5 +299,7 @@ data class EventDto(
     val role: String? = null,
     val part: PartDto? = null,
     val ask: AskDto? = null,
+    /** `ask.resolved`: the ask that is over */
+    val askID: String? = null,
     val message: String? = null,
 )

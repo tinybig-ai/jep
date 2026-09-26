@@ -405,6 +405,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun open(session: SessionSummary) {
         markRead(session.id)
+        // opened: whatever was announced about it is in front of the person now
+        dev.jep.client.device.Notifications.clear(getApplication(), session.id)
         // `adapter` is the workspace's friendly name; fall back to the folder
         // name of the path when an older listing didn't carry it
         val target = Screen.Chat(

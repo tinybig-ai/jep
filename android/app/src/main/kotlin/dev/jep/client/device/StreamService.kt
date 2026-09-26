@@ -12,6 +12,8 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import dev.jep.client.MainActivity
 import dev.jep.client.data.GatewayChatRepository
+import dev.jep.client.domain.repository.ChatEvent
+import kotlinx.coroutines.launch
 import dev.jep.client.domain.repository.ChatRepository
 
 // The one long-lived piece of the client: for as long as the process lives,
@@ -56,12 +58,39 @@ class StreamService : Service() {
                 GatewayChatRepository(pairing.baseUrl ?: return@Thread, { pairing.token }, JepHttp.client())
             runCatching {
                 kotlinx.coroutines.runBlocking {
+                    val scope = this
                     repo.events().collect { evt ->
+                        // an ask settled anywhere takes its "needs you" back:
+                        // one left standing sends the person to a card that is
+                        // already gone
+                        if (evt is ChatEvent.AskResolved) {
+                            pendingAsks.remove(evt.askId)
+                            if (pendingAsks.none { it.value == evt.sessionId }) {
+                                Notifications.withdraw(this@StreamService, evt.sessionId, Notifications.ASKED)
+                            }
+                        }
+                        if (evt is ChatEvent.Asked) pendingAsks[evt.ask.id] = evt.sessionId
                         // the service hosts the stream; what is worth a
                         // notification is the policy's call, not its own
                         when (NotificationPolicy.decide(evt, AppPresence.openSessionId, AppPresence.foreground)) {
-                            NotificationPolicy.Notice.FINISHED -> evt.sessionId?.let { notify(titleOf(repo, it), "finished replying", it) }
-                            NotificationPolicy.Notice.ASKED -> evt.sessionId?.let { notify(titleOf(repo, it), "needs you", it) }
+                            NotificationPolicy.Notice.FINISHED -> evt.sessionId?.let {
+                                Notifications.withdraw(this@StreamService, it, Notifications.ASKED)
+                                notify(titleOf(repo, it), "finished replying", it, Notifications.FINISHED)
+                            }
+                            NotificationPolicy.Notice.ASKED -> (evt as? ChatEvent.Asked)?.let { asked ->
+                                // An ask a harness answers itself (an "always
+                                // allow" rule) is raised and settled within a
+                                // moment; announcing it was the false "needs
+                                // you". Only one still open after a beat is.
+                                // waited apart from the feed, which must keep
+                                // reading or the resolution could never arrive
+                                scope.launch {
+                                    kotlinx.coroutines.delay(ASK_GRACE_MS)
+                                    if (pendingAsks.containsKey(asked.ask.id)) {
+                                        notify(titleOf(repo, asked.sessionId), "needs you", asked.sessionId, Notifications.ASKED)
+                                    }
+                                }
+                            }
                             null -> Unit
                         }
                     }
@@ -78,7 +107,10 @@ class StreamService : Service() {
             kotlinx.coroutines.runBlocking { repo.sessions() }.firstOrNull { it.id == sessionId }?.title
         }.getOrNull()?.ifBlank { null } ?: "jep"
 
-    private fun notify(title: String, text: String, sessionId: String) {
+    // asks surfaced and not yet settled, id -> conversation
+    private val pendingAsks = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    private fun notify(title: String, text: String, sessionId: String, kind: Int) {
         if (cancelled) return
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         // Tapping it should land in the conversation it is about, not on the
@@ -99,7 +131,9 @@ class StreamService : Service() {
             .setContentIntent(open)
             .setAutoCancel(true)
             .build()
-        manager.notify(System.currentTimeMillis().toInt(), n)
+        // one per conversation and kind, so a newer one replaces an older one
+        // and opening the chat can take them back (Notifications.clear)
+        manager.notify(sessionId, kind, n)
     }
 
     private fun holdNotification(text: String): Notification =
@@ -114,6 +148,7 @@ class StreamService : Service() {
     companion object {
         private const val CHANNEL_ID = "jep.events"
         private const val FOREGROUND_ID = 42
+        private const val ASK_GRACE_MS = 1_500L
 
         fun channel(context: Context) {
             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager

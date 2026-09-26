@@ -6,6 +6,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.jep.client.domain.model.Ask
+import dev.jep.client.domain.model.AskEntry
 import dev.jep.client.domain.model.AgentInfo
 import dev.jep.client.domain.repository.ChatEvent
 import dev.jep.client.domain.model.ChatMessage
@@ -98,7 +99,8 @@ class ChatViewModel(
         val tooBig: Boolean = false,
     )
 
-    data class UiState(        val messages: List<ChatMessage> = emptyList(),
+    data class UiState(
+        val messages: List<ChatMessage> = emptyList(),
         val live: LiveTurn? = null,
         val ask: Ask? = null,
         /** when that ask was raised, so the card can sit in the transcript where
@@ -110,6 +112,10 @@ class ChatViewModel(
         /** the message that was streaming when the ask arrived — the tool call
          *  that raised it lives in there, so the card belongs just after it */
         val askAfter: String? = null,
+        /** every earlier card, spent: answered, settled elsewhere, stood down, or
+         *  replaced by a newer ask. A card used to vanish when the next ask took
+         *  its slot, and with it the record of what was asked and answered. */
+        val pastAsks: List<AskEntry> = emptyList(),
         /** a file opened from a link in the transcript, read into the reader */
         val openFile: OpenFile? = null,
         val failure: String? = null,
@@ -165,7 +171,7 @@ class ChatViewModel(
      * that was answered keeps its spent state; only the open one stands down.
      */
     private fun UiState.standDownAsk(): UiState =
-        if (ask == null || askChoice != null) this else copy(ask = null, askAt = 0L, askAfter = null)
+        if (ask == null || askChoice != null) this else retireAsk()
 
     private val _state = MutableStateFlow(UiState())
     val state = _state.asStateFlow()
@@ -291,7 +297,11 @@ class ChatViewModel(
                 }
             }
             is ChatEvent.Asked -> _state.update {
-                it.copy(
+                // an ask already on the record (surfaced twice, or read back
+                // from history first) is not a new card
+                if (it.ask?.id == evt.ask.id || it.pastAsks.any { p -> p.ask.id == evt.ask.id }) return@update it
+                // the card it replaces keeps its place in the record
+                it.retireAsk().copy(
                     ask = evt.ask,
                     // the harness's own clock when it says, since that is the one
                     // the transcript's times are on
@@ -394,6 +404,7 @@ class ChatViewModel(
                             live = if (liveRowIsSettled(st.live?.messageId, batch.messages)) null else st.live,
                             hasMore = batch.hasMore,
                             loadingHistory = false,
+                        ).withServedAsks(batch.asks).copy(
                             // a queued message that now shows in the record has been
                             // picked up: it is no longer waiting, it is the turn. A
                             // NEW record entry only — an older message with the same
@@ -936,4 +947,61 @@ class ChatViewModel(
         _state.update { it.copy(askChoice = SOMETHING_ELSE) }
         viewModelScope.launch { runCatching { repo.reject(ask.id) } }
     }
+}
+
+/**
+ * Move the open card into the record, spent. `choice` is the option picked when
+ * one was (a "Something else" is no option); a card that was never answered is
+ * kept too, with nothing filled — it is the record of what was asked. The card
+ * keeps the time it was raised, so it stays where it was in the transcript.
+ */
+internal fun ChatViewModel.UiState.retireAsk(choice: String? = null): ChatViewModel.UiState {
+    val slot = ask ?: return this
+    val picked = choice ?: askChoice?.takeUnless { it == SOMETHING_ELSE }
+    val entry = AskEntry(slot.copy(at = slot.at ?: askAt.takeIf { it > 0 }), pending = false, choice = picked)
+    return copy(
+        ask = null,
+        askAt = 0L,
+        askChoice = null,
+        askAfter = null,
+        pastAsks = pastAsks.filterNot { it.ask.id == slot.id } + entry,
+    )
+}
+
+/**
+ * Fold in the gateway's ask record (from /history). The stream only tells a
+ * screen about asks raised while it was listening; the record is how a chat
+ * opened later — or a phone that lost its connection — learns that a turn is
+ * parked on a card, and what was asked before.
+ *
+ * This screen's own view of the open card wins while it is answering it (the
+ * record can lag a tap by a request). An ask the record says is settled stands
+ * the open card down; a pending one takes the slot when it is free, or when
+ * all the slot holds is a card already answered.
+ */
+internal fun ChatViewModel.UiState.withServedAsks(served: List<AskEntry>, now: Long = System.currentTimeMillis()): ChatViewModel.UiState {
+    var st = this
+    for (e in served) {
+        val slot = st.ask
+        if (slot?.id == e.ask.id) {
+            if (!e.pending && st.askChoice == null) st = st.retireAsk(e.choice)
+            continue
+        }
+        val known = st.pastAsks.firstOrNull { it.ask.id == e.ask.id }
+        if (known != null) {
+            // the record knows which option was picked, and this screen did not
+            if (!e.pending && known.choice == null && e.choice != null) {
+                st = st.copy(pastAsks = st.pastAsks.map { if (it.ask.id == e.ask.id) it.copy(choice = e.choice) else it })
+            }
+            continue
+        }
+        if (!e.pending) {
+            st = st.copy(pastAsks = st.pastAsks + e)
+        } else if (slot == null || st.askChoice != null) {
+            st = st.retireAsk().copy(ask = e.ask, askAt = e.ask.at ?: now, askChoice = null, askAfter = null)
+        }
+        // a second pending ask while one is open waits: the stream or the next
+        // read surfaces it once the open one is settled
+    }
+    return st
 }

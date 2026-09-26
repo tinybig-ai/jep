@@ -39,6 +39,8 @@ class FakeChatRepository(
     private val olderMessages: List<ChatMessage> = emptyList(),
     // harness-declared controls, so a test can drive the generic section
     private val harness: HarnessSettings = HarnessSettings(),
+    // the gateway's ask record, served with history
+    private val asks: List<dev.jep.client.domain.model.AskEntry> = emptyList(),
 ) : ChatRepository {
     /** every harness setting this fake was told about, as the screen set it */
     val harnessWrites = mutableListOf<Pair<String, Boolean>>()
@@ -97,7 +99,7 @@ class FakeChatRepository(
     override suspend fun termClose(sessionId: String) = true
     override suspend fun history(sessionId: String, limit: Int, before: Long, have: Int): HistoryBatch =
         if (before > 0 && olderMessages.isNotEmpty()) HistoryBatch(olderMessages, false)
-        else HistoryBatch(historyOverride ?: messages, olderMessages.isNotEmpty())
+        else HistoryBatch(historyOverride ?: messages, olderMessages.isNotEmpty(), asks)
 
     /** when set, prompt() waits on it, so a test can keep a turn in flight */
     @Volatile
