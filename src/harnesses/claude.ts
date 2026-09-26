@@ -1,7 +1,7 @@
 import { spawn, execFile, type ChildProcess } from "node:child_process"
 import net from "node:net"
-import { readFile, readdir, rm, mkdtemp } from "node:fs/promises"
-import { existsSync } from "node:fs"
+import { readFile, readdir, rm, mkdtemp, writeFile } from "node:fs/promises"
+import { existsSync, readFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -15,6 +15,32 @@ import { withAttachments } from "../core/transcript.ts"
 // another harness) is ignored rather than forwarded, which is what used to fail
 // with "--agent 'build' not found".
 const AGENTS: AgentRef[] = []
+
+// Context windows Claude Code reported, shared by every workspace and kept on
+// disk. Only a finished turn reports one, so held in memory alone they were
+// lost on every daemon restart, and until the next turn ended the status line
+// fell back to 200K and read "461K/200K 231%" for a 1M model.
+const WINDOWS_FILE = process.env.JEP_DATA_HOME ? path.join(process.env.JEP_DATA_HOME, "claude-context-windows.json") : null
+let windows: Map<string, number> | null = null
+
+function learnedWindows(): Map<string, number> {
+  if (windows) return windows
+  windows = new Map()
+  if (WINDOWS_FILE) {
+    try {
+      const raw = JSON.parse(readFileSync(WINDOWS_FILE, "utf8")) as Record<string, unknown>
+      for (const [id, w] of Object.entries(raw)) if (typeof w === "number" && w > 0) windows.set(id, w)
+    } catch {
+      /* nothing learned yet */
+    }
+  }
+  return windows
+}
+
+function saveLearnedWindows(): void {
+  if (!WINDOWS_FILE || !windows) return
+  writeFile(WINDOWS_FILE, JSON.stringify(Object.fromEntries(windows), null, 1)).catch(() => {})
+}
 
 export const CLAUDE_SETTINGS: HarnessSettingSpec[] = [
   {
@@ -90,7 +116,7 @@ export class ClaudeAdapter implements HarnessAdapter {
   // context windows Claude Code reported for the models it actually ran, keyed
   // by the id it ran and the id (or alias) the turn asked for; it knows these
   // and jep does not, so they are learned from each turn's result
-  #contextWindows = new Map<string, number>()
+  #contextWindows = learnedWindows()
   // the model the CLI resolved to on the last turn, for when nothing is configured
   #lastModel: string | null = null
 
@@ -859,6 +885,7 @@ export class ClaudeAdapter implements HarnessAdapter {
     if (!main) return
     this.#lastModel = main.id
     if (asked) this.#contextWindows.set(asked, main.window)
+    saveLearnedWindows()
   }
 
   async listProjects(): Promise<ProjectSummary[]> {

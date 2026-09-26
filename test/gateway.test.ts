@@ -1458,3 +1458,42 @@ test("what was seen is kept by the daemon, so every device agrees on unread", as
     await g.close()
   }
 })
+
+test("an attachment list in a user message comes back as file parts, not text", async () => {
+  // claude's print mode takes attachments as a path list in the prompt; the
+  // list is stripped from what is shown, and without file parts in its place
+  // the phone's thumbnail vanished once the record replaced its own copy
+  const a = fakeAdapter()
+  a.messages = async () => [
+    {
+      id: "u1",
+      sessionID: "s1",
+      role: "user",
+      time: 1,
+      parts: [{ kind: "text", text: "look at this\n\nAttached files:\n- /data/attachments/att-1-shot.jpg" }],
+    },
+  ]
+  const g = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter: a }],
+    dataHome: mkdtempSync(join(tmpdir(), "gw-test-")),
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+  })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const token = await pair(base, "TESTCODE")
+    const res = await fetch(`${base}/history`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ id: "s1" }),
+    })
+    const { messages } = (await res.json()) as { messages: Message[] }
+    assert.deepEqual(messages[0]!.parts, [
+      { kind: "text", text: "look at this" },
+      { kind: "file", filePath: "/data/attachments/att-1-shot.jpg", fileName: "att-1-shot.jpg", mimeType: "image/jpeg" },
+    ])
+  } finally {
+    await g.close()
+  }
+})

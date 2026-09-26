@@ -33,6 +33,14 @@ const ATTACHMENT_BLOCK = new RegExp(`\\n{2}${ATTACHMENT_HEADER}\\n(?:- [^\\n]+(?
 
 export const stripAttachments = (text: string): string => text.replace(ATTACHMENT_BLOCK, "")
 
+/** the paths an attachment list names, so a client can show them as files
+ *  again once the list itself is stripped from the text */
+export const attachedPaths = (text: string): string[] => {
+  const block = text.match(ATTACHMENT_BLOCK)?.[0]
+  if (!block) return []
+  return block.split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2).trim()).filter(Boolean)
+}
+
 // A harness splices a lot of machinery into the user's half of a transcript:
 // background-task notifications, the envelope around a slash command, the
 // stdout of a `!` shell line, system reminders. All of it is addressed to the

@@ -9,18 +9,18 @@ import { execFile } from "node:child_process"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
-import { dirname, isAbsolute, join, resolve, sep } from "node:path"
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path"
 import type { HarnessAdapter, HarnessSettingSpec, SessionImport, Terminal } from "../../core/ports.ts"
 import type { PairingAdmin } from "../../core/pairing.ts"
 import { pushFor, UnregisteredToken, type PushNotifier } from "../../core/push.ts"
 import { judgeTurn, LIVENESS, type LivenessConfig } from "../../core/liveness.ts"
 import { readClaudeMcp, readCodexMcp, readOpencodeMcp, writeClaudeProjectEnabled, writeCodexMcpEnabled, writeOpencodeMcpEnabled } from "../../core/mcpconfig.ts"
 import { listSkills, skillDirsFor, writeSkillModelInvocation } from "../../core/skills.ts"
-import type { AskRequest, DomainEvent, HarnessError, Message } from "../../core/types.ts"
+import type { AskRequest, DomainEvent, HarnessError, Message, Part } from "../../core/types.ts"
 import { eventSession, isAborted } from "../../core/types.ts"
 import { describeError } from "../../core/errors.ts"
 import { usageOf } from "../../core/usage.ts"
-import { transcriptText } from "../../core/transcript.ts"
+import { attachedPaths, stripInjectedContext, transcriptText } from "../../core/transcript.ts"
 import { newPairCode } from "../telegram/pair.ts"
 
 export interface GatewayDeps {
@@ -153,10 +153,19 @@ const same = (a: string, b: string): boolean => timingSafeEqual(sha256(a), sha25
 // person actually typed, the same way the Telegram client strips it.
 function cleanForDisplay(m: Message): Message {
   if (m.role !== "user") return m
+  // A print-mode harness (claude) gets attachments as a path list in the text.
+  // The list is stripped from what is shown, and the files it named come back
+  // as file parts: stripped alone, the message lost its thumbnail the moment
+  // the phone swapped its own copy for the record.
+  const files: Part[] = m.parts.flatMap((p) =>
+    p.kind === "text"
+      ? attachedPaths(stripInjectedContext(p.text)).map((fp) => ({ kind: "file" as const, filePath: fp, fileName: basename(fp), mimeType: mimeForPath(fp) }))
+      : [],
+  )
   const parts = m.parts
     .map((p) => (p.kind === "text" ? { ...p, text: transcriptText(p.text) } : p))
     .filter((p) => p.kind !== "text" || p.text.trim().length > 0)
-  return { ...m, parts }
+  return { ...m, parts: [...parts, ...files] }
 }
 
 // Content type for a file the phone fetches: enough for images to render
