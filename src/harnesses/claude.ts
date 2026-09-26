@@ -352,6 +352,9 @@ export class ClaudeAdapter implements HarnessAdapter {
       }
     }
 
+    // what this turn asked for, alias or not, so its context window can be
+    // found again under the name a client knows it by
+    const asked = opts?.model?.modelID ?? (await this.#configuredModel())
     const child = spawn(CLAUDE_BIN, args, { cwd: this.workspace, stdio: ["ignore", "pipe", "pipe"] })
     this.#running.set(native, child)
 
@@ -479,8 +482,11 @@ export class ClaudeAdapter implements HarnessAdapter {
                 failure = { name: "ClaudeError", message: String(d.error ?? d.result ?? d.subtype) }
                 this.#emit({ type: "session.error", sessionID: sid, message: failure.message })
               }
-              if (d.usage) tokens = mapUsage(d.usage)
+              // result.usage adds up every API call in the turn; the last call's
+              // own usage is what the context actually holds, so that one stands
+              if (d.usage && !tokens) tokens = mapUsage(d.usage)
               if (typeof d.total_cost_usd === "number") cost = d.total_cost_usd
+              this.#learnWindows(d.modelUsage, model, asked)
               this.#emit({ type: "session.idle", sessionID: sid })
             }
           }
@@ -765,6 +771,13 @@ export class ClaudeAdapter implements HarnessAdapter {
   // most specific first. The value may be an alias ("opus") rather than a full
   // id — that is what is configured, so that is what we report.
   async defaultModel(): Promise<string | null> {
+    // nothing configured: the CLI still picked something, and after one turn
+    // jep knows what — better than "default", which names no model at all
+    const model = (await this.#configuredModel()) ?? this.#lastModel
+    return model ? `claude/${model}` : null
+  }
+
+  async #configuredModel(): Promise<string | null> {
     const candidates = [
       path.join(this.workspace, ".claude", "settings.local.json"),
       path.join(this.workspace, ".claude", "settings.json"),
@@ -773,7 +786,7 @@ export class ClaudeAdapter implements HarnessAdapter {
     for (const file of candidates) {
       try {
         const model = JSON.parse(await readFile(file, "utf8"))?.model
-        if (typeof model === "string" && model.trim()) return `claude/${model.trim()}`
+        if (typeof model === "string" && model.trim()) return model.trim()
       } catch {
         // missing or malformed: try the next one, then give up to "default"
       }
@@ -795,10 +808,40 @@ export class ClaudeAdapter implements HarnessAdapter {
 
   async capabilities(): Promise<Map<string, ModelCaps>> {
     const out = new Map<string, ModelCaps>()
-    for (const m of await this.models()) {
-      out.set(`${m.providerID}/${m.modelID}`, { image: true, attachment: true, contextLimit: 0 })
+    const ids = new Set((await this.models()).map((m) => m.modelID))
+    const fallback = await this.defaultModel()
+    if (fallback) ids.add(fallback.slice("claude/".length))
+    for (const id of this.#contextWindows.keys()) ids.add(id)
+    for (const id of ids) {
+      out.set(`claude/${id}`, { image: true, attachment: true, contextLimit: this.#contextWindow(id) })
     }
     return out
+  }
+
+  // What Claude Code reported, when a turn has run on this model; until then
+  // the size its id implies — a 1M-context variant says so in the id, and
+  // everything else ships with 200K.
+  #contextWindow(id: string): number {
+    return this.#contextWindows.get(id) ?? (/\[1m\]/i.test(id) ? 1_000_000 : 200_000)
+  }
+
+  // result.modelUsage carries a contextWindow for every model the turn used
+  // (a sub-agent can run a different one). The main one is the model the
+  // assistant messages named; the turn's own request, alias or not, maps to it.
+  #learnWindows(usage: unknown, model: string | undefined, asked: string | null): void {
+    if (!usage || typeof usage !== "object") return
+    let main: { id: string; window: number; out: number } | null = null
+    for (const [id, u] of Object.entries(usage as Record<string, { contextWindow?: unknown; outputTokens?: unknown }>)) {
+      if (typeof u?.contextWindow !== "number" || u.contextWindow <= 0) continue
+      this.#contextWindows.set(id, u.contextWindow)
+      const out = typeof u.outputTokens === "number" ? u.outputTokens : 0
+      // the id the messages named wins; otherwise whichever did the most work
+      // (the messages may name a dated id where modelUsage keeps the short one)
+      if (id === model || !main || (main.id !== model && out > main.out)) main = { id, window: u.contextWindow, out }
+    }
+    if (!main) return
+    this.#lastModel = main.id
+    if (asked) this.#contextWindows.set(asked, main.window)
   }
 
   async listProjects(): Promise<ProjectSummary[]> {

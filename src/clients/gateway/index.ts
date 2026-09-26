@@ -1243,7 +1243,12 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           return { ...m, image: c?.image ?? false, attachment: c?.attachment ?? false, contextLimit: c?.contextLimit ?? 0 }
         })
         const resolvedDefault = adapter.defaultModel ? await adapter.defaultModel().catch(() => null) : null
-        return json(res, 200, { models: enriched, current: models.get(id) ?? null, default: resolvedDefault })
+        // the window of the model this conversation actually runs on, which may
+        // be one the picker does not list (an alias, a 1M variant, whatever the
+        // CLI fell back to) — the status line's fill rate needs it either way
+        const running = models.get(id) ?? resolvedDefault
+        const contextLimit = (running && caps.get(running)?.contextLimit) || 0
+        return json(res, 200, { models: enriched, current: models.get(id) ?? null, default: resolvedDefault, contextLimit })
       }
 
       // the primary agents this harness offers, plus the conversation's choice.
