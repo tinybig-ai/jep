@@ -1,6 +1,6 @@
 import { spawn, execFile, type ChildProcess } from "node:child_process"
 import net from "node:net"
-import { readFile, readdir, rm, mkdtemp, writeFile } from "node:fs/promises"
+import { mkdir, readFile, readdir, rm, mkdtemp, writeFile } from "node:fs/promises"
 import { existsSync, readFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -40,6 +40,23 @@ function learnedWindows(): Map<string, number> {
 function saveLearnedWindows(): void {
   if (!WINDOWS_FILE || !windows) return
   writeFile(WINDOWS_FILE, JSON.stringify(Object.fromEntries(windows), null, 1)).catch(() => {})
+}
+
+// When jep last ran a turn in a Claude conversation, one small file per
+// conversation. The desktop Claude Code hook (scripts/claude-handoff-hook.mjs)
+// reads it: a window that loaded the conversation before this time has not
+// seen what the phone did, and is told to reopen instead of forking the
+// transcript. Best effort: a failed stamp only loses the warning.
+export const REMOTE_TURNS_DIR = path.join(process.env.JEP_DATA_HOME ?? path.join(os.homedir(), ".local", "share", "jep-tg"), "claude-turns")
+
+async function markRemoteTurn(sessionID: string): Promise<void> {
+  if (!/^[\w-]+$/.test(sessionID)) return
+  try {
+    await mkdir(REMOTE_TURNS_DIR, { recursive: true })
+    await writeFile(path.join(REMOTE_TURNS_DIR, sessionID), String(Date.now()))
+  } catch {
+    /* only the desktop warning depends on it */
+  }
 }
 
 export const CLAUDE_SETTINGS: HarnessSettingSpec[] = [
@@ -400,6 +417,7 @@ export class ClaudeAdapter implements HarnessAdapter {
     const asked = opts?.model?.modelID ?? (await this.#configuredModel())
     const child = spawn(CLAUDE_BIN, args, { cwd: this.workspace, stdio: ["ignore", "pipe", "pipe"] })
     this.#running.set(native, child)
+    if (!pending) void markRemoteTurn(native)
 
     let realID = pending ? "" : native
     const parts: Part[] = []
@@ -551,6 +569,9 @@ export class ClaudeAdapter implements HarnessAdapter {
       opts?.signal?.removeEventListener("abort", onAbort)
       this.#running.delete(native)
       if (realID) this.#running.delete(realID)
+      // stamped again at the end: the desktop window must count everything
+      // this turn wrote, not only that it began
+      if (realID || !pending) void markRemoteTurn(realID || native)
       // the turn is over, so any card it raised is unanswerable now — say so
       // rather than leaving it standing on whatever client is showing it
       this.#standDownAsks(realID || native, "the turn ended before this was answered")
