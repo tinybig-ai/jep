@@ -25,6 +25,9 @@ import dev.jep.client.domain.model.Usage
 import dev.jep.client.domain.model.Role
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -39,6 +42,9 @@ import kotlinx.coroutines.launch
 // hundreds of messages long, so an unbounded initial fetch made loading slow
 // and handing megabytes of JSON to the UI thread crashed the app.
 const val WINDOW = 30
+
+/** the least time between two automatic retries of an unsent message */
+const val AUTO_RETRY_MS = 30_000L
 
 /**
  * Has the harness's own record already settled the message we are streaming?
@@ -67,6 +73,8 @@ class ChatViewModel(
     // tells the device layer this conversation has been seen, so the list stops
     // marking it unread
     private val onRead: () -> Unit = {},
+    // the draft and the unsent messages, kept past the life of the process
+    private val memory: ConversationMemory = ConversationMemory.None,
 ) : ViewModel() {
 
     // a chat the user renamed no longer matches the sessions-list title
@@ -194,6 +202,7 @@ class ChatViewModel(
     private var turn = 0
 
     init {
+        restoreFromMemory()
         // the foreground service needs to know which conversation is on screen:
         // it is the difference between "you are reading this" and "tell me when
         // it is done" (see NotificationPolicy)
@@ -396,6 +405,10 @@ class ChatViewModel(
                             false
                         }
                     }
+                    // A send that failed on the phone can still have reached the
+                    // daemon (the connection dropped after it was taken). The
+                    // record having it is the proof; retrying it would say it twice.
+                    if (outbox.keys.retainAll(optimistic.map { it.id }.toSet())) persistOutbox()
                     val servedNow = batch.messages.filter { it.role == Role.USER }
                     _state.update { st ->
                         st.copy(
@@ -418,6 +431,8 @@ class ChatViewModel(
                     }
                 }
                 .onFailure { _state.update { it.copy(loadingHistory = false) } }
+                // the gateway just answered: a good moment for what never got there
+                .onSuccess { retryOutboxIfDue() }
         }
     }
 
@@ -508,6 +523,7 @@ class ChatViewModel(
         val seq = ++turn
         optimistic.add(pending)
         outbox[pending.id] = body to files
+        persistOutbox()
         supersedeAsk()
         _state.update {
             it.copy(
@@ -524,6 +540,7 @@ class ChatViewModel(
                     if (seq != turn) return@onSuccess
                     optimistic.removeAll { it.id == pending.id }
                     outbox.remove(pending.id)
+                    persistOutbox()
                     // polling may already have served this message; replace by
                     // id rather than append, or the answer lands twice
                     _state.update { st ->
@@ -861,6 +878,67 @@ class ChatViewModel(
         }
     }
 
+    private fun Attachment.saved() = SavedAttachment(id, name, localUri, mimeType)
+    private fun SavedAttachment.live() = Attachment(id, name, localUri, mimeType)
+
+    private fun persistOutbox() {
+        memory.saveOutbox(
+            sessionId,
+            outbox.map { (id, entry) ->
+                SavedSend(id, entry.first, entry.second.map { it.saved() }, optimistic.firstOrNull { it.id == id }?.time ?: 0L)
+            },
+        )
+    }
+
+    /**
+     * Bring back what the last process held: the composer's draft, and the sends
+     * that never reached the daemon — shown undelivered, where they were, and
+     * tried again once the gateway answers (retryOutboxIfDue).
+     */
+    private fun restoreFromMemory() {
+        memory.loadDraft(sessionId)?.let { d ->
+            _state.update { it.copy(draft = d.text, attachments = d.attachments.map { a -> a.live() }) }
+        }
+        val sends = memory.loadOutbox(sessionId)
+        if (sends.isNotEmpty()) {
+            val rows = sends.map { s ->
+                outbox[s.id] = s.body to s.attachments.map { it.live() }
+                ChatMessage(
+                    id = s.id,
+                    role = Role.USER,
+                    time = s.time,
+                    parts = listOf(ChatPart.Text(s.body)) + s.attachments.map {
+                        ChatPart.File(path = it.name, name = it.name, mimeType = it.mimeType, localUri = it.localUri)
+                    },
+                    undelivered = true,
+                )
+            }
+            optimistic.addAll(rows)
+            _state.update { it.copy(messages = it.messages + rows) }
+        }
+        // from here on, every change to the draft is kept
+        viewModelScope.launch {
+            _state.map { it.draft to it.attachments }.distinctUntilChanged().drop(1).collect { (text, files) ->
+                memory.saveDraft(sessionId, SavedDraft(text, files.map { it.saved() }))
+            }
+        }
+    }
+
+    // Retrying on its own, but not in a loop: once the gateway has answered a
+    // read (so the connection is back), the oldest unsent message goes again, at
+    // most every 30s. A tap on the bubble still retries at once.
+    private var lastAutoRetry = 0L
+
+    private fun retryOutboxIfDue() {
+        val st = _state.value
+        if (st.sending) return
+        val now = System.currentTimeMillis()
+        if (now - lastAutoRetry < AUTO_RETRY_MS) return
+        val next = st.messages.firstOrNull { it.undelivered && it.id in outbox } ?: return
+        lastAutoRetry = now
+        retrySend(next.id)
+    }
+
     /** Send an undelivered message again. Tapping the dimmed bubble is the
      *  affordance: a message the harness never saw is not a message yet. */
     fun retrySend(id: String) {
@@ -883,6 +961,7 @@ class ChatViewModel(
                     if (seq != turn) return@onSuccess
                     optimistic.removeAll { it.id == id }
                     outbox.remove(id)
+                    persistOutbox()
                     _state.update { s ->
                         s.copy(
                             messages = s.messages.filterNot { it.id == id || it.id == final.id } + final,

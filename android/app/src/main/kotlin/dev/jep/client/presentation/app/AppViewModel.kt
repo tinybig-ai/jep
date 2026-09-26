@@ -67,6 +67,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val settings = AppSettings(application.getSharedPreferences("jep", Context.MODE_PRIVATE))
 
     private val read = dev.jep.client.device.ReadStore(application.getSharedPreferences("jep", Context.MODE_PRIVATE))
+    /** each conversation's draft and unsent messages, past the process's life */
+    val memory = dev.jep.client.device.ConversationStore(application.getSharedPreferences("jep-conversations", Context.MODE_PRIVATE))
 
     private val _prefs = MutableStateFlow(Prefs(settings.theme, settings.terminalEnabled, settings.backgroundStreaming))
     val prefs = _prefs.asStateFlow()

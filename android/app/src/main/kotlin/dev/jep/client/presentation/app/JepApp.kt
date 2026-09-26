@@ -63,7 +63,7 @@ fun JepApp(app: AppViewModel) {
             val vm: ChatViewModel = viewModel(
                 key = c.sessionId,
                 factory = viewModelFactory {
-                    initializer { ChatViewModel(app.chat(), c.sessionId, c.title, c.workspace, c.harness, { app.markRead(c.sessionId) }) }
+                    initializer { ChatViewModel(app.chat(), c.sessionId, c.title, c.workspace, c.harness, { app.markRead(c.sessionId) }, app.memory) }
                 },
             )
             ChatScreen(

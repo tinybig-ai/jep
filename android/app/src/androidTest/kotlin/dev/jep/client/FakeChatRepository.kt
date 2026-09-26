@@ -105,7 +105,11 @@ class FakeChatRepository(
     @Volatile
     var promptGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 
+    /** every prompt the screen sent, in order */
+    val prompts = java.util.Collections.synchronizedList(mutableListOf<String>())
+
     override suspend fun prompt(sessionId: String, text: String, files: List<String>, clientID: String?, steer: Boolean): ChatMessage {
+        prompts += text
         promptGate?.await()
         return ChatMessage("reply", Role.ASSISTANT, 1, listOf(ChatPart.Text("ok")))
     }
