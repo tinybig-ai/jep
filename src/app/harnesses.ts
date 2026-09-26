@@ -1,7 +1,7 @@
 import { startOpenCodeServer } from "../harnesses/opencode.ts"
 import { startCodexAdapter } from "../harnesses/codex.ts"
 import { CLAUDE_SETTINGS, startClaudeAdapter } from "../harnesses/claude.ts"
-import type { HarnessAdapter, HarnessSettingSpec, HarnessSupervisor } from "./ports.ts"
+import type { HarnessAdapter, HarnessSettingSpec, HarnessSupervisor } from "../core/ports.ts"
 
 /**
  * The registry behind HarnessSupervisor: the one place that knows how to bring

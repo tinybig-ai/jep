@@ -1,7 +1,7 @@
 import { mkdtempSync, mkdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { buildHarnesses } from "../core/harnesses.ts"
+import { buildHarnesses } from "./harnesses.ts"
 import { runComplianceSuite } from "../core/compliance.ts"
 
 /**

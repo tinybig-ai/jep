@@ -12,7 +12,7 @@ from **Telegram**, the **Android app**, or any client behind the
 
 [![](https://img.shields.io/badge/version-0.1.0-3d6aa8)](package.json)
 [![](https://img.shields.io/badge/Node-%E2%89%A526-339933)](package.json)
-[![](https://img.shields.io/badge/adapters-opencode%20%C2%B7%20codex%20%C2%B7%20claude-26a269)](src/core/harnesses.ts)
+[![](https://img.shields.io/badge/adapters-opencode%20%C2%B7%20codex%20%C2%B7%20claude-26a269)](src/app/harnesses.ts)
 [![](https://img.shields.io/badge/clients-Telegram%20%C2%B7%20Android-643891)](docs/GATEWAY.md)
 [![](https://img.shields.io/badge/license-mit-576b91)](LICENSE)
 
@@ -269,7 +269,7 @@ export async function startMyHarness(workspace: string): Promise<HarnessAdapter>
 Register it in the harness registry, **one row, and nothing else**:
 
 ```ts
-// src/core/harnesses.ts
+// src/app/harnesses.ts
 { id: "my-harness", icon: "🟢",
   start: (dir) => startMyHarness(dir),
   available: async () => probeCli("my-harness") }

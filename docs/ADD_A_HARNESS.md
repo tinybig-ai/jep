@@ -137,7 +137,7 @@ itself, so you never prefix them.
 ### 2. Register it
 
 Add **one row** to `defineHarnesses()` in
-[`src/core/harnesses.ts`](../src/core/harnesses.ts):
+[`src/app/harnesses.ts`](../src/app/harnesses.ts):
 
 ```ts
 {
