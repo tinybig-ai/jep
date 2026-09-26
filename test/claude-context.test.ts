@@ -44,6 +44,7 @@ await writeFile(bin, `#!/bin/sh\n[ "$1" = "--help" ] && exit 0\ncat <<'EOF'\n${l
 await chmod(bin, 0o755)
 process.env.CLAUDE_BIN = bin
 process.env.CLAUDE_HOME = dir // no settings.json: nothing configured
+process.env.JEP_DATA_HOME = dir // turn stamps land here, never in the real data home
 
 const { ClaudeAdapter } = await import("../src/harnesses/claude.ts")
 
