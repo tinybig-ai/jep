@@ -1,7 +1,7 @@
 import { startOpenCodeServer } from "../harnesses/opencode.ts"
 import { startCodexAdapter } from "../harnesses/codex.ts"
-import { startClaudeAdapter } from "../harnesses/claude.ts"
-import type { HarnessAdapter, HarnessSupervisor } from "./ports.ts"
+import { CLAUDE_SETTINGS, startClaudeAdapter } from "../harnesses/claude.ts"
+import type { HarnessAdapter, HarnessSettingSpec, HarnessSupervisor } from "./ports.ts"
 
 /**
  * The registry behind HarnessSupervisor: the one place that knows how to bring
@@ -23,6 +23,8 @@ export interface HarnessDef extends HarnessSupervisor {
    * fallback.
    */
   readonly icon: string
+  /** settings a client can offer when creating a session for this harness */
+  settings?(): HarnessSettingSpec[]
   /** false when the harness isn't installed/usable on this machine */
   available(): Promise<boolean>
 }
@@ -94,6 +96,7 @@ function defineHarnesses(opts: HarnessOpts): HarnessDef[] {
     {
       id: "claude",
       icon: "🔶",
+      settings: () => CLAUDE_SETTINGS,
       async start(workspace: string): Promise<HarnessAdapter> {
         return startClaudeAdapter(workspace)
       },

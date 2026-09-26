@@ -15,6 +15,24 @@ export const stripInjectedContext = (text: string): string => {
   return i === -1 ? text : text.slice(i + JEP_CONTEXT_FOOTER.length)
 }
 
+// An attachment has no flag in a print-mode CLI, so naming the paths in the
+// prompt is what lets the agent open them. That list is jep talking to the
+// harness, not part of the message — shown back to the reader it appears as if
+// they typed a filesystem path they never saw, and it makes the text the
+// harness recorded differ from the text the client sent, so a client matching
+// its own outgoing message against the record never finds it.
+// Built here and stripped here, so the two can't drift.
+export const ATTACHMENT_HEADER = "Attached files:"
+
+export const withAttachments = (text: string, paths: string[] = []): string =>
+  paths.length ? `${text}\n\n${ATTACHMENT_HEADER}\n${paths.map((p) => `- ${p}`).join("\n")}` : text
+
+// Anchored to the end and only over lines that are all "- <path>", so a message
+// that merely talks about attached files keeps its words.
+const ATTACHMENT_BLOCK = new RegExp(`\\n{2}${ATTACHMENT_HEADER}\\n(?:- [^\\n]+(?:\\n|$))+$`)
+
+export const stripAttachments = (text: string): string => text.replace(ATTACHMENT_BLOCK, "")
+
 // A harness splices a lot of machinery into the user's half of a transcript:
 // background-task notifications, the envelope around a slash command, the
 // stdout of a `!` shell line, system reminders. All of it is addressed to the
@@ -53,7 +71,7 @@ export const dropBlocks = (text: string): string => {
 // it. A slash command and a `!` shell line are real input and stay; their
 // surrounding bookkeeping does not.
 export const transcriptText = (raw: string): string => {
-  const text = stripInjectedContext(raw)
+  const text = stripAttachments(stripInjectedContext(raw))
   const cmd = text.match(/<command-name>([^<]*)<\/command-name>/)
   if (cmd) {
     const args = text.match(/<command-args>([^<]*)<\/command-args>/)

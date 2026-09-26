@@ -5,15 +5,26 @@ import { existsSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import type { AgentRef, HarnessAdapter, ModelRef, ModelCaps } from "../core/ports.ts"
+import type { AgentRef, HarnessAdapter, HarnessSettingSpec, ModelRef, ModelCaps } from "../core/ports.ts"
 import type { AskRequest, DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionHold, SessionSummary, SkillDirs } from "../core/types.ts"
 import { resolveAgent } from "../core/agents.ts"
+import { withAttachments } from "../core/transcript.ts"
 
 // claude's `--agent` takes a subagent type jep can't enumerate reliably, so it
 // offers no switch here. A requested id (opencode's "build", say, left over from
 // another harness) is ignored rather than forwarded, which is what used to fail
 // with "--agent 'build' not found".
 const AGENTS: AgentRef[] = []
+
+export const CLAUDE_SETTINGS: HarnessSettingSpec[] = [
+  {
+    id: "dangerouslySkipPermissions",
+    label: "Skip permission prompts",
+    description: "Run Claude with --dangerously-skip-permissions so tool use does not stop for approval.",
+    default: false,
+    danger: true,
+  },
+]
 
 /**
  * Claude Code as a harness.
@@ -114,6 +125,10 @@ export class ClaudeAdapter implements HarnessAdapter {
     } catch (err) {
       return { healthy: false, version: (err as Error)?.message ?? "claude not runnable" }
     }
+  }
+
+  settings(): HarnessSettingSpec[] {
+    return CLAUDE_SETTINGS
   }
 
   // ─── sessions ───────────────────────────────────────────────────────────
@@ -309,19 +324,21 @@ export class ClaudeAdapter implements HarnessAdapter {
       model?: ModelRef
       filePaths?: string[]
       agent?: string
+      harnessSettings?: Record<string, boolean>
     },
   ): Promise<Message> {
     const native = this.#real(sessionID)
     const pending = isPending(native)
 
     const args = ["-p", "--output-format", "stream-json", "--include-partial-messages", "--verbose"]
+    if (opts?.harnessSettings?.dangerouslySkipPermissions) args.push("--dangerously-skip-permissions")
     if (opts?.model?.modelID) args.push("--model", opts.model.modelID)
     const agent = resolveAgent(AGENTS, opts?.agent)
     if (agent) args.push("--agent", agent)
     if (!pending) args.push("--resume", native)
     // attachments have no flag in print mode; naming the paths is what lets
     // the agent read them with its own tools
-    const body = opts?.filePaths?.length ? `${text}\n\nAttached files:\n${opts.filePaths.map((f) => `- ${f}`).join("\n")}` : text
+    const body = withAttachments(text, opts?.filePaths)
     args.push(body)
 
     // Route permission prompts to the phone. Without this, print mode has
@@ -332,7 +349,7 @@ export class ClaudeAdapter implements HarnessAdapter {
     // or strings", space-separated), so whatever follows it is swallowed as
     // another config — including the prompt, which then reads as a missing file
     // and kills the run before it starts.
-    if (await this.#asksSupported()) {
+    if (!opts?.harnessSettings?.dangerouslySkipPermissions && await this.#asksSupported()) {
       const sock = await this.#askChannel()
       if (sock) {
         args.push(

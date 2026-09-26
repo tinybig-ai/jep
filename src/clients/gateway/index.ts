@@ -5,11 +5,12 @@
 // surface. Every endpoint the phone can call is listed in docs/GATEWAY.md,
 // which stays in step with this file.
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
+import { execFile } from "node:child_process"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, isAbsolute, join, resolve, sep } from "node:path"
-import type { HarnessAdapter, SessionImport, Terminal } from "../../core/ports.ts"
+import type { HarnessAdapter, HarnessSettingSpec, SessionImport, Terminal } from "../../core/ports.ts"
 import type { PairingAdmin } from "../../core/pairing.ts"
 import { pushFor, UnregisteredToken, type PushNotifier } from "../../core/push.ts"
 import { readClaudeMcp, readCodexMcp, readOpencodeMcp, writeClaudeProjectEnabled, writeCodexMcpEnabled, writeOpencodeMcpEnabled } from "../../core/mcpconfig.ts"
@@ -28,6 +29,8 @@ export interface GatewayDeps {
   /** the harnesses installed here, and the default — what a conversation may
    * be created under, independent of any one workspace */
   harnesses?(): { ids: string[]; default: string }
+  /** settings schemas for harnesses that have not started a workspace yet */
+  harnessSettings?(harness: string): HarnessSettingSpec[]
   /** bring a directory up as a workspace under a harness, the way the bot's
    * "Add project" does; the gateway holds no spawn logic of its own */
   addWorkspace?(dir: string, harness?: string): Promise<{ name: string; adapter: HarnessAdapter }>
@@ -76,6 +79,7 @@ const AGENTS_FILE = "gateway-agents.json"
 const TERMINAL_FILE = "gateway-terminal.json"
 const ARCHIVED_FILE = "gateway-archived.json"
 const PUSH_FILE = "gateway-push.json"
+const HARNESS_SETTINGS_FILE = "gateway-harness-settings.json"
 const BODY_MAX = 1 << 20
 
 // Turn liveness. A gateway turn runs with no absolute deadline (timeoutMs: 0),
@@ -193,6 +197,30 @@ async function loadAgents(dataHome: string): Promise<Map<string, string>> {
 const saveAgents = async (dataHome: string, agents: Map<string, string>): Promise<void> => {
   await mkdir(dataHome, { recursive: true })
   await writeFile(join(dataHome, AGENTS_FILE), JSON.stringify(Object.fromEntries(agents), null, 1))
+}
+
+type SessionHarnessSettings = Record<string, boolean>
+
+async function loadHarnessSettings(dataHome: string): Promise<Map<string, SessionHarnessSettings>> {
+  try {
+    const raw = JSON.parse(await readFile(join(dataHome, HARNESS_SETTINGS_FILE), "utf8")) as Record<string, unknown>
+    return new Map(Object.entries(raw).flatMap(([sessionID, value]) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return []
+      const settings = Object.fromEntries(Object.entries(value).filter((row): row is [string, boolean] => typeof row[1] === "boolean"))
+      return [[sessionID, settings]]
+    }))
+  } catch {
+    return new Map()
+  }
+}
+
+const saveHarnessSettings = async (dataHome: string, settings: Map<string, SessionHarnessSettings>): Promise<void> => {
+  await mkdir(dataHome, { recursive: true })
+  await writeFile(join(dataHome, HARNESS_SETTINGS_FILE), JSON.stringify(Object.fromEntries(settings), null, 1))
+}
+
+function valuesForSettings(specs: HarnessSettingSpec[], values: SessionHarnessSettings = {}): SessionHarnessSettings {
+  return Object.fromEntries(specs.map((setting) => [setting.id, values[setting.id] ?? setting.default]))
 }
 
 // Conversations the user filed away: hidden from the list, never deleted. Like
@@ -397,6 +425,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   const archived = await loadArchived(deps.dataHome)
   const models = await loadModels(deps.dataHome)
   const agents = await loadAgents(deps.dataHome)
+  const harnessSettings = await loadHarnessSettings(deps.dataHome)
   const terminalTokens = await loadTerminalTokens(deps.dataHome)
   const pushTokens = await loadPushTokens(deps.dataHome)
   // Whether this gateway offers a shell at all — an operator decision on the
@@ -732,6 +761,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         filePaths: next.filePaths,
         ...(next.model ? { model: next.model } : {}),
         ...(next.agent ? { agent: next.agent } : {}),
+        harnessSettings: harnessSettings.get(id) ?? {},
         signal: ac.signal,
       })
       next.resolve({ status: 200, message })
@@ -926,6 +956,23 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         return json(res, 200, { harnesses: h.ids, default: h.default })
       }
 
+      // The same adapter-declared schema powers creation-time controls (by
+      // harness id) and per-conversation settings (by session id).
+      if (path === "/harness-settings") {
+        const sessionID = str("id")
+        if (sessionID) {
+          const adapter = await ensureListed(sessionID)
+          if (!adapter) return json(res, 404, { error: "unknown session" })
+          const options = adapter.settings?.() ?? deps.harnessSettings?.(adapter.id) ?? []
+          return json(res, 200, { options, values: valuesForSettings(options, harnessSettings.get(sessionID)) })
+        }
+        const harnessID = str("harness")
+        if (!harnessID) return json(res, 400, { error: "harness required" })
+        const adapter = deps.adapters().find((item) => item.adapter.id === harnessID)?.adapter
+        const options = adapter?.settings?.() ?? deps.harnessSettings?.(harnessID) ?? []
+        return json(res, 200, { options, values: Object.fromEntries(options.map((o) => [o.id, o.default])) })
+      }
+
       // 📂 directory browser, bounded to one root so a tap can't wander into
       // /etc and "up" has somewhere to stop — the same rule the bot's picker
       // uses. Folders only, dotfiles hidden.
@@ -990,6 +1037,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const wantWorkspace = str("workspace") // a served workspace's name
         const wantPath = str("path") // …or an absolute directory to serve
         const wantHarness = str("harness")
+        const requestedSettings = b.harnessSettings && typeof b.harnessSettings === "object" && !Array.isArray(b.harnessSettings)
+          ? Object.fromEntries(Object.entries(b.harnessSettings).filter((row): row is [string, boolean] => typeof row[1] === "boolean"))
+          : {}
         const all = deps.adapters()
         // creation-time selection: name a workspace and/or a harness, or hand
         // over a directory. With nothing, the first served one (the old default).
@@ -1026,8 +1076,16 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           }
         }
         if (!picked) return json(res, 400, { error: "no such workspace or harness" })
+        const settingSpecs = picked.adapter.settings?.() ?? deps.harnessSettings?.(picked.adapter.id) ?? []
+        if (Object.keys(requestedSettings).some((key) => !settingSpecs.some((spec) => spec.id === key))) {
+          return json(res, 400, { error: "unknown harness setting" })
+        }
         const s = await picked.adapter.createSession(title || undefined)
         sessionAdapters.set(s.id, picked.adapter)
+        if (settingSpecs.length) {
+          harnessSettings.set(s.id, valuesForSettings(settingSpecs, requestedSettings))
+          await saveHarnessSettings(deps.dataHome, harnessSettings)
+        }
         return json(res, 200, { session: { ...s, adapter: picked.name, harness: picked.adapter.id } })
       }
 
@@ -1225,8 +1283,25 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         archived.delete(id)
         await saveArchived(deps.dataHome, archived)
         const gone = await adapter.deleteSession(id).catch(() => false)
-        if (gone) asksBySession.delete(id)
+        if (gone) {
+          harnessSettings.delete(id)
+          asksBySession.delete(id)
+          await saveHarnessSettings(deps.dataHome, harnessSettings)
+        }
         return json(res, gone ? 200 : 404, gone ? { ok: true } : { error: "couldn't delete" })
+      }
+
+      if (path === "/set-harness-setting") {
+        const key = str("key")
+        const enabled = typeof b.enabled === "boolean" ? b.enabled : null
+        if (!key || enabled == null) return json(res, 400, { error: "key and boolean enabled required" })
+        const specs = adapter.settings?.() ?? deps.harnessSettings?.(adapter.id) ?? []
+        if (!specs.some((setting) => setting.id === key)) return json(res, 400, { error: "unknown harness setting" })
+        const current = valuesForSettings(specs, harnessSettings.get(id))
+        current[key] = enabled
+        harnessSettings.set(id, current)
+        await saveHarnessSettings(deps.dataHome, harnessSettings)
+        return json(res, 200, { ok: true, values: current })
       }
 
       // the pickable models for this conversation's harness, plus the one it is

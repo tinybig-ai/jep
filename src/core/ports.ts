@@ -23,6 +23,15 @@ export interface ModelCaps {
   contextLimit: number
 }
 
+/** A harness-specific control rendered generically by clients. */
+export interface HarnessSettingSpec {
+  id: string
+  label: string
+  description: string
+  default: boolean
+  danger?: boolean
+}
+
 /** A primary agent a harness can run a turn under. Ids are the harness's own
  * (opencode's "build"/"plan", claude's agent types) and opaque to clients;
  * `default` marks the one the harness uses when none is chosen. */
@@ -63,6 +72,8 @@ export interface HarnessAdapter {
       /** primary agent to run this turn under, an id from agents() — omitted
        * means the harness default */
       agent?: string
+      /** boolean settings declared by this harness, persisted per session */
+      harnessSettings?: Record<string, boolean>
     },
   ): Promise<Message>
   /** @param opts.limit ask the harness for only the newest N, when it can
@@ -98,6 +109,9 @@ export interface HarnessAdapter {
    * saying "default" and leaving the user to guess. null when the harness
    * decides at run time and won't say in advance. */
   defaultModel?(): Promise<string | null>
+  /** extra per-harness controls; clients render these without knowing the
+   * harness that owns them. */
+  settings?(): HarnessSettingSpec[]
   /** `provider/model` -> input capabilities (image/attachment), if known */
   capabilities?(): Promise<Map<string, ModelCaps>>
   /** every project this harness knows of, regardless of which directory this

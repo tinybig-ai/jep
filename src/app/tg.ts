@@ -7,7 +7,7 @@ import { buildHarnesses, DEFAULT_HARNESS } from "../core/harnesses.ts"
 import { opencodeSessionImport } from "../importers/opencode.ts"
 import { tmuxTerminal } from "../terminals/tmux.ts"
 import { assertAdapterImplements } from "../core/compliance.ts"
-import type { HarnessAdapter } from "../core/ports.ts"
+import type { HarnessAdapter, HarnessSettingSpec } from "../core/ports.ts"
 import { TelegramBot } from "../clients/telegram/bot.ts"
 import { createTelegramApi, type ReplyMarkup, type TelegramApi, type TgUpdate } from "../clients/telegram/api.ts"
 import { Pairing, newPairCode } from "../clients/telegram/pair.ts"
@@ -365,10 +365,10 @@ async function main() {
 
   // only offer harnesses that are actually installed here — a picker row that
   // always fails is worse than no row
-  const available: Array<{ id: string; label: string; icon: string }> = []
+  const available: Array<{ id: string; label: string; icon: string; settings: HarnessSettingSpec[] }> = []
   for (const h of harnesses) {
     if (mockMode && h.id !== DEFAULT_HARNESS) continue
-    if (await h.available()) available.push({ id: h.id, label: h.label, icon: h.icon })
+    if (await h.available()) available.push({ id: h.id, label: h.label, icon: h.icon, settings: h.settings?.() ?? [] })
     else console.error(`[harness] ${h.id} unavailable — not offering it`)
   }
   console.error(`harnesses: ${available.map((h) => h.id).join(", ") || "(none)"}`)
@@ -406,6 +406,7 @@ async function main() {
     const gw = await startGateway({
       adapters: () => workspaces.map((w) => ({ name: w.name, adapter: w.adapter })),
       harnesses: () => ({ ids: available.map((h) => h.id), default: DEFAULT_HARNESS }),
+      harnessSettings: (id) => available.find((h) => h.id === id)?.settings ?? [],
       // the phone's "Add project": bring a directory up as a workspace under a
       // harness, exactly as the bot's workspace picker does
       addWorkspace: async (dir, harnessID) => {
