@@ -111,8 +111,9 @@ npm start
 
 > Both installers also register a small Claude Code hook
 > (`scripts/claude-handoff-hook.mjs`): when you continue a Claude conversation
-> from your phone, a desktop window that still has it open stops your next
-> message and says to run `claude -c`, instead of forking the conversation.
+> from your phone, a desktop window that still has it open catches up on
+> your next message: Claude is handed what was said on the phone first. If the
+> transcript cannot be read, it stops the message and says to run `claude -c`.
 > `JEP_NO_CLAUDE_HOOK=1` skips it.
 
 > On Linux, `sh scripts/install-linux.sh` installs it as a **systemd user
