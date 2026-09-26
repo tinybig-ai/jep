@@ -68,6 +68,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // Whether the person is looking at the app: the notification policy's
+    // first question. Nothing ever answered it, so the service always believed
+    // the app was away and announced a finished turn in the very chat on screen.
+    override fun onStart() {
+        super.onStart()
+        dev.jep.client.device.AppPresence.onForeground()
+    }
+
+    override fun onStop() {
+        dev.jep.client.device.AppPresence.onBackground()
+        super.onStop()
+    }
+
     /** a tap on a notification while the app is already running */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)

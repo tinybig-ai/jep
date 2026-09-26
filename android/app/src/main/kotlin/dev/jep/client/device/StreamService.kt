@@ -130,23 +130,35 @@ class StreamService : Service() {
             .setContentText(text)
             .setContentIntent(open)
             .setAutoCancel(true)
+            // A group of its own, per conversation. Left ungrouped, Android
+            // bundles the app's notifications (this one and the standing
+            // "holding the line") under a summary it makes itself, and tapping
+            // that summary opens the app's launcher, which is the list: the tap
+            // landed on the list or in the chat depending on where the finger
+            // hit. Android only bundles notifications that have no group.
+            .setGroup("jep:$sessionId")
             .build()
         // one per conversation and kind, so a newer one replaces an older one
         // and opening the chat can take them back (Notifications.clear)
         manager.notify(sessionId, kind, n)
     }
 
+    // the standing notification a foreground service must show: on a quiet
+    // channel of its own, and in its own group, so it is never bundled with the
+    // ones that matter (see notify)
     private fun holdNotification(text: String): Notification =
-        NotificationCompat.Builder(this, CHANNEL_ID)
+        NotificationCompat.Builder(this, HOLD_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_chat)
             .setContentText(text)
             .setOngoing(true)
+            .setGroup("jep:hold")
             .build()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
         private const val CHANNEL_ID = "jep.events"
+        private const val HOLD_CHANNEL_ID = "jep.hold"
         private const val FOREGROUND_ID = 42
         private const val ASK_GRACE_MS = 1_500L
 
@@ -154,6 +166,9 @@ class StreamService : Service() {
             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             manager.createNotificationChannel(
                 NotificationChannel(CHANNEL_ID, "agent activity", NotificationManager.IMPORTANCE_HIGH),
+            )
+            manager.createNotificationChannel(
+                NotificationChannel(HOLD_CHANNEL_ID, "staying connected", NotificationManager.IMPORTANCE_MIN),
             )
         }
     }
