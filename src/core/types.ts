@@ -165,6 +165,16 @@ export interface AskRequest {
   options: AskOption[]
   /** permission asks answer once/always/reject; questions carry their own choices */
   kind?: "permission" | "question"
+  /** Where in the transcript it was raised: the message, and the tool call that
+   *  is waiting on the answer. A client puts the card right under that call.
+   *  Placing it by time instead compared the harness's clock with the phone's,
+   *  and a phone a fraction of a second behind floated the card above the very
+   *  call it was asking about. Either may be missing. */
+  messageID?: string
+  callID?: string
+  /** when the harness raised it, on the harness's clock — the same clock its
+   *  message times are on, which the client's is not */
+  at?: number
 }
 
 // Where a harness looks for skills, and whether flipping
@@ -200,6 +210,13 @@ export type DomainEvent =
   | { type: "part.delta"; sessionID: string; messageID: string; partID: string; text: string; partType?: string }
   | { type: "session.idle"; sessionID: string }
   | { type: "ask.requested"; sessionID: string; ask: AskRequest }
+  /** That ask is over — answered (here or on another client), withdrawn, or
+   *  outlived by the turn that raised it. Without this, `ask.requested` was the
+   *  only ask event there was: a card could only ever be cleared by the very
+   *  client that answered it, so one answered from Telegram, or abandoned when
+   *  its turn ended, stood on the phone forever — and a standing card takes the
+   *  send button and the responding spinner with it. */
+  | { type: "ask.resolved"; sessionID: string; askID: string }
   | { type: "session.error"; sessionID: string; message: string }
   // The turn ended because somebody stopped it. A harness reports that as an
   // error, but it is not a failure, and every client was reading the error's

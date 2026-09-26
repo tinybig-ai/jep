@@ -406,13 +406,13 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   // help-files the phone needs, resolved as events and commands arrive
   const sessionAdapters = new Map<string, HarnessAdapter>()
   const askSessions = new Map<string, string>()
+  // Asks still waiting on a human, per session. A turn parked on a permission
+  // prompt is not stalled — it is being polite — so the watchdog holds its fire
+  // until the ask is answered or stood down.
   const turnIdleMs = deps.liveness?.turnIdleMs ?? TURN_IDLE_MS
   const toolIdleMs = deps.liveness?.toolIdleMs ?? TOOL_IDLE_MS
   const idleGraceMs = deps.liveness?.idleGraceMs ?? IDLE_GRACE_MS
   const watchdogTickMs = deps.liveness?.tickMs ?? WATCHDOG_TICK_MS
-  // Asks still waiting on a human, per session. A turn parked on a permission
-  // prompt is not stalled — it is being polite — so the watchdog holds its fire
-  // until the ask is answered or stood down.
   const asksBySession = new Map<string, Set<string>>()
   const openAsks = (sessionID: string): Set<string> => {
     const hit = asksBySession.get(sessionID)
@@ -518,6 +518,14 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
             askSessions.set(evt.ask.id, evt.ask.sessionID)
             openAsks(evt.ask.sessionID).add(evt.ask.id)
             console.error(`[ask] surfaced ${evt.ask.id} (${evt.ask.title})`)
+          }
+          // the ask is spent, wherever it was answered: stop holding the
+          // watchdog off, or a turn parked on a card nobody can answer any
+          // more would never be judged stalled
+          if (evt.type === "ask.resolved") {
+            closeAsk(evt.askID)
+            if (live) live.lastActivity = Date.now()
+            console.error(`[ask] resolved ${evt.askID}`)
           }
           // what the turn is doing decides which ceiling applies, so track the
           // tools the harness reports as running (and when each one started)

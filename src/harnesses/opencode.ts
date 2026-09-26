@@ -36,6 +36,14 @@ const NO_TIMEOUT_AGENT = new Agent({ headersTimeout: 0, bodyTimeout: 0 }) as unk
 const HARNESS_NS = "opencode"
 
 const toInternalId = (native: string) => `${HARNESS_NS}://${native}`
+
+// opencode names the tool call an ask is holding up as `tool: { messageID,
+// callID }`. The message id is the one the transcript uses; the callID is not
+// the tool part's id there, so only the message anchors the card.
+const askAnchor = (tool: unknown): { messageID?: string; at: number } => {
+  const messageID = (tool as { messageID?: unknown } | undefined)?.messageID
+  return { ...(typeof messageID === "string" && messageID ? { messageID } : {}), at: Date.now() }
+}
 const toNativeId = (id: string) =>
   id.startsWith(`${HARNESS_NS}://`) ? id.slice(HARNESS_NS.length + 3) : id
 
@@ -874,6 +882,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
             title: questions[0]?.header || questions[0]?.question || "question",
             ...(questions.length ? { detail: questions.map((q) => q.question ?? "").filter(Boolean).join("\n\n") } : {}),
             options,
+            ...askAnchor(props.tool),
           },
         }
       }
@@ -909,6 +918,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
               { id: "always", label: "Always allow" },
               { id: "reject", label: "Deny", style: "danger" },
             ],
+            ...askAnchor(props.tool),
           },
         }
       }

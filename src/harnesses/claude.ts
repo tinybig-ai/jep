@@ -70,10 +70,18 @@ export class ClaudeAdapter implements HarnessAdapter {
   // time a turn runs, plus the turns parked on an unanswered question
   #askSocket: string | null = null
   #askServer: net.Server | null = null
-  #askWaiters = new Map<string, (decision: { decision: "allow" | "deny"; message?: string }) => void>()
+  // the session each parked ask belongs to, so standing one down can say which
+  // conversation's card to take away
+  #askWaiters = new Map<string, { sessionID: string; answer: (decision: { decision: "allow" | "deny"; message?: string }) => void }>()
   #askSeq = 0
   // whether this CLI build takes --permission-prompt-tool at all; asked once
   #askSupported: boolean | null = null
+  // context windows Claude Code reported for the models it actually ran, keyed
+  // by the id it ran and the id (or alias) the turn asked for; it knows these
+  // and jep does not, so they are learned from each turn's result
+  #contextWindows = new Map<string, number>()
+  // the model the CLI resolved to on the last turn, for when nothing is configured
+  #lastModel: string | null = null
 
   constructor(workspace: string) {
     this.workspace = workspace
@@ -494,6 +502,9 @@ export class ClaudeAdapter implements HarnessAdapter {
       opts?.signal?.removeEventListener("abort", onAbort)
       this.#running.delete(native)
       if (realID) this.#running.delete(realID)
+      // the turn is over, so any card it raised is unanswerable now — say so
+      // rather than leaving it standing on whatever client is showing it
+      this.#standDownAsks(realID || native, "the turn ended before this was answered")
       this.#metaCache.clear() // the transcript just grew
     }
 
@@ -526,11 +537,13 @@ export class ClaudeAdapter implements HarnessAdapter {
     const waiter = this.#askWaiters.get(askID)
     if (!waiter) return false
     this.#askWaiters.delete(askID)
-    waiter(
+    waiter.answer(
       optionID === "allow"
         ? { decision: "allow" }
         : { decision: "deny", message: "denied from Telegram" },
     )
+    // every other client holding this card now learns it is spent
+    this.#emit({ type: "ask.resolved", sessionID: waiter.sessionID, askID })
     return true
   }
 
@@ -540,8 +553,31 @@ export class ClaudeAdapter implements HarnessAdapter {
     const waiter = this.#askWaiters.get(askID)
     if (!waiter) return false
     this.#askWaiters.delete(askID)
-    waiter({ decision: "deny", message: "answered in chat" })
+    waiter.answer({ decision: "deny", message: "answered in chat" })
+    this.#emit({ type: "ask.resolved", sessionID: waiter.sessionID, askID })
     return true
+  }
+
+  /**
+   * Stand down every ask still parked on a session, and say so. An ask belongs
+   * to the turn that raised it: once that turn is over the waiter's socket is
+   * gone and no answer can reach the model, so a card left standing is a button
+   * that cannot work — and on the phone a standing card holds the send button
+   * and the responding spinner hostage. Swept when the turn ends, not only at
+   * shutdown, which is what left the "wants to run" card up after the tool had
+   * already been and gone.
+   */
+  #standDownAsks(sessionID: string, why: string): void {
+    for (const [id, waiter] of [...this.#askWaiters]) {
+      if (sessionID && waiter.sessionID && waiter.sessionID !== sessionID) continue
+      this.#askWaiters.delete(id)
+      try {
+        waiter.answer({ decision: "deny", message: why })
+      } catch {
+        /* the socket is already gone, which is the case this exists for */
+      }
+      this.#emit({ type: "ask.resolved", sessionID: waiter.sessionID || sessionID, askID: id })
+    }
   }
 
   // One socket per adapter, opened lazily and never announced anywhere: the
@@ -583,7 +619,7 @@ export class ClaudeAdapter implements HarnessAdapter {
   // one question from the MCP server: turn it into an ask the frontend can
   // render, and hold the socket open until somebody taps an answer
   #onAsk(line: string, conn: net.Socket): void {
-    let msg: { id?: string; session?: string; tool?: string; input?: Record<string, unknown> }
+    let msg: { id?: string; session?: string; tool?: string; input?: Record<string, unknown>; toolUseID?: string }
     try {
       msg = JSON.parse(line)
     } catch {
@@ -600,12 +636,15 @@ export class ClaudeAdapter implements HarnessAdapter {
         : typeof input.file_path === "string"
           ? input.file_path
           : JSON.stringify(input)
-    this.#askWaiters.set(askID, (decision) => {
-      try {
-        conn.write(`${JSON.stringify({ id: msg.id, ...decision })}\n`)
-      } catch (err) {
-        console.error(`[claude] ask answer failed: ${(err as Error)?.message ?? err}`)
-      }
+    this.#askWaiters.set(askID, {
+      sessionID: msg.session ?? "",
+      answer: (decision) => {
+        try {
+          conn.write(`${JSON.stringify({ id: msg.id, ...decision })}\n`)
+        } catch (err) {
+          console.error(`[claude] ask answer failed: ${(err as Error)?.message ?? err}`)
+        }
+      },
     })
     const ask: AskRequest = {
       id: askID,
@@ -616,6 +655,9 @@ export class ClaudeAdapter implements HarnessAdapter {
         { id: "allow", label: "Allow", style: "success" },
         { id: "deny", label: "Deny", style: "danger" },
       ],
+      // the tool_use id is the tool part's id, live and in the transcript alike
+      ...(msg.toolUseID ? { callID: msg.toolUseID } : {}),
+      at: Date.now(),
     }
     this.#emit({ type: "ask.requested", sessionID: ask.sessionID, ask })
   }
@@ -778,10 +820,7 @@ export class ClaudeAdapter implements HarnessAdapter {
     this.#running.clear()
     // an unanswered ask outlives nothing: the socket goes, and every parked
     // turn is told no rather than left waiting on a server that has stopped
-    for (const [id, waiter] of this.#askWaiters) {
-      waiter({ decision: "deny", message: "jep is shutting down" })
-      this.#askWaiters.delete(id)
-    }
+    this.#standDownAsks("", "jep is shutting down")
     this.#askServer?.close()
     this.#askServer = null
     this.#askSocket = null
