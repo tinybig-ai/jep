@@ -1,9 +1,9 @@
 package dev.jep.client.device
 
 import android.content.SharedPreferences
-import dev.jep.client.presentation.chat.ConversationMemory
-import dev.jep.client.presentation.chat.SavedDraft
-import dev.jep.client.presentation.chat.SavedSend
+import dev.jep.client.domain.repository.ConversationMemory
+import dev.jep.client.domain.repository.SavedDraft
+import dev.jep.client.domain.repository.SavedSend
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 

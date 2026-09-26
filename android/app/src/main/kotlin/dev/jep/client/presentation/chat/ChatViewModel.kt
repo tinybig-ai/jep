@@ -7,6 +7,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.jep.client.domain.model.Ask
 import dev.jep.client.domain.model.AskEntry
+import dev.jep.client.domain.repository.Attention
+import dev.jep.client.domain.repository.ConversationMemory
+import dev.jep.client.domain.repository.SavedAttachment
+import dev.jep.client.domain.repository.SavedDraft
+import dev.jep.client.domain.repository.SavedSend
 import dev.jep.client.domain.model.AgentInfo
 import dev.jep.client.domain.repository.ChatEvent
 import dev.jep.client.domain.model.ChatMessage
@@ -14,7 +19,6 @@ import dev.jep.client.domain.model.ChatPart
 import dev.jep.client.domain.repository.ChatRepository
 import dev.jep.client.domain.repository.ModelChoices
 import dev.jep.client.domain.repository.TurnAborted
-import dev.jep.client.device.AppPresence
 import dev.jep.client.domain.model.FileDiff
 import dev.jep.client.domain.model.GitSnapshot
 import dev.jep.client.domain.model.HarnessSettings
@@ -75,6 +79,8 @@ class ChatViewModel(
     private val onRead: () -> Unit = {},
     // the draft and the unsent messages, kept past the life of the process
     private val memory: ConversationMemory = ConversationMemory.None,
+    // what the device must hear about this screen to decide on notifications
+    private val attention: Attention = Attention.None,
 ) : ViewModel() {
 
     // a chat the user renamed no longer matches the sessions-list title
@@ -206,7 +212,7 @@ class ChatViewModel(
         // the foreground service needs to know which conversation is on screen:
         // it is the difference between "you are reading this" and "tell me when
         // it is done" (see NotificationPolicy)
-        AppPresence.onChatOpen(sessionId)
+        attention.chatOpened(sessionId)
         onRead()
         refresh()
         // the banner needs the model's name and context window up front, not
@@ -264,7 +270,7 @@ class ChatViewModel(
     }
 
     override fun onCleared() {
-        AppPresence.onChatClosed(sessionId)
+        attention.chatClosed(sessionId)
         super.onCleared()
     }
 

@@ -46,7 +46,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.sp
-import dev.jep.client.device.ThemeMode
+import dev.jep.client.domain.model.ThemeMode
 import dev.jep.client.domain.model.TerminalAccess
 
 // App-wide settings — preferences that belong to the person, not to one

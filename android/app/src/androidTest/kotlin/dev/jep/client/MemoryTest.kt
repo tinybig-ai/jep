@@ -5,9 +5,9 @@ import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
 import dev.jep.client.domain.model.Role
 import dev.jep.client.presentation.chat.ChatViewModel
-import dev.jep.client.presentation.chat.ConversationMemory
-import dev.jep.client.presentation.chat.SavedDraft
-import dev.jep.client.presentation.chat.SavedSend
+import dev.jep.client.domain.repository.ConversationMemory
+import dev.jep.client.domain.repository.SavedDraft
+import dev.jep.client.domain.repository.SavedSend
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test

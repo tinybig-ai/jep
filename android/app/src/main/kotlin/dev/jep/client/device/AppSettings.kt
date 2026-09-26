@@ -1,11 +1,11 @@
 package dev.jep.client.device
 
+import dev.jep.client.domain.model.ThemeMode
+
 import android.content.SharedPreferences
 
 // The user's app-wide preferences — not the per-conversation settings, which
 // live on the session. Device-layer concern: the rest of the app sees values.
-enum class ThemeMode { SYSTEM, LIGHT, DARK }
-
 class AppSettings(private val prefs: SharedPreferences) {
 
     val theme: ThemeMode

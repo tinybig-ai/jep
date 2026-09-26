@@ -1,4 +1,4 @@
-package dev.jep.client.presentation.chat
+package dev.jep.client.domain.repository
 
 import kotlinx.serialization.Serializable
 

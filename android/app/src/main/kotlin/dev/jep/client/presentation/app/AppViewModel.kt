@@ -8,12 +8,14 @@ import androidx.lifecycle.viewModelScope
 import dev.jep.client.data.GatewayChatRepository
 import dev.jep.client.device.AppSettings
 import dev.jep.client.device.JepHttp
-import dev.jep.client.device.ThemeMode
+import dev.jep.client.domain.model.ThemeMode
 import dev.jep.client.device.PairingStore
 import dev.jep.client.domain.repository.ChatRepository
 import dev.jep.client.domain.model.BrowseResult
 import dev.jep.client.domain.model.ImportableSession
 import dev.jep.client.domain.model.HarnessSetting
+import dev.jep.client.domain.repository.Attention
+import dev.jep.client.domain.repository.ConversationMemory
 import dev.jep.client.domain.model.SessionSummary
 import dev.jep.client.domain.model.TerminalAccess
 import dev.jep.client.domain.model.Workspace
@@ -68,7 +70,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val read = dev.jep.client.device.ReadStore(application.getSharedPreferences("jep", Context.MODE_PRIVATE))
     /** each conversation's draft and unsent messages, past the process's life */
-    val memory = dev.jep.client.device.ConversationStore(application.getSharedPreferences("jep-conversations", Context.MODE_PRIVATE))
+    val memory: ConversationMemory = dev.jep.client.device.ConversationStore(application.getSharedPreferences("jep-conversations", Context.MODE_PRIVATE))
+    /** how the screens tell the device what the person is looking at */
+    val attention: Attention = dev.jep.client.device.DeviceAttention(application)
 
     private val _prefs = MutableStateFlow(Prefs(settings.theme, settings.terminalEnabled, settings.backgroundStreaming))
     val prefs = _prefs.asStateFlow()
@@ -415,7 +419,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun open(session: SessionSummary) {
         markRead(session.id)
         // opened: whatever was announced about it is in front of the person now
-        dev.jep.client.device.Notifications.clear(getApplication(), session.id)
+        attention.seen(session.id)
         // `adapter` is the workspace's friendly name; fall back to the folder
         // name of the path when an older listing didn't carry it
         val target = Screen.Chat(
