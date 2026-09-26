@@ -45,6 +45,7 @@ import {
 import type { Pairing } from "./pair.ts"
 import type { ChatStore, HeldPrompt, VerbositySettings, DetailMode, VerbosityLayout, PendingPrompt } from "./store.ts"
 import type { ReminderRecord, ReminderStore } from "./reminders.ts"
+import { matchModel } from "./model-match.ts"
 
 interface Ws {
   name: string
@@ -1524,6 +1525,27 @@ export class TelegramBot {
       case "settings":
         await this.#settingsRoot(chatID, null)
         break
+      // Typed only: deliberately not in setMyCommands, so it stays out of the
+      // tap menu. A name, part of one, or a typo of one switches the model.
+      case "model": {
+        if (!arg.trim()) {
+          await tg.sendMessage({ chatID, text: "usage: /model <name> — part of a name or a typo is fine" })
+          break
+        }
+        const harnessID = ws.adapter.id
+        const old = this.#store.model(chatID, harnessID) ?? "default"
+        const hit = matchModel(arg, await this.#modelLabels(chatID))
+        if (!hit.model) {
+          const offer = hit.close.length ? `\nclosest: ${hit.close.join(", ")}` : ""
+          await tg.sendMessage({ chatID, text: `no model matches "${arg.trim()}"${offer}` })
+          break
+        }
+        if (hit.model === "default") this.#store.clearModel(chatID, harnessID)
+        else this.#store.setModel(chatID, harnessID, hit.model)
+        await tg.sendMessage({ chatID, text: `model changed ${old} → ${hit.model}` })
+        void this.#updateStatus(chatID).catch(logFail("status"))
+        break
+      }
       case "ls": {
         await this.#listPicker(chatID, "Conversations:", false, undefined, messageID)
         break
@@ -3904,6 +3926,21 @@ export class TelegramBot {
     await this.#menu(chatID, [...lines, ...rows], { messageID })
   }
 
+  // what the model picker offers, "default" first — the buttons and the typed
+  // /model command choose from the same list
+  async #modelLabels(chatID: number): Promise<string[]> {
+    const ws = this.#activeWs(chatID)
+    const native: ModelRef[] = ws ? (await ws.adapter.models?.().catch(() => [])) ?? [] : []
+    const labels: string[] = ["default"]
+    const seen = new Set<string>(["default"])
+    for (const label of [...native.map((ref) => `${ref.providerID}/${ref.modelID}`), ...this.#extraModels]) {
+      if (seen.has(label)) continue
+      seen.add(label)
+      labels.push(label)
+    }
+    return labels
+  }
+
   async #settingsModel(chatID: number, messageID: number, requestPage?: number): Promise<void> {
     const c = await this.#chat(chatID)
     const ws = this.#activeWs(chatID)
@@ -3911,21 +3948,8 @@ export class TelegramBot {
     // the "default" row names the model it defers to, so choosing it is not a
     // blind pick — it is the one row whose meaning isn't written on it
     const defaultRef = (await ws.adapter.defaultModel?.().catch(() => null)) ?? null
-    const native: ModelRef[] = ws ? (await ws.adapter.models?.().catch(() => [])) ?? [] : []
     const caps = (await ws.adapter.capabilities?.().catch(() => new Map<string, ModelCaps>())) ?? new Map<string, ModelCaps>()
-    const labels: string[] = ["default"]
-    const seen = new Set<string>(["default"])
-    for (const ref of native) {
-      const label = `${ref.providerID}/${ref.modelID}`
-      if (seen.has(label)) continue
-      seen.add(label)
-      labels.push(label)
-    }
-    for (const label of this.#extraModels) {
-      if (seen.has(label)) continue
-      seen.add(label)
-      labels.push(label)
-    }
+    const labels = await this.#modelLabels(chatID)
     const pages = Math.max(1, Math.ceil(labels.length / MAX_LIST))
     c.modelList = labels
     // Opening the picker jumps to whichever page holds the current model, so
