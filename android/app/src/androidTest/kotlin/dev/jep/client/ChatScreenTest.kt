@@ -991,5 +991,24 @@ class ChatScreenTest {
         rule.onNodeWithText("elsewhere-ask").assertIsDisplayed()
         assertEquals(listOf("a1"), vm.state.value.pastAsks.map { it.ask.id })
     }
+
+    @Test
+    fun a_long_message_can_be_written_in_a_bigger_composer() {
+        val vm = ChatViewModel(FakeChatRepository(messages = manyMessages(3)), "s1", "T")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitForIdle()
+        // a short message has nothing to expand
+        rule.onAllNodesWithContentDescription("expand the composer").assertCountEquals(0)
+        rule.runOnUiThread { vm.setDraft("first line\nsecond line\nthird line") }
+        rule.waitUntil(5_000) { rule.onAllNodesWithContentDescription("expand the composer").fetchSemanticsNodes().isNotEmpty() }
+        val before = rule.onNodeWithTag("composer").fetchSemanticsNode().size.height
+        rule.onNodeWithContentDescription("expand the composer").performClick()
+        rule.waitForIdle()
+        val after = rule.onNodeWithTag("composer").fetchSemanticsNode().size.height
+        assertTrue("expanded ($after) must be much taller than before ($before)", after > before * 2)
+        rule.onNodeWithContentDescription("shrink the composer").performClick()
+        rule.waitForIdle()
+        assertTrue(rule.onNodeWithTag("composer").fetchSemanticsNode().size.height < after)
+    }
 }
 

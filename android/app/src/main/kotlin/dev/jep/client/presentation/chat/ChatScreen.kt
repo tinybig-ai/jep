@@ -110,6 +110,10 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.material.icons.filled.OpenInFull
+import androidx.compose.material.icons.filled.CloseFullscreen
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
@@ -2749,8 +2753,11 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
     val sendable = canSend(state.ask, state.askChoice)
 
     val context = LocalContext.current
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    // several at once: picking one file, then reopening the picker for the
+    // next, was the only way to send a handful of screenshots
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        uris.forEach { uri ->
             val name = displayName(context, uri) ?: "file"
             val mime = context.contentResolver.getType(uri)
             val bytes = runCatching { context.contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
@@ -2790,11 +2797,28 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
                 OutlinedTextField(
                     value = draft,
                     onValueChange = { vm.setDraft(it) },
-                    Modifier.weight(1f),
+                    // expanded, it takes most of what the keyboard leaves: a long
+                    // message could only be written six lines at a time
+                    Modifier.weight(1f).then(
+                        if (expanded) Modifier.heightIn(min = (LocalConfiguration.current.screenHeightDp * 0.45f).dp) else Modifier,
+                    ).testTag("composer"),
                     placeholder = { Text("Message the agent", color = MaterialTheme.colorScheme.onSurfaceVariant) },
                     shape = RoundedCornerShape(24.dp),
                     minLines = 1,
-                    maxLines = 6,
+                    maxLines = if (expanded) Int.MAX_VALUE else 6,
+                    // offered once there is something long to write, and to fold back
+                    trailingIcon = if (expanded || draft.count { it == '\n' } >= 2 || draft.length > 160) {
+                        {
+                            IconButton(onClick = { expanded = !expanded }) {
+                                Icon(
+                                    if (expanded) Icons.Filled.CloseFullscreen else Icons.Filled.OpenInFull,
+                                    if (expanded) "shrink the composer" else "expand the composer",
+                                    Modifier.size(18.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    } else null,
                     colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
                         unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
                         focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
@@ -2821,6 +2845,7 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
                                 } ?: ""
                                 vm.send(quote + draft)
                                 onCancelReply()
+                                expanded = false
                             },
                             // hold to choose: steer in now, or wait for the reply to end
                             onLongClick = { if (draft.isNotBlank() || state.attachments.isNotEmpty()) sendMenu = true },
