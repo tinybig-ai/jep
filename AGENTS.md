@@ -15,8 +15,8 @@ The rules, in `docs/PROCESSES.md` § launchd:
 - `launchctl kickstart -k gui/$(id -u)/com.jep.tg` for **code-only** changes.
   Prefer a graceful `kill -TERM <pid>` when you can (launchd `KeepAlive` still
   restarts it): the daemon's SIGTERM handler closes the gateway and every
-  harness child, while `kickstart -k` can orphan one `opencode serve` per active
-  workspace.
+  harness child, while `kickstart -k` can orphan the shared `opencode serve`
+  (the next boot reaps a parentless one, but a graceful stop never leaves it).
 - If `scripts/jep-daemon.sh` changed, refresh the copy the plist actually runs
   (`cp scripts/jep-daemon.sh ~/.local/share/jep-tg/jep-daemon.sh`), or a restart
   execs a stale path and crash-loops. `scripts/install.sh` does this for you.

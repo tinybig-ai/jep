@@ -74,8 +74,12 @@ fixture/
 
 - Node v26 native TypeScript, run with `--experimental-strip-types`.
 - One harness per workspace. The bot owns a list of workspaces; the first is
-  the default. Each workspace gets its own `HarnessAdapter` (a spawned
-  `opencode serve` child). Sessions live on disk and survive bot restarts.
+  the default. Each workspace gets its own `HarnessAdapter`; the opencode ones
+  share a single `opencode serve` child, each request naming its workspace with
+  `?directory=` (one process holding the store open instead of one per
+  workspace). Sessions live on disk and survive bot restarts. At boot the
+  daemon stops any parentless `opencode serve` started with jep's arguments —
+  one an earlier daemon lost on a hard restart.
 - All sessions run inside an **isolated data home** so the bot never touches the
   user's CLI/opencode store. The user's `auth.json` is mirrored there at boot
   so registry models (zen + opencode-go) still run (see `syncOpenCodeAuth` in
@@ -129,7 +133,8 @@ pgrep -fl 'src/app/tg.ts'   # expect exactly ONE node
 # prefer a graceful stop when you can: SIGTERM runs the daemon's shutdown
 # handler, which closes the gateway and every harness child, and then launchd
 # KeepAlive brings it straight back. kickstart -k kills the process without
-# that handler, so one `opencode serve` per active workspace can be orphaned.
+# that handler, so the shared `opencode serve` can be orphaned (the next boot
+# reaps it, but it holds the store open until then).
 kill -TERM "$(launchctl list | awk '/com\.jep\.tg/{print $1}')"; sleep 5
 pgrep -fl 'src/app/tg.ts'
 

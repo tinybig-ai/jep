@@ -5,6 +5,7 @@ import { mkdtempSync } from "node:fs"
 import { tmpdir, homedir } from "node:os"
 import { buildHarnesses, DEFAULT_HARNESS } from "../core/harnesses.ts"
 import { opencodeSessionImport } from "../importers/opencode.ts"
+import { reapOrphanedServers } from "../harnesses/opencode.ts"
 import { tmuxTerminal } from "../terminals/tmux.ts"
 import { assertAdapterImplements } from "../core/compliance.ts"
 import type { HarnessAdapter, HarnessSettingSpec } from "../core/ports.ts"
@@ -243,6 +244,12 @@ const unreadable = (dir: string): string =>
 async function main() {
   syncOpenCodeAuth()
   const mockMode = process.env.JEP_TG_MOCK === "1"
+  // servers a previous daemon lost on a hard restart: without this sweep the
+  // rule "restart gracefully" had to be remembered, and they piled up
+  if (!mockMode) {
+    const reaped = await reapOrphanedServers().catch(() => [])
+    if (reaped.length) console.error(`[boot] stopped ${reaped.length} orphaned opencode serve process(es): ${reaped.join(", ")}`)
+  }
   const store = ChatStore.load(join(DATA_HOME, "store.json"))
   const dirs = (process.env.JEP_WORKSPACES ?? "").split(":").filter(Boolean)
   // no env var to set up before the bot is useful: outside mock mode, the

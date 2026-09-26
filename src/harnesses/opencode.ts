@@ -312,20 +312,32 @@ export class OpenCodeAdapter implements HarnessAdapter {
   // goes silent and the watchdog can only say "no activity".
   #providerErrors: Map<string, { error: HarnessError; at: number }>
 
+  // how this adapter lets go of its server: the shared one is only stopped
+  // when the last workspace on it closes
+  #release: (() => Promise<void>) | null
+
   constructor(
     child: ChildProcess,
     workspace: string,
     endpoint: string,
     providerErrors: Map<string, { error: HarnessError; at: number }> = new Map(),
+    release?: () => Promise<void>,
   ) {
     this.#child = child
     this.workspace = workspace
     this.endpoint = endpoint
     this.#providerErrors = providerErrors
+    this.#release = release ?? null
   }
 
+  // Every request names this adapter's workspace. One `opencode serve` holds
+  // an instance per directory, and `?directory=` picks it — sessions, prompts
+  // and the event feed alike — so the workspaces can share one server instead
+  // of each holding the store open in a process of its own.
   #url(path: string): string {
-    return `${this.endpoint}${path}`
+    if (/[?&]directory=/.test(path)) return `${this.endpoint}${path}`
+    const sep = path.includes("?") ? "&" : "?"
+    return `${this.endpoint}${path}${sep}directory=${encodeURIComponent(this.workspace)}`
   }
 
   async #json<T>(path: string, init?: RequestInit): Promise<T> {
@@ -1007,6 +1019,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
       await Promise.race([reader.cancel().catch(() => {}), new Promise<void>((r) => setTimeout(r, 1_000))])
     }
     this.#eventReaders.clear()
+    if (this.#release) return this.#release()
     this.#child.kill("SIGTERM")
     await new Promise<void>((resolve) => {
       if (this.#child.exitCode !== null) return resolve()
@@ -1033,13 +1046,84 @@ function stripJsonc(source: string): string {
     .join("\n")
 }
 
+// One `opencode serve` per data home, shared by every workspace on it. Each
+// server held the whole store (gigabytes of it) open in a process of its own,
+// six at once here, more when a hard restart orphaned some — for no gain,
+// since one server keeps directories apart by `?directory=` (see #url).
+interface SharedServer {
+  child: ChildProcess
+  endpoint: string
+  providerErrors: Map<string, { error: HarnessError; at: number }>
+  refs: number
+}
+const sharedServers = new Map<string, Promise<SharedServer>>()
+
 export async function startOpenCodeServer(workspace: string, opts?: { dataHome?: string }): Promise<OpenCodeAdapter> {
+  const key = opts?.dataHome ?? ""
+  let pending = sharedServers.get(key)
+  if (!pending) {
+    pending = spawnOpenCodeServer(key, opts)
+    sharedServers.set(key, pending)
+    // a server that failed to start is not cached: the next workspace retries
+    pending.catch(() => sharedServers.delete(key))
+  }
+  const server = await pending
+  server.refs++
+  let released = false
+  const release = async (): Promise<void> => {
+    if (released) return
+    released = true
+    if (--server.refs > 0) return
+    if (sharedServers.get(key) === pending) sharedServers.delete(key)
+    server.child.kill("SIGTERM")
+    await new Promise<void>((resolve) => {
+      if (server.child.exitCode !== null) return resolve()
+      server.child.once("exit", () => resolve())
+      setTimeout(resolve, 2_000)
+    })
+  }
+  return new OpenCodeAdapter(server.child, workspace, server.endpoint, server.providerErrors, release)
+}
+
+// The exact arguments jep starts opencode with. A process with these and no
+// parent (launchd, pid 1, adopted it) is a server an earlier daemon lost track
+// of — a hard restart kills the daemon without its shutdown handler — still
+// holding the store open.
+const SERVE_ARGS = ["serve", "--hostname", "127.0.0.1", "--port", "0", "--print-logs"]
+
+/** Stop `opencode serve` processes an earlier daemon orphaned. @returns their pids */
+export async function reapOrphanedServers(): Promise<number[]> {
+  const listing = await new Promise<string>((resolve) => {
+    execFile("ps", ["-Ao", "pid=,ppid=,command="], { maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => resolve(err ? "" : stdout))
+  })
+  const wanted = `${path.basename(OPENCODE_BIN)} ${SERVE_ARGS.join(" ")}`
+  const reaped: number[] = []
+  for (const line of listing.split("\n")) {
+    const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line)
+    if (!m || m[2] !== "1") continue
+    // the binary may be named by path; the arguments must be jep's exactly
+    const cmd = m[3]!.trim()
+    const at = cmd.indexOf(wanted)
+    if (at < 0 || (at > 0 && cmd[at - 1] !== "/") || !/^(\s|$)/.test(cmd.slice(at + wanted.length))) continue
+    if (at > 0 && /\s/.test(cmd.slice(0, at))) continue
+    try {
+      process.kill(Number(m[1]), "SIGTERM")
+      reaped.push(Number(m[1]))
+    } catch {
+      /* gone already, or not ours to signal */
+    }
+  }
+  return reaped
+}
+
+async function spawnOpenCodeServer(key: string, opts?: { dataHome?: string }): Promise<SharedServer> {
   // --print-logs: opencode otherwise keeps its logs to its own file, and the
   // one record that matters here — `message="stream error"` (a 429, a usage
   // cap) — never becomes a session.error SSE event. On stderr it reaches the
   // forwarder below, which is the only way a frontend ever learns the reason.
-  const child = spawn(OPENCODE_BIN, ["serve", "--hostname", "127.0.0.1", "--port", "0", "--print-logs"], {
-    cwd: workspace,
+  const child = spawn(OPENCODE_BIN, SERVE_ARGS, {
+    // started in no workspace in particular: every request names its own
+    cwd: os.homedir(),
     env: opts?.dataHome ? { ...process.env, XDG_DATA_HOME: opts.dataHome } : process.env,
     stdio: ["ignore", "pipe", "pipe"],
   })
@@ -1049,8 +1133,10 @@ export async function startOpenCodeServer(workspace: string, opts?: { dataHome?:
   // opencode binary itself printed once running (a provider SDK error that
   // never made it into a session.error SSE event, an uncaught exception, a
   // crash) was invisible. Forward it into our own log for the life of the
-  // process, tagged by workspace so parallel servers don't interleave blind.
-  const tag = path.basename(workspace)
+  // process.
+  // one server serves every workspace, so the session id in a line is what
+  // says which conversation it was about
+  const tag = "serve"
   // `--print-logs` puts every level on stderr, so forward only what's worth a
   // line in our log (WARN/ERROR) and keep the provider failures on the side,
   // where a stalled turn can ask for them by session id.
@@ -1067,7 +1153,7 @@ export async function startOpenCodeServer(workspace: string, opts?: { dataHome?:
   let endpoint = ""
   const portPromise = new Promise<string>((resolve, reject) => {
     let out = ""
-    const timer = setTimeout(() => reject(new Error(`opencode serve failed to start in ${workspace}: no listening line. logs:\n${out}`)), 15_000)
+    const timer = setTimeout(() => reject(new Error(`opencode serve failed to start: no listening line. logs:\n${out}`)), 15_000)
     const onData = (chunk: Buffer) => {
       out += chunk.toString()
       const m = listenRe.exec(out)
@@ -1094,6 +1180,10 @@ export async function startOpenCodeServer(workspace: string, opts?: { dataHome?:
   })
 
   endpoint = await portPromise
-  const adapter = new OpenCodeAdapter(child, workspace, endpoint, providerErrors)
-  return adapter
+  // it can die on its own; the next workspace to start then spawns a fresh one
+  const self = sharedServers.get(key)
+  child.once("exit", () => {
+    if (sharedServers.get(key) === self) sharedServers.delete(key)
+  })
+  return { child, endpoint, providerErrors, refs: 0 }
 }
