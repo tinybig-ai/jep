@@ -85,7 +85,9 @@ function main() {
     return
   }
   // caught up: this window now knows what the phone did, so the next message
-  // is not replayed again
+  // is not replayed again. A window opened before the hook existed never ran
+  // SessionStart, so the folder may not be there yet.
+  mkdirSync(loadedDir, { recursive: true })
   writeFileSync(mark, String(Date.now()))
   if (missed.length === 0) return
   process.stdout.write(
