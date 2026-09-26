@@ -4,6 +4,8 @@ import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotFocused
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
@@ -1013,6 +1015,30 @@ class ChatScreenTest {
         ).performClick()
         rule.waitUntil(5_000) { repo.prompts.any { it.startsWith("first line") } }
         rule.waitUntil(5_000) { rule.onAllNodesWithTag("full-composer").fetchSemanticsNodes().isEmpty() }
+    }
+
+    @Test
+    fun send_now_on_a_queued_message_does_not_raise_the_keyboard() {
+        val repo = FakeChatRepository()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        repo.promptGate = gate
+        val vm = ChatViewModel(repo, "s1", "T", "jep", "opencode")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitForIdle()
+        rule.runOnUiThread { vm.send("first") }
+        rule.waitUntil(5_000) { vm.state.value.sending }
+        // typed into the composer, as a person does, so it holds focus
+        rule.onNodeWithTag("composer").performClick()
+        rule.onNodeWithTag("composer").assertIsFocused()
+        rule.runOnUiThread { vm.send("second while busy") }
+        rule.waitUntil(5_000) { vm.state.value.queued.size == 1 }
+        rule.onNodeWithText("second while busy").performClick()
+        rule.waitUntil(4_000) { rule.onAllNodesWithText("Send now").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("Send now").performClick()
+        rule.waitForIdle()
+        // the dialog must not hand focus back to the composer on its way out
+        rule.onNodeWithTag("composer").assertIsNotFocused()
+        gate.complete(Unit)
     }
 }
 

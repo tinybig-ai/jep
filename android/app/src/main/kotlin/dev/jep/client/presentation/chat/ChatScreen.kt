@@ -666,6 +666,8 @@ fun ChatScreen(
 
     var renameOpen by remember { mutableStateOf(false) }
     var queuedMenuFor by remember { mutableStateOf<ChatViewModel.Queued?>(null) }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focus = LocalFocusManager.current
     var queuedEditFor by remember { mutableStateOf<ChatViewModel.Queued?>(null) }
     var queuedCancelFor by remember { mutableStateOf<ChatViewModel.Queued?>(null) }
     var deleteOpen by remember { mutableStateOf(false) }
@@ -897,7 +899,14 @@ fun ChatScreen(
                 }
                 // Keep the visible queue in send order, after the newest message.
                 items(queuedDisplay.size, key = { "queued-${queuedDisplay[it].id}" }) { i ->
-                    QueuedBubble(queuedDisplay[i]) { queuedMenuFor = queuedDisplay[i] }
+                    QueuedBubble(queuedDisplay[i]) {
+                        // Let go of the composer first. A dialog hands focus back
+                        // to whatever held it when it closes, so "Send now" raised
+                        // the keyboard over a composer nobody was typing in.
+                        focus.clearFocus(force = true)
+                        keyboard?.hide()
+                        queuedMenuFor = queuedDisplay[i]
+                    }
                 }
                 // The last item gives end-of-conversation a stable scroll target.
                 item(key = "end-sentinel") { Spacer(Modifier.height(1.dp)) }
