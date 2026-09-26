@@ -6,7 +6,10 @@ import dev.jep.client.domain.model.BrowseResult
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
 import dev.jep.client.domain.model.FileDiff
+import dev.jep.client.domain.model.GitSnapshot
 import dev.jep.client.domain.model.Harnesses
+import dev.jep.client.domain.model.HarnessSetting
+import dev.jep.client.domain.model.HarnessSettings
 import dev.jep.client.domain.model.ImportableSession
 import dev.jep.client.domain.model.McpServer
 import dev.jep.client.domain.model.Model
@@ -30,6 +33,8 @@ data class ModelChoices(
     val all: List<Model>,
     val current: String?,
     val default: String? = null,
+    /** the running model's context window, from the gateway; 0 when unknown */
+    val contextLimit: Long = 0,
 )
 
 /** raised when a turn ends because it was stopped, not because it failed */
@@ -67,6 +72,11 @@ sealed interface ChatEvent {
 
     data class Asked(override val sessionId: String, val ask: Ask) : ChatEvent
 
+    /** that ask is over — answered here or anywhere else, withdrawn, or
+     * outlived by the turn that raised it. A card can no longer be answered,
+     * so it must stop holding the send button and the spinner. */
+    data class AskResolved(override val sessionId: String, val askId: String) : ChatEvent
+
     data class Failed(override val sessionId: String, val error: String) : ChatEvent
 
     /** the turn ended because somebody stopped it. The daemon says so in its
@@ -99,7 +109,13 @@ interface ChatRepository {
         workspace: String? = null,
         path: String? = null,
         harness: String? = null,
+        harnessSettings: Map<String, Boolean> = emptyMap(),
     ): SessionSummary
+    /** harness controls for the creation form; every client renders the schema generically */
+    suspend fun harnessOptions(harness: String): List<HarnessSetting>
+    /** the current harness controls for one existing conversation */
+    suspend fun sessionHarnessSettings(sessionId: String): HarnessSettings
+    suspend fun setSessionHarnessSetting(sessionId: String, key: String, enabled: Boolean): Boolean
     /** the models available to a conversation, and its current choice */
     suspend fun models(sessionId: String): ModelChoices
     /** set (or clear, with null) the conversation's model */
@@ -114,6 +130,8 @@ interface ChatRepository {
     suspend fun usage(sessionId: String): Usage
     /** files the conversation has changed */
     suspend fun diff(sessionId: String): List<FileDiff>
+    /** current workspace HEAD and recent commits */
+    suspend fun git(sessionId: String): GitSnapshot
     /** sessions in the user's own opencode (served dirs) that jep doesn't have */
     suspend fun importableSessions(): List<ImportableSession>
     /** fork one of those into jep: export from their store, import into jep's */
@@ -158,6 +176,8 @@ interface ChatRepository {
     suspend fun queueEdit(sessionId: String, clientID: String, text: String): Boolean
     suspend fun queueForce(sessionId: String, clientID: String): Boolean
     suspend fun stop(sessionId: String): Boolean
+    /** compress the conversation's context; false when the harness refused */
+    suspend fun compact(sessionId: String): Boolean
     /** a fetchable URL for a file part's bytes: the gateway's authenticated
      * `/file` route, so a client can render an image it did not attach itself */
     fun fileUrl(path: String): String

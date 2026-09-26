@@ -13,6 +13,7 @@ import dev.jep.client.device.PairingStore
 import dev.jep.client.domain.repository.ChatRepository
 import dev.jep.client.domain.model.BrowseResult
 import dev.jep.client.domain.model.ImportableSession
+import dev.jep.client.domain.model.HarnessSetting
 import dev.jep.client.domain.model.SessionSummary
 import dev.jep.client.domain.model.TerminalAccess
 import dev.jep.client.domain.model.Workspace
@@ -44,6 +45,9 @@ data class NewChatState(
     val path: String? = null,
     val harnesses: List<String> = emptyList(),
     val defaultHarness: String? = null,
+    val harnessOptions: List<HarnessSetting> = emptyList(),
+    val harnessSettings: Map<String, Boolean> = emptyMap(),
+    val loadingHarnessSettings: Boolean = false,
     val workspaces: List<Workspace> = emptyList(),
     val browse: BrowseResult? = null,
     val browsing: Boolean = false,
@@ -422,7 +426,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _screen.value = Screen.NewChat
         viewModelScope.launch {
             runCatching { r.harnesses() }.onSuccess { h ->
-                _newChat.update { it.copy(harnesses = h.ids, harness = it.harness ?: h.default, defaultHarness = h.default) }
+                val selected = _newChat.value.harness ?: h.default
+                _newChat.update { it.copy(harnesses = h.ids, harness = selected, defaultHarness = h.default) }
+                selected?.let { loadNewHarnessOptions(r, it) }
             }
             runCatching { r.workspaces() }.onSuccess { w ->
                 _workspaces.value = w
@@ -436,11 +442,42 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setNewTitle(value: String) = _newChat.update { it.copy(title = value, error = null) }
-    fun setNewHarness(id: String) = _newChat.update { it.copy(harness = id, error = null) }
+    fun setNewHarness(id: String) {
+        _newChat.update { it.copy(harness = id, harnessOptions = emptyList(), harnessSettings = emptyMap(), error = null) }
+        (repo ?: return).let { loadNewHarnessOptions(it, id) }
+    }
+
+    fun setNewHarnessSetting(id: String, enabled: Boolean) = _newChat.update {
+        it.copy(harnessSettings = it.harnessSettings + (id to enabled))
+    }
+
+    private fun loadNewHarnessOptions(r: ChatRepository, harness: String) {
+        _newChat.update { it.copy(loadingHarnessSettings = true) }
+        viewModelScope.launch {
+            runCatching { r.harnessOptions(harness) }
+                .onSuccess { options ->
+                    _newChat.update { current ->
+                        if (current.harness != harness) current
+                        else current.copy(
+                            harnessOptions = options,
+                            harnessSettings = options.associate { option ->
+                                option.id to (current.harnessSettings[option.id] ?: option.default)
+                            },
+                            loadingHarnessSettings = false,
+                        )
+                    }
+                }
+                .onFailure {
+                    _newChat.update { current -> if (current.harness == harness) current.copy(loadingHarnessSettings = false) else current }
+                }
+        }
+    }
     // a served workspace already names its harness — picking the row picks both,
     // so the two selectors can never disagree
-    fun selectWorkspace(name: String, harness: String) =
-        _newChat.update { it.copy(workspace = name, path = null, harness = harness, error = null) }
+    fun selectWorkspace(name: String, harness: String) {
+        _newChat.update { it.copy(workspace = name, path = null, harness = harness, harnessOptions = emptyList(), harnessSettings = emptyMap(), error = null) }
+        (repo ?: return).let { loadNewHarnessOptions(it, harness) }
+    }
     fun selectPath(path: String) = _newChat.update { it.copy(path = path, workspace = null, browsing = false, error = null) }
 
     fun openBrowse() {
@@ -494,7 +531,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
         _newChat.update { it.copy(creating = true, error = null) }
         viewModelScope.launch {
-            runCatching { r.newSession(st.title.ifBlank { null }, st.workspace, st.path, st.harness) }
+            runCatching {
+                r.newSession(st.title.ifBlank { null }, st.workspace, st.path, st.harness, st.harnessSettings)
+            }
                 .onSuccess {
                     refresh()
                     open(it)

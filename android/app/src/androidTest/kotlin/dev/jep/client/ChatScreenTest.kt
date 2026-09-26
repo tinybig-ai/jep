@@ -5,26 +5,31 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.onRoot
-import androidx.compose.ui.test.printToLog
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.swipeRight
+import androidx.compose.ui.test.swipeUp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
+import dev.jep.client.domain.model.HarnessSetting
+import dev.jep.client.domain.model.HarnessSettings
+import dev.jep.client.domain.model.Model
 import dev.jep.client.domain.model.Role
 import dev.jep.client.domain.repository.ChatEvent
+import dev.jep.client.domain.repository.ModelChoices
 import dev.jep.client.domain.model.TokenUsage
 import dev.jep.client.domain.model.ToolStatus
 import dev.jep.client.presentation.chat.ChatScreen
 import dev.jep.client.presentation.chat.ChatViewModel
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -55,9 +60,52 @@ class ChatScreenTest {
         val vm = ChatViewModel(FakeChatRepository(messages = manyMessages(30)), "s1", "T")
         rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
         rule.waitUntil(10_000) {
-            rule.onAllNodesWithText("message number 30").fetchSemanticsNodes().isNotEmpty()
+            rule.onAllNodesWithText("message number 30", substring = true).fetchSemanticsNodes().isNotEmpty() &&
+                rule.onAllNodesWithTag("positioning-overlay").fetchSemanticsNodes().isEmpty()
         }
-        rule.onNodeWithText("message number 30").assertIsDisplayed()
+        rule.onNodeWithText("message number 30", substring = true).assertIsDisplayed()
+        rule.onAllNodesWithContentDescription("jump to latest").assertCountEquals(0)
+        rule.onAllNodesWithText("message number 1 ", substring = true).assertCountEquals(0)
+        rule.onAllNodesWithText("▍", substring = true).assertCountEquals(0)
+    }
+
+    @Test
+    fun status_line_keeps_last_reported_usage_during_a_partial_stream_refresh() {
+        val choices = ModelChoices(
+            all = listOf(Model("opencode", "test-model", contextLimit = 32_000)),
+            current = "opencode/test-model",
+        )
+        val completed = ChatMessage(
+            "a0", Role.ASSISTANT, 1, listOf(ChatPart.Text("previous reply")),
+            model = "opencode/test-model",
+            cost = 0.02,
+            tokens = TokenUsage(input = 1_200),
+        )
+        val repo = FakeChatRepository(messages = listOf(completed), choices = choices)
+        val vm = ChatViewModel(repo, "s1", "T", "jep", "opencode")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(10_000) {
+            rule.onAllNodesWithText("test-model", substring = true).fetchSemanticsNodes().isNotEmpty() &&
+                rule.onAllNodesWithText("1.2K/32.0K", substring = true).fetchSemanticsNodes().isNotEmpty() &&
+                rule.onAllNodesWithText("$0.02", substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
+
+        rule.runOnUiThread {
+            repo.emitEvent(ChatEvent.TextDelta("s1", "a-live", "p1", "text", "streaming answer"))
+        }
+        rule.waitUntil(5_000) { vm.state.value.live != null }
+        rule.runOnUiThread {
+            repo.historyOverride = listOf(
+                ChatMessage("a0", Role.ASSISTANT, 1, listOf(ChatPart.Text("partial snapshot"))),
+            )
+            vm.refresh()
+        }
+        rule.waitUntil(10_000) {
+            rule.onAllNodesWithText("partial snapshot", substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNodeWithText("test-model", substring = true).assertExists()
+        rule.onNodeWithText("1.2K/32.0K", substring = true).assertExists()
+        rule.onNodeWithText("$0.02", substring = true).assertExists()
     }
 
     @Test
@@ -89,6 +137,36 @@ class ChatScreenTest {
             listOf("The user asks about fares"),
             live.parts.values.filterIsInstance<ChatPart.Reasoning>().map { it.text },
         )
+    }
+
+    @Test
+    fun the_live_row_survives_a_poll_while_the_turn_is_still_writing() {
+        // The bug this guards: polling history settled the live row the moment
+        // the record merely caught up with it (its time is set at creation,
+        // mid-stream), so the next delta started an empty LiveTurn and every
+        // part before the poll vanished — thinking showed only its last arriving
+        // part. Only a completion stamp ends the row, and opencode stamps
+        // durationMs at the end.
+        val repo = FakeChatRepository()
+        val vm = ChatViewModel(repo, "s1", "T", "jep", "opencode")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.runOnUiThread {
+            repo.emitEvent(ChatEvent.TextDelta("s1", "a1", "p1", "reasoning", "one "))
+        }
+        rule.waitUntil(5_000) { vm.state.value.live != null }
+        // the record catches up with the still-writing message: served with a
+        // creation time but no completion stamp
+        repo.historyOverride = listOf(
+            ChatMessage("a1", Role.ASSISTANT, 1_700_000_000_000L, listOf(ChatPart.Reasoning("one ")), durationMs = null),
+        )
+        rule.runOnUiThread { vm.refresh() }
+        rule.waitUntil(5_000) { vm.state.value.messages.any { it.id == "a1" } }
+        assertTrue("a poll must not drop a turn that is still writing", vm.state.value.live != null)
+        // the surviving row keeps what it had; the next delta lands on the SAME row
+        rule.runOnUiThread { repo.emitEvent(ChatEvent.TextDelta("s1", "a1", "p1", "reasoning", "two ")) }
+        rule.waitUntil(5_000) {
+            vm.state.value.live?.parts?.values?.filterIsInstance<ChatPart.Reasoning>()?.singleOrNull()?.text == "one two "
+        }
     }
 
     @Test
@@ -148,7 +226,12 @@ class ChatScreenTest {
         )
         val vm = ChatViewModel(repo, "s1", "T", "jep", "opencode")
         rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
-        rule.waitForIdle()
+        // under suite load waitForIdle can return before the ViewModel collects,
+        // and the delta was dropped; the served copy must also be on screen first
+        rule.waitUntil(10_000) {
+            repo.subscribed &&
+                rule.onAllNodesWithText("one ", substring = true, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+        }
         rule.runOnUiThread { repo.emitEvent(ChatEvent.TextDelta("s1", "a1", "p1", "text", "one two three")) }
         rule.waitUntil(5_000) {
             rule.onAllNodesWithText("one two three", substring = true, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
@@ -255,12 +338,62 @@ class ChatScreenTest {
         rule.onNodeWithText("Thought for 2s").assertExists()
     }
 
+    /** Compact is harness-declared: the row shows for opencode and acts once. */
+    @Test
+    fun the_hamburger_menu_offers_compact_for_opencode() {
+        val repo = FakeChatRepository(messages = listOf(ChatMessage("a1", Role.ASSISTANT, 1, listOf(ChatPart.Text("hello there")))))
+        val vm = ChatViewModel(repo, "s1", "T", "jep", "opencode")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("hello there", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithContentDescription("chat menu").performClick()
+        rule.onNodeWithText("Compact").assertExists()
+        rule.onNodeWithText("Compact").performClick()
+        rule.waitUntil(5_000) { repo.compacted }
+        assertEquals(true, repo.compacted)
+    }
+
+    /** the banner is read-when-read: an X closes it, nothing buries it on a timer */
+    @Test
+    fun the_info_banner_has_a_dismiss_button() {
+        val repo = FakeChatRepository(messages = listOf(ChatMessage("a1", Role.ASSISTANT, 1, listOf(ChatPart.Text("hello there"))))).apply {
+            compactAnswer = false
+        }
+        val vm = ChatViewModel(repo, "s1", "T", "jep", "opencode")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("hello there", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithContentDescription("chat menu").performClick()
+        rule.onNodeWithText("Compact").performClick()
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("the harness refused to compact").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithContentDescription("dismiss").performClick()
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("the harness refused to compact").fetchSemanticsNodes().isEmpty() }
+    }
+
+    /** compaction is visible while it runs, not only reported after the fact */
+    @Test
+    fun compacting_shows_a_progress_banner_until_it_settles() {
+        val repo = FakeChatRepository(messages = listOf(ChatMessage("a1", Role.ASSISTANT, 1, listOf(ChatPart.Text("hello there"))))).apply {
+            compactDelayMs = 4_000
+        }
+        val vm = ChatViewModel(repo, "s1", "T", "jep", "opencode")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("hello there", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithContentDescription("chat menu").performClick()
+        rule.onNodeWithText("Compact").performClick()
+        // the menu closes on tap; the banner survives it
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("Compacting…").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("Compacting…").assertExists()
+        rule.waitUntil(8_000) { rule.onAllNodesWithText("conversation compacted").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("Compacting…").assertDoesNotExist()
+    }
+
     @Test
     fun a_jump_to_latest_button_appears_once_scrolled_up() {
-        val vm = ChatViewModel(FakeChatRepository(messages = manyMessages(30)), "s1", "T")
+        val vm = ChatViewModel(FakeChatRepository(messages = manyMessages(100)), "s1", "T")
+
         rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
         rule.waitUntil(10_000) {
-            rule.onAllNodesWithText("message number 30").fetchSemanticsNodes().isNotEmpty()
+            rule.onAllNodesWithText("message number 100", substring = true).fetchSemanticsNodes().isNotEmpty() &&
+                rule.onAllNodesWithTag("positioning-overlay").fetchSemanticsNodes().isEmpty()
         }
         // at the bottom there is nothing to jump to
         rule.onAllNodesWithContentDescription("jump to latest").assertCountEquals(0)
@@ -269,6 +402,147 @@ class ChatScreenTest {
         rule.waitUntil(5_000) {
             rule.onAllNodesWithContentDescription("jump to latest").fetchSemanticsNodes().isNotEmpty()
         }
+        rule.onNodeWithContentDescription("jump to latest").performClick()
+        rule.waitUntil(5_000) {
+            rule.onAllNodesWithContentDescription("jump to latest").fetchSemanticsNodes().isEmpty()
+        }
+        rule.onNodeWithText("message number 100", substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun a_jump_button_hides_after_idle_and_returns_on_scroll() {
+        val vm = ChatViewModel(FakeChatRepository(messages = manyMessages(30)), "s1", "T")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(10_000) {
+            rule.onAllNodesWithText("message number 30", substring = true).fetchSemanticsNodes().isNotEmpty() &&
+                rule.onAllNodesWithTag("positioning-overlay").fetchSemanticsNodes().isEmpty()
+        }
+        repeat(4) { rule.onNodeWithTag("chat-list").performTouchInput { swipeDown() } }
+        rule.waitUntil(5_000) {
+            rule.onAllNodesWithContentDescription("jump to latest").fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.mainClock.advanceTimeBy(3_000)
+        rule.waitUntil(5_000) {
+            rule.onAllNodesWithContentDescription("jump to latest").fetchSemanticsNodes().isEmpty()
+        }
+        repeat(4) { rule.onNodeWithTag("chat-list").performTouchInput { swipeUp() } }
+        rule.waitUntil(5_000) {
+            rule.onAllNodesWithContentDescription("jump to latest").fetchSemanticsNodes().isEmpty()
+        }
+        rule.onNodeWithTag("chat-list").performTouchInput { swipeDown() }
+        rule.waitUntil(5_000) {
+            rule.onAllNodesWithContentDescription("jump to latest").fetchSemanticsNodes().isNotEmpty()
+        }
+    }
+
+    @Test
+    fun a_streamed_message_never_raises_the_jump_button_for_a_reader_still_at_the_end() {
+        // Every streamed part re-runs the pin-to-end animation, which is a
+        // programmatic scroll. The jump button used to answer it as if the
+        // reader had left the end and flashed on every delta — and a reader who
+        // never drags should never see it at all, however "not at the bottom"
+        // the moment is between a part landing and the pin catching up.
+        val repo = FakeChatRepository()
+        val vm = ChatViewModel(repo, "s1", "T", "jep", "opencode")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitForIdle()
+        for (part in listOf("one ", "two ", "three ", "four ")) {
+            rule.runOnUiThread { repo.emitEvent(ChatEvent.TextDelta("s1", "a1", "p1", "text", part)) }
+            rule.waitUntil(5_000) {
+                rule.onAllNodesWithText(part.trim(), substring = true, useUnmergedTree = true)
+                    .fetchSemanticsNodes().isNotEmpty()
+            }
+            // sample right as the delta lands, while the pin is still catching up
+            assertTrue(
+                "jump button flashed while streaming (after '${part.trim()}')",
+                rule.onAllNodesWithContentDescription("jump to latest").fetchSemanticsNodes().isEmpty(),
+            )
+        }
+    }
+
+    @Test
+    fun reaching_the_top_loads_older_messages_before_the_current_page() {
+        val older = listOf(
+            ChatMessage("old-1", Role.ASSISTANT, -2, listOf(ChatPart.Text("older message one"))),
+            ChatMessage("old-2", Role.ASSISTANT, -1, listOf(ChatPart.Text("older message two"))),
+        )
+        val vm = ChatViewModel(
+            FakeChatRepository(messages = manyMessages(30), olderMessages = older),
+            "s1", "T", "jep", "opencode",
+        )
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(10_000) {
+            rule.onAllNodesWithText("message number 30", substring = true).fetchSemanticsNodes().isNotEmpty() &&
+                rule.onAllNodesWithTag("positioning-overlay").fetchSemanticsNodes().isEmpty()
+        }
+        repeat(6) { rule.onNodeWithTag("chat-list").performTouchInput { swipeDown() } }
+        rule.waitUntil(10_000) { vm.state.value.messages.size == 32 }
+        rule.waitUntil(5_000) {
+            rule.onAllNodesWithText("older message one", substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        val first = rule.onNodeWithText("older message one", substring = true).fetchSemanticsNode().boundsInRoot.top
+        val second = rule.onNodeWithText("older message two", substring = true).fetchSemanticsNode().boundsInRoot.top
+        assertTrue("older page rows retain their chronological order", first < second)
+    }
+
+    /** opencode writes the compaction marker before its summarize reply; the line belongs below the reply. */
+    @Test
+    fun a_compaction_marker_renders_below_its_summary_response() {
+        val repo = FakeChatRepository(
+            messages = listOf(
+                ChatMessage("sm", Role.ASSISTANT, 40, listOf(ChatPart.Text("Objective: the folded summary"))),
+                ChatMessage("mk", Role.USER, 30, listOf(ChatPart.Compaction)),
+                ChatMessage("old", Role.ASSISTANT, 10, listOf(ChatPart.Text("old answer"))),
+            ),
+        )
+        val vm = ChatViewModel(repo, "s1", "T")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("compaction complete").fetchSemanticsNodes().isNotEmpty() }
+        val line = rule.onNodeWithText("compaction complete").fetchSemanticsNode().boundsInRoot.top
+        val summary = rule.onNodeWithText("Objective: the folded summary", substring = true).fetchSemanticsNode().boundsInRoot.top
+        val old = rule.onNodeWithText("old answer", substring = true).fetchSemanticsNode().boundsInRoot.top
+        assertTrue("the line sits below the summary it follows", line > summary)
+        assertTrue("the line sits above the old history", line > old)
+    }
+
+    @Test
+    fun a_new_reply_keeps_a_reader_pinned_to_the_end() {
+        val repo = FakeChatRepository(messages = manyMessages(30))
+        val vm = ChatViewModel(repo, "s1", "T", "jep", "opencode")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(10_000) {
+            rule.onAllNodesWithText("message number 30", substring = true).fetchSemanticsNodes().isNotEmpty() &&
+                rule.onAllNodesWithTag("positioning-overlay").fetchSemanticsNodes().isEmpty()
+        }
+        rule.runOnUiThread {
+            repo.emitEvent(ChatEvent.TextDelta("s1", "a-new", "p1", "text", "new live reply"))
+        }
+        rule.waitUntil(10_000) {
+            rule.onAllNodesWithText("new live reply", substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNodeWithText("new live reply", substring = true).assertIsDisplayed()
+        rule.onAllNodesWithContentDescription("jump to latest").assertCountEquals(0)
+    }
+
+    @Test
+    fun a_new_reply_does_not_pull_a_reader_out_of_history() {
+        val repo = FakeChatRepository(messages = manyMessages(30))
+        val vm = ChatViewModel(repo, "s1", "T", "jep", "opencode")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(10_000) {
+            rule.onAllNodesWithText("message number 30", substring = true).fetchSemanticsNodes().isNotEmpty() &&
+                rule.onAllNodesWithTag("positioning-overlay").fetchSemanticsNodes().isEmpty()
+        }
+        repeat(4) { rule.onNodeWithTag("chat-list").performTouchInput { swipeDown(durationMillis = 60L) } }
+        rule.runOnUiThread {
+            repo.emitEvent(ChatEvent.TextDelta("s1", "a-new", "p1", "text", "reply while reading history"))
+        }
+        rule.waitUntil(10_000) {
+            vm.state.value.live != null &&
+                rule.onAllNodesWithContentDescription("jump to latest").fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNodeWithContentDescription("jump to latest").assertExists()
+        rule.onAllNodesWithText("reply while reading history", substring = true).assertCountEquals(0)
     }
 
     @Test
@@ -468,6 +742,27 @@ class ChatScreenTest {
     }
 
     @Test
+    fun queued_messages_remain_in_send_order_at_the_end_of_the_forward_list() {
+        val repo = FakeChatRepository()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        repo.promptGate = gate
+        val vm = ChatViewModel(repo, "s1", "T", "jep", "opencode")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitForIdle()
+        rule.runOnUiThread { vm.send("first") }
+        rule.waitUntil(5_000) { vm.state.value.sending }
+        rule.runOnUiThread {
+            vm.send("queued one")
+            vm.send("queued two")
+        }
+        rule.waitUntil(5_000) { vm.state.value.queued.size == 2 }
+        val one = rule.onNodeWithText("queued one").fetchSemanticsNode().boundsInRoot.top
+        val two = rule.onNodeWithText("queued two").fetchSemanticsNode().boundsInRoot.top
+        assertTrue("the queue follows send order from top to bottom", one < two)
+        gate.complete(Unit)
+    }
+
+    @Test
     fun a_queued_message_survives_the_same_words_being_sent_before() {
         // The queued bubble clears when its message shows in the record. Matching
         // by text alone cleared it at once when the same words had ever been sent
@@ -513,7 +808,8 @@ class ChatScreenTest {
         val vm = ChatViewModel(FakeChatRepository(messages = messages), "s1", "T", "jep", "opencode")
         rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
         rule.waitUntil(10_000) {
-            rule.onAllNodesWithText("Read 3 files").fetchSemanticsNodes().isNotEmpty()
+            rule.onAllNodesWithText("Read 3 files").fetchSemanticsNodes().isNotEmpty() &&
+                rule.onAllNodesWithTag("positioning-overlay").fetchSemanticsNodes().isEmpty()
         }
         val grouped = rule.onNodeWithText("Read 3 files").fetchSemanticsNode().boundsInRoot
         val single = rule.onNodeWithText("Read agents.ts").fetchSemanticsNode().boundsInRoot
@@ -525,28 +821,19 @@ class ChatScreenTest {
         )
     }
 
-    /**
-     * A block that opens must not walk out from under the finger that opened it.
-     *
-     * The transcript is bottom-up, so an item's bottom edge is what holds still:
-     * the height a block adds comes out of the top of the item and the content
-     * above slides up. The header has to keep its place and the content below it
-     * has to be what moves. This is a layout position, so no JVM test can see it.
-     *
-     * The tool group, not the thinking block: the thinking block's seconds tick on
-     * an infinite transition, which never lets an instrumented test go idle.
-     */
+    /** The folded calls open below their header and push later messages down. */
     @Test
-    fun opening_a_block_leaves_its_header_where_it_was() {
+    fun opening_a_tool_group_keeps_its_header_and_pushes_later_content_down() {
         fun read(file: String) = ChatPart.Tool(id = "t-$file", name = "read", status = null, title = "src/$file")
-        // the group has to sit in a transcript with room to scroll: the height it
-        // adds is spent by scrolling the list, and a list whose whole content fits
-        // on screen has nothing to give
-        val messages = manyMessages(30) + listOf(
+        val messages = listOf(
             ChatMessage(
                 "a1", Role.ASSISTANT, 10,
-                listOf(read("one.ts"), read("two.ts"), read("three.ts")),
+                listOf(
+                    ChatPart.Text("before block"),
+                    read("one.ts"), read("two.ts"), read("three.ts"),
+                ),
             ),
+            ChatMessage("a2", Role.ASSISTANT, 20, listOf(ChatPart.Text("later content"))),
         )
         val vm = ChatViewModel(FakeChatRepository(messages = messages), "s1", "T", "jep", "opencode")
         rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
@@ -554,16 +841,91 @@ class ChatScreenTest {
             rule.onAllNodesWithText("Read 3 files").fetchSemanticsNodes().isNotEmpty()
         }
         val before = rule.onNodeWithText("Read 3 files").fetchSemanticsNode().boundsInRoot.top
+        val earlierBefore = rule.onNodeWithText("before block", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot.top
+        val laterBefore = rule.onNodeWithTag("message-row-a2").fetchSemanticsNode().boundsInRoot.top
         rule.onNodeWithText("Read 3 files").performClick()
-        // the correction is spent over a few frames, so wait for the header to
-        // come to rest rather than assuming one frame is enough
         rule.waitUntil(10_000) {
-            val now = rule.onNodeWithText("Read 3 files").fetchSemanticsNode().boundsInRoot.top
-            kotlin.math.abs(now - before) < 2f
+            rule.onAllNodesWithText("Read one.ts").fetchSemanticsNodes().isNotEmpty()
         }
-        // it really did open: a call it stands for is now on screen
-        rule.onNodeWithText("Read one.ts").assertExists()
         val after = rule.onNodeWithText("Read 3 files").fetchSemanticsNode().boundsInRoot.top
-        assertEquals("the header must hold its place on screen", before, after, 2f)
+        val earlierAfter = rule.onNodeWithText("before block", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot.top
+        val laterAfter = rule.onNodeWithTag("message-row-a2").fetchSemanticsNode().boundsInRoot.top
+        assertEquals("the tapped header stays put", before, after, 2f)
+        assertEquals("content above stays put", earlierBefore, earlierAfter, 2f)
+        assertTrue("later content is pushed down", laterAfter > laterBefore)
     }
+
+    @Test
+    fun opening_a_finished_thought_pushes_later_content_down() {
+        val message = ChatMessage(
+            "a-thought", Role.ASSISTANT, 10,
+            listOf(
+                ChatPart.Text("before thought"),
+                ChatPart.Reasoning("the hidden explanation", 3_000),
+                ChatPart.Text("after thought"),
+            ),
+        )
+        val vm = ChatViewModel(FakeChatRepository(messages = listOf(message)), "s1", "T", "jep", "opencode")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(10_000) {
+            rule.onAllNodesWithText("Thought for 3s").fetchSemanticsNodes().isNotEmpty() &&
+                rule.onAllNodesWithTag("positioning-overlay").fetchSemanticsNodes().isEmpty()
+        }
+        val headerBefore = rule.onNodeWithText("Thought for 3s").fetchSemanticsNode().boundsInRoot.top
+        val earlierBefore = rule.onNodeWithText("before thought", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot.top
+        val laterBefore = rule.onNodeWithText("after thought", substring = true, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot.top
+        rule.onNodeWithText("Thought for 3s").performClick()
+        rule.waitUntil(10_000) {
+            rule.onAllNodesWithText("the hidden explanation", substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.mainClock.advanceTimeBy(1_000)
+        val headerAfter = rule.onNodeWithText("Thought for 3s").fetchSemanticsNode().boundsInRoot.top
+        val earlierAfter = rule.onNodeWithText("before thought", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot.top
+        val laterAfter = rule.onNodeWithText("after thought", substring = true, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot.top
+        assertEquals("the thought header stays put", headerBefore, headerAfter, 2f)
+        assertEquals("content above stays put", earlierBefore, earlierAfter, 2f)
+        assertTrue("content below the thought moves down", laterAfter > laterBefore)
+    }
+    // Settings moved from an AlertDialog to a bottom sheet so the harness's own
+    // controls had somewhere to live. The section is generic: the phone renders
+    // whatever the adapter declares and knows none of the ids, so this drives a
+    // fake harness option end to end — menu, sheet, switch, repository.
+    @Test
+    fun settings_sheet_shows_the_harness_controls_and_writes_them_back() {
+        val repo = FakeChatRepository(
+            harness = HarnessSettings(
+                options = listOf(
+                    HarnessSetting(
+                        id = "dangerouslySkipPermissions",
+                        label = "Skip permission prompts",
+                        description = "Tool use does not stop for approval.",
+                        default = false,
+                        danger = true,
+                    ),
+                ),
+                values = mapOf("dangerouslySkipPermissions" to false),
+            ),
+        )
+        val vm = ChatViewModel(repo, "s1", "T", "jep", "claude")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitForIdle()
+
+        rule.onNodeWithContentDescription("chat menu").performClick()
+        rule.onNodeWithText("Settings").performClick()
+        // the sheet, not a dialog: it carries its own close affordance
+        rule.waitUntil(10_000) {
+            rule.onAllNodesWithContentDescription("close settings").fetchSemanticsNodes().isNotEmpty()
+        }
+        // the adapter-declared control is rendered by label, never by id
+        rule.waitUntil(10_000) {
+            rule.onAllNodesWithText("Skip permission prompts").fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNodeWithText("Skip permission prompts").assertIsDisplayed()
+
+        // and flipping it reaches the port
+        rule.onNodeWithText("Skip permission prompts").performClick()
+        rule.waitUntil(10_000) { repo.harnessWrites.isNotEmpty() }
+        assertEquals(listOf("dangerouslySkipPermissions" to true), repo.harnessWrites.toList())
+    }
+
 }

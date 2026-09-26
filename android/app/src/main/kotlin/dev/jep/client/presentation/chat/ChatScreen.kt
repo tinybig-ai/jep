@@ -6,6 +6,10 @@ import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
@@ -16,7 +20,6 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.clickable
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Spacer
@@ -35,18 +38,19 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -66,16 +70,16 @@ import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Compress
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Source
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Stop
@@ -108,12 +112,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -162,9 +165,12 @@ import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
 import dev.jep.client.domain.model.Role
 import dev.jep.client.domain.model.Ask
+import dev.jep.client.domain.model.GitCommit
+import dev.jep.client.domain.model.GitSnapshot
 import dev.jep.client.domain.model.SessionSummary
 import dev.jep.client.domain.model.ToolStatus
 import dev.jep.client.domain.repository.ModelChoices
+import dev.jep.client.presentation.harness.HarnessSettingsSection
 
 /** the ask card's own "Something else": spends the card without answering the
  *  harness, exactly as saying the answer in chat does */
@@ -186,6 +192,24 @@ internal sealed interface Row {
     data class Tools(val tools: List<ChatPart.Tool>) : Row {
         override val key: String get() = "tools-${tools.firstOrNull()?.id ?: "run"}"
     }
+
+    /** the harness folded the conversation; a divider, not a bubble */
+    data class Compaction(val m: ChatMessage) : Row {
+        override val key: String get() = m.id
+    }
+
+    /** opencode told the model to keep going after the fold; the user-turn
+     *  anchor a compaction divider settles against, shown as a quiet note */
+    data class AutoContinue(val m: ChatMessage) : Row {
+        override val key: String get() = m.id
+    }
+}
+
+/** A compaction marker is its own row; everything else renders as a message. */
+internal fun rowFor(m: ChatMessage): Row = when {
+    m.parts.size == 1 && m.parts[0] is ChatPart.Compaction -> Row.Compaction(m)
+    m.parts.size == 1 && m.parts[0] is ChatPart.AutoContinue -> Row.AutoContinue(m)
+    else -> Row.Msg(m)
 }
 
 /**
@@ -244,13 +268,18 @@ internal fun groupToolRuns(rows: List<Row>): List<Row> {
  * you had already answered. Placed by time, it is part of the conversation —
  * whatever you say next lands below it and carries it up the screen.
  *
- * `askAfter` is the message that was streaming when the ask arrived — the tool
- * call that raised the ask is a part of it, so the card belongs immediately
- * after that message and not above it. Comparing timestamps alone gets this
- * wrong: a message's time is when it started, and the ask happened in the
- * middle of it, so the by-time rule floats the card above the very question it
- * answers. `liveMessageId` is the row still streaming, which carries no usable
- * timestamp; when there is no anchor to follow, the scan steps over it.
+ * The card goes directly under the message it belongs to — the one carrying
+ * the tool call it holds up (`Ask.callId`), else the message the harness named
+ * (`Ask.messageId`), else `askAfter`, the message that was streaming when it
+ * arrived. `ordered` is newest first with index 0 at the bottom of the screen,
+ * so "under" means the card comes *before* its message here. It used to come
+ * after, which put the card above the call it was asking about.
+ *
+ * With no anchor in view it falls back to time. That compares `askAt` with
+ * message times, so `askAt` has to be on the harness's clock (`Ask.at`): the
+ * phone's own clock running a fraction behind was enough to float the card
+ * above a tool call written milliseconds before the ask. `liveMessageId` is the
+ * row still streaming, which carries no usable timestamp; the scan steps over it.
  */
 internal fun transcriptRows(
     ordered: List<ChatMessage>,
@@ -258,30 +287,98 @@ internal fun transcriptRows(
     askAt: Long,
     liveMessageId: String? = null,
     askAfter: String? = null,
-): List<Row> {
-    if (ask == null) return ordered.map { Row.Msg(it) }
-    val out = ArrayList<Row>(ordered.size + 1)
-    var placed = false
-    for (m in ordered) {
-        // the anchor wins, and the card follows its message: the tool call that
-        // raised the ask is a part of that message, so the card comes after it
-        if (!placed && askAfter != null && m.id == askAfter) {
-            out += Row.Msg(m)
-            out += Row.Pending(ask)
-            placed = true
+): List<Row> = settleCompaction(
+    if (ask == null) {
+        ordered.map { rowFor(it) }
+    } else {
+        val anchor = ask.callId?.let { call ->
+            ordered.firstOrNull { m -> m.parts.any { it is ChatPart.Tool && it.id == call } }
+        }
+            ?: ask.messageId?.let { id -> ordered.firstOrNull { it.id == id } }
+            ?: askAfter?.let { id -> ordered.firstOrNull { it.id == id } }
+        val out = ArrayList<Row>(ordered.size + 1)
+        var placed = false
+        for (m in ordered) {
+            // the card sits right under its message; nothing newer than the
+            // message is allowed to claim it first
+            if (!placed && anchor != null && m === anchor) {
+                out += Row.Pending(ask)
+                placed = true
+            }
+            // otherwise the first message that is neither live nor newer than the
+            // ask is the spot: it goes above the card, pushing the ask up as the
+            // turn says more below
+            if (!placed && anchor == null && m.id != liveMessageId && m.time <= askAt) {
+                out += Row.Pending(ask)
+                placed = true
+            }
+            out += rowFor(m)
+        }
+        if (!placed) out += Row.Pending(ask)
+        out
+    },
+)
+
+/**
+ * A compaction marker arrives BEFORE the summarize reply that answers it, so a
+ * literal placement draws the line above the very response the compaction
+ * produced. The marker is the boundary between the folded history and what
+ * follows it, so it settles after everything the compaction emitted: it floats
+ * past the assistant messages that carry the reply and plants itself right
+ * before the next user turn — at the transcript's end when no turn comes. The
+ * auto-continue prompt opencode writes after a summarize is that next turn, so
+ * it releases the divider there even though it is scaffolding, not words the
+ * person typed.
+ */
+private fun settleCompaction(rows: List<Row>): List<Row> {
+    if (rows.none { it is Row.Compaction }) return rows
+    // the caller passes rows newest-first; the settle rule is a rule about
+    // reading order, so walk it oldest-first and hand back the same order
+    val reading = rows.asReversed()
+    val out = ArrayList<Row>(rows.size)
+    var held: Row.Compaction? = null
+    fun isUserTurn(row: Row): Boolean =
+        row is Row.AutoContinue || (row as? Row.Msg)?.m?.role == Role.USER
+    for (row in reading) {
+        if (row is Row.Compaction) {
+            held = row
             continue
         }
-        // otherwise the first message that is neither live nor newer than the
-        // ask is the spot: it goes above the card, pushing the ask up as the
-        // turn says more below
-        if (!placed && m.id != liveMessageId && m.time <= askAt) {
-            out += Row.Pending(ask)
-            placed = true
+        if (held != null && isUserTurn(row)) {
+            out += held
+            held = null
         }
-        out += Row.Msg(m)
+        out += row
     }
-    if (!placed) out += Row.Pending(ask)
-    return out
+    held?.let { out += it }
+    return out.asReversed()
+}
+
+/** Refine LazyColumn's estimate as it measures toward a distant final item. */
+private suspend fun LazyListState.snapToEnd(endIndex: Int, keepFollowing: () -> Boolean) {
+    delay(32)
+    var settledEndLayouts = 0
+    repeat(96) {
+        if (!keepFollowing()) return
+        if (canScrollForward) {
+            settledEndLayouts = 0
+            scrollToItem(endIndex)
+        } else {
+            settledEndLayouts++
+            if (settledEndLayouts >= 3) {
+                delay(32)
+                if (!canScrollForward) return
+                settledEndLayouts = 0
+            }
+        }
+        delay(24)
+    }
+    // A very distant lazy target can keep refining its size estimate for more
+    // than the snap passes above. Finish with LazyList's animated target logic
+    // rather than declaring success just because one step stopped moving.
+    if (canScrollForward && keepFollowing()) {
+        animateScrollToItem(endIndex)
+    }
 }
 
 /**
@@ -315,12 +412,18 @@ fun ChatScreen(
     vm: ChatViewModel,
     onBack: () -> Unit,
     onNew: () -> Unit,
-    onForgetPairing: () -> Unit,
+    @Suppress("UNUSED_PARAMETER") onForgetPairing: () -> Unit = {},
     terminalEnabled: Boolean = false,
     onOpenSession: (SessionSummary) -> Unit = {},
     subagentCount: Int = 0,
 ) {
     val state by vm.state.collectAsState()
+    var retainedStatus by remember(vm.sessionId) { mutableStateOf(StatusSummary()) }
+    val currentStatus = remember(state.messages, state.models) { statusSummary(state) }
+    val visibleStatus = retainStatus(retainedStatus, currentStatus)
+    SideEffect {
+        if (retainedStatus != visibleStatus) retainedStatus = visibleStatus
+    }
     // a file tapped in a message: this conversation is the one that can resolve
     // a relative path against its own workspace, so it takes the hand-off
     val tappedFile by OpenedFile.pending.collectAsState()
@@ -338,7 +441,11 @@ fun ChatScreen(
     // it rewound the text for a frame — the "deleted and recreated" flicker.
     val rendered = remember(state) {
         val live = liveAsMessage(state.live)
-        val served = state.messages
+        // a record entry can carry nothing renderable — opencode marks a
+        // compaction with a synthetic user message whose only part silences to
+        // null in the mapper. Rendering it shows an empty bubble the user can't
+        // decode; the compact action already announces itself.
+        val served = renderableMessages(state.messages)
         if (live == null) {
             served
         } else {
@@ -384,18 +491,15 @@ fun ChatScreen(
     // nothing here intercepted it.
     BackHandler { onBack() }
 
-    // Newest first, laid out reversed: index 0 is the BOTTOM of the screen.
-    // This is how the Compose team and the chat UIs do it — a bottom-up list
-    // stays pinned by itself, because new content grows the item at index 0 and
-    // nothing above it moves. No scroll calls, no item-height estimates, no
-    // "am I near the bottom?" heuristics (which cannot work when one message is
-    // taller than the viewport).
+    // The transcript model is newest first; the LazyColumn below displays it
+    // oldest first so message content unfolds in the normal reading direction.
     val ordered = remember(rendered) { rendered.asReversed() }
     val ask = state.ask
     val liveMessageId = state.live?.messageId
     val rows = remember(ordered, ask, state.askAt, liveMessageId, state.askAfter) {
         groupToolRuns(transcriptRows(ordered, ask, state.askAt, liveMessageId, state.askAfter))
     }
+    val displayRows = remember(rows) { rows.asReversed() }
     val askAnswered = remember(ask, state.askChoice) { askIsSpent(ask, state.askChoice) }
     // An unanswered card is the signal in its own right; the spinner is not. This
     // is "a card is waiting", not "a card was answered" — asking the latter
@@ -404,24 +508,106 @@ fun ChatScreen(
     // the newest message, which carries the "still working" mark; the ask can sit
     // between it and the bottom, so this is a lookup rather than an index
     val newestMsgId = remember(rows) { rows.firstOrNull { it is Row.Msg }?.let { (it as Row.Msg).m.id } }
-    // At the bottom iff the sentinel below is the first thing on screen. Exact,
-    // cheap, and stable while the answer streams.
-    val atBottom by remember {
-        derivedStateOf {
-            listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset <= 2
+    val queuedDisplay = state.queued
+    val endIndex = displayRows.size + queuedDisplay.size + if (state.loadingOlder) 1 else 0
+    var atEnd by remember { mutableStateOf(false) }
+    var landed by remember { mutableStateOf(false) }
+    var followLatest by remember { mutableStateOf(true) }
+    var jumpVisible by remember { mutableStateOf(false) }
+    var scrollActivity by remember { mutableStateOf(0) }
+
+    // Remember whether the reader chose to leave the end. New messages and
+    // streaming deltas change the scroll range; that alone must not clear the
+    // reader's previous choice to follow the latest reply.
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.canScrollForward }
+            .collect { canScrollForward ->
+                if (canScrollForward) {
+                    atEnd = false
+                } else {
+                    delay(48)
+                    if (!listState.canScrollForward) {
+                        atEnd = true
+                        if (landed) followLatest = true
+                    }
+                }
+            }
+    }
+    LaunchedEffect(listState) {
+        listState.interactionSource.interactions.collect { interaction ->
+            when (interaction) {
+                is DragInteraction.Start -> followLatest = false
+                is DragInteraction.Stop,
+                is DragInteraction.Cancel -> if (atEnd) followLatest = true
+            }
         }
     }
-    // Sending pulls you back to your own message wherever you had scrolled to.
-    LaunchedEffect(state.sending) {
-        if (state.sending) listState.animateScrollToItem(0)
+    LaunchedEffect(listState, endIndex) {
+        var previousPosition: Pair<Int, Int>? = null
+        snapshotFlow {
+            Triple(
+                listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset,
+                listState.isScrollInProgress,
+                atEnd,
+            )
+        }.collect { (position, scrolling, atEndNow) ->
+            if (!landed) {
+                previousPosition = position
+                return@collect
+            }
+            if (atEndNow) jumpVisible = false
+            // The button answers a reader who left the end, not content that
+            // arrived: a streamed node reads as "not at the bottom" for a frame
+            // before pinning ("stickiness") catches up, and the pin itself is a
+            // programmatic scroll. Both move the position and set
+            // isScrollInProgress, and reacting to them flashed the button on
+            // every delta for a reader who never scrolled. `followLatest` is
+            // false only once the reader actually dragged away.
+            else if (!followLatest && (scrolling || (previousPosition != null && position != previousPosition))) {
+                jumpVisible = true
+                scrollActivity++
+            }
+            previousPosition = position
+        }
+    }
+    LaunchedEffect(scrollActivity, jumpVisible, atEnd) {
+        if (jumpVisible && !atEnd) {
+            delay(2_500)
+            jumpVisible = false
+        }
     }
 
-    // approaching the top of a long conversation pulls the previous page
-    LaunchedEffect(listState, state.hasMore, ordered.size) {
-        snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }
-            .collect { last ->
-                // the top of the screen is the END of a reversed list
-                if (state.hasMore && !state.loadingOlder && last >= ordered.size - 1) vm.loadOlder()
+    // Open at the latest message once history has arrived; follow subsequent
+    // content changes only if the reader was already at the end.
+    LaunchedEffect(state.loadingHistory) {
+        if (state.loadingHistory || landed) return@LaunchedEffect
+        snapshotFlow { listState.layoutInfo.totalItemsCount }
+            .first { it >= endIndex + 1 }
+        listState.snapToEnd(endIndex) { followLatest }
+        landed = true
+        followLatest = true
+    }
+    LaunchedEffect(displayRows, queuedDisplay, state.loadingOlder, endIndex) {
+        if (state.loadingHistory || !landed || !followLatest) return@LaunchedEffect
+        snapshotFlow { listState.layoutInfo.totalItemsCount }
+            .first { it >= endIndex + 1 }
+        listState.snapToEnd(endIndex) { followLatest }
+    }
+
+    // Sending is an explicit request to return to the newest part of the chat.
+    LaunchedEffect(state.sending) {
+        if (state.sending) {
+            followLatest = true
+            listState.animateScrollToItem(endIndex)
+            listState.snapToEnd(endIndex) { followLatest }
+        }
+    }
+
+    // Older pages are at the top of a forward list.
+    LaunchedEffect(listState, state.hasMore, state.loadingOlder, landed) {
+        snapshotFlow { listState.layoutInfo.visibleItemsInfo.firstOrNull()?.index ?: 0 }
+            .collect { first ->
+                if (landed && state.hasMore && !state.loadingOlder && first == 0) vm.loadOlder()
             }
     }
 
@@ -430,10 +616,9 @@ fun ChatScreen(
     var queuedEditFor by remember { mutableStateOf<ChatViewModel.Queued?>(null) }
     var queuedCancelFor by remember { mutableStateOf<ChatViewModel.Queued?>(null) }
     var deleteOpen by remember { mutableStateOf(false) }
-    var forgetOpen by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
     var usageOpen by remember { mutableStateOf(false) }
-    var changesOpen by remember { mutableStateOf(false) }
+    var gitOpen by remember { mutableStateOf(false) }
     var infoMsg by remember { mutableStateOf<ChatMessage?>(null) }
     var replyTo by remember { mutableStateOf<ChatMessage?>(null) }
     var skillsView by remember { mutableStateOf(false) }
@@ -482,15 +667,26 @@ fun ChatScreen(
                             onClick = { menu = false; usageOpen = true },
                         )
                         DropdownMenuItem(
-                            text = { Text("Changes") },
-                            leadingIcon = { Icon(Icons.Filled.List, null) },
-                            onClick = { menu = false; changesOpen = true },
+                            text = { Text("Git") },
+                            leadingIcon = { Icon(Icons.Filled.Source, null) },
+                            onClick = { menu = false; gitOpen = true },
                         )
                         if (terminalEnabled) {
                             DropdownMenuItem(
                                 text = { Text("Terminal") },
                                 leadingIcon = { Icon(Icons.Filled.Terminal, null) },
                                 onClick = { menu = false; termVisible = true },
+                            )
+                        }
+                        // Compact is harness-catalogued: only show the row for a
+                        // harness whose adapter offers the port. opencode is the
+                        // first; the menu stays honest instead of failing at a tap.
+                        if (vm.harness == "opencode") {
+                            DropdownMenuItem(
+                                text = { Text(if (state.compacting) "Compacting…" else "Compact") },
+                                leadingIcon = { Icon(Icons.Filled.Compress, null) },
+                                enabled = !state.compacting && !busy,
+                                onClick = { menu = false; vm.compact() },
                             )
                         }
                         DropdownMenuItem(
@@ -524,11 +720,6 @@ fun ChatScreen(
                                 clipboard.setText(AnnotatedString(vm.sessionId))
                             },
                         )
-                        DropdownMenuItem(
-                            text = { Text("Forget pairing") },
-                            leadingIcon = { Icon(Icons.Filled.ExitToApp, null) },
-                            onClick = { menu = false; forgetOpen = true },
-                        )
                     }
                 }
             },
@@ -536,7 +727,7 @@ fun ChatScreen(
         // the ambient status line: model in use, tokens it held, spend so far —
         // the phone's answer to Telegram's pinned status. Silent when there is
         // nothing yet to say.
-        statusText(state).takeIf { it.isNotEmpty() }?.let { s ->
+        statusText(visibleStatus).takeIf { it.isNotEmpty() }?.let { s ->
             Surface(color = MaterialTheme.colorScheme.surface) {
                 Text(
                     s,
@@ -548,20 +739,48 @@ fun ChatScreen(
                 )
             }
         }
+        // compaction outlives the menu that started it: a tap closes the
+        // dropdown, so the "Compacting…" label there would never be seen.
+        // The banner under the status line is where work-in-progress lives.
+        AnimatedVisibility(state.compacting) {
+            Surface(color = MaterialTheme.colorScheme.surfaceVariant) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+                    Text(
+                        "Compacting…",
+                        Modifier.padding(start = 10.dp),
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
         AnimatedVisibility(state.failure != null || state.notice != null) {
             Surface(color = MaterialTheme.colorScheme.surfaceVariant) {
-                Text(
-                    state.failure ?: state.notice.orEmpty(),
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                    color = if (state.failure != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 13.sp,
-                )
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    // dismissible, not on a timer: an explanation you came for
+                    // (a refusal's reason, a failed send) must survive reading
+                    Text(
+                        state.failure ?: state.notice.orEmpty(),
+                        Modifier.weight(1f).padding(start = 16.dp, top = 8.dp, bottom = 8.dp),
+                        color = if (state.failure != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 13.sp,
+                    )
+                    IconButton(
+                        onClick = vm::dismissBanner,
+                        modifier = Modifier.padding(end = 6.dp).size(24.dp),
+                    ) {
+                        Icon(Icons.Filled.Close, "dismiss", Modifier.size(14.dp))
+                    }
+                }
             }
         }
         val scope = rememberCoroutineScope()
-        val anchor = remember(listState, scope) { TranscriptAnchor(listState, scope) }
         // there is content below the fold: one tap and you are back at the end
-        val showJump = !atBottom && rendered.isNotEmpty()
+        val showJump = jumpVisible && landed && !atEnd && rendered.isNotEmpty()
         Box(Modifier.weight(1f)) {
             if (state.messages.isEmpty() && state.loadingHistory) {
                 Box(
@@ -570,19 +789,11 @@ fun ChatScreen(
                 ) {
                     CircularProgressIndicator(Modifier.size(30.dp), strokeWidth = 3.dp)
                 }
-            } else CompositionLocalProvider(LocalTranscriptAnchor provides anchor) { LazyColumn(
+            } else LazyColumn(
                 Modifier.fillMaxSize().testTag("chat-list"),
                 state = listState,
-                // bottom-up: index 0 is the bottom of the screen
-                reverseLayout = true,
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 10.dp),
             ) {
-                // A 1px sentinel at index 0, below the newest message. It is the
-                // current scroll position if and only if we are at the very
-                // bottom, which is what makes "at the bottom" exact — and new
-                // messages slot in above it, so a pinned view stays pinned with
-                // no scroll call at all.
-                item(key = "bottom-sentinel") { Spacer(Modifier.height(1.dp)) }
                 // reaching the top threshold pulls the previous page; say so while
                 // it is in flight, or the list just sits there looking stuck
                 if (state.loadingOlder) {
@@ -597,16 +808,13 @@ fun ChatScreen(
                         }
                     }
                 }
-                // queued messages ride at the end, like the real messages they are
-                val queuedDisplay = state.queued.asReversed()
-                items(queuedDisplay.size, key = { "queued-${queuedDisplay[it].id}" }) { i ->
-                    QueuedBubble(queuedDisplay[i]) { queuedMenuFor = queuedDisplay[i] }
-                }
                 val busy = state.sending || state.live != null
-                items(rows.size, key = { rows[it].key }) { i ->
-                    when (val row = rows[i]) {
+                items(displayRows.size, key = { displayRows[it].key }) { i ->
+                    when (val row = displayRows[i]) {
                         is Row.Tools -> ToolGroupRow(row.tools)
                         is Row.Pending -> AskBar(row.ask, vm, spent = askAnswered, choiceId = state.askChoice)
+                        is Row.Compaction -> CompactionRow(row.m)
+                        is Row.AutoContinue -> AutoContinueRow(row.m)
                         is Row.Msg -> CompositionLocalProvider(LocalFileUrl provides { path -> vm.fileUrl(path) }) {
                             MessageRow(
                                 row.m,
@@ -625,15 +833,46 @@ fun ChatScreen(
                         }
                     }
                 }
-            } }
-            if (showJump) {
-                FloatingActionButton(
-                    onClick = { scope.launch { listState.animateScrollToItem(0) } },
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 12.dp).size(44.dp),
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                // Keep the visible queue in send order, after the newest message.
+                items(queuedDisplay.size, key = { "queued-${queuedDisplay[it].id}" }) { i ->
+                    QueuedBubble(queuedDisplay[i]) { queuedMenuFor = queuedDisplay[i] }
+                }
+                // The last item gives end-of-conversation a stable scroll target.
+                item(key = "end-sentinel") { Spacer(Modifier.height(1.dp)) }
+            }
+            Column(
+                Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 12.dp).size(44.dp),
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.Bottom,
+            ) {
+                AnimatedVisibility(
+                    visible = showJump,
+                    modifier = Modifier.align(Alignment.End),
+                    enter = fadeIn(tween(170)) + scaleIn(initialScale = 0.82f, animationSpec = tween(170)),
+                    exit = fadeOut(tween(260)) + scaleOut(targetScale = 0.9f, animationSpec = tween(260)),
                 ) {
-                    Icon(Icons.Filled.ArrowDownward, "jump to latest", Modifier.size(22.dp))
+                    FloatingActionButton(
+                        onClick = {
+                            scope.launch {
+                                followLatest = true
+                                listState.animateScrollToItem(endIndex)
+                                listState.snapToEnd(endIndex) { followLatest }
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    ) {
+                        Icon(Icons.Filled.ArrowDownward, "jump to latest", Modifier.size(22.dp))
+                    }
+                }
+            }
+            if (!landed && rendered.isNotEmpty()) {
+                Box(
+                    Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).testTag("positioning-overlay"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
                 }
             }
         }
@@ -690,13 +929,7 @@ fun ChatScreen(
         onConfirm = { deleteOpen = false; vm.delete { if (it) onBack() } },
         onDismiss = { deleteOpen = false },
     )
-    if (forgetOpen) ConfirmDialog(
-        "Forget pairing?",
-        "Your token is erased. Reconnect with the gateway address and a fresh pairing code.",
-        onConfirm = { forgetOpen = false; onForgetPairing() },
-        onDismiss = { forgetOpen = false },
-    )
-    if (settingsOpen) SettingsDialog(
+    if (settingsOpen) SettingsSheet(
         vm,
         onDismiss = { settingsOpen = false },
         onSkills = { settingsOpen = false; skillsView = true },
@@ -706,7 +939,7 @@ fun ChatScreen(
     if (mcpView) ManageScreen("MCP servers", onClose = { mcpView = false }) { McpBody(vm) }
 
     if (usageOpen) UsageDialog(vm, onDismiss = { usageOpen = false })
-    if (changesOpen) ChangesDialog(vm, onDismiss = { changesOpen = false })
+    if (gitOpen) GitSheet(vm, onDismiss = { gitOpen = false })
     infoMsg?.let { ResponseInfoDialog(it) { infoMsg = null } }
 }
 
@@ -739,24 +972,32 @@ private fun ResponseInfoDialog(message: ChatMessage, onDismiss: () -> Unit) {
     )
 }
 
-// Settings, opened from the top-right menu. Scoped to what a phone can act on
-// today: the model this conversation runs on (mirroring Telegram's picker).
-// The list is fetched when the panel opens; a tap sets it on the gateway, which
-// remembers it for the next prompt.
+// Settings, opened from the top-right menu. A sheet rather than a dialog: it
+// grew past what an AlertDialog can hold — a dialog capped the body at 440dp
+// and scrolled the whole lot inside a box the size of a postcard, and the
+// harness options below needed room to explain themselves. Sheets are already
+// how this screen shows its other deep panels (Git, the diff shelf).
 @Composable
-private fun SettingsDialog(
+@OptIn(ExperimentalMaterial3Api::class)
+private fun SettingsSheet(
     vm: ChatViewModel,
     onDismiss: () -> Unit,
     onSkills: () -> Unit,
     onMcp: () -> Unit,
 ) {
     val state by vm.state.collectAsState()
-    LaunchedEffect(Unit) { vm.loadModels(); vm.loadAgent(); vm.loadSkills(); vm.loadMcp() }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Settings") },
-        text = {
-            Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState())) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    LaunchedEffect(Unit) { vm.loadModels(); vm.loadAgent(); vm.loadSkills(); vm.loadMcp(); vm.loadHarnessSettings() }
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(
+            Modifier.fillMaxWidth().heightIn(max = 720.dp).padding(horizontal = 18.dp).padding(bottom = 24.dp),
+        ) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Settings", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                IconButton(onClick = onDismiss) { Icon(Icons.Filled.Close, "close settings") }
+            }
+            HorizontalDivider()
+            Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
                 SectionLabel("HARNESS")
                 // fixed for the life of the conversation: a chat cannot move
                 // between harnesses, so this is shown, never offered
@@ -775,7 +1016,7 @@ private fun SettingsDialog(
                     SettingRow(a.label, selected = state.agent == a.id, subtitle = a.detail, onPick = { vm.setAgent(a.id) }, leading = { SettingIcon(Icons.Filled.Build) })
                 }
 
-                // managing these lives in its own view: the modal stays a summary
+                // managing these lives in its own view: the sheet stays a summary
                 SectionLabel("SKILLS", top = 14.dp)
                 SettingRow(
                     "Skills",
@@ -792,12 +1033,23 @@ private fun SettingsDialog(
                     onPick = onMcp,
                     leading = { SettingIcon(Icons.Filled.Dns) },
                 )
+
+                // Last, and the only destructive thing here: whatever this
+                // conversation's harness declares. The adapter owns the ids and
+                // the wording — the phone renders whatever comes back and knows
+                // none of it, so a harness gaining a control needs no app change.
+                HarnessSettingsSection(
+                    options = state.harnessSettings.options,
+                    values = state.harnessSettings.values,
+                    onChange = { id: String, enabled: Boolean -> vm.setHarnessSetting(id, enabled) },
+                    title = "${vm.harness?.ifBlank { null }?.uppercase() ?: "HARNESS"} OPTIONS",
+                )
+                if (state.harnessSettingsLoading) {
+                    Text("Loading harness options…", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
-        },
-        confirmButton = {
-            androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Done") }
-        },
-    )
+        }
+    }
 }
 
 // The model picker, collapsed to one row: the list was an endless scroll inside
@@ -1312,38 +1564,126 @@ private fun StatRow(label: String, value: String) {
     }
 }
 
-// the files this conversation changed (adapter.diff via the gateway)
 @Composable
-private fun ChangesDialog(vm: ChatViewModel, onDismiss: () -> Unit) {
+@OptIn(ExperimentalMaterial3Api::class)
+private fun GitSheet(vm: ChatViewModel, onDismiss: () -> Unit) {
     val state by vm.state.collectAsState()
-    LaunchedEffect(Unit) { vm.loadDiff() }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Changes") },
-        text = {
-            val files = state.diffs
+    val git = state.git
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    LaunchedEffect(Unit) { vm.loadGit() }
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(
+            Modifier.fillMaxWidth().heightIn(max = 720.dp).padding(horizontal = 18.dp).padding(bottom = 24.dp),
+        ) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Git", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                TextButton(onClick = { vm.loadGit() }, enabled = !state.gitLoading) { Text("Refresh") }
+                IconButton(onClick = onDismiss) { Icon(Icons.Filled.Close, "close Git sheet") }
+            }
+            HorizontalDivider()
             when {
-                files == null -> Text("Loading…", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                files.isEmpty() -> Text("No file changes in this conversation.", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                else -> Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
-                    files.forEach { f ->
-                        Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(f.file.substringAfterLast('/'), Modifier.weight(1f), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
-                            Text("+${f.additions}", fontSize = 12.sp, color = Color(0xFF4CAF50))
-                            Text(" −${f.deletions}", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
-                        }
-                    }
+                state.gitLoading && git == null -> LoadingLine()
+                state.gitError != null && git == null -> Text(
+                    state.gitError.orEmpty(),
+                    Modifier.padding(vertical = 18.dp),
+                    color = MaterialTheme.colorScheme.error,
+                    fontSize = 13.sp,
+                )
+                git == null -> LoadingLine()
+                !git.isRepository -> Text(
+                    "This workspace isn't a Git repository.",
+                    Modifier.padding(vertical = 18.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 14.sp,
+                )
+                else -> GitSnapshotContent(git)
+            }
+        }
+    }
+}
+
+@Composable
+private fun GitSnapshotContent(git: GitSnapshot) {
+    Column(Modifier.fillMaxWidth().heightIn(max = 620.dp).verticalScroll(rememberScrollState())) {
+        Row(
+            Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = RoundedCornerShape(50)) {
+                Row(Modifier.padding(horizontal = 11.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.Source, null, Modifier.size(15.dp), tint = MaterialTheme.colorScheme.onSecondaryContainer)
+                    Text(git.branch ?: "detached HEAD", Modifier.padding(start = 6.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSecondaryContainer)
                 }
             }
-        },
-        confirmButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Done") } },
-    )
+            Spacer(Modifier.weight(1f))
+            if (git.changedFiles > 0) {
+                Text(
+                    "${git.changedFiles} changed",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.tertiary,
+                )
+            } else {
+                Text("clean", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        git.head?.let { GitCommitCard(it) }
+        if (git.commits.isEmpty()) {
+            Text("No commits yet", Modifier.padding(vertical = 16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+        } else {
+            Text("RECENT HISTORY", Modifier.padding(top = 18.dp, bottom = 8.dp), fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            git.commits.drop(1).forEach { GitCommitRow(it) }
+        }
+    }
 }
+
+@Composable
+private fun GitCommitCard(commit: GitCommit) {
+    Surface(
+        Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.primaryContainer,
+        shape = RoundedCornerShape(14.dp),
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("HEAD", fontSize = 10.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                Spacer(Modifier.size(8.dp))
+                Text(commit.shortHash, fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f))
+            }
+            Text(commit.subject, fontSize = 15.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
+            Text(
+                "${commit.author} · ${fmtGitTime(commit.time)}",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun GitCommitRow(commit: GitCommit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+        Column(Modifier.width(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Surface(Modifier.padding(top = 5.dp).size(8.dp), shape = CircleShape, color = MaterialTheme.colorScheme.outline) {}
+            Box(Modifier.padding(top = 4.dp).width(1.dp).height(38.dp).background(MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)))
+        }
+        Column(Modifier.weight(1f).padding(bottom = 10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(commit.shortHash, fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.primary)
+                Text("  ·  ${fmtGitTime(commit.time)}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Text(commit.subject, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface)
+            Text(commit.author, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+private fun fmtGitTime(seconds: Long): String =
+    java.text.SimpleDateFormat("MMM d · HH:mm", java.util.Locale.getDefault()).format(java.util.Date(seconds * 1000))
 
 private fun liveAsMessage(live: ChatViewModel.LiveTurn?): ChatMessage? {
     if (live == null) return null
     // a thinking part with nothing in it yet is not worth a bubble
-    val parts = live.parts.values.filterNot { it is ChatPart.Text && it.text.isEmpty() || it is ChatPart.Reasoning && it.text.isEmpty() }
+    val parts = live.parts.values.filterNot { it is ChatPart.Text && it.text.isEmpty() || it is ChatPart.Reasoning && it.text.isBlank() }
     if (parts.isEmpty()) return null
     return ChatMessage(live.messageId, Role.ASSISTANT, 0, parts)
 }
@@ -1366,6 +1706,8 @@ private fun fullTurnText(message: ChatMessage): String =
                     p.output?.takeIf { it.isNotBlank() }?.let { append("\n$it") }
                 }
             is ChatPart.File -> "[file] ${p.name ?: p.path}"
+            ChatPart.Compaction -> "[conversation compacted]"
+            ChatPart.AutoContinue -> ""
             is ChatPart.Unsupported -> ""
         }
     }.trim()
@@ -1397,6 +1739,7 @@ private fun MessageRow(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = RowInset, vertical = RowVInset)
+            .testTag("message-row-${message.id}")
             .combinedClickable(onClick = {}, onLongClick = { menu = true }),
     ) {
         when (message.role) {
@@ -1562,7 +1905,10 @@ private fun AssistantBody(
         collapseTranscript(message.parts).forEach { row ->
             when (row) {
                 is TranscriptRow.Group -> ToolGroupRow(row.tools)
-                is TranscriptRow.One -> PartView(row.part, streaming = row.part === message.parts.last())
+                is TranscriptRow.One -> PartView(
+                    row.part,
+                    streaming = responding && row.part === message.parts.last(),
+                )
             }
         }
         // still working: a quiet spinner at the end of the reply, so a pause
@@ -1658,35 +2004,9 @@ internal fun withLocalLinks(markdown: String): String =
  * far it moved. The header keeps its place; the content below it is what moves,
  * which is the way a fold is expected to open.
  */
-private class TranscriptAnchor(
-    private val listState: LazyListState,
-    private val scope: CoroutineScope,
-) {
-    private var height = 0f
-
-    /**
-     * The block changed height. Give the list back exactly that much.
-     *
-     * Driven by the height itself rather than by polling where the header ended
-     * up: an opening block reports its size once per frame of its own animation,
-     * so each step is handed straight back and the header never drifts. Polling
-     * for the header instead races the animation and lands wherever it happened
-     * to be when it was measured.
-     */
-    fun resized(value: Float) {
-        val delta = value - height
-        height = value
-        if (delta != 0f) scope.launch { listState.scrollBy(delta) }
-    }
-}
-
-private val LocalTranscriptAnchor = compositionLocalOf<TranscriptAnchor?> { null }
-
 @Composable
 private fun ToolGroupRow(tools: List<ChatPart.Tool>) {
     var open by remember(tools) { mutableStateOf(false) }
-    val anchor = LocalTranscriptAnchor.current
-    val flip = { open = !open }
     val anyFailed = tools.any { it.status == ToolStatus.ERROR }
     val anyRunning = tools.any { it.status == ToolStatus.RUNNING || it.status == ToolStatus.PENDING }
     val added = tools.sumOf { it.added ?: 0 }
@@ -1696,13 +2016,9 @@ private fun ToolGroupRow(tools: List<ChatPart.Tool>) {
         anyRunning -> MaterialTheme.colorScheme.primary
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
-    Column(
-        Modifier.fillMaxWidth()
-            .padding(horizontal = RowInset, vertical = RowVInset)
-            .onSizeChanged { anchor?.resized(it.height.toFloat()) },
-    ) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = RowInset, vertical = RowVInset)) {
         Row(
-            Modifier.fillMaxWidth().clickable { flip() },
+            Modifier.fillMaxWidth().clickable { open = !open },
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(toolGroupSummary(tools), style = MaterialTheme.typography.labelMedium, color = tint)
@@ -1803,9 +2119,11 @@ private fun PartView(part: ChatPart, streaming: Boolean, onOpenLink: (String) ->
                 ),
             ),
         )
-        is ChatPart.Reasoning -> ReasoningRow(part, active = streaming)
+        is ChatPart.Reasoning -> if (part.text.isNotBlank()) ReasoningRow(part, active = streaming)
         is ChatPart.Tool -> ToolRow(part)
         is ChatPart.File -> FileRow(part)
+        ChatPart.Compaction -> Unit // a divider row renders the message, not its parts
+        ChatPart.AutoContinue -> Unit // the anchor row renders the quiet note, not a bubble
         is ChatPart.Unsupported -> Unit
     }
 }
@@ -1887,8 +2205,6 @@ private fun FileRow(part: ChatPart.File) {
 @Composable
 private fun ReasoningRow(part: ChatPart.Reasoning, active: Boolean = false) {
     var open by remember { mutableStateOf(false) }
-    val anchor = LocalTranscriptAnchor.current
-    val flip = { open = !open }
     // While it is still thinking the seconds must tick, or a frozen "1s" reads
     // as stuck. Driven by an infinite animation rather than a delay loop in the
     // composition: a loop there keeps the screen "busy" forever, which also
@@ -1901,11 +2217,7 @@ private fun ReasoningRow(part: ChatPart.Reasoning, active: Boolean = false) {
         label = "seconds",
     )
     val secs = elapsed.toInt()
-    Column(
-        Modifier.fillMaxWidth()
-            .onSizeChanged { anchor?.resized(it.height.toFloat()) }
-            .combinedClickable(onClick = flip, onLongClick = {}),
-    ) {
+    Column(Modifier.fillMaxWidth().combinedClickable(onClick = { open = !open }, onLongClick = {})) {
         Row(
             Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -2262,7 +2574,7 @@ private fun AskBar(ask: Ask, vm: ChatViewModel, spent: Boolean, choiceId: String
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun QueuedBubble(q: ChatViewModel.Queued, onClick: () -> Unit) {
     Row(
@@ -2284,12 +2596,41 @@ private fun QueuedBubble(q: ChatViewModel.Queued, onClick: () -> Unit) {
             color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
             shape = RoundedCornerShape(18.dp),
         ) {
-            Text(
-                q.text,
-                Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
-                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f),
-                fontSize = 15.sp,
-            )
+            Column(Modifier.padding(horizontal = 14.dp, vertical = 9.dp)) {
+                Text(
+                    q.text,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f),
+                    fontSize = 15.sp,
+                )
+                // what is going with it, named the same way the composer named it
+                // — a queued message that showed only its words looked as though
+                // the attachment had been dropped on the way into the queue
+                if (q.attachments.isNotEmpty()) {
+                    FlowRow(
+                        Modifier.padding(top = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        q.attachments.forEach { a ->
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+                                Icon(
+                                    Icons.Filled.AttachFile,
+                                    null,
+                                    Modifier.size(14.dp),
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f),
+                                )
+                                Text(
+                                    a.name,
+                                    Modifier.padding(start = 3.dp),
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f),
+                                    fontSize = 12.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -2298,7 +2639,11 @@ private fun QueuedBubble(q: ChatViewModel.Queued, onClick: () -> Unit) {
 @Composable
 private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: () -> Unit) {
     val state by vm.state.collectAsState()
-    val draft = remember { mutableStateOf("") }
+    // The draft lives in the ViewModel, not in a `remember` here: this composable
+    // leaves composition the moment you tap back, and with it went everything you
+    // had typed — while the attachment, held in the same state, survived. The
+    // asymmetry read as the app eating the message.
+    val draft = state.draft
     var sendMenu by remember { mutableStateOf(false) }
     // Stop shows whenever a turn is active for this conversation — this client's,
     // or one started elsewhere (Telegram, a steer). Safe now that a tap on Send
@@ -2349,8 +2694,8 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
                     Icon(Icons.Filled.AttachFile, "attach", Modifier.size(24.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 OutlinedTextField(
-                    value = draft.value,
-                    onValueChange = { draft.value = it },
+                    value = draft,
+                    onValueChange = { vm.setDraft(it) },
                     Modifier.weight(1f),
                     placeholder = { Text("Message the agent", color = MaterialTheme.colorScheme.onSurfaceVariant) },
                     shape = RoundedCornerShape(24.dp),
@@ -2380,12 +2725,11 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
                                 val quote = replyTo?.let { m ->
                                     messageText(m).trim().lineSequence().take(6).joinToString("\n") { "> $it" } + "\n\n"
                                 } ?: ""
-                                vm.send(quote + draft.value)
-                                draft.value = ""
+                                vm.send(quote + draft)
                                 onCancelReply()
                             },
                             // hold to choose: steer in now, or wait for the reply to end
-                            onLongClick = { if (draft.value.isNotBlank() || state.attachments.isNotEmpty()) sendMenu = true },
+                            onLongClick = { if (draft.isNotBlank() || state.attachments.isNotEmpty()) sendMenu = true },
                         ),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -2395,7 +2739,7 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
                         Modifier.size(26.dp),
                         tint = when {
                             !sendable -> MaterialTheme.colorScheme.surfaceVariant
-                            draft.value.isBlank() && state.attachments.isEmpty() -> MaterialTheme.colorScheme.surfaceVariant
+                            draft.isBlank() && state.attachments.isEmpty() -> MaterialTheme.colorScheme.surfaceVariant
                             else -> MaterialTheme.colorScheme.primary
                         },
                     )
@@ -2410,8 +2754,7 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
                         text = { Text("While the agent works, Send steers your message in at the next tool call. You can hold to send it only after this reply ends.") },
                         confirmButton = {
                             TextButton(onClick = {
-                                vm.send(quote + draft.value, steer = false)
-                                draft.value = ""
+                                vm.send(quote + draft, steer = false)
                                 sendMenu = false
                                 onCancelReply()
                             }) { Text("After this reply") }
@@ -2470,32 +2813,103 @@ private fun Spacer8() {
     androidx.compose.foundation.layout.Spacer(Modifier.size(8.dp))
 }
 
-// model · tokens · spend, from what the client already holds: the newest
-// assistant turn's model and token count, and the summed cost of priced turns
-// (an unpriced turn shows as "$?" — absent is not free).
-private fun statusText(state: ChatViewModel.UiState): String {
+/** Last known status fields survive partial history snapshots during a live turn. */
+internal data class StatusSummary(
+    val model: String? = null,
+    val used: Long? = null,
+    val limit: Long? = null,
+    val spend: Double? = null,
+)
+
+/** The status line's current inputs; missing fields are distinct from zero. */
+internal fun statusSummary(state: ChatViewModel.UiState): StatusSummary {
     val turns = state.messages.filter { it.role == Role.ASSISTANT }
     val last = turns.lastOrNull { it.tokens != null }
-    val out = mutableListOf<String>()
-    // the model in use, up here by name rather than under every reply
     val model = last?.model?.substringAfterLast('/')
         ?: state.models?.current?.substringAfterLast('/')
         ?: state.models?.default?.substringAfterLast('/')
-    if (!model.isNullOrBlank()) out += model
-    // fill: how much of the model's context window the last turn held
-    val used = last?.tokens?.context ?: 0
+    val used = last?.tokens?.context?.takeIf { it > 0 }
+    // the picker's entry for the running model, else the gateway's own answer:
+    // a model the picker does not list (an alias, a 1M variant, the CLI's own
+    // fallback) still has a window
     val limit = state.models?.let { c ->
         val ref = c.current ?: c.default
-        c.all.firstOrNull { it.ref == ref }?.contextLimit ?: 0L
-    } ?: 0L
+        c.all.firstOrNull { it.ref == ref }?.contextLimit?.takeIf { it > 0 }
+            ?: c.contextLimit.takeIf { it > 0 }
+    }
+    val costs = turns.mapNotNull { it.cost }
+    val spend = costs.sum().takeIf { costs.isNotEmpty() && it > 0.0 }
+    return StatusSummary(model?.takeIf { it.isNotBlank() }, used, limit, spend)
+}
+
+/** Keep the last reported values when a streaming history snapshot omits them. */
+internal fun retainStatus(previous: StatusSummary, current: StatusSummary): StatusSummary =
+    StatusSummary(
+        model = current.model ?: previous.model,
+        used = current.used ?: previous.used,
+        limit = current.limit ?: previous.limit,
+        spend = when {
+            current.spend == null -> previous.spend
+            previous.spend == null -> current.spend
+            else -> maxOf(previous.spend, current.spend)
+        },
+    )
+
+/**
+ * A record entry can carry nothing renderable — a part the mapper silences to
+ * null and nothing else. Rendering it shows an empty bubble. Compaction is not
+ * this case any more: its marker maps to a real part and renders as a divider.
+ */
+internal fun renderableMessages(messages: List<ChatMessage>): List<ChatMessage> =
+    messages.filter { it.parts.isNotEmpty() }
+
+/** compaction is written full width: a line, the words centred, a line */
+@Composable
+internal fun CompactionRow(m: ChatMessage) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        HorizontalDivider(Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant)
+        Text(
+            "compaction complete",
+            Modifier.padding(horizontal = 12.dp),
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        HorizontalDivider(Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant)
+    }
+}
+
+/** the auto-continue prompt is scaffolding, only an anchor: a quiet note that
+ *  the harness simply went on — never the model's words as the user's own */
+@Composable
+internal fun AutoContinueRow(m: ChatMessage) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        HorizontalDivider(Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant)
+        Text(
+            "· auto-continued ·",
+            Modifier.padding(horizontal = 12.dp),
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.outline,
+        )
+        HorizontalDivider(Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant)
+    }
+}
+
+internal fun statusText(status: StatusSummary): String {
+    val out = mutableListOf<String>()
+    status.model?.let { out += it }
+    val used = status.used ?: 0L
+    val limit = status.limit ?: 0L
     when {
         used > 0 && limit > 0 -> out += "${fmtTokens(used)}/${fmtTokens(limit)}  ${(100.0 * used / limit).roundToInt()}%"
         used > 0 -> out += "${fmtTokens(used)} tok"
     }
-    val spend = turns.mapNotNull { it.cost }.sum()
-    // a harness that prices nothing (claude) simply says nothing: "$?" was a
-    // stand-in for "unpriced turns exist" and read as a bug
-    if (spend > 0) out += fmtMoney(spend)
+    status.spend?.takeIf { it > 0 }?.let { out += fmtMoney(it) }
     return out.joinToString("  ·  ")
 }
 

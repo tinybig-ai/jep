@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowDropUp
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.SettingsBrightness
@@ -67,11 +68,13 @@ fun SettingsScreen(
     onDisableTerminal: () -> Unit,
     onBackgroundStreaming: (Boolean) -> Unit,
     onReconnect: (String, String, (Boolean) -> Unit) -> Unit,
+    onForgetPairing: () -> Unit,
 ) {
     BackHandler { onBack() }
     var codeOpen by remember { mutableStateOf(false) }
     var reconnectOpen by remember { mutableStateOf(false) }
     var howOpen by remember { mutableStateOf(false) }
+    var forgetOpen by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -163,6 +166,24 @@ fun SettingsScreen(
                     onClick = { reconnectOpen = true },
                 )
             }
+
+            item { SectionTitle("PAIRING", top = 18.dp) }
+            item {
+                Row(
+                    Modifier.fillMaxWidth().clickable { forgetOpen = true }.padding(horizontal = 18.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Filled.ExitToApp, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.error)
+                    Column(Modifier.padding(start = 14.dp)) {
+                        Text("Forget pairing", fontSize = 15.sp, color = MaterialTheme.colorScheme.error)
+                        Text(
+                            "Remove this device's gateway token",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -175,6 +196,17 @@ fun SettingsScreen(
         current = gateway,
         onDismiss = { reconnectOpen = false },
         onSubmit = onReconnect,
+    )
+    if (forgetOpen) AlertDialog(
+        onDismissRequest = { forgetOpen = false },
+        title = { Text("Forget pairing?") },
+        text = { Text("Your token is erased. Reconnect with the gateway address and a fresh pairing code.") },
+        confirmButton = {
+            TextButton(onClick = { forgetOpen = false; onForgetPairing() }) {
+                Text("Forget", color = MaterialTheme.colorScheme.error)
+            }
+        },
+        dismissButton = { TextButton(onClick = { forgetOpen = false }) { Text("Cancel") } },
     )
 }
 

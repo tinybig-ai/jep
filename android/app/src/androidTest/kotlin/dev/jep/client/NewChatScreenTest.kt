@@ -141,6 +141,7 @@ class NewChatScreenTest {
                 onBack = onBack,
                 onTitle = {},
                 onHarness = {},
+                onHarnessSetting = { _, _ -> },
                 onSelectWorkspace = { _, _ -> },
                 onSelectPath = {},
                 onOpenBrowse = {},

@@ -10,6 +10,10 @@ import dev.jep.client.data.dto.AgentDto
 import dev.jep.client.data.dto.BrowseRes
 import dev.jep.client.data.dto.DirEntryDto
 import dev.jep.client.data.dto.FileDiffDto
+import dev.jep.client.data.dto.GitCommitDto
+import dev.jep.client.data.dto.GitRes
+import dev.jep.client.data.dto.HarnessSettingDto
+import dev.jep.client.data.dto.HarnessSettingsRes
 import dev.jep.client.data.dto.ImportableDto
 import dev.jep.client.data.dto.McpDto
 import dev.jep.client.data.dto.MessageDto
@@ -29,6 +33,10 @@ import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
 import dev.jep.client.domain.model.DirEntry
 import dev.jep.client.domain.model.FileDiff
+import dev.jep.client.domain.model.GitCommit
+import dev.jep.client.domain.model.GitSnapshot
+import dev.jep.client.domain.model.HarnessSetting
+import dev.jep.client.domain.model.HarnessSettings
 import dev.jep.client.domain.model.ImportableSession
 import dev.jep.client.domain.model.McpServer
 import dev.jep.client.domain.model.Model
@@ -81,6 +89,14 @@ fun UsageDto.toDomain() = Usage(
 
 fun FileDiffDto.toDomain() = FileDiff(file, additions, deletions, status)
 
+fun GitCommitDto.toDomain() = GitCommit(hash, shortHash, subject, author, time)
+
+fun GitRes.toDomain() = GitSnapshot(isRepository, branch, head?.toDomain(), changedFiles, commits.map { it.toDomain() })
+
+fun HarnessSettingDto.toDomain() = HarnessSetting(id, label, description, default, danger)
+
+fun HarnessSettingsRes.toDomain() = HarnessSettings(options.map { it.toDomain() }, values)
+
 fun MessageDto.toDomain() = ChatMessage(
     id = id,
     role = if (role == "user") Role.USER else Role.ASSISTANT,
@@ -99,6 +115,9 @@ fun AskDto.toDomain() = Ask(
     detail = detail,
     options = options.map { AskOption(it.id, it.label, it.style == "danger") },
     kind = kind,
+    messageId = messageID,
+    callId = callID,
+    at = at,
 )
 
 // What an edit changed, counted from the call's own arguments. opencode hands
@@ -154,7 +173,10 @@ private fun JsonElement.toolDiff(tool: String): String? {
 
 fun PartDto.toDomain(): ChatPart? = when (kind) {
     "text" -> text?.let { ChatPart.Text(it) }
-    "reasoning" -> text?.let { ChatPart.Reasoning(it, durationMs) }
+    // Some providers expose reasoning token counts without any readable
+    // reasoning text. Keep the usage in the message metadata, but don't create
+    // an empty disclosure row from an empty `text` field.
+    "reasoning" -> text?.takeIf { it.isNotBlank() }?.let { ChatPart.Reasoning(it, durationMs) }
     "tool" -> {
         val change = input?.lineChange(name.orEmpty())
         ChatPart.Tool(
@@ -170,6 +192,16 @@ fun PartDto.toDomain(): ChatPart? = when (kind) {
         )
     }
     "file" -> filePath?.takeIf { it.isNotBlank() }?.let { ChatPart.File(it, fileName, mimeType) }
+    // the compaction marker is a transcript fact, not noise: opencode writes a
+    // synthetic user message holding only this after a summarize. Likewise the
+    // "Continue if you have next steps…" prompt it writes right after — that is
+    // the user-turn the divider settles against, so it must stay a row, but it
+    // is scaffolding, never the user's own words.
+    "other" -> when (nativeType) {
+        "compaction" -> ChatPart.Compaction
+        "compaction-continue" -> ChatPart.AutoContinue
+        else -> null
+    }
     else -> null
 }
 

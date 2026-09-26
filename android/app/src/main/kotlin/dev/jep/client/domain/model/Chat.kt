@@ -28,6 +28,20 @@ data class Workspace(val name: String, val harness: String, val dir: String = ""
 /** the harnesses installed on the machine, and the default */
 data class Harnesses(val ids: List<String>, val default: String?)
 
+/** Harness-owned controls rendered by the client without harness-specific UI. */
+data class HarnessSetting(
+    val id: String,
+    val label: String,
+    val description: String,
+    val default: Boolean = false,
+    val danger: Boolean = false,
+)
+
+data class HarnessSettings(
+    val options: List<HarnessSetting> = emptyList(),
+    val values: Map<String, Boolean> = emptyMap(),
+)
+
 /** a SKILL.md the harness loads; `disabled` hides it from the model */
 data class Skill(val name: String, val description: String, val scope: String, val path: String, val disabled: Boolean)
 
@@ -117,6 +131,14 @@ sealed interface ChatPart {
         val localUri: String? = null,
     ) : ChatPart
 
+    /** the harness folded the conversation; renders as a divider, not a bubble */
+    data object Compaction : ChatPart
+
+    /** opencode told the model to keep going ("Continue if you have next
+     *  steps…"); the user-turn anchor a compaction divider settles against, but
+     *  it is scaffolding, never the user's own words */
+    data object AutoContinue : ChatPart
+
     data class Unsupported(val kind: String) : ChatPart
 }
 
@@ -150,6 +172,12 @@ data class AskOption(val id: String, val label: String, val danger: Boolean = fa
         /** "permission" or "question": a permission ask answers once/always/reject,
          *  a question one carries its own choices */
         val kind: String? = null,
+        /** the message and tool call the ask is holding up, when the harness
+         *  says — the card goes right under that call */
+        val messageId: String? = null,
+        val callId: String? = null,
+        /** when it was raised, on the harness's clock (the one message times use) */
+        val at: Long? = null,
     )
 
 /** what a conversation has spent, summed from the harness's own record */
@@ -169,3 +197,19 @@ data class Usage(
 
 /** one file a conversation changed */
 data class FileDiff(val file: String, val additions: Int, val deletions: Int, val status: String? = null)
+
+data class GitCommit(
+    val hash: String,
+    val shortHash: String,
+    val subject: String,
+    val author: String,
+    val time: Long,
+)
+
+data class GitSnapshot(
+    val isRepository: Boolean,
+    val branch: String? = null,
+    val head: GitCommit? = null,
+    val changedFiles: Int = 0,
+    val commits: List<GitCommit> = emptyList(),
+)

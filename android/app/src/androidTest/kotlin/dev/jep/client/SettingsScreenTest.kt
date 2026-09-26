@@ -76,6 +76,7 @@ class SettingsScreenTest {
                 onDisableTerminal = onDisable,
                 onBackgroundStreaming = {},
                 onReconnect = { _, _, done -> done(false) },
+                onForgetPairing = {},
             )
         }
     }

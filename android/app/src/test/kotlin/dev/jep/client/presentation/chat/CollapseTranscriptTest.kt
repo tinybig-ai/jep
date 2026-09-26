@@ -118,6 +118,8 @@ class CollapseTranscriptTest {
             is Row.Tools -> "tools:" + row.tools.joinToString(",") { it.id.orEmpty() }
             is Row.Msg -> "msg:" + row.m.id
             is Row.Pending -> "ask:" + row.ask.id
+            is Row.Compaction -> "compaction:" + row.m.id
+            is Row.AutoContinue -> "auto:" + row.m.id
         }
     }
 

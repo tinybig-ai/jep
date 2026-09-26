@@ -15,6 +15,8 @@ import dev.jep.client.domain.repository.ModelChoices
 import dev.jep.client.domain.repository.TurnAborted
 import dev.jep.client.device.AppPresence
 import dev.jep.client.domain.model.FileDiff
+import dev.jep.client.domain.model.GitSnapshot
+import dev.jep.client.domain.model.HarnessSettings
 import dev.jep.client.domain.model.McpServer
 import dev.jep.client.domain.model.SessionSummary
 import dev.jep.client.domain.model.SkillSet
@@ -43,12 +45,15 @@ const val WINDOW = 30
  * A live row is only ever closed by a turn-ending event, and the transcript
  * always prefers the live row over its twin in the record — so one missed event
  * (a dropped stream, a backgrounded app) stranded a finished answer under a
- * stale row that still believed it was streaming, cursor and all. Live rows carry
- * time 0 by construction, so a real timestamp in the record is what says the
- * harness has finished with it and the row can go.
+ * stale row that still believed it was streaming, cursor and all. Only a
+ * completion in the record says the harness is done with it: `time` is when the
+ * message was CREATED, so it is set mid-stream, and settling on it dropped the
+ * live row on every history poll — the next delta then started an empty row,
+ * which (preferred over its twin) showed only what arrived after the poll.
+ * `durationMs` exists only once the harness has stamped the message completed.
  */
 internal fun liveRowIsSettled(liveMessageId: String?, served: List<ChatMessage>): Boolean =
-    liveMessageId != null && served.any { it.id == liveMessageId && it.time > 0L }
+    liveMessageId != null && served.any { it.id == liveMessageId && it.durationMs != null }
 
 class ChatViewModel(
     private val repo: ChatRepository,
@@ -110,7 +115,15 @@ class ChatViewModel(
         val failure: String? = null,
         val sending: Boolean = false,
         val lost: Boolean = false,
+        /** a context-compact is being applied by the harness */
+        val compacting: Boolean = false,
         val attachments: List<Attachment> = emptyList(),
+        /** what is typed in the composer but not yet sent. It lives here, beside
+         *  the attachments it will be sent with, because the composer's own
+         *  `remember` dies the moment the screen leaves composition: tapping
+         *  back and returning threw the words away while the attachment — held
+         *  here all along — survived, which read as the app eating the message. */
+        val draft: String = "",
         val queued: List<Queued> = emptyList(),
         val notice: String? = null,
         val hasMore: Boolean = false,
@@ -125,14 +138,34 @@ class ChatViewModel(
         val agents: List<AgentInfo> = emptyList(),
         /** loaded on demand for the Usage panel */
         val usage: Usage? = null,
-        /** loaded on demand for the Changes panel */
+        /** loaded on demand for the legacy file-change summary */
         val diffs: List<FileDiff>? = null,
+        /** workspace HEAD and recent history, loaded from the Git sheet */
+        val git: GitSnapshot? = null,
+        val gitLoading: Boolean = false,
+        val gitError: String? = null,
+        val harnessSettings: HarnessSettings = HarnessSettings(),
+        val harnessSettingsLoading: Boolean = false,
         /** subagent sessions of this conversation, loaded on demand */
         val subagents: List<SessionSummary>? = null,
         /** loaded on demand for the Settings panel */
         val skills: SkillSet? = null,
         val mcp: List<McpServer>? = null,
     )
+
+    /**
+     * A card belongs to the turn that raised it. When that turn ends — stopped,
+     * failed, or simply finished — an unanswered card is no longer answerable:
+     * the harness has forgotten the ask, and tapping Allow can only fail.
+     *
+     * Leaving it standing was what killed the composer. `canSend` deliberately
+     * withholds the send button while a card is open, so an ask nobody could
+     * answer any more meant the send button never came back for the life of the
+     * screen — stop the hung turn and you could no longer type at all. A card
+     * that was answered keeps its spent state; only the open one stands down.
+     */
+    private fun UiState.standDownAsk(): UiState =
+        if (ask == null || askChoice != null) this else copy(ask = null, askAt = 0L, askAfter = null)
 
     private val _state = MutableStateFlow(UiState())
     val state = _state.asStateFlow()
@@ -260,22 +293,31 @@ class ChatViewModel(
             is ChatEvent.Asked -> _state.update {
                 it.copy(
                     ask = evt.ask,
-                    askAt = System.currentTimeMillis(),
+                    // the harness's own clock when it says, since that is the one
+                    // the transcript's times are on
+                    askAt = evt.ask.at ?: System.currentTimeMillis(),
                     askChoice = null,
                     askAfter = it.live?.messageId,
                 )
+            }
+            // the same ask settled somewhere else — another device, Telegram, or
+            // the harness standing it down itself. The card must not keep sitting
+            // here inviting a tap that can only fail. An ask *this* screen already
+            // answered is left alone: standDownAsk keeps the spent card in place.
+            is ChatEvent.AskResolved -> _state.update {
+                if (it.ask?.id != evt.askId) it else it.standDownAsk()
             }
             // a harness-reported failure ends the turn: it must clear the live
             // row too, or the spinner outlives the turn it belonged to. An
             // abort is the user's own stop coming back around, not an error.
             is ChatEvent.Failed -> _state.update {
-                it.copy(failure = evt.error, live = null, sending = false)
+                it.copy(failure = evt.error, live = null, sending = false).standDownAsk()
             }
             // a stop ends the turn: clear the live row (or it dangles as a
             // spinner forever) and say why, since the stop can come from the
             // watchdog or the harness and not only from this screen's button
             is ChatEvent.Aborted -> _state.update {
-                it.copy(failure = null, live = null, sending = false, notice = "the turn was stopped")
+                it.copy(failure = null, live = null, sending = false, notice = "the turn was stopped").standDownAsk()
             }
             // the turn finished while this chat is open: it has been seen.
             // session.idle is the turn ending, and prompt() (the blocking POST)
@@ -285,7 +327,7 @@ class ChatViewModel(
             is ChatEvent.Quiet -> {
                 onRead()
                 refresh()
-                _state.update { it.copy(sending = false, live = null) }
+                _state.update { it.copy(sending = false, live = null).standDownAsk() }
             }
             is ChatEvent.Lost -> _state.update { it.copy(lost = true) }
             is ChatEvent.MessageSeen -> {
@@ -391,6 +433,11 @@ class ChatViewModel(
         }
     }
 
+    /** the composer reporting what is typed, so it outlives the screen */
+    fun setDraft(text: String) {
+        if (_state.value.draft != text) _state.update { it.copy(draft = text) }
+    }
+
     fun send(text: String, steer: Boolean = true) {
         val trimmed = text.trim()
         val files = _state.value.attachments
@@ -399,6 +446,8 @@ class ChatViewModel(
         // served message agree on the text (refresh reconciles them by text).
         if (trimmed.isEmpty() && files.isEmpty()) return
         val body = trimmed.ifEmpty { "see the attached file" }
+        // it is on its way; the composer starts empty again
+        _state.update { it.copy(draft = "") }
         if (_state.value.sending) {
             enqueue(body, files, steer)
             return
@@ -614,6 +663,36 @@ class ChatViewModel(
         }
     }
 
+    fun loadGit() {
+        _state.update { it.copy(gitLoading = true, gitError = null) }
+        viewModelScope.launch {
+            runCatching { repo.git(sessionId) }
+                .onSuccess { snapshot -> _state.update { it.copy(git = snapshot, gitLoading = false) } }
+                .onFailure { err -> _state.update { it.copy(gitLoading = false, gitError = err.message ?: "couldn't load Git history") } }
+        }
+    }
+
+    fun loadHarnessSettings() {
+        _state.update { it.copy(harnessSettingsLoading = true) }
+        viewModelScope.launch {
+            runCatching { repo.sessionHarnessSettings(sessionId) }
+                .onSuccess { settings -> _state.update { it.copy(harnessSettings = settings, harnessSettingsLoading = false) } }
+                .onFailure { err -> _state.update { it.copy(harnessSettingsLoading = false, notice = err.message ?: "couldn't load harness settings") } }
+        }
+    }
+
+    fun setHarnessSetting(id: String, enabled: Boolean) {
+        val before = _state.value.harnessSettings
+        _state.update { st -> st.copy(harnessSettings = st.harnessSettings.copy(values = st.harnessSettings.values + (id to enabled))) }
+        viewModelScope.launch {
+            runCatching { repo.setSessionHarnessSetting(sessionId, id, enabled) }
+                .onSuccess { ok ->
+                    if (!ok) _state.update { it.copy(harnessSettings = before, notice = "couldn't change that harness setting") }
+                }
+                .onFailure { err -> _state.update { it.copy(harnessSettings = before, notice = err.message ?: "couldn't change that harness setting") } }
+        }
+    }
+
     // the in-chat terminal: a tmux-backed shell in this conversation's folder,
     // attached to the session so it reattaches across app and daemon restarts
     suspend fun termOpen() {
@@ -705,6 +784,33 @@ class ChatViewModel(
         turn++
         _state.update { it.copy(sending = false, live = null, failure = null) }
         viewModelScope.launch { runCatching { repo.stop(sessionId) } }
+    }
+
+    // Compact asks the harness to compress everything seen so far into a
+    // summary it carries forward. The record changes shape underneath the UI,
+    // so history is refetched once the harness confirms — otherwise a transcript
+    // from before the fold lingers until the next 1.2s poll.
+    /** the info banner stays until read: an X, not a timer */
+    fun dismissBanner() {
+        _state.update { it.copy(notice = null, failure = null) }
+    }
+
+    fun compact() {
+        if (_state.value.compacting) return
+        _state.update { it.copy(compacting = true, notice = null) }
+        viewModelScope.launch {
+            // the failure text is the gateway's own body (route missing, the
+            // harness's refusal, or a turn actually running). Inventing a
+            // reason here is how a missing route read as "a turn may be
+            // running" while nothing ran.
+            try {
+                repo.compact(sessionId)
+                _state.update { it.copy(compacting = false, notice = "conversation compacted") }
+                refresh()
+            } catch (err: Exception) {
+                _state.update { it.copy(compacting = false, notice = err.message ?: "couldn't compact") }
+            }
+        }
     }
 
     // the gateway reports an aborted turn as a failure carrying the harness's

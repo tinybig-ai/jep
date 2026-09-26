@@ -51,6 +51,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.jep.client.presentation.app.NewChatState
+import dev.jep.client.presentation.harness.HarnessSettingsSection
 
 // New conversation — a full view, not a modal: a form where the workspace and
 // the harness are the user's to choose before anything exists. The harness is
@@ -62,6 +63,7 @@ fun NewChatScreen(
     onBack: () -> Unit,
     onTitle: (String) -> Unit,
     onHarness: (String) -> Unit,
+    onHarnessSetting: (String, Boolean) -> Unit,
     onSelectWorkspace: (String, String) -> Unit,
     onSelectPath: (String) -> Unit,
     onOpenBrowse: () -> Unit,
@@ -94,7 +96,7 @@ fun NewChatScreen(
             if (state.browsing) {
                 Browser(state, onBrowseInto, onBrowseUp, onSelectPath, onNewFolder)
             } else {
-                Form(state, onTitle, onHarness, onSelectWorkspace, onOpenBrowse, onCreate)
+                Form(state, onTitle, onHarness, onHarnessSetting, onSelectWorkspace, onOpenBrowse, onCreate)
             }
         }
     }
@@ -106,6 +108,7 @@ private fun Form(
     state: NewChatState,
     onTitle: (String) -> Unit,
     onHarness: (String) -> Unit,
+    onHarnessSetting: (String, Boolean) -> Unit,
     onSelectWorkspace: (String, String) -> Unit,
     onOpenBrowse: () -> Unit,
     onCreate: () -> Unit,
@@ -135,6 +138,17 @@ private fun Form(
                 if (state.harnesses.isEmpty()) {
                     Text("loading…", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+            }
+        }
+        item {
+            HarnessSettingsSection(
+                options = state.harnessOptions,
+                values = state.harnessSettings,
+                onChange = onHarnessSetting,
+                title = "${state.harness?.uppercase() ?: "HARNESS"} OPTIONS",
+            )
+            if (state.loadingHarnessSettings) {
+                Text("Loading harness options…", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
 

@@ -34,6 +34,54 @@ class TranscriptRowsTest {
     }
 
     @Test
+    fun `a compaction marker settles after its response, before the next user turn`() {
+        // opencode writes the marker BEFORE the summarize reply, so the record
+        // order is: old history, marker, the summary answer — and the line has
+        // to sit BELOW the summary, right above the next thing the user says.
+        // ordered is newest-first here; keys come back in the same direction.
+        val marker = ChatMessage("mk", Role.USER, 30, listOf(ChatPart.Compaction))
+        val ordered = listOf(msg("nu", Role.USER, 50), msg("sm", Role.ASSISTANT, 40), marker, msg("old", Role.ASSISTANT, 10))
+        assertEquals(listOf("nu", "mk", "sm", "old"), keys(transcriptRows(ordered, null, 0)))
+    }
+
+    @Test
+    fun `a marker with no response yet stays in place at the end`() {
+        val marker = ChatMessage("mk", Role.USER, 30, listOf(ChatPart.Compaction))
+        val ordered = listOf(marker, msg("old", Role.ASSISTANT, 10))
+        assertEquals(listOf("mk", "old"), keys(transcriptRows(ordered, null, 0)))
+    }
+
+    @Test
+    fun `opencode's auto-continue prompt keeps the divider from drifting to the end during a live turn`() {
+        // The reported bug: after each message completion the "compaction
+        // complete" line jumped to the bottom of the transcript. opencode writes
+        // a synthetic user prompt ("Continue if you have next steps…") right
+        // after the summarize reply, and that prompt IS the next user turn the
+        // divider settles against. It must survive as a user row (as
+        // Row.AutoContinue) so the line parks between the summary and the
+        // continued work instead of riding to the newest end.
+        val marker = ChatMessage("mk", Role.USER, 30, listOf(ChatPart.Compaction))
+        val auto = ChatMessage("ac", Role.USER, 45, listOf(ChatPart.AutoContinue))
+        val ordered = listOf(
+            msg("work2", Role.ASSISTANT, 70),
+            msg("work1", Role.ASSISTANT, 60),
+            auto,
+            msg("sm", Role.ASSISTANT, 40),
+            marker,
+            msg("old", Role.ASSISTANT, 10),
+        )
+        assertEquals(listOf("work2", "work1", "ac", "mk", "sm", "old"), keys(transcriptRows(ordered, null, 0)))
+    }
+
+    @Test
+    fun `an auto-continue prompt without a summary still anchors the marker`() {
+        val marker = ChatMessage("mk", Role.USER, 30, listOf(ChatPart.Compaction))
+        val auto = ChatMessage("ac", Role.USER, 45, listOf(ChatPart.AutoContinue))
+        val ordered = listOf(msg("work", Role.ASSISTANT, 50), auto, marker, msg("old", Role.ASSISTANT, 10))
+        assertEquals(listOf("work", "ac", "mk", "old"), keys(transcriptRows(ordered, null, 0)))
+    }
+
+    @Test
     fun `a fresh ask lands at the bottom, where it is visible`() {
         // ordered is newest-first, so index 0 is the bottom of the screen — which
         // is where a just-raised ask has to be, or the user never sees it
@@ -75,8 +123,10 @@ class TranscriptRowsTest {
         // streaming assistant message, and that message's time is when it
         // started — before the ask. Comparing times therefore floated the card
         // above the question it answers, and above the user's own message from
-        // before it. The anchor wins: the card follows the message that was
-        // streaming when the ask arrived.
+        // before it. The anchor wins: the card sits DIRECTLY under the message
+        // that was streaming when the ask arrived — newest-first, index 0 is
+        // the bottom of the screen, so "under" means the card comes before its
+        // message in the list.
         val ordered = listOf(
             msg("live", Role.ASSISTANT, 0),
             msg("m3", Role.USER, 25),
@@ -84,7 +134,7 @@ class TranscriptRowsTest {
             msg("m1", Role.USER, 10),
         )
         assertEquals(
-            listOf("live", "ask-a1", "m3", "m2", "m1"),
+            listOf("ask-a1", "live", "m3", "m2", "m1"),
             keys(transcriptRows(ordered, ask, 30, liveMessageId = "live", askAfter = "live")),
         )
     }

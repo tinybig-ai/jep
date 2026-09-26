@@ -29,6 +29,7 @@ fun JepApp(app: AppViewModel) {
                 onBack = { app.closeNewChat() },
                 onTitle = { app.setNewTitle(it) },
                 onHarness = { app.setNewHarness(it) },
+                onHarnessSetting = { id, enabled -> app.setNewHarnessSetting(id, enabled) },
                 onSelectWorkspace = { name, harness -> app.selectWorkspace(name, harness) },
                 onSelectPath = { app.selectPath(it) },
                 onOpenBrowse = { app.openBrowse() },
@@ -54,6 +55,7 @@ fun JepApp(app: AppViewModel) {
                 onDisableTerminal = { app.disableTerminal() },
                 onBackgroundStreaming = { app.setBackgroundStreaming(it) },
                 onReconnect = { address, code, done -> app.reconnect(address, code, done) },
+                onForgetPairing = { app.forgetPairing() },
             )
         }
         screen is Screen.Chat -> {
@@ -68,7 +70,6 @@ fun JepApp(app: AppViewModel) {
                 vm,
                 onBack = { app.back() },
                 onNew = { app.openNewChat() },
-                onForgetPairing = { app.forgetPairing() },
                 terminalEnabled = app.prefs.collectAsState().value.terminalEnabled,
                 onOpenSession = { app.open(it) },
                 subagentCount = app.sessions.collectAsState().value.firstOrNull { it.id == c.sessionId }?.subagents ?: 0,

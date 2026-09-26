@@ -111,6 +111,21 @@ data class WorkspacesRes(val items: List<WorkspaceDto> = emptyList())
 data class HarnessesRes(val harnesses: List<String> = emptyList(), val default: String? = null)
 
 @Serializable
+data class HarnessSettingDto(
+    val id: String = "",
+    val label: String = "",
+    val description: String = "",
+    val default: Boolean = false,
+    val danger: Boolean = false,
+)
+
+@Serializable
+data class HarnessSettingsRes(
+    val options: List<HarnessSettingDto> = emptyList(),
+    val values: Map<String, Boolean> = emptyMap(),
+)
+
+@Serializable
 data class DirEntryDto(val name: String = "", val git: Boolean = false)
 
 @Serializable
@@ -135,6 +150,8 @@ data class ModelsRes(
     val models: List<ModelDto> = emptyList(),
     val current: String? = null,
     val default: String? = null,
+    /** the window of the model the conversation runs on, listed or not */
+    val contextLimit: Long = 0,
 )
 
 @Serializable
@@ -224,6 +241,24 @@ data class FileDiffDto(
 data class DiffRes(val files: List<FileDiffDto> = emptyList())
 
 @Serializable
+data class GitCommitDto(
+    val hash: String = "",
+    val shortHash: String = "",
+    val subject: String = "",
+    val author: String = "",
+    val time: Long = 0,
+)
+
+@Serializable
+data class GitRes(
+    val isRepository: Boolean = false,
+    val branch: String? = null,
+    val head: GitCommitDto? = null,
+    val changedFiles: Int = 0,
+    val commits: List<GitCommitDto> = emptyList(),
+)
+
+@Serializable
 data class AttachRes(val id: String, val name: String = "")
 
 @Serializable
@@ -237,6 +272,9 @@ data class AskDto(
     val detail: String? = null,
     val options: List<AskOptionDto> = emptyList(),
     val kind: String? = null,
+    val messageID: String? = null,
+    val callID: String? = null,
+    val at: Long? = null,
 )
 
 // one shape for every DomainEvent the gateway forwards; fields the event

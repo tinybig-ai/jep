@@ -5,6 +5,8 @@ import dev.jep.client.data.dto.AgentsRes
 import dev.jep.client.data.dto.AttachRes
 import dev.jep.client.data.dto.BrowseRes
 import dev.jep.client.data.dto.DiffRes
+import dev.jep.client.data.dto.GitRes
+import dev.jep.client.data.dto.HarnessSettingsRes
 import dev.jep.client.data.dto.ErrorDto
 import dev.jep.client.data.dto.HarnessesRes
 import dev.jep.client.data.dto.HistoryRes
@@ -32,6 +34,8 @@ import dev.jep.client.domain.model.AgentInfo
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.FileDiff
 import dev.jep.client.domain.model.Harnesses
+import dev.jep.client.domain.model.HarnessSetting
+import dev.jep.client.domain.model.HarnessSettings
 import dev.jep.client.domain.model.ImportableSession
 import dev.jep.client.domain.model.McpServer
 import dev.jep.client.domain.repository.ChatRepository
@@ -146,19 +150,41 @@ private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     override suspend fun archivedSessions(): List<SessionSummary> =
         decode("/archived", SessionsRes.serializer()).items.map { it.toDomain() }
 
-    override suspend fun newSession(title: String?, workspace: String?, path: String?, harness: String?): SessionSummary {
+    override suspend fun newSession(
+        title: String?,
+        workspace: String?,
+        path: String?,
+        harness: String?,
+        harnessSettings: Map<String, Boolean>,
+    ): SessionSummary {
         val body = buildJsonObject {
             title?.let { put("title", it) }
             workspace?.let { put("workspace", it) }
             path?.let { put("path", it) }
             harness?.let { put("harness", it) }
+            if (harnessSettings.isNotEmpty()) {
+                put("harnessSettings", buildJsonObject { harnessSettings.forEach { (key, enabled) -> put(key, enabled) } })
+            }
         }.toString()
         return decode("/new", NewSessionRes.serializer(), body).session.toDomain()
     }
 
+    override suspend fun harnessOptions(harness: String): List<HarnessSetting> =
+        decode("/harness-settings", HarnessSettingsRes.serializer(), payload("harness" to harness)).options.map { it.toDomain() }
+
+    override suspend fun sessionHarnessSettings(sessionId: String): HarnessSettings =
+        decode("/harness-settings", HarnessSettingsRes.serializer(), payload("id" to sessionId)).toDomain()
+
+    override suspend fun setSessionHarnessSetting(sessionId: String, key: String, enabled: Boolean): Boolean =
+        post("/set-harness-setting", buildJsonObject {
+            put("id", sessionId)
+            put("key", key)
+            put("enabled", enabled)
+        }.toString()).first in 200..299
+
     override suspend fun models(sessionId: String): ModelChoices {
         val res = decode("/models", ModelsRes.serializer(), payload("id" to sessionId))
-        return ModelChoices(res.models.map { it.toDomain() }, res.current, res.default)
+        return ModelChoices(res.models.map { it.toDomain() }, res.current, res.default, res.contextLimit)
     }
 
     override suspend fun setModel(sessionId: String, ref: String?): Boolean =
@@ -178,6 +204,9 @@ private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     override suspend fun diff(sessionId: String): List<FileDiff> =
         decode("/diff", DiffRes.serializer(), payload("id" to sessionId)).files.map { it.toDomain() }
+
+    override suspend fun git(sessionId: String) =
+        decode("/git", GitRes.serializer(), payload("id" to sessionId)).toDomain()
 
     override suspend fun skills(sessionId: String): SkillSet =
         decode("/skills", SkillsRes.serializer(), payload("id" to sessionId)).toDomain()
@@ -307,6 +336,19 @@ private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     override suspend fun stop(sessionId: String): Boolean =
         post("/stop", payload("id" to sessionId)).first in 200..299
+
+    override suspend fun compact(sessionId: String): Boolean {
+        val (code, body) = post("/compact", payload("id" to sessionId))
+        if (code in 200..299) return true
+        // the gateway's error body is the truthful reason (unknown route, a
+        // harness without the control, a turn mid-flight). A silent `false`
+        // here used to surface as "a turn may be running" over a 404 from a
+        // daemon that never had this route at all.
+        val reason = runCatching {
+            json.decodeFromString(ErrorDto.serializer(), body).error
+        }.getOrNull() ?: "couldn't compact ($code)"
+        throw ApiFailure(code, reason)
+    }
 
     override fun fileUrl(path: String): String {
         // the pairing token rides in the query because the image loader fetches
