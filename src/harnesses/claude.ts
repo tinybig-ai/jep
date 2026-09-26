@@ -67,7 +67,30 @@ export const CLAUDE_SETTINGS: HarnessSettingSpec[] = [
     default: false,
     danger: true,
   },
+  {
+    id: "lowPriority",
+    label: "Low priority at your limit",
+    description: "When you reach your usage limit, keep working at lower priority instead of stopping, like Claude's /low-priority. Uses your weekly limit. Under your limit nothing changes.",
+    default: false,
+  },
 ]
+
+// What Claude Code's own /low-priority does on the wire: every request carries
+// this header, and the server answers each one with
+// anthropic-ratelimit-unified-slow-status: "not_needed" (under the limit,
+// served as usual) or "active" (over it, served at lower priority). The command
+// only works in an interactive window (supportsNonInteractive: false), and a
+// turn jep runs is `claude -p`, so the header is set for that process through
+// ANTHROPIC_CUSTOM_HEADERS, which Claude Code adds to its requests. Found in
+// Claude Code 2.1.283; it is Claude Code's behavior, not a documented API.
+export const LOW_PRIORITY_HEADER = "anthropic-usage-limit: slow"
+
+/** the environment a turn runs with: `lowPriority` adds the header to any already set */
+export function turnEnv(base: NodeJS.ProcessEnv, lowPriority: boolean): NodeJS.ProcessEnv {
+  if (!lowPriority) return base
+  const existing = (base.ANTHROPIC_CUSTOM_HEADERS ?? "").split("\n").filter((l) => l.trim() && !/^anthropic-usage-limit\s*:/i.test(l))
+  return { ...base, ANTHROPIC_CUSTOM_HEADERS: [...existing, LOW_PRIORITY_HEADER].join("\n") }
+}
 
 /**
  * Claude Code as a harness.
@@ -429,7 +452,11 @@ export class ClaudeAdapter implements HarnessAdapter {
     // what this turn asked for, alias or not, so its context window can be
     // found again under the name a client knows it by
     const asked = opts?.model?.modelID ?? (await this.#configuredModel())
-    const child = spawn(CLAUDE_BIN, args, { cwd: this.workspace, stdio: ["ignore", "pipe", "pipe"] })
+    const child = spawn(CLAUDE_BIN, args, {
+      cwd: this.workspace,
+      env: turnEnv(process.env, opts?.harnessSettings?.lowPriority === true),
+      stdio: ["ignore", "pipe", "pipe"],
+    })
     this.#running.set(native, child)
     if (!pending) void markRemoteTurn(this.#turnsDir, native)
 
