@@ -1497,3 +1497,40 @@ test("an attachment list in a user message comes back as file parts, not text", 
     await g.close()
   }
 })
+
+test("/history answers an unchanged window in a few bytes when the client holds it", async () => {
+  // The phone polls this every 1.2s during a turn; most answers repeat the last.
+  const a = fakeAdapter()
+  let text = "hi"
+  a.messages = async () => [{ id: "m0", sessionID: "s1", role: "user", time: 1, parts: [{ kind: "text", text }] }]
+  const g = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter: a }],
+    dataHome: mkdtempSync(join(tmpdir(), "gw-test-")),
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+  })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const token = await pair(base, "TESTCODE")
+    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" }
+    const history = async (etag?: string) => {
+      const res = await fetch(`${base}/history`, { method: "POST", headers, body: JSON.stringify({ id: "s1", ...(etag ? { etag } : {}) }) })
+      const raw = await res.text()
+      return { raw, body: JSON.parse(raw) as { etag: string; unchanged?: boolean; messages?: unknown[] } }
+    }
+    const first = await history()
+    assert.equal(first.body.messages?.length, 1)
+    assert.ok(first.body.etag, "every answer is tagged")
+    const again = await history(first.body.etag)
+    assert.deepEqual(again.body, { unchanged: true, etag: first.body.etag })
+    assert.ok(again.raw.length < first.raw.length, "the unchanged answer is the small one")
+    text = "hi there" // the record moved on: the tag the client holds is stale
+    const moved = await history(first.body.etag)
+    assert.equal(moved.body.unchanged, undefined)
+    assert.notEqual(moved.body.etag, first.body.etag)
+    assert.equal(moved.body.messages?.length, 1)
+  } finally {
+    await g.close()
+  }
+})

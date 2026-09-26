@@ -1635,7 +1635,13 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         // the asks ride along whole (they are few): each is placed by its own
         // anchor, and the pending one is what holds the composer
         const asks = (askLedger.get(id) ?? []).map((r) => ({ ...r.ask, state: r.state, ...(r.answer ? { answer: r.answer } : {}) }))
-        return json(res, 200, { messages, hasMore, asks })
+        // Hash-guarded: while a turn runs the phone asks for this every 1.2s,
+        // and most of those answers are the same as the last. A client that
+        // sends the tag of what it holds gets a few bytes back instead of the
+        // whole window again, tool output and all.
+        const tag = createHash("sha1").update(JSON.stringify({ messages, hasMore, asks })).digest("hex").slice(0, 20)
+        if (str("etag") === tag) return json(res, 200, { unchanged: true, etag: tag })
+        return json(res, 200, { messages, hasMore, asks, etag: tag })
       }
 
       if (path === "/prompt") {

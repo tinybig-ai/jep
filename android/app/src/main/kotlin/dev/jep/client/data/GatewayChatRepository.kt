@@ -266,8 +266,17 @@ private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     override suspend fun termClose(sessionId: String): Boolean =
         post("/term/close", payload("id" to sessionId)).first in 200..299
 
+    // The last newest-page answer per conversation and its tag. Polled every
+    // 1.2s during a turn, the page is mostly unchanged; sending the tag back
+    // lets the gateway answer "unchanged" in a few bytes instead of resending
+    // the whole window over mobile data.
+    private val lastPage = java.util.concurrent.ConcurrentHashMap<String, Pair<String, HistoryBatch>>()
+
     override suspend fun history(sessionId: String, limit: Int, before: Long, have: Int): HistoryBatch =
         withContext(Dispatchers.Default) {
+            // only the newest page is polled; an older page is fetched once
+            val key = "$sessionId|$limit".takeIf { before <= 0 && have <= 0 }
+            val held = key?.let { lastPage[it] }
             val res = decode(
                 "/history",
                 HistoryRes.serializer(),
@@ -276,13 +285,17 @@ private val json = Json { ignoreUnknownKeys = true; isLenient = true }
                     if (limit > 0) put("limit", limit)
                     if (before > 0) put("before", before)
                     if (have > 0) put("have", have)
+                    held?.let { put("etag", it.first) }
                 }.toString(),
             )
-            HistoryBatch(
+            if (res.unchanged && held != null && res.etag == held.first) return@withContext held.second
+            val batch = HistoryBatch(
                 res.messages.map { it.toDomain() },
                 res.hasMore,
                 res.asks.map { AskEntry(it.toDomain(), pending = it.state == "pending", choice = it.answer) },
             )
+            if (key != null && res.etag != null) lastPage[key] = res.etag to batch
+            batch
         }
 
     override suspend fun prompt(sessionId: String, text: String, files: List<String>, clientID: String?, steer: Boolean): ChatMessage {

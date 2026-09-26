@@ -103,6 +103,10 @@ data class HistoryRes(
     val hasMore: Boolean = false,
     /** every ask the conversation raised, with how it ended */
     val asks: List<AskDto> = emptyList(),
+    /** fingerprint of this answer; sent back, it lets the gateway say "unchanged" */
+    val etag: String? = null,
+    /** the answer is the one tagged `etag`, which this client already holds */
+    val unchanged: Boolean = false,
 )
 
 @Serializable
