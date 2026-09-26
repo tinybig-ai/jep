@@ -129,6 +129,11 @@ export interface HarnessAdapter {
   releaseHold?(sessionID: string): Promise<boolean>
   /** file changes accumulated in this session so far, if the harness tracks them */
   diff?(sessionID: string): Promise<FileDiff[]>
+  /** compress the conversation's context ("compact" in opencode). Optional:
+   * only harnesses that expose it declare it, and a client hides the control
+   * when the adapter doesn't. False when the harness refused (a turn may be
+   * mid-flight). */
+  compact?(sessionID: string): Promise<boolean>
   /** Stop the child server. Sessions stay on disk for the next boot. */
   close(): Promise<void>
 }

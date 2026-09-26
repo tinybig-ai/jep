@@ -12,6 +12,9 @@ import { parseOpencodeLogError } from "./opencode-log.ts"
 const OPENCODE_BIN = process.env.OPENCODE_BIN ?? "opencode"
 const MODEL_REF = process.env.JEP_MODEL ?? "localfree-models-proxy/auto"
 const DEFAULT_TIMEOUT_MS = 180_000
+// Compacting runs a summarizing model turn, not a control call, so it needs a
+// budget in the same league as a prompt rather than #json's read-only ceiling.
+const COMPACT_TIMEOUT_MS = Number(process.env.JEP_COMPACT_TIMEOUT_MS ?? "") || 300_000
 
 // opencode's own primary agents — the one place that names them. Clients read
 // them through the port instead of hardcoding "build"/"plan".
@@ -129,8 +132,14 @@ function parseSse(raw: string): SseFrame[] {
 function mapPart(part: any, workspace: string): Part {
   // opencode marks its own scaffolding `synthetic` — e.g. the
   // "Called the Read tool with the following input: …" text it inserts when a
-  // file is attached. It is written for the model, never for a person; passing
-  // it on painted that scaffolding into the user's own message on every client.
+  // file is attached, and the "Continue if you have next steps…" prompt it
+  // writes after a compaction. The continuation prompt is the next turn the
+  // clients' compaction divider settles against, so it survives as its own
+  // marker rather than being dropped with the rest of the scaffolding — but it
+  // is still not the user's words, so it must not become a text bubble.
+  if (part?.synthetic === true && part?.metadata?.compaction_continue === true) {
+    return { kind: "other", nativeType: "compaction-continue" }
+  }
   if (part?.synthetic === true) return { kind: "other", nativeType: "synthetic" }
   switch (part?.type) {
     case "text":
@@ -202,7 +211,10 @@ function mapParts(parts: any[] | undefined, workspace: string): Part[] {
     .flatMap((p) => [...String(p.text).matchAll(/"filePath"\s*:\s*"([^"]+)"/g)].map((m) => m[1] as string))
   let next = 0
   return rows
-    .filter((p) => p?.synthetic !== true)
+    // the compaction_continue prompt is scaffolding that must survive (it is
+    // the user-turn anchor after a summarize); every other synthetic part is
+    // written for the model and dropped
+    .filter((p) => p?.synthetic !== true || p?.metadata?.compaction_continue === true)
     .map((p): Part => {
       const isDataFile = p?.type === "file" && typeof p?.url === "string" && (p.url as string).startsWith("data:")
       const fp = isDataFile ? attached[next] : undefined
@@ -638,6 +650,34 @@ export class OpenCodeAdapter implements HarnessAdapter {
     // which events() translates to turn.aborted — so every watcher, not just
     // the caller who asked, learns how the turn ended
     return this.#json(`/session/${encodeURIComponent(toNativeId(sessionID))}/abort`, { method: "POST" })
+  }
+
+  // Compress the conversation: opencode's summarize folds the history seen so
+  // far into one summary message and continues from there. It needs the model
+  // named (the same one prompts run under) because the summarizing turn runs on
+  // it. Refuses while a turn is in flight — reported as false, not an error.
+  async compact(sessionID: string): Promise<boolean> {
+    const [providerID, modelID] = MODEL_REF.split("/")
+    try {
+      await this.#json(`/session/${encodeURIComponent(toNativeId(sessionID))}/summarize`, {
+        method: "POST",
+        body: JSON.stringify({ providerID, modelID }),
+        // summarize runs a real model turn, so #json's 30s read-only ceiling cuts
+        // it off mid-summary and reports the timeout as a refusal. Give it a
+        // turn-sized budget of its own instead.
+        signal: AbortSignal.timeout(COMPACT_TIMEOUT_MS),
+      })
+      return true
+    } catch (err) {
+      // a refusal is a fact to keep: 404 here means this opencode build has no
+      // summarize route (older CLI), 409 means a turn owns the session. Without
+      // the body a caller can't tell them apart.
+      if (err instanceof HttpError && err.status >= 400 && err.status < 500) {
+        console.error(`[opencode] compact ${sessionID} refused: ${err.message}`)
+        return false
+      }
+      throw err
+    }
   }
 
   async agents(): Promise<AgentRef[]> {

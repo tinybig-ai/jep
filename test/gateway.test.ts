@@ -998,6 +998,51 @@ test("an archived conversation leaves the list and appears under /archived", asy
   }
 })
 
+test("/compact advances to the harness and 501s when it isn't offered", async () => {
+  const a = fakeAdapter()
+  const calls: string[] = []
+  const g = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter: a }],
+    dataHome: mkdtempSync(join(tmpdir(), "gw-test-")),
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+  })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const token = await pair(base, "TESTCODE")
+    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" }
+    const post = async (path: string) =>
+      await fetch(`${base}${path}`, { method: "POST", headers, body: JSON.stringify({ id: "s1" }) })
+
+    // no adapter-declared compact: the control is hidden, not broken — 501 says so
+    assert.equal((await post("/compact")).status, 501)
+
+    a.compact = async (sessionID) => {
+      calls.push(sessionID)
+      return true
+    }
+    const ok = await post("/compact")
+    assert.equal(ok.status, 200)
+    assert.deepEqual(calls, ["s1"])
+
+    // a harness refusing (a turn mid-flight) is a 409, not a 500
+    a.compact = async () => false
+    assert.equal((await post("/compact")).status, 409)
+
+    // A summarize that ran out of time is not a refusal: reporting it as one
+    // sent the phone chasing a harness that had done nothing wrong.
+    a.compact = async () => {
+      throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" })
+    }
+    const slow = await post("/compact")
+    assert.equal(slow.status, 504)
+    assert.match(((await slow.json()) as { error?: string }).error ?? "", /took too long/)
+  } finally {
+    await g.close()
+  }
+})
+
 test("/new asking for a second harness on a served workspace spawns it", async () => {
   const a = fakeAdapter() // name "a-ws", harness "fake", dir /tmp/ws
   let added: string | null = null

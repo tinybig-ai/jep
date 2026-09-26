@@ -139,6 +139,47 @@ test("recovers a user attachment's real path from opencode's synthetic part", as
   }
 })
 
+test("a compaction_continue prompt survives as its own marker, not the user's words", async () => {
+  // After a summarize opencode writes a synthetic user message telling the
+  // model to keep going. It is the "next user turn" a compaction divider
+  // settles against, so it must reach the clients as a row — but the prompt is
+  // scaffolding, never something the person typed, so it is not a text bubble.
+  const srv = await serve((pathname) => {
+    if (pathname !== "/session/ses_a/message") return undefined
+    return [
+      {
+        info: { id: "msg_1", role: "user", time: { created: 10 } },
+        parts: [
+          { type: "compaction", auto: true, overflow: false },
+        ],
+      },
+      {
+        info: { id: "msg_2", role: "user", time: { created: 20 } },
+        parts: [
+          {
+            type: "text",
+            text: "Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed.",
+            synthetic: true,
+            metadata: { compaction_continue: true },
+          },
+        ],
+      },
+    ]
+  })
+  try {
+    const adapter = new OpenCodeAdapter({} as any, WS, srv.base)
+    const messages = await adapter.messages("opencode://ses_a")
+    const auto = messages.find((m) => m.id === "msg_2")!
+    assert.deepEqual(
+      auto.parts.map((p) => ({ kind: p.kind, nativeType: p.kind === "other" ? p.nativeType : undefined })),
+      [{ kind: "other", nativeType: "compaction-continue" }],
+      "the continuation prompt is a distinct marker, not text",
+    )
+  } finally {
+    await srv.close()
+  }
+})
+
 test("names a data: attachment from its mime when there is no scaffolding", async () => {
   // fallback for a message with no synthetic part: still never treat the data:
   // URL as a path (it used to become "<workspace>/data:image/jpeg;base64,…")

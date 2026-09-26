@@ -28,18 +28,30 @@ plain clients).
 | `POST /workspaces` | (none) | `{items[]}` of `{name,harness,dir}`: what a conversation may be created in, for creation-time selection |
 | `POST /harnesses` | (none) | `{harnesses[],default}`: the harnesses installed here |
 | `POST /browse` | `{path?}` | `{cwd,root,parent,dirs[]}`: folders under `cwd` (`{name,git}`), bounded to `JEP_BROWSE_ROOT` (default `$HOME`); `parent` is null at the root |
-| `POST /new` | `{title?,workspace?,path?,harness?}` | `{session}`: created in a named workspace, at an absolute `path` (spawning that workspace under `harness` if it isn't served yet), and/or under a harness; with none, the first served workspace. The returned session carries `adapter`+`harness` |
+| `POST /new` | `{title?,workspace?,path?,harness?,harnessSettings?}` | `{session}`: created in a named workspace, at an absolute `path` (spawning that workspace under `harness` if it isn't served yet), and/or under a harness; with none, the first served workspace. `harnessSettings` (`{key: bool}`) must name settings the harness declares, or 400. The returned session carries `adapter`+`harness` |
+| `POST /mkdir` | `{path?,name}` | `{ok,path}`: create a folder inside the browse root (409 if it exists), so a conversation can start in a new one |
+| `POST /harness-settings` | `{id}` or `{harness}` | `{options[],values}`: the boolean settings a harness declares (`{id,label,description,default,danger?}`) and, by session, that conversation's values (by harness, the defaults) |
+| `POST /set-harness-setting` | `{id,key,enabled}` | `{ok,values}`: flip one declared setting for this conversation; persisted in `<DATA_HOME>/gateway-harness-settings.json` and handed to every prompt |
 | `POST /history` | `{id,limit?,before?}` | `{messages[],hasMore}`: the newest `limit` messages (or, when `before` is a time, the newest `limit` older than it); `hasMore` says older pages exist |
-| `POST /prompt` | `{id,text,files?}` | `{message}` resolves when the turn ends; `files` are `attach` ids sent to the harness as `filePaths`; runs on the session's model if one was set. A turn has no absolute deadline — see [Turn liveness](#turn-liveness) for what ends one that goes quiet |
-| `POST /respond` | `{askID,optionID}` | `{ok}` |
+| `POST /prompt` | `{id,text,files?,clientID?,steer?,force?}` | resolves when *this* prompt's turn ends: `{message}`, `{aborted:true}`, `{cancelled:true}`, or an error. `files` are `attach` ids sent to the harness as `filePaths`; runs on the session's model and agent if set. A prompt into a busy session is queued, never refused: by default it steers in at the next tool boundary (`steer:false` waits for the turn to end), and `force:true` aborts the running turn and runs it next. `clientID` is the handle `/queue/*` acts on. A turn has no absolute deadline — see [Turn liveness](#turn-liveness) |
+| `POST /queue/cancel` | `{id,clientID}` | `{ok}`: drop a prompt still waiting (its `/prompt` resolves `{cancelled:true}`); 404 not queued, 409 already running |
+| `POST /queue/edit` | `{id,clientID,text}` | `{ok}`: change a waiting prompt's words |
+| `POST /queue/force` | `{id,clientID}` | `{ok}`: run a waiting prompt now, aborting the running turn |
+| `POST /respond` | `{askID,optionID}` | `{ok}` or 409 already answered. Keyed by the ask alone (no `id` needed) |
+| `POST /reject` | `{askID,id?}` | `{ok}`: stand an ask down without choosing (the person answered in their own words), so the turn can finish |
 | `POST /stop` | `{id}` | `{stopped}` |
-| `POST /models` | `{id}` | `{models[],current,default}`: the models this conversation's harness can run on, each with `image`/`attachment`/`contextLimit`; `current` is the set one (null = harness default); `default` is what "default" resolves to |
+| `POST /models` | `{id}` | `{models[],current,default,contextLimit}`: the models this conversation's harness can run on, each with `image`/`attachment`/`contextLimit`; `current` is the set one (null = harness default); `default` is what "default" resolves to; `contextLimit` is the window of the model the conversation actually runs on (0 when unknown) |
 | `POST /setmodel` | `{id,model?}` | `{ok,model}`: set (`"provider/model"`) or clear (omit) this conversation's model; persisted in `<DATA_HOME>/gateway-models.json`, applied to the next `/prompt` |
 | `POST /agents` | `{id}` | `{agents[],current,default}`: the primary agents this conversation's harness offers (`{id,label,detail,default?}`), the current choice, and the harness default; the adapter owns the ids, so the client renders whatever it declares |
 | `POST /agent` | `{id}` | `{current}`: the primary agent set for this conversation (null = harness default) |
 | `POST /setagent` | `{id,agent?}` | `{ok,agent}`: set or clear this conversation's primary agent; a harness that names its agents refuses one it doesn't offer (400 `unknown agent`), one that names none accepts the id and ignores it. Persisted in `<DATA_HOME>/gateway-agents.json`, applied to the next `/prompt` |
 | `POST /usage` | `{id}` | `{usage}`: tokens (in/out/thinking/cache) and reported cost summed over the conversation, plus turns and models (`core/usage.ts`) |
 | `POST /diff` | `{id}` | `{files[]}`: files this conversation changed (`{file,additions,deletions,status?}`) |
+| `POST /git` | `{id}` | `{isRepository,branch,head,changedFiles,commits[]}`: the conversation's workspace repo — branch, tracked changes, last 30 commits (`{hash,shortHash,subject,author,time}`). Fixed git arguments only |
+| `POST /compact` | `{id}` | `{ok}`: compress the conversation's context (opencode's summarize). 501 when the harness has no such control, 409 when it refused (a turn in flight), 504 when the summarize ran out of time |
+| `POST /subagents` | `{id}` | `{items[]}`: the subagent sessions this conversation spawned |
+| `POST /read` | `{id,path}` | `{path,text}`: a file the transcript linked to, as text; relative paths resolve in the conversation's workspace; only under served roots (403), at most `READ_MAX` (413) |
+| `GET /file` | `?p=<base64url path>` | the file's bytes, for inline images; only under jep's data home or a served workspace |
 | `POST /term` | (none) | `{authorized}`: whether *this* device token may open a shell (see below) |
 | `POST /term/unlock` | `{code}` | `{ok}` or 403: prove the pairing code a second time to allow a terminal from this device |
 | `POST /term/lock` | (none) | `{ok}`: drop that grant |
@@ -56,12 +68,16 @@ plain clients).
 | `POST /import` | `{id}` | `{ok,id,output}`: fork one in via `opencode export` from the user's store, then `opencode import` into jep's. A copy; the original is untouched |
 | `POST /archive` | `{id}` | `{ok,archived}`: hide a conversation from `/sessions` without deleting it; persisted in `<DATA_HOME>/gateway-archived.json` |
 | `POST /unarchive` | `{id}` | `{ok,archived}`: put it back |
+| `POST /archived` | (none) | `{items[]}`: the archived conversations, same shape as `/sessions` |
 | `POST /delete` | `{id}` | `{ok}`: removes the session from the harness |
 | `POST /attach` | raw octets, `?id=<session>&name=<name>` | `{id,name}`: buffers up to 32 MB under `<DATA_HOME>/attachments`; the id feeds the next `/prompt`'s `files` |
+| `POST /push/register` | `{token}` | `{ok,devices}`: remember this device's FCM token (503 without push configured) |
+| `POST /push/unregister` | `{token}` | `{ok,devices}`: forget it |
+| `POST /restart` | `{quiet?,maxWait?}` | `{ok,quietMs,maxWaitMs}`: arm a restart; the daemon exits once no turn has been active for `quiet` s (default 5), or at `maxWait` s (default 180), and launchd brings it back |
 | `GET /stream` | (none) | SSE, never ends |
 
 Errors are a bare `{error}` with a fitting status. A second prompt into a
-running session answers `409 {error:"busy"}`.
+running session is queued (see `/prompt`), not refused.
 
 ## Turn liveness
 
@@ -97,7 +113,11 @@ forwarded as-is:
 - `part.delta`: live streaming text (append to the part it names)
 - `part.updated`: a part finalized (tool call landed, text settled)
 - `session.idle`: the harness went quiet (turn root stop marker)
-- `ask.requested`: an ask; options ride along, answer via `/respond`
+- `ask.requested`: an ask; options ride along, answer via `/respond`. It may
+  carry `messageID`/`callID` (the tool call it holds up, for placing the card)
+  and `at` (when it was raised, on the harness's clock)
+- `ask.resolved`: that ask is over — answered on any client, stood down, or
+  outlived by its turn; take the card down
 - `session.error`: the harness said something failed
 
 The client owns rendering: it opens `/stream` at startup, keeps it for the

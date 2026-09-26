@@ -98,6 +98,50 @@ const WATCHDOG_TICK_MS = 15_000
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
+interface GitCommitView {
+  hash: string
+  shortHash: string
+  subject: string
+  author: string
+  time: number
+}
+
+function gitText(cwd: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile("git", args, { cwd, encoding: "utf8", timeout: 4_000, maxBuffer: 1 << 20 }, (err, stdout) => {
+      if (err) reject(err)
+      else resolve(stdout)
+    })
+  })
+}
+
+async function gitSnapshot(cwd: string) {
+  try {
+    await gitText(cwd, ["rev-parse", "--show-toplevel"])
+  } catch {
+    return { isRepository: false, branch: null, head: null, changedFiles: 0, commits: [] as GitCommitView[] }
+  }
+  const [branchText, statusText, logText] = await Promise.all([
+    gitText(cwd, ["branch", "--show-current"]).catch(() => ""),
+    gitText(cwd, ["status", "--porcelain=v1", "--untracked-files=no"]).catch(() => ""),
+    gitText(cwd, ["log", "-n", "30", "--format=%H%x1f%h%x1f%s%x1f%an%x1f%ct%x1e"]).catch(() => ""),
+  ])
+  const commits = logText.split("\x1e").flatMap((record) => {
+    const fields = record.trim().split("\x1f")
+    if (fields.length < 5 || !fields[0]) return []
+    const time = Number(fields[4])
+    return [{ hash: fields[0]!, shortHash: fields[1]!, subject: fields[2]!, author: fields[3]!, time: Number.isFinite(time) ? time : 0 }]
+  })
+  const branch = branchText.trim() || (commits.length ? "detached HEAD" : "unborn branch")
+  return {
+    isRepository: true,
+    branch,
+    head: commits[0] ?? null,
+    changedFiles: statusText.split("\n").filter(Boolean).length,
+    commits,
+  }
+}
+
 const sha256 = (s: string): Buffer => createHash("sha256").update(s).digest()
 const same = (a: string, b: string): boolean => timingSafeEqual(sha256(a), sha256(b))
 
@@ -1376,6 +1420,38 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       if (path === "/diff") {
         const files = adapter.diff ? await adapter.diff(id).catch(() => []) : []
         return json(res, 200, { files })
+      }
+
+      // The log belongs to the workspace, not a harness-specific diff
+      // implementation. Only fixed git arguments run; the client never supplies
+      // a command or path.
+      if (path === "/git") {
+        return json(res, 200, await gitSnapshot(adapter.workspace))
+      }
+
+      // Compress this conversation's context (opencode "compact"). The port is
+      // optional: a harness that has no such control answers 501, so the phone
+      // can hide the row rather than pretend it failed at pressing it.
+      if (path === "/compact") {
+        if (!adapter.compact) return json(res, 501, { error: "this harness can't compact" })
+        // A refusal (false) and a broken attempt (throw) are different facts, and
+        // reporting a timed-out summarize as "refused" sent the phone chasing the
+        // wrong thing. Keep them apart.
+        let failure: string | null = null
+        const ok = await adapter.compact(id).catch((err) => {
+          const msg = (err as Error)?.message ?? String(err)
+          console.error(`[gw] compact ${id} failed: ${msg}`)
+          failure = /timeout|abort/i.test(msg) ? "compacting took too long and was given up on" : msg
+          return false
+        })
+        if (failure) return json(res, 504, { error: failure })
+        // the adapter names its own refusal in the daemon log (40x from the
+        // harness); here it is relayed as-is so a phone shows the truth
+        if (!ok) return json(res, 409, { error: "the harness refused to compact" })
+        // the summarize rewrites the transcript; a cached frame from before it
+        // must not be served afterwards
+        msgCache.delete(id)
+        return json(res, 200, { ok: true })
       }
 
       // ── the in-chat terminal ────────────────────────────────────────────
