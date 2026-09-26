@@ -47,7 +47,7 @@ plain clients).
 | `POST /setagent` | `{id,agent?}` | `{ok,agent}`: set or clear this conversation's primary agent; a harness that names its agents refuses one it doesn't offer (400 `unknown agent`), one that names none accepts the id and ignores it. Persisted in `<DATA_HOME>/gateway-agents.json`, applied to the next `/prompt` |
 | `POST /usage` | `{id}` | `{usage}`: tokens (in/out/thinking/cache) and reported cost summed over the conversation, plus turns and models (`core/usage.ts`) |
 | `POST /diff` | `{id}` | `{files[]}`: files this conversation changed (`{file,additions,deletions,status?}`) |
-| `POST /git` | `{id}` | `{isRepository,branch,head,changedFiles,commits[]}`: the conversation's workspace repo — branch, tracked changes, last 30 commits (`{hash,shortHash,subject,author,time}`). Fixed git arguments only |
+| `POST /git` | `{id}` | `{isRepository,branch,head,changedFiles,commits[]}`: the conversation's workspace repo, read through `core/git.ts` like Telegram's /git: branch, changed files (untracked included), last 30 commits (`{hash,shortHash,subject,author,time}`, hash is the short one, time in seconds). The client supplies no command and no path |
 | `POST /compact` | `{id}` | `{ok}`: compress the conversation's context (opencode's summarize). 501 when the harness has no such control, 409 when it refused (a turn in flight), 504 when the summarize ran out of time |
 | `POST /subagents` | `{id}` | `{items[]}`: the subagent sessions this conversation spawned |
 | `POST /read` | `{id,path}` | `{path,text}`: a file the transcript linked to, as text; relative paths resolve in the conversation's workspace; only under served roots (403), at most `READ_MAX` (413) |

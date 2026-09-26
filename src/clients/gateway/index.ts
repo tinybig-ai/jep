@@ -5,7 +5,6 @@
 // surface. Every endpoint the phone can call is listed in docs/GATEWAY.md,
 // which stays in step with this file.
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
-import { execFile } from "node:child_process"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
@@ -14,6 +13,7 @@ import type { HarnessAdapter, HarnessSettingSpec, SessionImport, Terminal } from
 import type { PairingAdmin } from "../../core/pairing.ts"
 import { pushFor, UnregisteredToken, type PushNotifier } from "../../core/push.ts"
 import { judgeTurn, LIVENESS, type LivenessConfig } from "../../core/liveness.ts"
+import { isRepo, repoStatus } from "../../core/git.ts"
 import { readClaudeMcp, readCodexMcp, readOpencodeMcp, writeClaudeProjectEnabled, writeCodexMcpEnabled, writeOpencodeMcpEnabled } from "../../core/mcpconfig.ts"
 import { listSkills, skillDirsFor, writeSkillModelInvocation } from "../../core/skills.ts"
 import type { AskRequest, DomainEvent, HarnessError, Message, Part } from "../../core/types.ts"
@@ -100,46 +100,18 @@ interface AskRecord {
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
-interface GitCommitView {
-  hash: string
-  shortHash: string
-  subject: string
-  author: string
-  time: number
-}
-
-function gitText(cwd: string, args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile("git", args, { cwd, encoding: "utf8", timeout: 4_000, maxBuffer: 1 << 20 }, (err, stdout) => {
-      if (err) reject(err)
-      else resolve(stdout)
-    })
-  })
-}
-
-async function gitSnapshot(cwd: string) {
-  try {
-    await gitText(cwd, ["rev-parse", "--show-toplevel"])
-  } catch {
-    return { isRepository: false, branch: null, head: null, changedFiles: 0, commits: [] as GitCommitView[] }
-  }
-  const [branchText, statusText, logText] = await Promise.all([
-    gitText(cwd, ["branch", "--show-current"]).catch(() => ""),
-    gitText(cwd, ["status", "--porcelain=v1", "--untracked-files=no"]).catch(() => ""),
-    gitText(cwd, ["log", "-n", "30", "--format=%H%x1f%h%x1f%s%x1f%an%x1f%ct%x1e"]).catch(() => ""),
-  ])
-  const commits = logText.split("\x1e").flatMap((record) => {
-    const fields = record.trim().split("\x1f")
-    if (fields.length < 5 || !fields[0]) return []
-    const time = Number(fields[4])
-    return [{ hash: fields[0]!, shortHash: fields[1]!, subject: fields[2]!, author: fields[3]!, time: Number.isFinite(time) ? time : 0 }]
-  })
-  const branch = branchText.trim() || (commits.length ? "detached HEAD" : "unborn branch")
+// The phone's Git screen, shaped from the core's view of the repository — the
+// same core/git.ts the Telegram /git screen reads, so the two clients cannot
+// disagree about what changed. This file only decides what the phone is sent.
+async function gitView(workspace: string) {
+  if (!(await isRepo(workspace))) return { isRepository: false, branch: null, head: null, changedFiles: 0, commits: [] }
+  const s = await repoStatus(workspace, 30)
+  const commits = s.commits.map((c) => ({ hash: c.hash, shortHash: c.hash, subject: c.subject, author: c.author, time: Math.floor(c.at / 1000) }))
   return {
     isRepository: true,
-    branch,
+    branch: s.detached ? "detached HEAD" : s.branch,
     head: commits[0] ?? null,
-    changedFiles: statusText.split("\n").filter(Boolean).length,
+    changedFiles: s.files.length,
     commits,
   }
 }
@@ -1488,10 +1460,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       }
 
       // The log belongs to the workspace, not a harness-specific diff
-      // implementation. Only fixed git arguments run; the client never supplies
-      // a command or path.
+      // implementation. The client supplies no command and no path.
       if (path === "/git") {
-        return json(res, 200, await gitSnapshot(adapter.workspace))
+        return json(res, 200, await gitView(adapter.workspace))
       }
 
       // Compress this conversation's context (opencode "compact"). The port is

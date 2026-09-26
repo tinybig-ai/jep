@@ -1534,3 +1534,40 @@ test("/history answers an unchanged window in a few bytes when the client holds 
     await g.close()
   }
 })
+
+test("/git reads the workspace through core/git, and says so when there is no repo", async () => {
+  const { execFileSync } = await import("node:child_process")
+  const repo = mkdtempSync(join(tmpdir(), "gw-git-"))
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8" })
+  git("init", "-q", "-b", "main")
+  git("-c", "user.name=T", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "first commit")
+  writeFileSync(join(repo, "new.txt"), "hello\n")
+  const plain = mkdtempSync(join(tmpdir(), "gw-nogit-"))
+  let where = repo
+  const a = { ...fakeAdapter(), get workspace() { return where } } as HarnessAdapter
+  const g = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter: a }],
+    dataHome: mkdtempSync(join(tmpdir(), "gw-test-")),
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+  })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const token = await pair(base, "TESTCODE")
+    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" }
+    const view = async () => (await (await fetch(`${base}/git`, { method: "POST", headers, body: JSON.stringify({ id: "s1" }) })).json()) as any
+    const v = await view()
+    assert.equal(v.isRepository, true)
+    assert.equal(v.branch, "main")
+    assert.equal(v.changedFiles, 1, "the new file counts, as it does on Telegram's /git")
+    assert.equal(v.commits.length, 1)
+    assert.equal(v.head.subject, "first commit")
+    assert.equal(v.head.shortHash, v.head.hash)
+    assert.ok(v.head.time > 1_700_000_000, "seconds, as the phone expects")
+    where = plain
+    assert.deepEqual(await view(), { isRepository: false, branch: null, head: null, changedFiles: 0, commits: [] })
+  } finally {
+    await g.close()
+  }
+})
