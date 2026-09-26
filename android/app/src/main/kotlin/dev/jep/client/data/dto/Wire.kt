@@ -24,6 +24,8 @@ data class SessionDto(
     // … and the engine behind it (opencode/codex/claude); display-only, a
     // conversation never changes harness.
     val harness: String? = null,
+    // when it was last looked at, on any device (0 = never)
+    val seenAt: Long = 0,
 )
 
 @Serializable

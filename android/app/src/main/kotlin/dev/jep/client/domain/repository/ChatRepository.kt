@@ -196,6 +196,8 @@ interface ChatRepository {
      *  to know a directory and the roots check stays authoritative. */
     suspend fun readFile(sessionId: String, path: String): String
     suspend fun rename(sessionId: String, title: String): Boolean
+    /** tell the daemon it was looked at (`at` 0 = mark unread), so every device agrees */
+    suspend fun seen(sessionId: String, at: Long): Boolean
     suspend fun delete(sessionId: String): Boolean
     /** upload a file to the gateway; returns the id to pass in the next prompt */
     suspend fun attach(sessionId: String, filename: String, bytes: ByteArray): String

@@ -321,13 +321,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     /** the row was looked at: stop marking it unread */
     fun markRead(sessionId: String) {
-        read.markRead(sessionId)
+        val at = System.currentTimeMillis()
+        read.markRead(sessionId, at)
         _unread.value = _unread.value - sessionId
+        val r = repo ?: return
+        viewModelScope.launch { runCatching { r.seen(sessionId, at) } }
     }
 
     fun markUnread(sessionId: String) {
         read.markUnread(sessionId)
+        // the daemon's mark would otherwise keep it read until the next listing
+        _sessions.value = _sessions.value.map { if (it.id == sessionId) it.copy(seenAt = 0) else it }
         recomputeUnread()
+        val r = repo ?: return
+        viewModelScope.launch { runCatching { r.seen(sessionId, 0) } }
     }
 
     // conversations that were archived: reachable, restorable, and otherwise

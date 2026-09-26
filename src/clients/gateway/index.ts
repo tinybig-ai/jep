@@ -78,6 +78,7 @@ const MODELS_FILE = "gateway-models.json"
 const AGENTS_FILE = "gateway-agents.json"
 const TERMINAL_FILE = "gateway-terminal.json"
 const ARCHIVED_FILE = "gateway-archived.json"
+const SEEN_FILE = "gateway-seen.json"
 const PUSH_FILE = "gateway-push.json"
 const HARNESS_SETTINGS_FILE = "gateway-harness-settings.json"
 // asks remembered per conversation for /history; pending ones are never dropped
@@ -289,6 +290,23 @@ async function loadArchived(dataHome: string): Promise<Set<string>> {
   }
 }
 
+// When each conversation was last looked at, on any device. "Unread" lived
+// only on the phone, so a reinstall marked everything unread and two devices
+// never agreed; the daemon is the one place both can read.
+async function loadSeen(dataHome: string): Promise<Map<string, number>> {
+  try {
+    const raw = JSON.parse(await readFile(join(dataHome, SEEN_FILE), "utf8")) as Record<string, unknown>
+    return new Map(Object.entries(raw).filter((e): e is [string, number] => typeof e[1] === "number" && e[1] > 0))
+  } catch {
+    return new Map()
+  }
+}
+
+const saveSeen = async (dataHome: string, seen: Map<string, number>): Promise<void> => {
+  await mkdir(dataHome, { recursive: true })
+  await writeFile(join(dataHome, SEEN_FILE), JSON.stringify(Object.fromEntries(seen), null, 1))
+}
+
 const saveArchived = async (dataHome: string, ids: Set<string>): Promise<void> => {
   await mkdir(dataHome, { recursive: true })
   await writeFile(join(dataHome, ARCHIVED_FILE), JSON.stringify([...ids], null, 1))
@@ -478,6 +496,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   }
   const titles = await loadTitles(deps.dataHome)
   const archived = await loadArchived(deps.dataHome)
+  const seen = await loadSeen(deps.dataHome)
   const models = await loadModels(deps.dataHome)
   const agents = await loadAgents(deps.dataHome)
   const harnessSettings = await loadHarnessSettings(deps.dataHome)
@@ -1020,7 +1039,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
             // conversation cannot move between harnesses after it exists.
             // `active` = a turn is in flight for it right now (a reply streaming,
             // a tool running) — the phone shows a live mark on the row
-            items.push({ ...s, title: overridden ?? s.title, adapter: name, harness: adapter.id, active: isActive(s.id) })
+            items.push({ ...s, title: overridden ?? s.title, adapter: name, harness: adapter.id, active: isActive(s.id), seenAt: seen.get(s.id) ?? 0 })
           }
         }
         items.sort((x, y) => y.updatedAt - x.updatedAt)
@@ -1353,6 +1372,16 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         return json(res, 200, { ok: true })
       }
 
+      // looked at, on some device: later is kept (a device with a slow clock
+      // must not make a conversation unread again). `at: 0` is "mark unread".
+      if (path === "/seen") {
+        const at = typeof b.at === "number" ? b.at : Date.now()
+        if (at <= 0) seen.delete(id)
+        else seen.set(id, Math.max(seen.get(id) ?? 0, at))
+        await saveSeen(deps.dataHome, seen)
+        return json(res, 200, { ok: true, seenAt: seen.get(id) ?? 0 })
+      }
+
       // archive hides a conversation from the list without touching the
       // harness — the same filed-away idea as a mail client
       if (path === "/archive" || path === "/unarchive") {
@@ -1371,6 +1400,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         await saveTitles(deps.dataHome, titles)
         archived.delete(id)
         await saveArchived(deps.dataHome, archived)
+        if (seen.delete(id)) await saveSeen(deps.dataHome, seen)
         const gone = await adapter.deleteSession(id).catch(() => false)
         if (gone) {
           harnessSettings.delete(id)

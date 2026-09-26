@@ -140,6 +140,7 @@ class FakeChatRepository(
     override suspend fun reject(askId: String) = true
     override suspend fun readFile(sessionId: String, path: String) = "# $path\n\nfake contents for tests"
     override suspend fun rename(sessionId: String, title: String) = true
+    override suspend fun seen(sessionId: String, at: Long) = true
     override suspend fun delete(sessionId: String) = true
     override suspend fun attach(sessionId: String, filename: String, bytes: ByteArray) = "attachment"
     // tests drive a turn by hand: whatever the harness would emit goes here

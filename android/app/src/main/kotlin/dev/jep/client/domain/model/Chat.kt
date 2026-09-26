@@ -19,6 +19,8 @@ data class SessionSummary(
     val subagents: Int = 0,
     /** a turn is in flight for it right now: a reply streaming, a tool running */
     val active: Boolean = false,
+    /** when it was last looked at on any device, as the daemon keeps it (0 = never) */
+    val seenAt: Long = 0,
 )
 
 /** a workspace the gateway serves, the harness (opencode/codex/…) behind it,

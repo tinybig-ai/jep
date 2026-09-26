@@ -3,9 +3,9 @@ package dev.jep.client.device
 import android.content.SharedPreferences
 import dev.jep.client.domain.model.SessionSummary
 
-// Which conversations have been looked at since they last changed. Kept on the
-// device, because "unread" is about this person on this phone — the daemon has
-// no idea who has seen what.
+// Which conversations have been looked at since they last changed. The daemon
+// keeps the mark too (SessionSummary.seenAt), so a reinstall or a second device
+// agrees; this copy answers at once, before the daemon's reply comes back.
 class ReadStore(private val prefs: SharedPreferences) {
 
     fun lastRead(sessionId: String): Long = runCatching { prefs.getLong(key(sessionId), 0L) }.getOrDefault(0L)
@@ -18,7 +18,7 @@ class ReadStore(private val prefs: SharedPreferences) {
     fun markUnread(sessionId: String) = prefs.edit().remove(key(sessionId)).apply()
 
     /** a conversation that has moved on since it was last opened */
-    fun isUnread(session: SessionSummary): Boolean = session.updatedAt > lastRead(session.id)
+    fun isUnread(session: SessionSummary): Boolean = session.updatedAt > maxOf(lastRead(session.id), session.seenAt)
 
     private fun key(sessionId: String) = "$PREFIX$sessionId"
 

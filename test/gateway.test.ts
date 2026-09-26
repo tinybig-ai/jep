@@ -1433,3 +1433,28 @@ test("/history carries every ask the conversation raised, and how each ended", a
     await g.close()
   }
 })
+
+test("what was seen is kept by the daemon, so every device agrees on unread", async () => {
+  const g = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter: fakeAdapter() }],
+    dataHome: mkdtempSync(join(tmpdir(), "gw-test-")),
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+  })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const token = await pair(base, "TESTCODE")
+    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" }
+    const post = async (path: string, body: object) => (await fetch(`${base}${path}`, { method: "POST", headers, body: JSON.stringify(body) })).json() as Promise<any>
+    const seenAt = async () => (await post("/sessions", {})).items.find((s: any) => s.id === "s1").seenAt
+    assert.equal(await seenAt(), 0, "never seen")
+    await post("/seen", { id: "s1", at: 500 })
+    await post("/seen", { id: "s1", at: 300 }) // a device with a slow clock
+    assert.equal(await seenAt(), 500, "the later mark stands")
+    await post("/seen", { id: "s1", at: 0 })
+    assert.equal(await seenAt(), 0, "marked unread again")
+  } finally {
+    await g.close()
+  }
+})
