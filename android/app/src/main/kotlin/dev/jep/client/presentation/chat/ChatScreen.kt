@@ -110,8 +110,14 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.TextField
+import androidx.compose.material3.InputChip
+import androidx.compose.material3.FilledIconButton
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.CloseFullscreen
 import androidx.compose.runtime.LaunchedEffect
@@ -187,7 +193,11 @@ internal const val SOMETHING_ELSE = "something-else"
 internal sealed interface Row {
     val key: String
 
-    data class Msg(val m: ChatMessage) : Row {
+    /** `cards`: asks drawn inside the message, right after the tool call they
+     *  hold up (by call id). A live message keeps growing below its calls, so a
+     *  card placed under the whole message ended up under everything written
+     *  after it, and only fell into place when the turn ended. */
+    data class Msg(val m: ChatMessage, val cards: Map<String, List<Row>> = emptyMap()) : Row {
         override val key: String get() = m.id
     }
 
@@ -218,10 +228,10 @@ internal sealed interface Row {
 }
 
 /** A compaction marker is its own row; everything else renders as a message. */
-internal fun rowFor(m: ChatMessage): Row = when {
+internal fun rowFor(m: ChatMessage, cards: Map<String, List<Row>> = emptyMap()): Row = when {
     m.parts.size == 1 && m.parts[0] is ChatPart.Compaction -> Row.Compaction(m)
     m.parts.size == 1 && m.parts[0] is ChatPart.AutoContinue -> Row.AutoContinue(m)
-    else -> Row.Msg(m)
+    else -> Row.Msg(m, cards)
 }
 
 /**
@@ -252,7 +262,8 @@ internal fun groupToolRuns(rows: List<Row>): List<Row> {
         run = mutableListOf()
     }
     for (row in rows) {
-        val calls = (row as? Row.Msg)?.let { toolOnlyCalls(it.m) }
+        // a message carrying a card is never folded away: the card must show
+        val calls = (row as? Row.Msg)?.takeIf { it.cards.isEmpty() }?.let { toolOnlyCalls(it.m) }
         when {
             calls == null -> {
                 flush()
@@ -317,6 +328,16 @@ internal fun transcriptRows(
             ?: c.after?.let { id -> ordered.firstOrNull { it.id == id } }
     }
     val placed = BooleanArray(cards.size)
+    // a card whose call is found inside its message goes in the message, after
+    // that call — not under the message, where later parts would pile on top
+    val inline = HashMap<String, MutableMap<String, MutableList<Row>>>()
+    cards.indices.sortedBy { cards[it].at }.forEach { i ->
+        val call = cards[i].ask.callId ?: return@forEach
+        val host = anchors[i] ?: return@forEach
+        if (host.parts.none { it is ChatPart.Tool && it.id == call }) return@forEach
+        inline.getOrPut(host.id) { mutableMapOf() }.getOrPut(call) { mutableListOf() } += cards[i].row
+        placed[i] = true
+    }
     val out = ArrayList<Row>(ordered.size + cards.size)
     // several cards under one message: newest nearest the bottom, and the list
     // is newest first
@@ -332,7 +353,7 @@ internal fun transcriptRows(
         // live nor newer than the ask is the spot, so the card rides up as the
         // turn says more below it.
         drop { i -> anchors[i]?.let { it === m } ?: (m.id != liveMessageId && m.time <= cards[i].at) }
-        out += rowFor(m)
+        out += rowFor(m, inline[m.id].orEmpty())
     }
     drop { true }
     return settleCompaction(out)
@@ -527,7 +548,13 @@ fun ChatScreen(
     // Whether the open card is on screen. A card above the fold is what made a
     // parked turn look hung: no spinner, Send withheld, and nothing in view to
     // say why. When it is out of sight, the composer says so and jumps to it.
-    val askKey = ask?.let { "ask-${it.id}" }
+    // the row that holds the open card: its own, or the message it sits inside
+    val askHost = remember(displayRows) {
+        displayRows.indexOfFirst { r ->
+            r is Row.Pending || (r is Row.Msg && r.cards.values.any { cs -> cs.any { it is Row.Pending } })
+        }
+    }
+    val askKey = if (ask != null && askHost >= 0) displayRows[askHost].key else null
     val askInView by remember(askKey) {
         derivedStateOf { askKey != null && listState.layoutInfo.visibleItemsInfo.any { it.key == askKey } }
     }
@@ -856,6 +883,14 @@ fun ChatScreen(
                                     row.m.id == newestMsgId && row.m.role == Role.ASSISTANT,
                                 showActions = row.m.id in actionIds,
                                 onRetrySend = { vm.retrySend(it) },
+                                cards = row.cards,
+                                cardView = { card ->
+                                    when (card) {
+                                        is Row.Pending -> AskBar(card.ask, vm, spent = askAnswered, choiceId = state.askChoice)
+                                        is Row.PastAsk -> AskBar(card.entry.ask, vm, spent = true, choiceId = card.entry.choice)
+                                        else -> Unit
+                                    }
+                                },
                             )
                         }
                     }
@@ -906,7 +941,7 @@ fun ChatScreen(
         replyTo?.let { ReplyBanner(it) { replyTo = null } }
         if (askPending && !askInView) {
             WaitingForYou(ask?.kind == "question") {
-                val at = displayRows.indexOfFirst { it is Row.Pending }
+                val at = askHost
                 if (at >= 0) scope.launch {
                     followLatest = false
                     listState.animateScrollToItem(at + if (state.loadingOlder) 1 else 0)
@@ -1763,6 +1798,8 @@ private fun MessageRow(
     responding: Boolean = false,
     showActions: Boolean = true,
     onRetrySend: (String) -> Unit = {},
+    cards: Map<String, List<Row>> = emptyMap(),
+    cardView: @Composable (Row) -> Unit = {},
 ) {
     var menu by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
@@ -1780,7 +1817,7 @@ private fun MessageRow(
     ) {
         when (message.role) {
             Role.USER -> UserBubble(message) { onRetrySend(message.id) }
-            Role.ASSISTANT -> AssistantBody(message, onInfo, responding, showActions)
+            Role.ASSISTANT -> AssistantBody(message, onInfo, responding, showActions, cards, cardView)
             else -> Unit
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -1931,6 +1968,8 @@ private fun AssistantBody(
     onInfo: (ChatMessage) -> Unit,
     responding: Boolean = false,
     showActions: Boolean = true,
+    cards: Map<String, List<Row>> = emptyMap(),
+    cardView: @Composable (Row) -> Unit = {},
 ) {
     // the per-turn accounting lives behind a quiet hollow "i", not printed under
     // every reply; a copy button sits beside it for the reply's own text
@@ -1938,13 +1977,16 @@ private fun AssistantBody(
     val clipboard = LocalClipboardManager.current
     val fullText = remember(message) { messageText(message) }
     Column(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        collapseTranscript(message.parts).forEach { row ->
+        collapseTranscript(message.parts, cards.keys).forEach { row ->
             when (row) {
                 is TranscriptRow.Group -> ToolGroupRow(row.tools)
-                is TranscriptRow.One -> PartView(
-                    row.part,
-                    streaming = responding && row.sources.last() === message.parts.last(),
-                )
+                is TranscriptRow.One -> {
+                    PartView(
+                        row.part,
+                        streaming = responding && row.sources.last() === message.parts.last(),
+                    )
+                    (row.part as? ChatPart.Tool)?.id?.let { cards[it] }?.forEach { cardView(it) }
+                }
             }
         }
         // still working: a quiet spinner at the end of the reply, so a pause
@@ -2091,7 +2133,7 @@ internal sealed interface TranscriptRow {
     data class Group(val tools: List<ChatPart.Tool>) : TranscriptRow
 }
 
-internal fun collapseTranscript(parts: List<ChatPart>): List<TranscriptRow> {
+internal fun collapseTranscript(parts: List<ChatPart>, keep: Set<String> = emptySet()): List<TranscriptRow> {
     val out = ArrayList<TranscriptRow>(parts.size)
     var run = mutableListOf<ChatPart.Tool>()
     fun flush() {
@@ -2130,7 +2172,8 @@ internal fun collapseTranscript(parts: List<ChatPart>): List<TranscriptRow> {
             continue
         }
         flushThinking()
-        if (tool == null) {
+        // a call with a card under it stays its own row, so the card has a place
+        if (tool == null || tool.id in keep) {
             flush()
             out += TranscriptRow.One(part)
         } else if (run.isNotEmpty() && run[0].name != tool.name) {
@@ -2648,6 +2691,87 @@ private fun AskBar(ask: Ask, vm: ChatViewModel, spent: Boolean, choiceId: String
     }
 }
 
+/**
+ * The composer, full screen, for writing something long. The six-line box
+ * could only show a long message a few lines at a time. Here the text gets the
+ * whole screen above the keyboard, and every control sits in one bar at the
+ * top: fold back on the left, attach and send together on the right.
+ */
+@Composable
+private fun FullComposer(
+    draft: String,
+    attachments: List<ChatViewModel.Attachment>,
+    sendable: Boolean,
+    onDraft: (String) -> Unit,
+    onAttach: () -> Unit,
+    onRemove: (String) -> Unit,
+    onSend: () -> Unit,
+    onClose: () -> Unit,
+) {
+    val focus = remember { FocusRequester() }
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onClose,
+        properties = androidx.compose.ui.window.DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+        ),
+    ) {
+        Surface(Modifier.fillMaxSize().testTag("full-composer"), color = MaterialTheme.colorScheme.background) {
+            Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(onClick = onClose) {
+                        Icon(Icons.Filled.CloseFullscreen, "shrink the composer")
+                    }
+                    Text(
+                        "${draft.length} chars",
+                        Modifier.weight(1f),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    IconButton(onClick = onAttach) {
+                        Icon(Icons.Filled.AttachFile, "attach", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    FilledIconButton(onClick = onSend, enabled = sendable) {
+                        Icon(Icons.AutoMirrored.Filled.Send, "send")
+                    }
+                }
+                if (attachments.isNotEmpty()) {
+                    Row(
+                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        attachments.forEach { a ->
+                            InputChip(
+                                selected = false,
+                                onClick = { onRemove(a.id) },
+                                label = { Text(a.name, maxLines = 1) },
+                                trailingIcon = { Icon(Icons.Filled.Close, "remove", Modifier.size(16.dp)) },
+                            )
+                        }
+                    }
+                }
+                HorizontalDivider()
+                TextField(
+                    value = draft,
+                    onValueChange = onDraft,
+                    Modifier.fillMaxWidth().weight(1f).focusRequester(focus).testTag("full-composer-text"),
+                    placeholder = { Text("Message the agent") },
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = MaterialTheme.colorScheme.background,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.background,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                    ),
+                )
+            }
+        }
+    }
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+}
+
 /** Above the composer while the turn is parked on a card that is out of view. */
 @Composable
 private fun WaitingForYou(question: Boolean, onJump: () -> Unit) {
@@ -2754,6 +2878,15 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
 
     val context = LocalContext.current
     var expanded by rememberSaveable { mutableStateOf(false) }
+    val send: () -> Unit = {
+        // a swipe-armed reply rides along as a quoted block
+        val quote = replyTo?.let { m ->
+            messageText(m).trim().lineSequence().take(6).joinToString("\n") { "> $it" } + "\n\n"
+        } ?: ""
+        vm.send(quote + draft)
+        onCancelReply()
+        expanded = false
+    }
     // several at once: picking one file, then reopening the picker for the
     // next, was the only way to send a handful of screenshots
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
@@ -2765,6 +2898,18 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
         }
     }
 
+    if (expanded) {
+        FullComposer(
+            draft = draft,
+            attachments = state.attachments,
+            sendable = sendable && (draft.isNotBlank() || state.attachments.isNotEmpty()),
+            onDraft = { vm.setDraft(it) },
+            onAttach = { picker.launch(arrayOf("*/*")) },
+            onRemove = { vm.removeAttachment(it) },
+            onSend = send,
+            onClose = { expanded = false },
+        )
+    }
     Surface(tonalElevation = 2.dp, color = MaterialTheme.colorScheme.background) {
         Column(Modifier.fillMaxWidth().imePadding().padding(horizontal = 12.dp, vertical = 10.dp)) {
             if (state.attachments.isNotEmpty()) {
@@ -2797,22 +2942,18 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
                 OutlinedTextField(
                     value = draft,
                     onValueChange = { vm.setDraft(it) },
-                    // expanded, it takes most of what the keyboard leaves: a long
-                    // message could only be written six lines at a time
-                    Modifier.weight(1f).then(
-                        if (expanded) Modifier.heightIn(min = (LocalConfiguration.current.screenHeightDp * 0.45f).dp) else Modifier,
-                    ).testTag("composer"),
+                    Modifier.weight(1f).testTag("composer"),
                     placeholder = { Text("Message the agent", color = MaterialTheme.colorScheme.onSurfaceVariant) },
                     shape = RoundedCornerShape(24.dp),
                     minLines = 1,
-                    maxLines = if (expanded) Int.MAX_VALUE else 6,
-                    // offered once there is something long to write, and to fold back
-                    trailingIcon = if (expanded || draft.count { it == '\n' } >= 2 || draft.length > 160) {
+                    maxLines = 6,
+                    // offered once there is something long to write
+                    trailingIcon = if (draft.count { it == '\n' } >= 2 || draft.length > 160) {
                         {
-                            IconButton(onClick = { expanded = !expanded }) {
+                            IconButton(onClick = { expanded = true }) {
                                 Icon(
-                                    if (expanded) Icons.Filled.CloseFullscreen else Icons.Filled.OpenInFull,
-                                    if (expanded) "shrink the composer" else "expand the composer",
+                                    Icons.Filled.OpenInFull,
+                                    "expand the composer",
                                     Modifier.size(18.dp),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -2838,15 +2979,7 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
                         .size(48.dp)
                         .combinedClickable(
                             enabled = sendable,
-                            onClick = {
-                                // a swipe-armed reply rides along as a quoted block
-                                val quote = replyTo?.let { m ->
-                                    messageText(m).trim().lineSequence().take(6).joinToString("\n") { "> $it" } + "\n\n"
-                                } ?: ""
-                                vm.send(quote + draft)
-                                onCancelReply()
-                                expanded = false
-                            },
+                            onClick = send,
                             // hold to choose: steer in now, or wait for the reply to end
                             onLongClick = { if (draft.isNotBlank() || state.attachments.isNotEmpty()) sendMenu = true },
                         ),
@@ -3028,7 +3161,9 @@ internal fun statusText(status: StatusSummary): String {
     val used = status.used ?: 0L
     val limit = status.limit ?: 0L
     when {
-        used > 0 && limit > 0 -> out += "${fmtTokens(used)}/${fmtTokens(limit)}  ${(100.0 * used / limit).roundToInt()}%"
+        // more in use than the limit allows means the limit is the wrong one
+        // (a window not learned yet): "461K/200K 231%" is worse than no limit
+        used > 0 && limit >= used -> out += "${fmtTokens(used)}/${fmtTokens(limit)}  ${(100.0 * used / limit).roundToInt()}%"
         used > 0 -> out += "${fmtTokens(used)} tok"
     }
     status.spend?.takeIf { it > 0 }?.let { out += fmtMoney(it) }

@@ -87,4 +87,22 @@ class AskRecordTest {
         assertEquals(listOf("ask-a3", "m3", "ask-a2", "m2", "ask-a1", "m1"), rows.map { it.key })
         assertEquals(listOf(Row.PastAsk::class, Row.PastAsk::class), rows.filterIsInstance<Row.PastAsk>().map { it::class })
     }
+
+    @Test
+    fun `a card sits inside its message, right after the call it holds up`() {
+        // claude streams a whole turn as ONE live message: calls and the text
+        // after them. Under the message, the card sank below everything written
+        // after the call, and only fell into place once the turn ended.
+        val tool = ChatPart.Tool(id = "toolu_1", name = "Bash", status = null, title = null)
+        val live = ChatMessage("live", Role.ASSISTANT, 0, listOf(ChatPart.Text("before"), tool, ChatPart.Text("after")))
+        val card = Ask(id = "a1", title = "Bash wants to run", callId = "toolu_1", at = 5)
+        val rows = transcriptRows(listOf(live, msg("m1", 1)), card, 5, liveMessageId = "live")
+        assertEquals(listOf("live", "m1"), rows.map { it.key })
+        val host = rows[0] as Row.Msg
+        assertEquals(listOf("ask-a1"), host.cards["toolu_1"]?.map { it.key })
+        // and the call with a card under it is never folded into a group
+        val grouped = collapseTranscript(listOf(tool, tool.copy(id = "t2"), tool.copy(id = "t3")), setOf("toolu_1"))
+        assertEquals(TranscriptRow.One(tool), grouped.first())
+    }
 }
+

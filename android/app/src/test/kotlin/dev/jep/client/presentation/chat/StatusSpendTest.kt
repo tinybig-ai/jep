@@ -32,4 +32,11 @@ class StatusSpendTest {
         assertEquals(0.30, shown.spend!!, 1e-9)
         assertEquals(0.30, retainStatus(shown, StatusSummary(spend = null)).spend!!, 1e-9)
     }
+
+    @Test
+    fun `a limit smaller than what is in use is not shown`() {
+        assertEquals("opus  ·  461.1K tok", statusText(StatusSummary(model = "opus", used = 461_100, limit = 200_000)))
+        assertEquals("opus  ·  461.1K/1.0M  46%", statusText(StatusSummary(model = "opus", used = 461_100, limit = 1_000_000)))
+    }
 }
+

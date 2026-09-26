@@ -993,22 +993,26 @@ class ChatScreenTest {
     }
 
     @Test
-    fun a_long_message_can_be_written_in_a_bigger_composer() {
-        val vm = ChatViewModel(FakeChatRepository(messages = manyMessages(3)), "s1", "T")
+    fun a_long_message_opens_a_full_screen_editor_with_its_controls_together() {
+        val repo = FakeChatRepository(messages = manyMessages(3))
+        val vm = ChatViewModel(repo, "s1", "T")
         rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
         rule.waitForIdle()
         // a short message has nothing to expand
         rule.onAllNodesWithContentDescription("expand the composer").assertCountEquals(0)
         rule.runOnUiThread { vm.setDraft("first line\nsecond line\nthird line") }
         rule.waitUntil(5_000) { rule.onAllNodesWithContentDescription("expand the composer").fetchSemanticsNodes().isNotEmpty() }
-        val before = rule.onNodeWithTag("composer").fetchSemanticsNode().size.height
         rule.onNodeWithContentDescription("expand the composer").performClick()
-        rule.waitForIdle()
-        val after = rule.onNodeWithTag("composer").fetchSemanticsNode().size.height
-        assertTrue("expanded ($after) must be much taller than before ($before)", after > before * 2)
-        rule.onNodeWithContentDescription("shrink the composer").performClick()
-        rule.waitForIdle()
-        assertTrue(rule.onNodeWithTag("composer").fetchSemanticsNode().size.height < after)
+        rule.waitUntil(5_000) { rule.onAllNodesWithTag("full-composer").fetchSemanticsNodes().isNotEmpty() }
+        // the words carried over, and send sits in the editor's own bar
+        rule.onNodeWithTag("full-composer-text").assertIsDisplayed()
+        rule.onAllNodesWithText("first line", substring = true).fetchSemanticsNodes().isNotEmpty().let { assertTrue(it) }
+        rule.onNode(
+            androidx.compose.ui.test.hasContentDescription("send") and
+                androidx.compose.ui.test.hasAnyAncestor(androidx.compose.ui.test.hasTestTag("full-composer")),
+        ).performClick()
+        rule.waitUntil(5_000) { repo.prompts.any { it.startsWith("first line") } }
+        rule.waitUntil(5_000) { rule.onAllNodesWithTag("full-composer").fetchSemanticsNodes().isEmpty() }
     }
 }
 
