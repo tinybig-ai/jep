@@ -51,7 +51,7 @@ plain clients).
 | `POST /compact` | `{id}` | `{ok}`: compress the conversation's context (opencode's summarize, Claude Code's `/compact`). 501 when the harness has no such control, 409 when it refused (a turn in flight), 504 when the summarize ran out of time |
 | `POST /subagents` | `{id}` | `{items[]}`: the subagent sessions this conversation spawned |
 | `POST /read` | `{id,path}` | `{path,text}`: a file the transcript linked to, as text; relative paths resolve in the conversation's workspace; only under served roots (403), at most `READ_MAX` (413) |
-| `GET /file` | `?p=<base64url path>` | the file's bytes, for inline images; only under jep's data home or a served workspace |
+| `GET /file` | `?p=<base64url path>` | the file's bytes, for inline images; only uploaded files (`attachments/`, `uploads/`) or a served workspace, symlinks resolved (403) |
 | `POST /term` | (none) | `{authorized}`: whether *this* device token may open a shell (see below) |
 | `POST /term/unlock` | `{code}` | `{ok}` or 403: prove the pairing code a second time to allow a terminal from this device |
 | `POST /term/lock` | (none) | `{ok}`: drop that grant |
