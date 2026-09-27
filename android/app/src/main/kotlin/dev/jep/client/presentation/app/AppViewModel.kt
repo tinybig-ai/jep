@@ -233,7 +233,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 .onFailure { _notice.value = "gateway unreachable: ${it.message}" }
             // the creation picker lists the same served workspaces; keep them
             // fresh with the session list so "New conversation" is never empty
-            runCatching { r.workspaces() }.onSuccess { _workspaces.value = it }
+            runCatching { r.workspaces() }.onSuccess { _workspaces.value = byRecency(it) }
             _busy.value = false
             if (refreshQueued) {
                 refreshQueued = false
@@ -457,10 +457,33 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 selected?.let { loadNewHarnessOptions(r, it) }
             }
             runCatching { r.workspaces() }.onSuccess { w ->
-                _workspaces.value = w
-                _newChat.update { it.copy(workspaces = w) }
+                val ordered = byRecency(w)
+                _workspaces.value = ordered
+                _newChat.update { it.copy(workspaces = ordered) }
             }
         }
+    }
+
+    /**
+     * The served workspaces, most recently used first.
+     *
+     * A folder's place comes from the newest conversation in it, not from the
+     * order the gateway happens to list them: the picker is opened to start
+     * work in a project you were just in, and a stable alphabetical list buries
+     * that under folders untouched for weeks. Folders with no conversation keep
+     * their served order, after the ones with history.
+     */
+    private fun byRecency(workspaces: List<Workspace>): List<Workspace> {
+        val lastUsed = HashMap<String, Long>()
+        for (s in _sessions.value) {
+            if (s.workspace.isBlank()) continue
+            val seen = lastUsed[s.workspace]
+            if (seen == null || s.updatedAt > seen) lastUsed[s.workspace] = s.updatedAt
+        }
+        if (lastUsed.isEmpty()) return workspaces
+        val used = workspaces.filter { lastUsed.containsKey(it.dir) }.sortedByDescending { lastUsed[it.dir] }
+        val fresh = workspaces.filterNot { lastUsed.containsKey(it.dir) }
+        return used + fresh
     }
 
     fun closeNewChat() {

@@ -20,6 +20,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CreateNewFolder
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Source
@@ -114,6 +115,11 @@ private fun Form(
     onOpenBrowse: () -> Unit,
     onCreate: () -> Unit,
 ) {
+    // The picker opens on the folders you were just in, most recent first. Five
+    // is a screenful without a scroll; the rest arrive in fives rather than as
+    // one wall of paths.
+    var shown by remember { mutableStateOf(5) }
+    val folders = state.workspaces.distinctBy { it.dir.ifBlank { it.name } }
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
         item {
             OutlinedTextField(
@@ -160,13 +166,22 @@ private fun Form(
             // repeating it under every harness is noise: the HARNESS chips
             // above choose which one, and the gateway brings that harness up
             // for the directory if it isn't serving it yet.
-            state.workspaces.distinctBy { it.dir.ifBlank { it.name } }.forEach { w ->
+            folders.take(shown).forEach { w ->
                 val selected = state.workspace == w.name && state.path == null
                 SelectRow(
                     title = w.name,
                     subtitle = w.dir.ifBlank { w.harness },
                     selected = selected,
                     onClick = { onSelectWorkspace(w.name, state.harness ?: w.harness) },
+                )
+            }
+            if (folders.size > shown) {
+                SelectRow(
+                    title = "Show more",
+                    subtitle = "${folders.size - shown} more",
+                    selected = false,
+                    onClick = { shown += 5 },
+                    icon = { Icon(Icons.Filled.ExpandMore, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) },
                 )
             }
             SelectRow(
