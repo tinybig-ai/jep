@@ -342,8 +342,11 @@ class ChatScreenTest {
 
     /** Compact is harness-declared: the row shows for opencode and acts once. */
     @Test
-    fun the_hamburger_menu_offers_compact_for_opencode() {
-        val repo = FakeChatRepository(messages = listOf(ChatMessage("a1", Role.ASSISTANT, 1, listOf(ChatPart.Text("hello there")))))
+    fun the_hamburger_menu_offers_compact_where_the_harness_can() {
+        val repo = FakeChatRepository(
+            messages = listOf(ChatMessage("a1", Role.ASSISTANT, 1, listOf(ChatPart.Text("hello there")))),
+            harness = HarnessSettings(canCompact = true),
+        )
         val vm = ChatViewModel(repo, "s1", "T", "jep", "opencode")
         rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
         rule.waitUntil(5_000) { rule.onAllNodesWithText("hello there", substring = true).fetchSemanticsNodes().isNotEmpty() }
@@ -357,7 +360,10 @@ class ChatScreenTest {
     /** the banner is read-when-read: an X closes it, nothing buries it on a timer */
     @Test
     fun the_info_banner_has_a_dismiss_button() {
-        val repo = FakeChatRepository(messages = listOf(ChatMessage("a1", Role.ASSISTANT, 1, listOf(ChatPart.Text("hello there"))))).apply {
+        val repo = FakeChatRepository(
+            messages = listOf(ChatMessage("a1", Role.ASSISTANT, 1, listOf(ChatPart.Text("hello there")))),
+            harness = HarnessSettings(canCompact = true),
+        ).apply {
             compactAnswer = false
         }
         val vm = ChatViewModel(repo, "s1", "T", "jep", "opencode")
@@ -373,7 +379,10 @@ class ChatScreenTest {
     /** compaction is visible while it runs, not only reported after the fact */
     @Test
     fun compacting_shows_a_progress_banner_until_it_settles() {
-        val repo = FakeChatRepository(messages = listOf(ChatMessage("a1", Role.ASSISTANT, 1, listOf(ChatPart.Text("hello there"))))).apply {
+        val repo = FakeChatRepository(
+            messages = listOf(ChatMessage("a1", Role.ASSISTANT, 1, listOf(ChatPart.Text("hello there")))),
+            harness = HarnessSettings(canCompact = true),
+        ).apply {
             compactDelayMs = 4_000
         }
         val vm = ChatViewModel(repo, "s1", "T", "jep", "opencode")
@@ -1054,5 +1063,14 @@ class ChatScreenTest {
         rule.runOnUiThread { repo.emitEvent(ChatEvent.Changed("s1")) }
         rule.waitUntil(5_000) { rule.onAllNodesWithText("written on the desktop").fetchSemanticsNodes().isNotEmpty() }
     }
-}
 
+    @Test
+    fun no_compact_row_where_the_harness_cannot() {
+        val repo = FakeChatRepository(messages = listOf(ChatMessage("a1", Role.ASSISTANT, 1, listOf(ChatPart.Text("hello there")))))
+        val vm = ChatViewModel(repo, "s1", "T", "jep", "codex")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("hello there", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithContentDescription("chat menu").performClick()
+        rule.onAllNodesWithText("Compact").assertCountEquals(0)
+    }
+}

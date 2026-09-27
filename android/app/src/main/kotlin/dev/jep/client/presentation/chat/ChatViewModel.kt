@@ -221,6 +221,9 @@ class ChatViewModel(
         // the status line's spend is the whole conversation's, from the same
         // place the usage sheet reads it
         refreshUsage()
+        // what the conversation's harness can do (the menu's Compact) and its
+        // options, known before anyone opens a menu
+        loadHarnessSettings(quiet = true)
         // The push feed is a convenience, not the record: it drops on a daemon
         // restart, a network change, a backgrounded radio. A chat that stops
         // updating is worse than one that reconnects a moment late, so we
@@ -725,12 +728,15 @@ class ChatViewModel(
         }
     }
 
-    fun loadHarnessSettings() {
+    /** `quiet`: on opening the chat, where a failure is not worth a notice */
+    fun loadHarnessSettings(quiet: Boolean = false) {
         _state.update { it.copy(harnessSettingsLoading = true) }
         viewModelScope.launch {
             runCatching { repo.sessionHarnessSettings(sessionId) }
                 .onSuccess { settings -> _state.update { it.copy(harnessSettings = settings, harnessSettingsLoading = false) } }
-                .onFailure { err -> _state.update { it.copy(harnessSettingsLoading = false, notice = err.message ?: "couldn't load harness settings") } }
+                .onFailure { err ->
+                    _state.update { it.copy(harnessSettingsLoading = false, notice = if (quiet) it.notice else err.message ?: "couldn't load the options") }
+                }
         }
     }
 
@@ -740,9 +746,9 @@ class ChatViewModel(
         viewModelScope.launch {
             runCatching { repo.setSessionHarnessSetting(sessionId, id, enabled) }
                 .onSuccess { ok ->
-                    if (!ok) _state.update { it.copy(harnessSettings = before, notice = "couldn't change that harness setting") }
+                    if (!ok) _state.update { it.copy(harnessSettings = before, notice = "couldn't change that setting") }
                 }
-                .onFailure { err -> _state.update { it.copy(harnessSettings = before, notice = err.message ?: "couldn't change that harness setting") } }
+                .onFailure { err -> _state.update { it.copy(harnessSettings = before, notice = err.message ?: "couldn't change that setting") } }
         }
     }
 

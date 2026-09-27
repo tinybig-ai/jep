@@ -1571,3 +1571,25 @@ test("/git reads the workspace through core/git, and says so when there is no re
     await g.close()
   }
 })
+
+test("/harness-settings says whether the conversation's harness can compact", async () => {
+  const a = fakeAdapter()
+  const g = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter: a }],
+    dataHome: mkdtempSync(join(tmpdir(), "gw-test-")),
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+  })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const token = await pair(base, "TESTCODE")
+    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" }
+    const ask = async () => ((await (await fetch(`${base}/harness-settings`, { method: "POST", headers, body: JSON.stringify({ id: "s1" }) })).json()) as { compact: boolean }).compact
+    assert.equal(await ask(), false, "no compact port: the phone shows no Compact row")
+    a.compact = async () => true
+    assert.equal(await ask(), true)
+  } finally {
+    await g.close()
+  }
+})

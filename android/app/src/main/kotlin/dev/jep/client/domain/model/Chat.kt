@@ -42,6 +42,8 @@ data class HarnessSetting(
 data class HarnessSettings(
     val options: List<HarnessSetting> = emptyList(),
     val values: Map<String, Boolean> = emptyMap(),
+    /** the harness can compress this conversation's context (Compact) */
+    val canCompact: Boolean = false,
 )
 
 /** a SKILL.md the harness loads; `disabled` hides it from the model */

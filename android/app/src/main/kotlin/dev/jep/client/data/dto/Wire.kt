@@ -134,6 +134,8 @@ data class HarnessSettingDto(
 data class HarnessSettingsRes(
     val options: List<HarnessSettingDto> = emptyList(),
     val values: Map<String, Boolean> = emptyMap(),
+    /** the conversation's harness can compress its context */
+    val compact: Boolean = false,
 )
 
 @Serializable

@@ -733,10 +733,10 @@ fun ChatScreen(
                                 onClick = { menu = false; termVisible = true },
                             )
                         }
-                        // Compact is harness-catalogued: only show the row for a
-                        // harness whose adapter offers the port. opencode is the
-                        // first; the menu stays honest instead of failing at a tap.
-                        if (vm.harness == "opencode") {
+                        // Offered where the harness can do it, as the gateway
+                        // says (opencode and Claude today), never by name: the
+                        // menu stays honest instead of failing at a tap.
+                        if (state.harnessSettings.canCompact) {
                             DropdownMenuItem(
                                 text = { Text(if (state.compacting) "Compacting…" else "Compact") },
                                 leadingIcon = { Icon(Icons.Filled.Compress, null) },

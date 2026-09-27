@@ -1030,7 +1030,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           const adapter = await ensureListed(sessionID)
           if (!adapter) return json(res, 404, { error: "unknown session" })
           const options = adapter.settings?.() ?? deps.harnessSettings?.(adapter.id) ?? []
-          return json(res, 200, { options, values: valuesForSettings(options, harnessSettings.get(sessionID)) })
+          // `compact`: whether this conversation's harness can compress its
+          // context, so a client offers the control only where it works
+          return json(res, 200, { options, values: valuesForSettings(options, harnessSettings.get(sessionID)), compact: typeof adapter.compact === "function" })
         }
         const harnessID = str("harness")
         if (!harnessID) return json(res, 400, { error: "harness required" })

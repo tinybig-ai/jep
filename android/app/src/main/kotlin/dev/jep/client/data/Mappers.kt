@@ -95,7 +95,7 @@ fun GitRes.toDomain() = GitSnapshot(isRepository, branch, head?.toDomain(), chan
 
 fun HarnessSettingDto.toDomain() = HarnessSetting(id, label, description, default, danger)
 
-fun HarnessSettingsRes.toDomain() = HarnessSettings(options.map { it.toDomain() }, values)
+fun HarnessSettingsRes.toDomain() = HarnessSettings(options.map { it.toDomain() }, values, compact)
 
 fun MessageDto.toDomain() = ChatMessage(
     id = id,
