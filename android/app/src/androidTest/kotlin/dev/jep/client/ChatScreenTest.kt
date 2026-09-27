@@ -14,6 +14,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.swipeRight
 import androidx.compose.ui.test.swipeUp
@@ -475,7 +476,7 @@ class ChatScreenTest {
     }
 
     @Test
-    fun reaching_the_top_loads_older_messages_before_the_current_page() {
+    fun pulling_past_the_top_loads_older_messages_before_the_current_page() {
         val older = listOf(
             ChatMessage("old-1", Role.ASSISTANT, -2, listOf(ChatPart.Text("older message one"))),
             ChatMessage("old-2", Role.ASSISTANT, -1, listOf(ChatPart.Text("older message two"))),
@@ -489,7 +490,13 @@ class ChatScreenTest {
             rule.onAllNodesWithText("message number 30", substring = true).fetchSemanticsNodes().isNotEmpty() &&
                 rule.onAllNodesWithTag("positioning-overlay").fetchSemanticsNodes().isEmpty()
         }
-        repeat(6) { rule.onNodeWithTag("chat-list").performTouchInput { swipeDown() } }
+        // reaching the top is not asking for more
+        rule.onNodeWithTag("chat-list").performScrollToIndex(0)
+        rule.waitForIdle()
+        Thread.sleep(1_500)
+        assertEquals("no older page without a pull", 30, vm.state.value.messages.size)
+        // a pull past the top, let go, is
+        repeat(2) { rule.onNodeWithTag("chat-list").performTouchInput { swipeDown() } }
         rule.waitUntil(10_000) { vm.state.value.messages.size == 32 }
         rule.waitUntil(5_000) {
             rule.onAllNodesWithText("older message one", substring = true).fetchSemanticsNodes().isNotEmpty()

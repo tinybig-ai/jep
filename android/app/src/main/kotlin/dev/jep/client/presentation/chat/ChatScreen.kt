@@ -1,6 +1,12 @@
 package dev.jep.client.presentation.chat
 
 import android.content.Context
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.unit.Velocity
+import androidx.compose.ui.graphics.graphicsLayer
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -659,13 +665,12 @@ fun ChatScreen(
         }
     }
 
-    // Older pages are at the top of a forward list.
-    LaunchedEffect(listState, state.hasMore, state.loadingOlder, landed) {
-        snapshotFlow { listState.layoutInfo.visibleItemsInfo.firstOrNull()?.index ?: 0 }
-            .collect { first ->
-                if (landed && state.hasMore && !state.loadingOlder && first == 0) vm.loadOlder()
-            }
-    }
+    // Older pages are at the top of a forward list, behind a pull: reaching
+    // the top used to load them on its own, so a scroll that only meant to
+    // read the first message kept yanking in more. Now you ask, the way a
+    // swipe archives a conversation: past the threshold and let go.
+    val pullAvailable = landed && state.hasMore && !state.loadingOlder
+    val olderPull = rememberOlderPull(pullAvailable) { vm.loadOlder() }
 
     var renameOpen by remember { mutableStateOf(false) }
     var queuedMenuFor by remember { mutableStateOf<ChatViewModel.Queued?>(null) }
@@ -820,7 +825,8 @@ fun ChatScreen(
         val scope = rememberCoroutineScope()
         // there is content below the fold: one tap and you are back at the end
         val showJump = jumpVisible && landed && !atEnd && rendered.isNotEmpty()
-        Box(Modifier.weight(1f)) {
+        Box(Modifier.weight(1f).nestedScroll(olderPull.connection)) {
+            OlderPullIndicator(olderPull, Modifier.align(Alignment.TopCenter))
             if (state.messages.isEmpty() && state.loadingHistory) {
                 Box(
                     Modifier.fillMaxSize().semantics { contentDescription = "loading conversation" },
@@ -829,7 +835,10 @@ fun ChatScreen(
                     CircularProgressIndicator(Modifier.size(30.dp), strokeWidth = 3.dp)
                 }
             } else LazyColumn(
-                Modifier.fillMaxSize().testTag("chat-list"),
+                Modifier
+                    .fillMaxSize()
+                    .offset { androidx.compose.ui.unit.IntOffset(0, olderPull.offset.roundToInt()) }
+                    .testTag("chat-list"),
                 state = listState,
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 10.dp),
             ) {
@@ -3249,4 +3258,80 @@ private fun fmtMoney(usd: Double): String = when {
     usd < 0.01 -> String.format(java.util.Locale.US, "$%.4f", usd)
     usd < 100 -> String.format(java.util.Locale.US, "$%.2f", usd)
     else -> "$" + usd.roundToLong()
+}
+
+/** how far past the top a pull must go before letting go loads older messages */
+private const val OLDER_PULL_THRESHOLD = 150f
+
+internal class OlderPull(
+    val offset: Float,
+    val armed: Boolean,
+    val connection: NestedScrollConnection,
+)
+
+// A pull down past the top of the list, with the finger, never a fling that
+// happens to reach it. The list follows the finger at half speed, and a
+// release past the threshold asks for the previous page; anything short of it
+// springs back and does nothing.
+@Composable
+private fun rememberOlderPull(enabled: Boolean, onLoad: () -> Unit): OlderPull {
+    val scope = rememberCoroutineScope()
+    val pull = remember { androidx.compose.animation.core.Animatable(0f) }
+    val currentEnabled by androidx.compose.runtime.rememberUpdatedState(enabled)
+    val currentLoad by androidx.compose.runtime.rememberUpdatedState(onLoad)
+    val connection = remember {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                // pushing back up takes the pull away before the list scrolls
+                if (pull.value > 0f && available.y < 0f && source == NestedScrollSource.UserInput) {
+                    val take = maxOf(available.y, -pull.value * 2f)
+                    scope.launch { pull.snapTo((pull.value + take / 2f).coerceAtLeast(0f)) }
+                    return Offset(0f, take)
+                }
+                return Offset.Zero
+            }
+
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                // the list is at its top and the finger keeps pulling down
+                if (!currentEnabled || available.y <= 0f || source != NestedScrollSource.UserInput) return Offset.Zero
+                scope.launch { pull.snapTo((pull.value + available.y / 2f).coerceAtMost(OLDER_PULL_THRESHOLD * 1.4f)) }
+                return Offset(0f, available.y)
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                if (pull.value <= 0f) return Velocity.Zero
+                val fire = pull.value >= OLDER_PULL_THRESHOLD && currentEnabled
+                scope.launch { pull.animateTo(0f) }
+                if (fire) currentLoad()
+                // a released pull is spent: it must not fling the list as well
+                return available
+            }
+        }
+    }
+    return OlderPull(pull.value, pull.value >= OLDER_PULL_THRESHOLD, connection)
+}
+
+@Composable
+private fun OlderPullIndicator(pull: OlderPull, modifier: Modifier = Modifier) {
+    if (pull.offset < 1f) return
+    Row(
+        modifier
+            .padding(top = 8.dp)
+            .graphicsLayer { alpha = (pull.offset / OLDER_PULL_THRESHOLD).coerceIn(0f, 1f) }
+            .semantics { contentDescription = "pull to load earlier messages" },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Filled.ArrowUpward,
+            null,
+            Modifier.size(16.dp).graphicsLayer { rotationZ = if (pull.armed) 0f else 180f },
+            tint = if (pull.armed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            if (pull.armed) "Release to load earlier" else "Pull to load earlier",
+            Modifier.padding(start = 6.dp),
+            fontSize = 12.sp,
+            color = if (pull.armed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }
