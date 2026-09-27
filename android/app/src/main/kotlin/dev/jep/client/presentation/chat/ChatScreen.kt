@@ -34,6 +34,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -483,7 +485,7 @@ internal fun isWorthExpanding(lines: Int): Boolean = lines >= 4
 // paragraphs, tool calls collapse to one quiet row each, the person answers
 // from a rounded composer that pins itself to the keyboard. Long-press any
 // message to copy it; the top bar owns the chat itself.
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ChatScreen(
     vm: ChatViewModel,
@@ -691,6 +693,20 @@ fun ChatScreen(
             listState.animateScrollToItem(endIndex)
             listState.snapToEnd(endIndex) { followLatest }
         }
+    }
+
+    // The keyboard takes half the screen without moving the words. The window
+    // changes size, the list's viewport shrinks, and a reader sitting on the
+    // newest reply watches it slide below the fold — a resize is not a scroll,
+    // so nothing re-pins it. A reader who was following gets the end again; a
+    // reader who scrolled away keeps their place, which is what followLatest
+    // already records, and is why "the text doesn't move" is only right then.
+    val imeVisible = WindowInsets.isImeVisible
+    LaunchedEffect(imeVisible) {
+        if (!landed || !followLatest) return@LaunchedEffect
+        // let the window take the keyboard's size before chasing the end
+        delay(80)
+        if (followLatest) listState.snapToEnd(endIndex) { followLatest }
     }
 
     // Older pages are at the top of a forward list, behind a pull: reaching
