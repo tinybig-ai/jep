@@ -373,7 +373,7 @@ struct TerminalView: View {
                         Text(frame).jepFont(12, design: .monospaced).foregroundStyle(.green).textSelection(.enabled).padding(8).fixedSize().id("frame")
                     }
                     .background(Color.black, in: RoundedRectangle(cornerRadius: 12))
-                    .onChange(of: frame) { _, _ in proxy.scrollTo("frame", anchor: .bottom) }
+                    .onChange(of: frame) { _, _ in proxy.scrollTo("frame", anchor: .bottomLeading) }
                 }
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack {
