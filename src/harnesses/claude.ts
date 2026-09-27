@@ -126,6 +126,10 @@ const ASK_MCP = path.join(path.dirname(fileURLToPath(import.meta.url)), "claude-
 
 const HARNESS_NS = "claude"
 const toInternalId = (native: string) => `${HARNESS_NS}://${native}`
+
+// One content block of one API message: the id messages() gives its transcript
+// entry and the id its live stream carries, so both are the same row on a client.
+const blockMessageID = (native: string, apiID: string, block: number) => toInternalId(`${native}:${apiID}:${block}`)
 const toNativeId = (id: string) => (id.startsWith(`${HARNESS_NS}://`) ? id.slice(HARNESS_NS.length + 3) : id)
 
 // Same problem as Codex: the port hands out a session id at createSession
@@ -371,6 +375,8 @@ export class ClaudeAdapter implements HarnessAdapter {
     // every tool call seen so far, so a result arriving in a later turn can be
     // folded back onto the call it belongs to
     const toolsByID = new Map<string, Part & { kind: "tool" }>()
+    // how many blocks of each API message came before, for blockMessageID
+    const blocksSeen = new Map<string, number>()
     for (const line of raw.split("\n")) {
       if (!line.trim()) continue
       let d: any
@@ -396,6 +402,10 @@ export class ClaudeAdapter implements HarnessAdapter {
         continue
       }
       if (d.type !== "user" && d.type !== "assistant") continue
+      // counted before anything is skipped, the way the stream counts blocks
+      const apiID = d.type === "assistant" && typeof d.message?.id === "string" ? d.message.id : ""
+      const block = apiID ? (blocksSeen.get(apiID) ?? 0) : 0
+      if (apiID) blocksSeen.set(apiID, block + 1)
       if (d.isCompactSummary) continue
       // and neither is Claude Code talking to itself — the local-command
       // caveat, a slash command's name/args, its stdout
@@ -407,7 +417,7 @@ export class ClaudeAdapter implements HarnessAdapter {
       if (!parts.length) continue
       for (const p of parts) if (p.kind === "tool") toolsByID.set(p.id, p)
       out.push({
-        id: toInternalId(`${native}:${d.uuid ?? out.length}`),
+        id: apiID ? blockMessageID(native, apiID, block) : toInternalId(`${native}:${d.uuid ?? out.length}`),
         sessionID: toInternalId(native),
         role: d.type === "user" ? "user" : "assistant",
         time: Date.parse(d.timestamp ?? "") || Date.now(),
@@ -496,6 +506,14 @@ export class ClaudeAdapter implements HarnessAdapter {
     let stderr = ""
     // index -> position in `parts`, so streamed deltas accumulate in place
     const blockAt = new Map<number, number>()
+    // Claude Code writes every content block of an API message as a transcript
+    // entry of its own, so each streamed block is its own message, named the
+    // way messages() names it. Keyed by the session instead, one turn's text,
+    // tool calls and next text all piled into a single live row that repeated
+    // what the record already showed.
+    let apiID = ""
+    const blocksSettled = new Map<string, number>()
+    const toolMessage = new Map<string, string>()
 
     const onAbort = () => child.kill("SIGTERM")
     opts?.signal?.addEventListener("abort", onAbort, { once: true })
@@ -523,20 +541,26 @@ export class ClaudeAdapter implements HarnessAdapter {
                 this.#alias.set(native, realID)
                 this.#running.set(realID, child)
               }
-              this.#emit({ type: "message.created", sessionID: toInternalId(realID), messageID: "", role: "assistant" })
             }
             const sid = toInternalId(realID || native)
+            const rid = realID || native
 
             if (d.type === "stream_event" && d.event) {
               // a sub-agent's tokens carry parent_tool_use_id; they belong to
               // that tool call, not to the answer being composed
               if (d.parent_tool_use_id) continue
               const ev = d.event
-              if (ev.type === "content_block_start" && typeof ev.index === "number") {
+              if (ev.type === "message_start" && typeof ev.message?.id === "string") {
+                apiID = ev.message.id
+                blockAt.clear()
+              } else if (ev.type === "content_block_start" && typeof ev.index === "number") {
                 const part = startBlock(ev.content_block)
                 if (part) {
                   blockAt.set(ev.index, parts.length)
                   parts.push(part)
+                  if (apiID) {
+                    this.#emit({ type: "message.created", sessionID: sid, messageID: blockMessageID(rid, apiID, ev.index), role: "assistant" })
+                  }
                 }
               } else if (ev.type === "content_block_delta" && typeof ev.index === "number") {
                 const at = blockAt.get(ev.index)
@@ -550,8 +574,10 @@ export class ClaudeAdapter implements HarnessAdapter {
                 this.#emit({
                   type: "part.delta",
                   sessionID: sid,
-                  messageID: sid,
-                  partID: String(ev.index),
+                  messageID: apiID ? blockMessageID(rid, apiID, ev.index) : sid,
+                  // unique across the turn: a client that keys by part alone
+                  // (Telegram) would otherwise glue every message's block 0
+                  partID: apiID ? `${apiID}:${ev.index}` : String(ev.index),
                   text: String(add),
                   partType: part.kind === "reasoning" ? "reasoning" : "text",
                 })
@@ -560,7 +586,12 @@ export class ClaudeAdapter implements HarnessAdapter {
             }
 
             if (d.type === "assistant" && d.message?.content) {
-              // the settled message: tool_use blocks only appear here
+              // the settled message: tool_use blocks only appear here. One
+              // event per block, in order, which is how messages() counts them.
+              const settled = typeof d.message.id === "string" ? d.message.id : ""
+              const block = settled ? (blocksSettled.get(settled) ?? 0) : 0
+              if (settled) blocksSettled.set(settled, block + 1)
+              const mid = settled ? blockMessageID(rid, settled, block) : sid
               for (const block of d.message.content) {
                 if (block?.type !== "tool_use") continue
                 const title = toolTitle(block.input)
@@ -577,7 +608,9 @@ export class ClaudeAdapter implements HarnessAdapter {
                   startedAt: Date.now(),
                 }
                 parts.push(part)
-                this.#emit({ type: "part.updated", sessionID: sid, messageID: sid, partID: part.id, partType: "tool", part })
+                toolMessage.set(part.id, mid)
+                this.#emit({ type: "message.created", sessionID: sid, messageID: mid, role: "assistant" })
+                this.#emit({ type: "part.updated", sessionID: sid, messageID: mid, partID: part.id, partType: "tool", part })
               }
               if (d.message.usage) tokens = mapUsage(d.message.usage)
               if (typeof d.message.model === "string") model = d.message.model
@@ -599,7 +632,7 @@ export class ClaudeAdapter implements HarnessAdapter {
                 if (!call) continue
                 call.output = contentText(block.content)
                 call.status = block.is_error ? "error" : "completed"
-                this.#emit({ type: "part.updated", sessionID: sid, messageID: sid, partID: call.id, partType: "tool", part: call })
+                this.#emit({ type: "part.updated", sessionID: sid, messageID: toolMessage.get(call.id) ?? sid, partID: call.id, partType: "tool", part: call })
               }
               continue
             }
