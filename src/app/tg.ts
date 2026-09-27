@@ -15,6 +15,7 @@ import { Pairing, newPairCode } from "../clients/telegram/pair.ts"
 import { ChatStore } from "../clients/telegram/store.ts"
 import { ReminderStore } from "../clients/telegram/reminders.ts"
 import type { PairingAdmin } from "../core/pairing.ts"
+import type { PushNotifier } from "../core/push.ts"
 
 const FIXTURE = join(import.meta.dirname, "..", "..", "fixture")
 const DEFAULT_WORKSPACES = ["workspace-alpha", "workspace-beta"].map((n) => join(FIXTURE, n))
@@ -444,17 +445,32 @@ async function main() {
       // holding a foreground service (and its standing notification) open.
       // Off unless an operator points at a service account key: no key, no
       // push, and the device falls back to its own connection.
-      ...(process.env.JEP_FCM_KEY
-        ? await (async () => {
+      ...(await (async () => {
+        const senders: { fcm?: PushNotifier; apns?: PushNotifier } = {}
+        if (process.env.JEP_FCM_KEY) {
+          try {
             const { FcmNotifier } = await import("../push/fcm.ts")
-            const notifier = await FcmNotifier.fromFile(process.env.JEP_FCM_KEY!)
+            const notifier = await FcmNotifier.fromFile(process.env.JEP_FCM_KEY)
             console.error(`[gw] push enabled (fcm project ${notifier.projectID})`)
-            return { push: notifier }
-          })().catch((err) => {
-            console.error(`[gw] push disabled — ${(err as Error)?.message ?? err}`)
-            return {}
-          })
-        : {}),
+            senders.fcm = notifier
+          } catch (err) {
+            console.error(`[gw] fcm push disabled — ${(err as Error)?.message ?? err}`)
+          }
+        }
+        if (process.env.JEP_APNS_KEY) {
+          try {
+            const { ApnsNotifier } = await import("../push/apns.ts")
+            const notifier = await ApnsNotifier.fromEnv(process.env)
+            console.error(`[gw] push enabled (apns ${notifier.topic})`)
+            senders.apns = notifier
+          } catch (err) {
+            console.error(`[gw] apns push disabled — ${(err as Error)?.message ?? err}`)
+          }
+        }
+        if (!senders.fcm && !senders.apns) return {}
+        const { routedNotifier } = await import("../push/routed.ts")
+        return { push: routedNotifier(senders) }
+      })()),
       // an import lands in the store, but a running opencode server won't list
       // it until it comes up again — so restart the one serving that directory
       restartWorkspace: async (dir) => {

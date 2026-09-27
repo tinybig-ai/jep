@@ -1,0 +1,44 @@
+name: ios
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # JepKit is Foundation-only: its logic tests run on Linux in seconds.
+  jepkit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: '6.1'
+      - name: Test JepKit
+        working-directory: ios/JepKit
+        run: swift test
+
+  # The app itself: proof it compiles for the Simulator, nothing signed.
+  app:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate the Xcode project
+        working-directory: ios/Jep
+        run: brew install xcodegen && xcodegen generate
+      - name: Build for the Simulator
+        working-directory: ios/Jep
+        run: |
+          xcodebuild -project Jep.xcodeproj -scheme Jep \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO build | tail -n 60
+          exit ${PIPESTATUS[0]}
+      - name: Test JepKit on iOS
+        working-directory: ios/JepKit
+        run: |
+          xcodebuild -scheme JepKit -destination 'platform=iOS Simulator,name=iPhone 16' test | tail -n 40
+          exit ${PIPESTATUS[0]}
