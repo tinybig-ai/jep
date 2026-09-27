@@ -395,8 +395,9 @@ class ChatScreenTest {
         // the menu closes on tap; the banner survives it
         rule.waitUntil(5_000) { rule.onAllNodesWithText("Compacting…").fetchSemanticsNodes().isNotEmpty() }
         rule.onNodeWithText("Compacting…").assertExists()
-        rule.waitUntil(8_000) { rule.onAllNodesWithText("conversation compacted").fetchSemanticsNodes().isNotEmpty() }
-        rule.onNodeWithText("Compacting…").assertDoesNotExist()
+        rule.waitUntil(8_000) { rule.onAllNodesWithText("Compacting…").fetchSemanticsNodes().isEmpty() }
+        // done says nothing up top: the record's divider is the news
+        rule.onAllNodesWithText("conversation compacted").assertCountEquals(0)
     }
 
     @Test

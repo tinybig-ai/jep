@@ -867,7 +867,9 @@ class ChatViewModel(
             // running" while nothing ran.
             try {
                 repo.compact(sessionId)
-                _state.update { it.copy(compacting = false, notice = "conversation compacted") }
+                // no banner to say so: the divider the record now carries is
+                // where you are already looking, and a top banner went unseen
+                _state.update { it.copy(compacting = false) }
                 refresh()
             } catch (err: Exception) {
                 _state.update { it.copy(compacting = false, notice = err.message ?: "couldn't compact") }
