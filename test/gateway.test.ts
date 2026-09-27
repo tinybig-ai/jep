@@ -999,6 +999,46 @@ test("an archived conversation leaves the list and appears under /archived", asy
   }
 })
 
+test("a pinned conversation leads the list whatever its age", async () => {
+  const older: SessionSummary = { id: "old", title: "Older", workspace: "/tmp/ws", createdAt: 1, updatedAt: 10 }
+  const newer: SessionSummary = { id: "new", title: "Newer", workspace: "/tmp/ws", createdAt: 1, updatedAt: 999 }
+  const a = fakeAdapter()
+  const adapter = { ...a, listSessions: async () => [newer, older] }
+  const g = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter }],
+    dataHome: mkdtempSync(join(tmpdir(), "gw-pin-")),
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+  })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const token = await pair(base, "TESTCODE")
+    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" }
+    type Row = SessionSummary & { pinned?: boolean }
+    const post = async (path: string, body: Record<string, unknown> = {}) =>
+      ((await (await fetch(`${base}${path}`, { method: "POST", headers, body: JSON.stringify(body) })).json()) as {
+        items?: Row[]
+        pinned?: boolean
+      })
+
+    // untouched: newest first
+    assert.deepEqual((await post("/sessions")).items?.map((s) => s.id), ["new", "old"])
+
+    assert.equal((await post("/pin", { id: "old" })).pinned, true)
+    // the pin outranks recency: the older conversation leads now
+    const pinnedList = (await post("/sessions")).items ?? []
+    assert.deepEqual(pinnedList.map((s) => s.id), ["old", "new"])
+    assert.equal(pinnedList[0]?.pinned, true)
+    assert.equal(pinnedList[1]?.pinned, false)
+
+    await post("/unpin", { id: "old" })
+    assert.deepEqual((await post("/sessions")).items?.map((s) => s.id), ["new", "old"])
+  } finally {
+    await g.close()
+  }
+})
+
 test("/compact advances to the harness and 501s when it isn't offered", async () => {
   const a = fakeAdapter()
   const calls: string[] = []

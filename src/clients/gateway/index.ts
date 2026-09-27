@@ -79,6 +79,7 @@ const MODELS_FILE = "gateway-models.json"
 const AGENTS_FILE = "gateway-agents.json"
 const TERMINAL_FILE = "gateway-terminal.json"
 const ARCHIVED_FILE = "gateway-archived.json"
+const PINNED_FILE = "gateway-pinned.json"
 const SEEN_FILE = "gateway-seen.json"
 const PUSH_FILE = "gateway-push.json"
 const HARNESS_SETTINGS_FILE = "gateway-harness-settings.json"
@@ -261,6 +262,18 @@ async function loadArchived(dataHome: string): Promise<Set<string>> {
   }
 }
 
+// Conversations the user pinned: still in the list, but sorted above everything
+// else. The same shape as the archived set — a client-side concern the gateway
+// remembers so the phone and Telegram agree, and so a reinstall keeps the pins.
+async function loadPinned(dataHome: string): Promise<Set<string>> {
+  try {
+    const raw = JSON.parse(await readFile(join(dataHome, PINNED_FILE), "utf8")) as string[]
+    return new Set(raw)
+  } catch {
+    return new Set()
+  }
+}
+
 // When each conversation was last looked at, on any device. "Unread" lived
 // only on the phone, so a reinstall marked everything unread and two devices
 // never agreed; the daemon is the one place both can read.
@@ -281,6 +294,11 @@ const saveSeen = async (dataHome: string, seen: Map<string, number>): Promise<vo
 const saveArchived = async (dataHome: string, ids: Set<string>): Promise<void> => {
   await mkdir(dataHome, { recursive: true })
   await writeFile(join(dataHome, ARCHIVED_FILE), JSON.stringify([...ids], null, 1))
+}
+
+const savePinned = async (dataHome: string, ids: Set<string>): Promise<void> => {
+  await mkdir(dataHome, { recursive: true })
+  await writeFile(join(dataHome, PINNED_FILE), JSON.stringify([...ids], null, 1))
 }
 
 // Tokens that proved the pairing code a second time and are therefore allowed
@@ -467,6 +485,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   }
   const titles = await loadTitles(deps.dataHome)
   const archived = await loadArchived(deps.dataHome)
+  const pinned = await loadPinned(deps.dataHome)
   const seen = await loadSeen(deps.dataHome)
   const models = await loadModels(deps.dataHome)
   const agents = await loadAgents(deps.dataHome)
@@ -1015,10 +1034,12 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
             // conversation cannot move between harnesses after it exists.
             // `active` = a turn is in flight for it right now (a reply streaming,
             // a tool running) — the phone shows a live mark on the row
-            items.push({ ...s, title: overridden ?? s.title, adapter: name, harness: adapter.id, active: isActive(s.id), seenAt: seen.get(s.id) ?? 0 })
+            items.push({ ...s, title: overridden ?? s.title, adapter: name, harness: adapter.id, active: isActive(s.id), seenAt: seen.get(s.id) ?? 0, pinned: pinned.has(s.id) })
           }
         }
-        items.sort((x, y) => y.updatedAt - x.updatedAt)
+        // pinned conversations first, then newest — pinning is the user saying
+        // this one matters more than whatever moved most recently
+        items.sort((x, y) => Number(y.pinned) - Number(x.pinned) || y.updatedAt - x.updatedAt)
         return json(res, 200, { items })
       }
 
@@ -1369,6 +1390,15 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         return json(res, 200, { ok: true, archived: archived.has(id) })
       }
 
+      // pin sorts a conversation above the rest without touching the harness,
+      // the polite cousin of archive: still there, just first
+      if (path === "/pin" || path === "/unpin") {
+        if (path === "/pin") pinned.add(id)
+        else pinned.delete(id)
+        await savePinned(deps.dataHome, pinned)
+        return json(res, 200, { ok: true, pinned: pinned.has(id) })
+      }
+
       if (path === "/delete") {
         sessionAdapters.delete(id)
         attachments.forEach((v, k) => {
@@ -1378,6 +1408,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         await saveTitles(deps.dataHome, titles)
         archived.delete(id)
         await saveArchived(deps.dataHome, archived)
+        if (pinned.delete(id)) await savePinned(deps.dataHome, pinned)
         if (seen.delete(id)) await saveSeen(deps.dataHome, seen)
         const gone = await adapter.deleteSession(id).catch(() => false)
         if (gone) {
