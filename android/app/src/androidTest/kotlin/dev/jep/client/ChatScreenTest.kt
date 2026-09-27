@@ -17,6 +17,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.swipeRight
 import androidx.compose.ui.test.swipeUp
+import androidx.compose.ui.test.longClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
@@ -24,6 +25,7 @@ import dev.jep.client.domain.model.HarnessSetting
 import dev.jep.client.domain.model.HarnessSettings
 import dev.jep.client.domain.model.Model
 import dev.jep.client.domain.model.Role
+import dev.jep.client.domain.model.SendMode
 import dev.jep.client.domain.repository.ChatEvent
 import dev.jep.client.domain.repository.ModelChoices
 import dev.jep.client.domain.model.TokenUsage
@@ -738,7 +740,7 @@ class ChatScreenTest {
         // sent while the turn is in flight: held and marked queued, not refused
         rule.runOnUiThread { vm.send("second while busy") }
         rule.waitUntil(5_000) { vm.state.value.queued.size == 1 }
-        rule.onNodeWithContentDescription("queued").assertExists()
+        rule.onNodeWithContentDescription("steers in at the next tool call").assertExists()
         rule.onNodeWithText("second while busy").assertExists()
         // tapping it offers edit / send now / cancel
         rule.onNodeWithText("second while busy").performClick()
@@ -750,6 +752,49 @@ class ChatScreenTest {
         rule.onNodeWithText("Cancel it").performClick()
         rule.waitUntil(5_000) { vm.state.value.queued.isEmpty() }
         gate.complete(Unit)
+    }
+
+    @Test
+    fun holding_send_while_busy_offers_every_way_in_and_marks_the_choice() {
+        val repo = FakeChatRepository()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        repo.promptGate = gate
+        val vm = ChatViewModel(repo, "s1", "T", "jep", "opencode")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitForIdle()
+        rule.runOnUiThread { vm.send("first") }
+        rule.waitUntil(5_000) { vm.state.value.sending }
+        rule.runOnUiThread { vm.setDraft("held for later") }
+        rule.onNodeWithTag("send-button").performTouchInput { longClick() }
+        rule.waitUntil(4_000) { rule.onAllNodesWithText("Send how?").fetchSemanticsNodes().isNotEmpty() }
+        // all three, in one place
+        rule.onNodeWithText("Steer in").assertExists()
+        rule.onNodeWithText("Send now").assertExists()
+        rule.onNodeWithText("After this reply").performClick()
+        rule.waitUntil(5_000) { vm.state.value.queued.size == 1 }
+        assertEquals(SendMode.AFTER_REPLY, vm.state.value.queued.single().mode)
+        rule.waitUntil(5_000) { repo.modes.size == 2 }
+        assertEquals(SendMode.AFTER_REPLY, repo.modes.last())
+        // it says what it waits for, and it is not the steer's mark
+        rule.onNodeWithText("sends after this reply").assertExists()
+        rule.onAllNodesWithText("steers in at the next tool call").assertCountEquals(0)
+        // a plain tap still steers, and the two read differently side by side
+        rule.runOnUiThread { vm.send("steer this") }
+        rule.waitUntil(5_000) { vm.state.value.queued.size == 2 }
+        rule.onNodeWithText("steers in at the next tool call").assertExists()
+        gate.complete(Unit)
+    }
+
+    @Test
+    fun holding_send_with_nothing_running_just_sends() {
+        val repo = FakeChatRepository()
+        val vm = ChatViewModel(repo, "s1", "T", "jep", "opencode")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitForIdle()
+        rule.runOnUiThread { vm.setDraft("idle hold") }
+        rule.onNodeWithTag("send-button").performTouchInput { longClick() }
+        rule.waitUntil(5_000) { repo.prompts.contains("idle hold") }
+        rule.onAllNodesWithText("Send how?").assertCountEquals(0)
     }
 
     @Test
@@ -791,7 +836,7 @@ class ChatScreenTest {
         rule.runOnUiThread { vm.send("hello") }
         rule.waitUntil(5_000) { vm.state.value.queued.size == 1 }
         rule.waitForIdle()
-        rule.onNodeWithContentDescription("queued").assertExists()
+        rule.onNodeWithContentDescription("steers in at the next tool call").assertExists()
         gate.complete(Unit)
     }
 

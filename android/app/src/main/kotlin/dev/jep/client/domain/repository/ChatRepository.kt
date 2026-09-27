@@ -1,5 +1,6 @@
 package dev.jep.client.domain.repository
 
+import dev.jep.client.domain.model.SendMode
 import dev.jep.client.domain.model.AgentInfo
 import dev.jep.client.domain.model.Ask
 import dev.jep.client.domain.model.AskEntry
@@ -177,7 +178,7 @@ interface ChatRepository {
      * `before` (ms). `have` is how many are already held, so the daemon can ask
      * the harness for one bounded window instead of the whole conversation. */
     suspend fun history(sessionId: String, limit: Int = 0, before: Long = 0, have: Int = 0): HistoryBatch
-    suspend fun prompt(sessionId: String, text: String, files: List<String> = emptyList(), clientID: String? = null, steer: Boolean = true): ChatMessage
+    suspend fun prompt(sessionId: String, text: String, files: List<String> = emptyList(), clientID: String? = null, mode: SendMode = SendMode.STEER): ChatMessage
     /** cancel a queued prompt the client still holds a handle to (its clientID) */
     suspend fun queueCancel(sessionId: String, clientID: String): Boolean
     suspend fun queueEdit(sessionId: String, clientID: String, text: String): Boolean

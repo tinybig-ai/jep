@@ -1,5 +1,15 @@
 package dev.jep.client.domain.model
 
+/** how a message sent while the agent works joins the turn */
+enum class SendMode {
+    /** folded into the running turn at its next tool call */
+    STEER,
+    /** held until the running turn ends, then run as its own */
+    AFTER_REPLY,
+    /** stops the running turn and runs next */
+    NOW,
+}
+
 enum class Role {
     USER,
     ASSISTANT,

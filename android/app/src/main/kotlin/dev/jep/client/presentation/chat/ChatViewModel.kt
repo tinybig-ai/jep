@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import dev.jep.client.domain.model.SendMode
 import dev.jep.client.domain.model.Ask
 import dev.jep.client.domain.model.AskEntry
 import dev.jep.client.domain.repository.Attention
@@ -93,7 +94,7 @@ class ChatViewModel(
 
     /** a message typed while the agent was busy: held, shown as queued, handed
      * over when the current turn ends */
-    data class Queued(val id: String, val text: String, val attachments: List<Attachment> = emptyList(), val steer: Boolean = true, /** served user message ids already present when this was queued, so an older message with the same words cannot clear it */ val seen: Set<String> = emptySet())
+    data class Queued(val id: String, val text: String, val attachments: List<Attachment> = emptyList(), val mode: SendMode = SendMode.STEER, /** served user message ids already present when this was queued, so an older message with the same words cannot clear it */ val seen: Set<String> = emptySet())
 
     /** the turn being written right now, unit = streaming part */
     data class LiveTurn(
@@ -485,7 +486,7 @@ class ChatViewModel(
         if (_state.value.draft != text) _state.update { it.copy(draft = text) }
     }
 
-    fun send(text: String, steer: Boolean = true) {
+    fun send(text: String, mode: SendMode = SendMode.STEER) {
         val trimmed = text.trim()
         val files = _state.value.attachments
         // an image on its own is a valid message. The model still needs words, so
@@ -496,23 +497,25 @@ class ChatViewModel(
         // it is on its way; the composer starts empty again
         _state.update { it.copy(draft = "") }
         if (_state.value.sending) {
-            enqueue(body, files, steer)
+            enqueue(body, files, mode)
             return
         }
         sendNow(body, files)
     }
 
     // The daemon owns the queue now: hand the message over with an id and a mode,
-    // and it steers it in at the next tool boundary — or waits for the turn to end
-    // if the user asked for that. The client keeps it on screen as queued until it
+    // and it steers it in at the next tool boundary, waits for the turn to end, or
+    // stops the turn and runs next, whichever the user asked for. The client keeps it on screen as queued until it
     // is picked up.
-    private fun enqueue(body: String, files: List<Attachment>, steer: Boolean) {
+    private fun enqueue(body: String, files: List<Attachment>, mode: SendMode) {
         val clientID = "q-${System.nanoTime()}"
         val seen = _state.value.messages.filter { it.role == Role.USER }.map { it.id }.toSet()
-        _state.update { it.copy(queued = it.queued + Queued(clientID, body, files, steer, seen), attachments = emptyList()) }
+        val q = Queued(clientID, body, files, mode, seen)
+        // "now" jumps the line, the way the daemon runs it
+        _state.update { it.copy(queued = if (mode == SendMode.NOW) listOf(q) + it.queued else it.queued + q, attachments = emptyList()) }
         viewModelScope.launch {
             // resolves when its turn finishes, or at once if it was cancelled
-            runCatching { repo.prompt(sessionId, body, files.map { it.id }, clientID, steer) }
+            runCatching { repo.prompt(sessionId, body, files.map { it.id }, clientID, mode) }
             _state.update { st ->
                 val rest = st.queued.filterNot { q -> q.id == clientID }
                 // this one is done; a turn is still active only if another waits
@@ -627,7 +630,7 @@ class ChatViewModel(
             sendNow(item.text, item.attachments)
             return
         }
-        _state.update { st -> st.copy(queued = listOf(item) + st.queued.filterNot { q -> q.id == id }) }
+        _state.update { st -> st.copy(queued = listOf(item.copy(mode = SendMode.NOW)) + st.queued.filterNot { q -> q.id == id }) }
         viewModelScope.launch { runCatching { repo.queueForce(sessionId, id) } }
     }
 

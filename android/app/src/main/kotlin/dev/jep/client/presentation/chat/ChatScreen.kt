@@ -66,6 +66,8 @@ import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.automirrored.filled.CallMerge
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
@@ -173,6 +175,7 @@ import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 import java.net.URLEncoder
+import dev.jep.client.domain.model.SendMode
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
 import dev.jep.client.domain.model.Role
@@ -969,8 +972,12 @@ fun ChatScreen(
         AlertDialog(
             onDismissRequest = { queuedMenuFor = null },
             title = { Text("Queued") },
-            text = { Text("The agent is busy. This steers in at its next tool call, or send it after this reply ends.") },
-            confirmButton = { TextButton(onClick = { queuedMenuFor = null; vm.forceSendQueued(q.id) }) { Text("Send now") } },
+            text = { Text(queuedExplainer(q.mode)) },
+            confirmButton = {
+                if (q.mode != SendMode.NOW) {
+                    TextButton(onClick = { queuedMenuFor = null; vm.forceSendQueued(q.id) }) { Text("Send now") }
+                }
+            },
             dismissButton = {
                 Row {
                     TextButton(onClick = { queuedMenuFor = null; queuedEditFor = q }) { Text("Edit") }
@@ -2801,62 +2808,90 @@ private fun WaitingForYou(question: Boolean, onJump: () -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun QueuedBubble(q: ChatViewModel.Queued, onClick: () -> Unit) {
-    Row(
+    // a steer, a message held for after the reply, and one stopping the reply
+    // all wait, but for different things: the mark and the line under the
+    // bubble say which, so a held message is never mistaken for a steer
+    val look = sendModeLook(q.mode)
+    val ink = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f)
+    val held = q.mode == SendMode.AFTER_REPLY
+    Column(
         Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.End,
-        verticalAlignment = Alignment.CenterVertically,
+        horizontalAlignment = Alignment.End,
     ) {
-        // a queued message looks like a real one — same side, same bubble — only
-        // dimmed, with a clock beside it: it is waiting its turn, not broken. A
-        // clock face reads at this size; an hourglass was a smudge.
-        Icon(
-            Icons.Filled.Schedule,
-            "queued",
-            Modifier.size(20.dp).padding(end = 7.dp),
-            tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f),
-        )
-        Surface(
-            Modifier.widthIn(max = 320.dp).clickable { onClick() },
-            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
-            shape = RoundedCornerShape(18.dp),
-        ) {
-            Column(Modifier.padding(horizontal = 14.dp, vertical = 9.dp)) {
-                Text(
-                    q.text,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f),
-                    fontSize = 15.sp,
-                )
-                // what is going with it, named the same way the composer named it
-                // — a queued message that showed only its words looked as though
-                // the attachment had been dropped on the way into the queue
-                if (q.attachments.isNotEmpty()) {
-                    FlowRow(
-                        Modifier.padding(top = 6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        q.attachments.forEach { a ->
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
-                                Icon(
-                                    Icons.Filled.AttachFile,
-                                    null,
-                                    Modifier.size(14.dp),
-                                    tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f),
-                                )
-                                Text(
-                                    a.name,
-                                    Modifier.padding(start = 3.dp),
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f),
-                                    fontSize = 12.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            // a queued message looks like a real one — same side, same bubble —
+            // only dimmed, with its mark beside it: it is waiting, not broken
+            Icon(
+                look.icon,
+                look.caption,
+                Modifier.size(20.dp).padding(end = 7.dp),
+                tint = ink,
+            )
+            Surface(
+                Modifier.widthIn(max = 320.dp).clickable { onClick() },
+                // held for later sits back further: an outline, not a fill
+                color = if (held) Color.Transparent else MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
+                border = if (held) androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)) else null,
+                shape = RoundedCornerShape(18.dp),
+            ) {
+                Column(Modifier.padding(horizontal = 14.dp, vertical = 9.dp)) {
+                    Text(
+                        q.text,
+                        color = if (held) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f) else ink,
+                        fontSize = 15.sp,
+                    )
+                    // what is going with it, named the same way the composer named it
+                    // — a queued message that showed only its words looked as though
+                    // the attachment had been dropped on the way into the queue
+                    if (q.attachments.isNotEmpty()) {
+                        FlowRow(
+                            Modifier.padding(top = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            q.attachments.forEach { a ->
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+                                    Icon(
+                                        Icons.Filled.AttachFile,
+                                        null,
+                                        Modifier.size(14.dp),
+                                        tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f),
+                                    )
+                                    Text(
+                                        a.name,
+                                        Modifier.padding(start = 3.dp),
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f),
+                                        fontSize = 12.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
                             }
                         }
                     }
                 }
             }
         }
+        Text(
+            look.caption,
+            Modifier.padding(top = 3.dp, end = 6.dp),
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
+}
+
+private class SendModeLook(val icon: androidx.compose.ui.graphics.vector.ImageVector, val title: String, val caption: String)
+
+private fun sendModeLook(mode: SendMode) = when (mode) {
+    SendMode.STEER -> SendModeLook(Icons.AutoMirrored.Filled.CallMerge, "Steer in", "steers in at the next tool call")
+    SendMode.AFTER_REPLY -> SendModeLook(Icons.Filled.Schedule, "After this reply", "sends after this reply")
+    SendMode.NOW -> SendModeLook(Icons.Filled.FastForward, "Send now", "stops the reply, sends next")
+}
+
+private fun queuedExplainer(mode: SendMode) = when (mode) {
+    SendMode.STEER -> "The agent is busy. This steers in at its next tool call."
+    SendMode.AFTER_REPLY -> "The agent is busy. This waits for the reply to end, then sends."
+    SendMode.NOW -> "This stops the running reply and sends next."
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -2979,11 +3014,17 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
                 Box(
                     Modifier
                         .size(48.dp)
+                        .testTag("send-button")
                         .combinedClickable(
                             enabled = sendable,
                             onClick = send,
-                            // hold to choose: steer in now, or wait for the reply to end
-                            onLongClick = { if (draft.isNotBlank() || state.attachments.isNotEmpty()) sendMenu = true },
+                            // hold to choose how it joins a running turn. With
+                            // nothing running there is no choice: a hold sends.
+                            onLongClick = {
+                                if (draft.isNotBlank() || state.attachments.isNotEmpty()) {
+                                    if (busy) sendMenu = true else send()
+                                }
+                            },
                         ),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -3005,14 +3046,33 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
                     AlertDialog(
                         onDismissRequest = { sendMenu = false },
                         title = { Text("Send how?") },
-                        text = { Text("While the agent works, Send steers your message in at the next tool call. You can hold to send it only after this reply ends.") },
-                        confirmButton = {
-                            TextButton(onClick = {
-                                vm.send(quote + draft, steer = false)
-                                sendMenu = false
-                                onCancelReply()
-                            }) { Text("After this reply") }
+                        text = {
+                            // every way in, in one place; a tap on Send is the first
+                            Column {
+                                SendMode.entries.forEach { mode ->
+                                    val look = sendModeLook(mode)
+                                    Row(
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                vm.send(quote + draft, mode)
+                                                sendMenu = false
+                                                onCancelReply()
+                                                expanded = false
+                                            }
+                                            .padding(vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Icon(look.icon, null, Modifier.size(22.dp), tint = MaterialTheme.colorScheme.primary)
+                                        Column(Modifier.padding(start = 14.dp)) {
+                                            Text(look.title, fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurface)
+                                            Text(look.caption, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                    }
+                                }
+                            }
                         },
+                        confirmButton = {},
                         dismissButton = { TextButton(onClick = { sendMenu = false }) { Text("Back") } },
                     )
                 }

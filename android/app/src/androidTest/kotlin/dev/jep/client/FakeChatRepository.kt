@@ -1,5 +1,6 @@
 package dev.jep.client
 
+import dev.jep.client.domain.model.SendMode
 import dev.jep.client.domain.model.AgentInfo
 import dev.jep.client.domain.model.BrowseResult
 import dev.jep.client.domain.model.ChatMessage
@@ -108,7 +109,11 @@ class FakeChatRepository(
     /** every prompt the screen sent, in order */
     val prompts = java.util.Collections.synchronizedList(mutableListOf<String>())
 
-    override suspend fun prompt(sessionId: String, text: String, files: List<String>, clientID: String?, steer: Boolean): ChatMessage {
+    /** how each of those prompts asked to join the turn */
+    val modes = java.util.Collections.synchronizedList(mutableListOf<SendMode>())
+
+    override suspend fun prompt(sessionId: String, text: String, files: List<String>, clientID: String?, mode: SendMode): ChatMessage {
+        modes += mode
         prompts += text
         promptGate?.await()
         return ChatMessage("reply", Role.ASSISTANT, 1, listOf(ChatPart.Text("ok")))

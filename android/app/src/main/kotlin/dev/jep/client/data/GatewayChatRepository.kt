@@ -29,6 +29,7 @@ import dev.jep.client.domain.repository.ChatEvent
 import dev.jep.client.domain.repository.HistoryBatch
 import dev.jep.client.domain.repository.ModelChoices
 import dev.jep.client.domain.repository.TurnAborted
+import dev.jep.client.domain.model.SendMode
 import dev.jep.client.domain.model.BrowseResult
 import dev.jep.client.domain.model.AgentInfo
 import dev.jep.client.domain.model.ChatMessage
@@ -298,14 +299,18 @@ private val json = Json { ignoreUnknownKeys = true; isLenient = true }
             batch
         }
 
-    override suspend fun prompt(sessionId: String, text: String, files: List<String>, clientID: String?, steer: Boolean): ChatMessage {
+    override suspend fun prompt(sessionId: String, text: String, files: List<String>, clientID: String?, mode: SendMode): ChatMessage {
         val body = buildJsonObject {
             put("id", sessionId)
             put("text", text)
             if (files.isNotEmpty()) put("files", JsonArray(files.map { JsonPrimitive(it) }))
             clientID?.let { put("clientID", it) }
-            // the daemon steers by default; only say so when it should wait
-            if (!steer) put("steer", false)
+            // the daemon steers by default; only say so when it should not
+            when (mode) {
+                SendMode.STEER -> Unit
+                SendMode.AFTER_REPLY -> put("steer", false)
+                SendMode.NOW -> put("force", true)
+            }
         }.toString()
         val dto = try {
             decode("/prompt", MessageRes.serializer(), body)
