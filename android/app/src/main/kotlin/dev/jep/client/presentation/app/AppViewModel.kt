@@ -299,6 +299,40 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         ids.forEach { if (read) markRead(it) else markUnread(it) }
     }
 
+    // Pinning holds a conversation at the top of the list. The daemon owns the
+    // fact (so the phone and Telegram agree, and a reinstall keeps the pins),
+    // but the list is re-sorted here at once rather than waiting for a reload:
+    // a pin that visibly does nothing until the next refresh reads as broken.
+    fun pinSelected(pinned: Boolean) {
+        val ids = _selection.value
+        if (ids.isEmpty()) return
+        _selection.value = emptySet()
+        pinAll(ids, pinned)
+    }
+
+    fun togglePin(session: SessionSummary) = pinAll(setOf(session.id), !session.pinned)
+
+    private fun pinAll(ids: Set<String>, pinned: Boolean) {
+        val r = repo ?: return
+        if (ids.isEmpty()) return
+        _sessions.value = pinFirst(_sessions.value.map { if (it.id in ids) it.copy(pinned = pinned) else it })
+        viewModelScope.launch {
+            var failed = false
+            for (id in ids) {
+                val done = runCatching { if (pinned) r.pinSession(id) else r.unpinSession(id) }.getOrDefault(false)
+                if (!done) failed = true
+            }
+            if (failed) {
+                _notice.value = "couldn't change the pin — the list is being reloaded"
+                refresh()
+            }
+        }
+    }
+
+    /** pinned conversations first, then by recency — the daemon's own order */
+    private fun pinFirst(sessions: List<SessionSummary>): List<SessionSummary> =
+        sessions.sortedWith(compareByDescending<SessionSummary> { it.pinned }.thenByDescending { it.updatedAt })
+
     private fun archiveAll(sessions: List<SessionSummary>) {
         val r = repo ?: return
         if (sessions.isEmpty()) return

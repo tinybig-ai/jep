@@ -31,6 +31,8 @@ data class SessionSummary(
     val active: Boolean = false,
     /** when it was last looked at on any device, as the daemon keeps it (0 = never) */
     val seenAt: Long = 0,
+    /** held above the rest of the list, whatever has moved most recently */
+    val pinned: Boolean = false,
 )
 
 /** a workspace the gateway serves, the harness (opencode/codex/…) behind it,

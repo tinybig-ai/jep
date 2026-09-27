@@ -150,6 +150,11 @@ interface ChatRepository {
     suspend fun archiveSession(sessionId: String): Boolean
     /** put an archived conversation back in the list */
     suspend fun unarchiveSession(sessionId: String): Boolean
+
+    /** hold a conversation above the rest of the list */
+    suspend fun pinSession(sessionId: String): Boolean
+    /** release it back into the ordinary order */
+    suspend fun unpinSession(sessionId: String): Boolean
     /** the skills this conversation's harness loads */
     suspend fun skills(sessionId: String): SkillSet
     /** hide (or allow) a skill for the model, by its SKILL.md path */
