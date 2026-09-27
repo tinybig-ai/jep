@@ -42,3 +42,33 @@ jobs:
         run: |
           xcodebuild -scheme JepKit -destination 'platform=iOS Simulator,name=iPhone 16' test | tail -n 40
           exit ${PIPESTATUS[0]}
+
+  # Drives every screen against a canned gateway and keeps the screenshots.
+  screens:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start the demo gateway
+        run: node ios/Jep/JepUITests/demo-gateway.mjs 8931 &
+      - name: Generate the Xcode project
+        working-directory: ios/Jep
+        run: brew install xcodegen && xcodegen generate
+      - name: Screen tour
+        working-directory: ios/Jep
+        run: |
+          xcodebuild -project Jep.xcodeproj -scheme Jep \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -resultBundlePath "$RUNNER_TEMP/tour.xcresult" \
+            CODE_SIGNING_ALLOWED=NO test | tail -n 60
+          exit ${PIPESTATUS[0]}
+      - name: Export screenshots
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/shots"
+          xcrun xcresulttool export attachments --path "$RUNNER_TEMP/tour.xcresult" --output-path "$RUNNER_TEMP/shots"
+          ls "$RUNNER_TEMP/shots"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-screens
+          path: ${{ runner.temp }}/shots
