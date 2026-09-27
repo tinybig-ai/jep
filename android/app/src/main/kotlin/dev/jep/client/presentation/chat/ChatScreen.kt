@@ -1078,20 +1078,13 @@ private fun SettingsSheet(
             }
             HorizontalDivider()
             Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
-                SectionLabel("HARNESS")
-                // fixed for the life of the conversation: a chat cannot move
-                // between harnesses, so this is shown, never offered
-                SettingRow(
-                    listOfNotNull(vm.workspace.ifBlank { null }, vm.harness).joinToString(" · ").ifBlank { "—" },
-                    selected = false,
-                    subtitle = "fixed for this conversation",
-                    onPick = {},
-                    checkable = false,
-                )
-                SectionLabel("MODEL", top = 12.dp)
+                // Only what can be changed. Which workspace and harness the chat
+                // runs in is fixed, and the header under the title already says
+                // it; a row here that did nothing when tapped was noise.
+                SectionLabel("MODEL")
                 ModelDropdown(state.models) { vm.setModel(it) }
                 SectionLabel("AGENT", top = 12.dp)
-                SettingRow("Default (harness)", selected = state.agent == null, subtitle = null, onPick = { vm.setAgent(null) }, leading = { SettingIcon(Icons.Filled.Star) })
+                SettingRow("Default", selected = state.agent == null, subtitle = null, onPick = { vm.setAgent(null) }, leading = { SettingIcon(Icons.Filled.Star) })
                 state.agents.forEach { a ->
                     SettingRow(a.label, selected = state.agent == a.id, subtitle = a.detail, onPick = { vm.setAgent(a.id) }, leading = { SettingIcon(Icons.Filled.Build) })
                 }
@@ -1125,7 +1118,7 @@ private fun SettingsSheet(
                     title = "${vm.harness?.ifBlank { null }?.uppercase() ?: "HARNESS"} OPTIONS",
                 )
                 if (state.harnessSettingsLoading) {
-                    Text("Loading harness options…", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Loading options…", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
@@ -1144,7 +1137,7 @@ private fun ModelDropdown(choices: ModelChoices?, onPick: (String?) -> Unit) {
         choices == null -> "Loading…"
         current != null -> current.substringAfterLast('/')
         choices.default != null -> "Default · ${choices.default.substringAfterLast('/')}"
-        else -> "Default (harness)"
+        else -> "Default"
     }
     Box {
         Surface(
@@ -1578,12 +1571,11 @@ private fun SettingRow(
     selected: Boolean,
     subtitle: String?,
     onPick: () -> Unit,
-    checkable: Boolean = true,
     leading: (@Composable () -> Unit)? = null,
 ) {
     Row(
         Modifier.fillMaxWidth()
-            .then(if (checkable) Modifier.clickable(onClick = onPick) else Modifier)
+            .clickable(onClick = onPick)
             .padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1600,7 +1592,7 @@ private fun SettingRow(
                 Text(it, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        if (selected && checkable) {
+        if (selected) {
             Icon(Icons.Filled.Check, "selected", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
         }
     }

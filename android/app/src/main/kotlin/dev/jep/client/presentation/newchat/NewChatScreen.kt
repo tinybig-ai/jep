@@ -148,7 +148,7 @@ private fun Form(
                 title = "${state.harness?.uppercase() ?: "HARNESS"} OPTIONS",
             )
             if (state.loadingHarnessSettings) {
-                Text("Loading harness options…", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Loading options…", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
 
