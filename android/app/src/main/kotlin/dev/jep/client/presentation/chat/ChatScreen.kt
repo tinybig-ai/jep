@@ -3162,16 +3162,11 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
             // fall as the text grows and as the reader's text size grows, so
             // the same 320 characters is three lines for one reader and six for
             // another, and only the layout knows which.
-            //
-            // Always measured against the base reserve, never the wider one
-            // expand would add. Narrower text can only add lines, so a draft
-            // that reaches four here still has four after the reserve grows:
-            // the answer cannot flip back and make the buttons jump.
             val measurer = rememberTextMeasurer()
             val draftStyle = MaterialTheme.typography.bodyLarge
-            // the field's own 16dp insets, plus the base reserve, is what the
-            // words actually get to wrap in
-            val insetsPx = with(LocalDensity.current) { 164.dp.toPx() }
+            // the field's own 16dp insets are all that stands between the field
+            // and its words now that nothing is reserved inside it
+            val insetsPx = with(LocalDensity.current) { 32.dp.toPx() }
             var fieldPx by remember { mutableIntStateOf(0) }
             val draftLines = remember(draft, fieldPx, draftStyle, insetsPx) {
                 val room = fieldPx - insetsPx
@@ -3186,96 +3181,78 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
                 }
             }
             val expandable = isWorthExpanding(draftLines)
+
+            // The field keeps the whole width, and the buttons sit on their own
+            // row beneath it. Overlaying them inside the field cost the text
+            // their width on every line — M3 lays a trailing icon beside the
+            // text, so reserving room for the pills shortened every line of the
+            // draft, and the more buttons were on offer the narrower the writing
+            // became. A row below spends a little height and gives back all of
+            // the width, and a button appearing in it cannot move the text.
+            OutlinedTextField(
+                value = draft,
+                onValueChange = { vm.setDraft(it) },
+                Modifier.fillMaxWidth().onSizeChanged { fieldPx = it.width }.testTag("composer"),
+                placeholder = { Text("Message the agent", color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                shape = RoundedCornerShape(Radius.field),
+                minLines = 1,
+                maxLines = 6,
+                colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    focusedBorderColor = MaterialTheme.colorScheme.outline,
+                    unfocusedBorderColor = Color.Transparent,
+                ),
+            )
             Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.Bottom,
+                Modifier.fillMaxWidth().padding(top = 2.dp),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                // The composer is a plain M3 field with its buttons overlaid,
-                // not slotted. The trailingIcon slot centers whatever it is
-                // given, and it measures unbounded — a fillMaxHeight there blew
-                // the field to the full screen in rc6. So the buttons live as a
-                // sibling Row pinned to this Box's bottom end, and a spacer in
-                // the trailing slot reserves exactly their width, keeping text
-                // clear of them.
-                //
-                // The reserve is the base cluster (stop + attach + send) and
-                // grows by expand's own 44dp only while expand is offered, so
-                // the usual draft gives its text back the width. Stop's slot is
-                // permanent even when nothing is running, so starting a turn
-                // never reflows the words under your cursor.
-                Box(Modifier.weight(1f).onSizeChanged { fieldPx = it.width }) {
-                    OutlinedTextField(
-                        value = draft,
-                        onValueChange = { vm.setDraft(it) },
-                        Modifier.fillMaxWidth().testTag("composer"),
-                        placeholder = { Text("Message the agent", color = MaterialTheme.colorScheme.onSurfaceVariant) },
-                        shape = RoundedCornerShape(Radius.field),
-                        minLines = 1,
-                        maxLines = 6,
-                        trailingIcon = { Spacer(Modifier.width(if (expandable) 178.dp else 132.dp)) },
-                        colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                            focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                            focusedBorderColor = MaterialTheme.colorScheme.outline,
-                            unfocusedBorderColor = Color.Transparent,
-                        ),
+                // Stop leads while it is there: the only button that ends work
+                // rather than shaping the draft, so it sits apart from the rest.
+                if (busy) {
+                    ComposerPill(
+                        icon = Icons.Filled.Stop,
+                        desc = "stop",
+                        onClick = { vm.stop() },
+                        tint = MaterialTheme.colorScheme.error,
                     )
-                    Row(
-                        Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = 6.dp),
-                        verticalAlignment = Alignment.Bottom,
-                    ) {
-                        // Stop claims the far left while it is there: it is the
-                        // odd one out (the only button that ends work instead of
-                        // shaping the draft), so it sits apart from the pair.
-                        if (busy) {
-                            ComposerPill(
-                                icon = Icons.Filled.Stop,
-                                desc = "stop",
-                                onClick = { vm.stop() },
-                                tint = MaterialTheme.colorScheme.error,
-                            )
-                        }
-                        ComposerPill(
-                            icon = Icons.Filled.AttachFile,
-                            desc = "attach",
-                            onClick = { picker.launch(arrayOf("*/*")) },
-                        )
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(2.dp),
-                        ) {
-                            // Offered only once the draft really is four
-                            // lines tall, and then it is not merely useful but
-                            // necessary: see isWorthExpanding. It stays out of
-                            // the cluster until then, because a permanently
-                            // reserved slot makes the column taller than a
-                            // short field and pushes the pills out through the
-                            // top of it.
-                            if (expandable) {
-                                ComposerPill(
-                                    icon = Icons.Filled.OpenInFull,
-                                    desc = "expand the composer",
-                                    onClick = { expanded = true },
-                                )
-                            }
-                            ComposerPill(
-                                icon = Icons.AutoMirrored.Filled.Send,
-                                desc = "send",
-                                enabled = sendable,
-                                tint = if (sendable) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                onClick = send,
-                                // hold to choose how it joins a running turn. With
-                                // nothing running there is no choice: a hold sends.
-                                onLongClick = {
-                                    if (draft.isNotBlank() || state.attachments.isNotEmpty()) {
-                                        if (busy) sendMenu = true else send()
-                                    }
-                                },
-                                modifier = Modifier.testTag("send-button"),
-                            )
-                        }
-                    }
                 }
+                // Expand sits with stop, on the left: neither is about the
+                // message being sent. Attach and send are, so they stay
+                // together at the end.
+                //
+                // Offered once the draft really is four lines tall, measured
+                // rather than counted — see isWorthExpanding.
+                if (expandable) {
+                    ComposerPill(
+                        icon = Icons.Filled.OpenInFull,
+                        desc = "expand the composer",
+                        onClick = { expanded = true },
+                    )
+                }
+                ComposerPill(
+                    icon = Icons.Filled.AttachFile,
+                    desc = "attach",
+                    onClick = { picker.launch(arrayOf("*/*")) },
+                )
+                ComposerPill(
+                    icon = Icons.AutoMirrored.Filled.Send,
+                    desc = "send",
+                    enabled = sendable,
+                    tint = if (sendable) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    onClick = send,
+                    // hold to choose how it joins a running turn. With nothing
+                    // running there is no choice: a hold sends.
+                    onLongClick = {
+                        if (draft.isNotBlank() || state.attachments.isNotEmpty()) {
+                            if (busy) sendMenu = true else send()
+                        }
+                    },
+                    modifier = Modifier.testTag("send-button"),
+                )
+            }
                 if (sendMenu) {
                     val quote = replyTo?.let { quoteOf(it) }
                     AlertDialog(
@@ -3311,7 +3288,6 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
                         dismissButton = { TextButton(onClick = { sendMenu = false }) { Text("Back") } },
                     )
                 }
-            }
         }
     }
 }
