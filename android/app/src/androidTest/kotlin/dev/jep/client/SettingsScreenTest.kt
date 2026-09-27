@@ -7,6 +7,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import dev.jep.client.domain.model.TextSize
 import dev.jep.client.domain.model.ThemeMode
 import dev.jep.client.domain.model.TerminalAccess
 import dev.jep.client.presentation.settings.SettingsScreen
@@ -30,6 +31,14 @@ class SettingsScreenTest {
         show(theme = ThemeMode.SYSTEM, onTheme = { picked = it })
         rule.onNodeWithText("Dark").performClick()
         assertEquals(ThemeMode.DARK, picked)
+    }
+
+    @Test
+    fun picking_a_text_size_reports_it() {
+        var picked: TextSize? = null
+        show(theme = ThemeMode.SYSTEM, onTextSize = { picked = it })
+        rule.onNodeWithContentDescription("Text size L").performClick()
+        assertEquals(TextSize.LARGE, picked)
     }
 
     @Test
@@ -59,12 +68,14 @@ class SettingsScreenTest {
         terminalEnabled: Boolean = false,
         gateway: String? = null,
         onTheme: (ThemeMode) -> Unit = {},
+        onTextSize: (TextSize) -> Unit = {},
         onUnlockTerminal: (String, (Boolean) -> Unit) -> Unit = { _, _ -> },
         onDisable: () -> Unit = {},
     ) {
         rule.setContent {
             SettingsScreen(
                 theme = theme,
+                textSize = TextSize.DEFAULT,
                 terminalEnabled = terminalEnabled,
                 backgroundStreaming = true,
                 knownCode = null,
@@ -72,6 +83,7 @@ class SettingsScreenTest {
                 gateway = gateway,
                 onBack = {},
                 onTheme = onTheme,
+                onTextSize = onTextSize,
                 onUnlockTerminal = onUnlockTerminal,
                 onDisableTerminal = onDisable,
                 onBackgroundStreaming = {},

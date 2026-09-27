@@ -28,6 +28,7 @@ import dev.jep.client.data.dto.WorkspaceDto
 import dev.jep.client.domain.model.Ask
 import dev.jep.client.domain.model.AgentInfo
 import dev.jep.client.domain.model.AskOption
+import dev.jep.client.domain.model.AskQuestion
 import dev.jep.client.domain.model.BrowseResult
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
@@ -114,6 +115,14 @@ fun AskDto.toDomain() = Ask(
     title = title,
     detail = detail,
     options = options.map { AskOption(it.id, it.label, it.style == "danger") },
+    questions = questions.map { q ->
+        AskQuestion(
+            title = q.title,
+            detail = q.detail,
+            multiple = q.multiple,
+            options = q.options.map { AskOption(it.id, it.label, it.style == "danger") },
+        )
+    },
     kind = kind,
     messageId = messageID,
     callId = callID,

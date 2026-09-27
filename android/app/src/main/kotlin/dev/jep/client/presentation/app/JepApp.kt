@@ -44,6 +44,7 @@ fun JepApp(app: AppViewModel) {
             val prefs by app.prefs.collectAsState()
             dev.jep.client.presentation.settings.SettingsScreen(
                 theme = prefs.theme,
+                textSize = prefs.textSize,
                 terminalEnabled = prefs.terminalEnabled,
                 backgroundStreaming = prefs.backgroundStreaming,
                 knownCode = app.pairing.nextCode,
@@ -51,6 +52,7 @@ fun JepApp(app: AppViewModel) {
                 gateway = app.gateway.collectAsState().value,
                 onBack = { app.back() },
                 onTheme = { app.setTheme(it) },
+                onTextSize = { app.setTextSize(it) },
                 onUnlockTerminal = { code, done -> app.enableTerminal(code, done) },
                 onDisableTerminal = { app.disableTerminal() },
                 onBackgroundStreaming = { app.setBackgroundStreaming(it) },

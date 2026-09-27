@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import dev.jep.client.data.GatewayChatRepository
 import dev.jep.client.device.AppSettings
 import dev.jep.client.device.JepHttp
+import dev.jep.client.domain.model.TextSize
 import dev.jep.client.domain.model.ThemeMode
 import dev.jep.client.device.PairingStore
 import dev.jep.client.domain.repository.ChatRepository
@@ -62,7 +63,12 @@ data class NewChatState(
 }
 
 // app-wide preferences, mirrored into a flow so the theme can react
-data class Prefs(val theme: ThemeMode, val terminalEnabled: Boolean, val backgroundStreaming: Boolean)
+data class Prefs(
+    val theme: ThemeMode,
+    val textSize: TextSize,
+    val terminalEnabled: Boolean,
+    val backgroundStreaming: Boolean,
+)
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
     val pairing = PairingStore(application.getSharedPreferences("jep", Context.MODE_PRIVATE))
@@ -74,7 +80,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     /** how the screens tell the device what the person is looking at */
     val attention: Attention = dev.jep.client.device.DeviceAttention(application)
 
-    private val _prefs = MutableStateFlow(Prefs(settings.theme, settings.terminalEnabled, settings.backgroundStreaming))
+    private val _prefs = MutableStateFlow(Prefs(settings.theme, settings.textSize, settings.terminalEnabled, settings.backgroundStreaming))
     val prefs = _prefs.asStateFlow()
 
     // the gateway we're pointed at — changes when re-paired, and the Settings
@@ -93,6 +99,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun setTheme(mode: ThemeMode) {
         settings.setTheme(mode)
         _prefs.value = _prefs.value.copy(theme = mode)
+    }
+
+    fun setTextSize(size: TextSize) {
+        settings.setTextSize(size)
+        _prefs.value = _prefs.value.copy(textSize = size)
     }
 
     // The terminal is not a normal preference: turning it on proves the pairing

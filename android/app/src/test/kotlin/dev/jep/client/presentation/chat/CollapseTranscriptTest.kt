@@ -75,12 +75,14 @@ class CollapseTranscriptTest {
     }
 
     @Test
-    fun `a group reads as one line with its totals`() {
+    fun `a group title carries no line counts of its own`() {
         val tools = listOf(
             tool("edit", "1", added = 10, removed = 2),
             tool("edit", "2", added = 118, removed = 92),
         )
-        assertEquals("Edited 2 files +128 -94", toolGroupSummary(tools))
+        // The row draws +128 -94 beside this, in mono and in the diff's own
+        // colours. If the summary also spelled them out they would appear twice.
+        assertEquals("Edited 2 files", toolGroupSummary(tools))
     }
 
     @Test
@@ -165,7 +167,7 @@ class CollapseTranscriptTest {
             ),
         )
         val group = rows.filterIsInstance<Row.Tools>().single()
-        assertEquals("Edited 3 files +16 -3", toolGroupSummary(group.tools))
+        assertEquals("Edited 3 files", toolGroupSummary(group.tools))
     }
 
     @Test

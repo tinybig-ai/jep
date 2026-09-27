@@ -21,7 +21,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
+import dev.jep.client.presentation.theme.JepMono
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -60,7 +60,7 @@ fun PairScreen(busy: Boolean, onPair: (address: String, code: String, done: (Boo
                 onValueChange = { address = it },
                 Modifier.fillMaxWidth(),
                 label = { Text("gateway address") },
-                placeholder = { Text("192.168.1.20:8931", fontFamily = FontFamily.Monospace) },
+                placeholder = { Text("192.168.1.20:8931", fontFamily = JepMono) },
                 singleLine = true,
             )
             OutlinedTextField(

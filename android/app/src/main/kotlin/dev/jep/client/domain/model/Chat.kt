@@ -181,11 +181,30 @@ data class ChatMessage(
 
 data class AskOption(val id: String, val label: String, val danger: Boolean = false)
 
+/**
+ * One question inside a `question` ask.
+ *
+ * A `question` ask may ask several things at once, and the harness answers them
+ * with one list of labels per question, in order. Each question therefore keeps
+ * its own choices: merging them into one list — which the app used to render —
+ * made a pick untraceable to the question it answered.
+ */
+data class AskQuestion(
+    val title: String,
+    val detail: String? = null,
+    /** more than one of `options` may be chosen */
+    val multiple: Boolean = false,
+    val options: List<AskOption> = emptyList(),
+)
+
 data class Ask(
     val id: String,
     val title: String,
     val detail: String? = null,
     val options: List<AskOption> = emptyList(),
+    /** a multi-question ask, when there is one. `options` stays the flat union
+     *  so a single-question ask renders exactly as it always did. */
+    val questions: List<AskQuestion> = emptyList(),
     /** "permission" or "question": a permission ask answers once/always/reject,
      *  a question one carries its own choices */
     val kind: String? = null,

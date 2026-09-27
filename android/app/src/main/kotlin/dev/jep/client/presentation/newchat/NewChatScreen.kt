@@ -47,7 +47,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontFamily
+import dev.jep.client.presentation.theme.JepMono
+import dev.jep.client.presentation.theme.Radius
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.jep.client.presentation.app.NewChatState
@@ -121,7 +122,7 @@ private fun Form(
                 Modifier.fillMaxWidth().padding(top = 8.dp),
                 label = { Text("Title (optional)") },
                 singleLine = true,
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(Radius.card),
             )
         }
 
@@ -206,7 +207,7 @@ private fun NewFolderDialog(parent: String?, onDismiss: () -> Unit, onCreate: (S
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 parent?.let {
-                    Text(it, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(it, fontSize = 12.sp, fontFamily = JepMono, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 OutlinedTextField(
                     value = name,
@@ -243,7 +244,7 @@ private fun Browser(
                 b?.cwd ?: "…",
                 Modifier.weight(1f),
                 fontSize = 13.sp,
-                fontFamily = FontFamily.Monospace,
+                fontFamily = JepMono,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 2,
             )
@@ -328,7 +329,7 @@ private fun Browser(
             Surface(
                 Modifier.fillMaxWidth().padding(vertical = 6.dp),
                 color = MaterialTheme.colorScheme.errorContainer,
-                shape = RoundedCornerShape(10.dp),
+                shape = RoundedCornerShape(Radius.control),
             ) {
                 Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.Warning, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onErrorContainer)
@@ -367,14 +368,14 @@ private fun SelectRow(
     Surface(
         Modifier.fillMaxWidth().padding(vertical = 3.dp).clickable(onClick = onClick),
         color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(Radius.card),
     ) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
             icon?.let { Box(Modifier.padding(end = 10.dp)) { it() } }
             Column(Modifier.weight(1f)) {
                 Text(title, fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
                 subtitle?.let {
-                    Text(it, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                    Text(it, fontSize = 12.sp, fontFamily = JepMono, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
                 }
             }
             if (selected) Icon(Icons.Filled.Check, "selected", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)

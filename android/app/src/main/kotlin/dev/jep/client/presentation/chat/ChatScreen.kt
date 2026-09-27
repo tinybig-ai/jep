@@ -152,9 +152,15 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.font.FontFamily
+import dev.jep.client.presentation.theme.JepMono
+import dev.jep.client.presentation.theme.LocalSyntaxColors
+import dev.jep.client.presentation.theme.Radius
+import dev.jep.client.presentation.theme.Spacing
+import dev.jep.client.presentation.theme.SyntaxColors
+import dev.jep.client.presentation.theme.pill
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -188,6 +194,7 @@ import dev.jep.client.domain.model.ChatPart
 import dev.jep.client.domain.model.Role
 import dev.jep.client.domain.model.Ask
 import dev.jep.client.domain.model.AskEntry
+import dev.jep.client.domain.model.AskOption
 import dev.jep.client.domain.model.GitCommit
 import dev.jep.client.domain.model.GitSnapshot
 import dev.jep.client.domain.model.SessionSummary
@@ -795,9 +802,9 @@ fun ChatScreen(
             Surface(color = MaterialTheme.colorScheme.surface) {
                 Text(
                     s,
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 3.dp),
+                    Modifier.fillMaxWidth().padding(horizontal = Spacing.gutter, vertical = 3.dp),
                     fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = JepMono,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                 )
@@ -1161,13 +1168,23 @@ private fun ModelDropdown(choices: ModelChoices?, onPick: (String?) -> Unit) {
         Surface(
             Modifier.fillMaxWidth().clickable(enabled = choices != null) { open = true },
             color = MaterialTheme.colorScheme.surfaceContainer,
-            shape = RoundedCornerShape(12.dp),
+            shape = RoundedCornerShape(Radius.card),
         ) {
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(label, Modifier.weight(1f), fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
+                // a model id can be far longer than the row. maxLines alone would
+                // clip it mid-glyph, which reads as breakage; ellipsis reads as
+                // "there is more", and the full id is one tap away in the list.
+                Text(
+                    label,
+                    Modifier.weight(1f),
+                    fontSize = 15.sp,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
                 Icon(Icons.Filled.ArrowDropDown, "choose model", tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
@@ -1293,7 +1310,7 @@ private fun SubagentsDialog(vm: ChatViewModel, onOpen: (SessionSummary) -> Unit,
                             Text(
                                 s.workspace.substringAfterLast('/'),
                                 fontSize = 12.sp,
-                                fontFamily = FontFamily.Monospace,
+                                fontFamily = JepMono,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
                             )
@@ -1322,8 +1339,8 @@ private fun readerTypography() = markdownTypography(
     h6 = MaterialTheme.typography.bodyMedium,
     text = MaterialTheme.typography.bodyMedium,
     paragraph = MaterialTheme.typography.bodyMedium.copy(lineHeight = 21.sp),
-    code = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-    inlineCode = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+    code = MaterialTheme.typography.bodySmall.copy(fontFamily = JepMono),
+    inlineCode = MaterialTheme.typography.bodySmall.copy(fontFamily = JepMono),
     textLink = TextLinkStyles(
         style = SpanStyle(
             color = MaterialTheme.colorScheme.primary,
@@ -1341,8 +1358,8 @@ private fun readerTypography() = markdownTypography(
  * copies of this number is how a group row ended up flush left beside inset rows
  * and read as misaligned, so there is one.
  */
-private val RowInset = 14.dp
-private val RowVInset = 4.dp
+private val RowInset = Spacing.row
+private val RowVInset = 3.dp
 
 /** How the reader shows a file. The store is small and pure on purpose — a path
  *  in, an engine and two defaults out — so what the reader does with any file is
@@ -1398,7 +1415,7 @@ private fun FileSheet(open: ChatViewModel.OpenFile, onClose: () -> Unit) {
                     open.path,
                     Modifier.weight(1f),
                     fontSize = 15.sp,
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = JepMono,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -1451,7 +1468,7 @@ private fun FileSheet(open: ChatViewModel.OpenFile, onClose: () -> Unit) {
                         open.text.orEmpty(),
                         Modifier.verticalScroll(down),
                         fontSize = 13.sp,
-                        fontFamily = if (engine == FileEngine.Code) FontFamily.Monospace else FontFamily.Default,
+                        fontFamily = if (engine == FileEngine.Code) JepMono else FontFamily.Default,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
                 }
@@ -1505,18 +1522,21 @@ private fun TerminalBody(vm: ChatViewModel, modifier: Modifier = Modifier) {
     LaunchedEffect(frame, scroll.maxValue) {
         scroll.scrollTo(scroll.maxValue)
     }
+    // A terminal is dark in both themes: its output is a fixed ground, not a
+    // surface, and a light one costs more in legibility than it gains in looks.
+    val syntax = LocalSyntaxColors.current
     Column(modifier.fillMaxWidth()) {
         Text(
             frame.trimEnd('\n'),
             Modifier.weight(1f).fillMaxWidth()
                 .verticalScroll(scroll)
-                .background(Color(0xFF0E0E0D))
+                .background(syntax.terminalBg)
                 .padding(10.dp)
                 .semantics { contentDescription = "terminal output" },
-            fontFamily = FontFamily.Monospace,
+            fontFamily = JepMono,
             fontSize = 11.sp,
             lineHeight = 15.sp,
-            color = Color(0xFFD8D6CE),
+            color = syntax.terminalFg,
         )
         Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp),
@@ -1536,7 +1556,7 @@ private fun TerminalBody(vm: ChatViewModel, modifier: Modifier = Modifier) {
                 onValueChange = { draft.value = it },
                 modifier = Modifier.weight(1f),
                 placeholder = { Text("type a command", fontSize = 13.sp) },
-                textStyle = androidx.compose.ui.text.TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp),
+                textStyle = androidx.compose.ui.text.TextStyle(fontFamily = JepMono, fontSize = 13.sp),
                 maxLines = 3,
             )
             IconButton(onClick = {
@@ -1571,7 +1591,7 @@ private fun ToggleRow(name: String, subtitle: String?, checked: Boolean, enabled
         Column(Modifier.weight(1f)) {
             Text(name, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
             subtitle?.takeIf { it.isNotBlank() }?.let {
-                Text(it, fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                Text(it, fontSize = 11.sp, fontFamily = JepMono, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
             }
         }
         Switch(checked = checked, enabled = enabled, onCheckedChange = onChange)
@@ -1607,7 +1627,7 @@ private fun SettingRow(
                 color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
             )
             subtitle?.takeIf { it.isNotBlank() }?.let {
-                Text(it, fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(it, fontSize = 12.sp, fontFamily = JepMono, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         if (selected) {
@@ -1650,7 +1670,7 @@ private fun UsageDialog(vm: ChatViewModel, onDismiss: () -> Unit) {
 private fun StatRow(label: String, value: String) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(label, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(value, fontSize = 13.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurface)
+        Text(value, fontSize = 13.sp, fontFamily = JepMono, color = MaterialTheme.colorScheme.onSurface)
     }
 }
 
@@ -1699,7 +1719,7 @@ private fun GitSnapshotContent(git: GitSnapshot) {
             Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = RoundedCornerShape(50)) {
+            Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = pill) {
                 Row(Modifier.padding(horizontal = 11.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.Source, null, Modifier.size(15.dp), tint = MaterialTheme.colorScheme.onSecondaryContainer)
                     Text(git.branch ?: "detached HEAD", Modifier.padding(start = 6.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSecondaryContainer)
@@ -1731,13 +1751,13 @@ private fun GitCommitCard(commit: GitCommit) {
     Surface(
         Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.primaryContainer,
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(Radius.card),
     ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("HEAD", fontSize = 10.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
                 Spacer(Modifier.size(8.dp))
-                Text(commit.shortHash, fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f))
+                Text(commit.shortHash, fontSize = 11.sp, fontFamily = JepMono, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f))
             }
             Text(commit.subject, fontSize = 15.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
             Text(
@@ -1758,7 +1778,7 @@ private fun GitCommitRow(commit: GitCommit) {
         }
         Column(Modifier.weight(1f).padding(bottom = 10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(commit.shortHash, fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.primary)
+                Text(commit.shortHash, fontSize = 11.sp, fontFamily = JepMono, color = MaterialTheme.colorScheme.primary)
                 Text("  ·  ${fmtGitTime(commit.time)}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Text(commit.subject, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface)
@@ -1965,7 +1985,7 @@ private fun UserBubble(message: ChatMessage, onRetry: () -> Unit = {}) {
                 .widthIn(max = 320.dp)
                 .then(if (pending) Modifier.clickable(onClick = onRetry) else Modifier),
             color = if (pending) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.primaryContainer,
-            shape = RoundedCornerShape(18.dp),
+            shape = RoundedCornerShape(Radius.bubble),
         ) {
             Column(Modifier.padding(horizontal = 14.dp, vertical = 9.dp)) {
                 // a file must show in the person's own bubble too, or an image
@@ -2148,22 +2168,29 @@ private fun ToolGroupRow(tools: List<ChatPart.Tool>) {
     val anyRunning = tools.any { it.status == ToolStatus.RUNNING || it.status == ToolStatus.PENDING }
     val added = tools.sumOf { it.added ?: 0 }
     val removed = tools.sumOf { it.removed ?: 0 }
+    val syntax = LocalSyntaxColors.current
     val tint = when {
         anyFailed -> MaterialTheme.colorScheme.error
         anyRunning -> MaterialTheme.colorScheme.primary
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
-    Column(Modifier.fillMaxWidth().padding(horizontal = RowInset, vertical = RowVInset)) {
+    // The title carries the row inset, exactly like an ungrouped row — not the
+    // screen edge, and not a second inset on top of one. It is a heading, but
+    // it still has to line up with the rows it stands among; flush to the edge
+    // it read as a different kind of thing, and double-inset as a quotation.
+    // The calls it opens keep the same inset, so an opened group still lines up
+    // with the rows around it.
+    Column(Modifier.fillMaxWidth().padding(vertical = RowVInset)) {
         Row(
-            Modifier.fillMaxWidth().clickable { open = !open },
+            Modifier.fillMaxWidth().padding(horizontal = RowInset).clickable { open = !open },
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(toolGroupSummary(tools), style = MaterialTheme.typography.labelMedium, color = tint)
             if (added > 0) {
-                Text("+$added", style = MaterialTheme.typography.labelMedium, fontFamily = FontFamily.Monospace, color = LineAdded, modifier = Modifier.padding(start = 6.dp))
+                Text("+$added", style = MaterialTheme.typography.labelMedium, fontFamily = JepMono, color = syntax.added, modifier = Modifier.padding(start = 6.dp))
             }
             if (removed > 0) {
-                Text("-$removed", style = MaterialTheme.typography.labelMedium, fontFamily = FontFamily.Monospace, color = LineRemoved, modifier = Modifier.padding(start = 4.dp))
+                Text("-$removed", style = MaterialTheme.typography.labelMedium, fontFamily = JepMono, color = syntax.removed, modifier = Modifier.padding(start = 4.dp))
             }
             Icon(
                 if (open) Icons.Filled.ArrowDropUp else Icons.Filled.ArrowDropDown,
@@ -2172,7 +2199,11 @@ private fun ToolGroupRow(tools: List<ChatPart.Tool>) {
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (open) tools.forEach { ToolRow(it) }
+        if (open) {
+            Column(Modifier.fillMaxWidth().padding(start = RowInset, top = 2.dp, end = RowInset)) {
+                tools.forEach { ToolRow(it) }
+            }
+        }
     }
 }
 
@@ -2266,10 +2297,12 @@ internal fun toolGroupSummary(tools: List<ChatPart.Tool>): String {
         "glob" -> "matches"
         else -> "calls"
     }
-    val added = tools.sumOf { it.added ?: 0 }
-    val removed = tools.sumOf { it.removed ?: 0 }
-    val delta = if (added == 0 && removed == 0) "" else " +$added -$removed"
-    return "$verb ${tools.size} $noun$delta"
+    // No line counts here. The row that draws this title also draws the added
+    // and removed totals itself, in mono and in the diff's own colours — this
+    // used to append them as text too, so every edited-file group read
+    // "Edited 6 files +12 -3 +12 -3", the counts once in grey and once in
+    // colour. One rendering of a number, from the one place that styles it.
+    return "$verb ${tools.size} $noun"
 }
 
 @Composable
@@ -2329,7 +2362,7 @@ private fun ImageThumb(part: ChatPart.File) {
         modifier = Modifier
             .padding(top = 4.dp)
             .size(96.dp)
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(Radius.control))
             .clickable(enabled = url.isNotBlank()) { open = true },
     )
     if (open) {
@@ -2354,7 +2387,7 @@ private fun FileRow(part: ChatPart.File) {
         Surface(
             Modifier.fillMaxWidth(),
             color = MaterialTheme.colorScheme.surfaceContainer,
-            shape = RoundedCornerShape(10.dp),
+            shape = RoundedCornerShape(Radius.control),
         ) {
             Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Filled.AttachFile, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -2366,7 +2399,7 @@ private fun FileRow(part: ChatPart.File) {
                         maxLines = 1,
                     )
                     part.mimeType?.let {
-                        Text(it, fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(it, fontSize = 11.sp, fontFamily = JepMono, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -2433,9 +2466,9 @@ private fun ReasoningRow(part: ChatPart.Reasoning, active: Boolean = false) {
     }
 }
 
-// the diff colours: green for what a change added, red for what it took away
-private val LineAdded = Color(0xFF4CAF50)
-private val LineRemoved = Color(0xFFEF5350)
+// The diff's green and red, the terminal's ground, and the highlighter's three
+// all come from the theme now (see LocalSyntaxColors), so a theme change reaches
+// them; they used to be fixed constants that ignored dark mode.
 
 private val ToolSubjectKeys = listOf("command", "filePath", "file_path", "path", "pattern", "query", "description", "url")
 
@@ -2459,6 +2492,7 @@ private fun ToolRow(part: ChatPart.Tool) {
     val body = toolBody(part)
     val added = part.added ?: 0
     val removed = part.removed ?: 0
+    val syntax = LocalSyntaxColors.current
     val diff = part.diff
     val title = toolTitle(part)
     var sheet by remember(part.id) { mutableStateOf(false) }
@@ -2498,10 +2532,10 @@ private fun ToolRow(part: ChatPart.Tool) {
             )
             // how big the change was, readable without opening anything
             if (added > 0) {
-                Text("+$added", style = MaterialTheme.typography.labelMedium, fontFamily = FontFamily.Monospace, color = LineAdded, modifier = Modifier.padding(start = 6.dp))
+                Text("+$added", style = MaterialTheme.typography.labelMedium, fontFamily = JepMono, color = syntax.added, modifier = Modifier.padding(start = 6.dp))
             }
             if (removed > 0) {
-                Text("-$removed", style = MaterialTheme.typography.labelMedium, fontFamily = FontFamily.Monospace, color = LineRemoved, modifier = Modifier.padding(start = 4.dp))
+                Text("-$removed", style = MaterialTheme.typography.labelMedium, fontFamily = JepMono, color = syntax.removed, modifier = Modifier.padding(start = 4.dp))
             }
             if (hasDetail) {
                 Icon(Icons.Filled.ArrowDropDown, "open details", Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -2513,7 +2547,7 @@ private fun ToolRow(part: ChatPart.Tool) {
                 Text(
                     it.lineSequence().first(),
                     fontSize = 12.sp,
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = JepMono,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -2547,7 +2581,7 @@ private fun ToolSheet(title: String, body: String, onDismiss: () -> Unit) {
                 Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
                 fontSize = 12.sp,
                 lineHeight = 17.sp,
-                fontFamily = FontFamily.Monospace,
+                fontFamily = JepMono,
                 color = MaterialTheme.colorScheme.onSurface,
             )
         }
@@ -2574,11 +2608,8 @@ private val CodeToken = Regex(
         "|(\\b\\d[\\d_]*(?:\\.\\d+)?\\b)" +  // a number
         "|([A-Za-z_][A-Za-z0-9_]*)",         // an identifier
 )
-private val CodeKeyword = Color(0xFF7C4DFF)
-private val CodeString = Color(0xFFC25E00)
-private val CodeNumber = Color(0xFF1976D2)
 
-private fun highlight(line: String, base: Color, comment: Color): AnnotatedString {
+private fun highlight(line: String, base: Color, comment: Color, syntax: SyntaxColors): AnnotatedString {
     val out = AnnotatedString.Builder()
     var last = 0
     for (m in CodeToken.findAll(line)) {
@@ -2586,9 +2617,9 @@ private fun highlight(line: String, base: Color, comment: Color): AnnotatedStrin
         val text = m.value
         val color = when {
             m.groupValues[1].isNotEmpty() -> comment
-            m.groupValues[2].isNotEmpty() -> CodeString
-            m.groupValues[3].isNotEmpty() -> CodeNumber
-            m.groupValues[4].isNotEmpty() && text in CodeKeywords -> CodeKeyword
+            m.groupValues[2].isNotEmpty() -> syntax.string
+            m.groupValues[3].isNotEmpty() -> syntax.number
+            m.groupValues[4].isNotEmpty() && text in CodeKeywords -> syntax.keyword
             else -> base
         }
         out.pushStyle(SpanStyle(color = color))
@@ -2623,7 +2654,7 @@ private fun DiffSheet(path: String?, diff: String, onDismiss: () -> Unit) {
                 Text(
                     it,
                     fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = JepMono,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp),
                 )
@@ -2631,25 +2662,26 @@ private fun DiffSheet(path: String?, diff: String, onDismiss: () -> Unit) {
             HorizontalDivider(Modifier.padding(top = 8.dp))
             val onSurface = MaterialTheme.colorScheme.onSurface
             val faded = MaterialTheme.colorScheme.onSurfaceVariant
+            val syntax = LocalSyntaxColors.current
             LazyColumn(Modifier.fillMaxWidth()) {
                 items(diff.split("\n")) { line ->
                     // the red/green is the line's background, the way a diff reads
                     val added = line.startsWith("+")
                     val removed = line.startsWith("-")
                     val bg = when {
-                        added -> LineAdded.copy(alpha = 0.18f)
-                        removed -> LineRemoved.copy(alpha = 0.18f)
+                        added -> syntax.added.copy(alpha = 0.18f)
+                        removed -> syntax.removed.copy(alpha = 0.18f)
                         else -> Color.Transparent
                     }
                     Text(
-                        highlight(line, onSurface, faded),
+                        highlight(line, onSurface, faded, syntax),
                         Modifier
                             .fillMaxWidth()
                             .background(bg)
                             .padding(horizontal = 14.dp, vertical = 1.dp),
                         fontSize = 12.sp,
                         lineHeight = 17.sp,
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = JepMono,
                     )
                 }
             }
@@ -2677,79 +2709,149 @@ private fun AskBar(ask: Ask, vm: ChatViewModel, spent: Boolean, choiceId: String
     // The card is the record: it stays where it was raised, rides up the chat as
     // the turn continues below it, and keeps every choice on show — spent, not
     // removed — once it has been answered.
+    //
+    // A `question` ask can ask several things at once. Each question is drawn
+    // with its own choices under its own heading, and the answers go back
+    // together — the harness reads them positionally, one list per question, so
+    // a tap can only be sent once every question has one.
+    val multi = ask.questions.size > 1
+    var picks by remember(ask.id) { mutableStateOf(emptyMap<Int, String>()) }
+    // while the card is open the picks are what has been tapped; once it is
+    // spent they are the answers that were actually sent
+    val chosen = if (spent) parsePicked(choiceId) else picks
+    val onPick: (Int, AskOption) -> Unit = { qi, option ->
+        if (!spent) {
+            val next = picks + (qi to option.id)
+            picks = next
+            if (ask.questions.indices.all { next.containsKey(it) }) {
+                vm.respond(ask.id, encodePicked(ask.questions.size, next))
+            }
+        }
+    }
     Card(
         Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (spent) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
             else MaterialTheme.colorScheme.surface,
         ),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(Radius.card),
     ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(ask.title, fontSize = 15.sp, color = MaterialTheme.colorScheme.onBackground)
-            ask.detail?.let {
+            // No line cap on the question itself. It used to clip at four lines
+            // with no ellipsis, so a second question's text simply stopped
+            // mid-sentence and read as though that were all of it.
+            ask.detail?.takeIf { !multi }?.let {
                 Text(
                     it,
                     fontSize = 13.sp,
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = JepMono,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 4,
                 )
             }
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                ask.options.forEach { option ->
-                    val picked = option.id == choiceId
-                    if (picked) {
-                        // the one you chose is filled, in the app's own accent: a
-                        // spent card that still shows every choice, with this one
-                        // unmistakably the answer
-                        Button(
-                            onClick = {},
-                            enabled = false,
-                            colors = ButtonDefaults.buttonColors(
-                                disabledContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                disabledContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                            ),
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 4.dp),
-                            modifier = Modifier.semantics { contentDescription = "${option.label}, chosen" },
-                        ) {
-                            Text(option.label, fontSize = 14.sp, maxLines = 1)
+            if (multi) {
+                ask.questions.forEachIndexed { qi, q ->
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(q.title, fontSize = 14.sp, color = MaterialTheme.colorScheme.onBackground)
+                        q.detail?.let {
+                            Text(
+                                it,
+                                fontSize = 12.sp,
+                                fontFamily = JepMono,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
-                    } else {
-                        // Deny reads as what it is: the harness marks it danger,
-                        // and a card is exactly where a slip is costly
-                        OutlinedButton(
-                            onClick = { vm.respond(ask.id, option.id) },
-                            enabled = !spent,
-                            colors = if (option.danger) ButtonDefaults.outlinedButtonColors(
-                                contentColor = MaterialTheme.colorScheme.error,
-                            ) else ButtonDefaults.outlinedButtonColors(),
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 4.dp),
-                        ) {
-                            Text(option.label, fontSize = 14.sp, maxLines = 1)
-                        }
+                        AskChoices(q.options, spent, chosen[qi]) { onPick(qi, it) }
                     }
                 }
-                // A question asked in the open does not have to be answered with
-                // one of the labels I wrote. This spends the card the way saying
-                // the answer in chat does, and sends nothing: the ask stands down
-                // and the reply comes as a message.
-                if (ask.kind == "question") {
-                    OutlinedButton(
-                        onClick = { vm.spendAsk(ask.id) },
-                        enabled = !spent,
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 4.dp),
-                    ) {
-                        Text("Something else", fontSize = 14.sp, maxLines = 1)
-                    }
+            } else {
+                AskChoices(ask.options, spent, choiceId) { vm.respond(ask.id, it.id) }
+            }
+            // A question asked in the open does not have to be answered with
+            // one of the labels I wrote. This spends the card the way saying
+            // the answer in chat does, and sends nothing: the ask stands down
+            // and the reply comes as a message.
+            if (ask.kind == "question") {
+                OutlinedButton(
+                    onClick = { vm.spendAsk(ask.id) },
+                    enabled = !spent,
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 4.dp),
+                ) {
+                    Text("Something else", fontSize = 14.sp, maxLines = 1)
                 }
             }
         }
     }
 }
+
+/** one question's choices: the picked one filled, the rest still pressable */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AskChoices(
+    options: List<AskOption>,
+    spent: Boolean,
+    pickedId: String?,
+    onPick: (AskOption) -> Unit,
+) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        options.forEach { option ->
+            if (option.id == pickedId) {
+                // the one you chose is filled, in the app's own accent: a
+                // spent card that still shows every choice, with this one
+                // unmistakably the answer
+                Button(
+                    onClick = {},
+                    enabled = false,
+                    colors = ButtonDefaults.buttonColors(
+                        disabledContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                        disabledContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    ),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 4.dp),
+                    modifier = Modifier.semantics { contentDescription = "${option.label}, chosen" },
+                ) {
+                    Text(option.label, fontSize = 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+            } else {
+                // Deny reads as what it is: the harness marks it danger,
+                // and a card is exactly where a slip is costly
+                OutlinedButton(
+                    onClick = { onPick(option) },
+                    enabled = !spent,
+                    colors = if (option.danger) ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error,
+                    ) else ButtonDefaults.outlinedButtonColors(),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 4.dp),
+                ) {
+                    Text(option.label, fontSize = 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The answers on a spent card, as a question index to option id.
+ *
+ * A card that answered one question holds a bare option id; several questions
+ * hold the JSON array that was sent (see [encodePicked]). Anything else is
+ * unknown, and an unknown answer highlights nothing rather than guessing.
+ */
+internal fun parsePicked(choiceId: String?): Map<Int, String> {
+    val raw = choiceId?.trim() ?: return emptyMap()
+    if (!raw.startsWith("[")) return emptyMap()
+    val ids = Regex("\"([^\"]*)\"").findAll(raw).map { it.groupValues[1] }.toList()
+    return ids.mapNotNull { id ->
+        val prefix = id.substringBefore(':', "")
+        prefix.toIntOrNull()?.let { it to id }
+    }.toMap()
+}
+
+/** the picked option ids as one JSON array, in question order */
+internal fun encodePicked(count: Int, picks: Map<Int, String>): String =
+    (0 until count).mapNotNull { picks[it] }.joinToString(",", "[", "]") { "\"${it.replace("\"", "\\\"")}\"" }
 
 /**
  * The composer, full screen, for writing something long. The six-line box
@@ -2778,6 +2880,11 @@ private fun FullComposer(
     ) {
         Surface(Modifier.fillMaxSize().testTag("full-composer"), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
+                // The top bar is navigation and title only: shrink, and how
+                // much is written. The draft's actions live at the bottom,
+                // where the main composer keeps them — the sheet is tall, and
+                // top-corner buttons would drift a thumb's journey from the
+                // text they act on.
                 Row(
                     Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -2791,12 +2898,6 @@ private fun FullComposer(
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    IconButton(onClick = onAttach) {
-                        Icon(Icons.Filled.AttachFile, "attach", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    FilledIconButton(onClick = onSend, enabled = sendable) {
-                        Icon(Icons.AutoMirrored.Filled.Send, "send")
-                    }
                 }
                 if (attachments.isNotEmpty()) {
                     Row(
@@ -2826,6 +2927,22 @@ private fun FullComposer(
                         unfocusedIndicatorColor = Color.Transparent,
                     ),
                 )
+                // The draft's actions, bottom-right, mirroring the main
+                // composer: attach, then send. The Column already carries
+                // imePadding, so this rides above the keyboard, and the text
+                // scrolls above it rather than under it.
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(onClick = onAttach) {
+                        Icon(Icons.Filled.AttachFile, "attach", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    FilledIconButton(onClick = onSend, enabled = sendable) {
+                        Icon(Icons.AutoMirrored.Filled.Send, "send")
+                    }
+                }
             }
         }
     }
@@ -2883,7 +3000,7 @@ private fun QueuedBubble(q: ChatViewModel.Queued, onClick: () -> Unit) {
                 // held for later sits back further: an outline, not a fill
                 color = if (held) Color.Transparent else MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
                 border = if (held) androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)) else null,
-                shape = RoundedCornerShape(18.dp),
+                shape = RoundedCornerShape(Radius.card),
             ) {
                 Column(Modifier.padding(horizontal = 14.dp, vertical = 9.dp)) {
                     q.quote?.let { QuoteBlock(it, if (held) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f) else ink, Modifier.padding(bottom = 6.dp)) }
@@ -2998,7 +3115,7 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
         )
     }
     Surface(tonalElevation = 2.dp, color = MaterialTheme.colorScheme.background) {
-        Column(Modifier.fillMaxWidth().imePadding().padding(horizontal = 12.dp, vertical = 10.dp)) {
+        Column(Modifier.fillMaxWidth().imePadding().padding(horizontal = 10.dp, vertical = 8.dp)) {
             if (state.attachments.isNotEmpty()) {
                 FlowRow(
                     Modifier.fillMaxWidth().padding(bottom = 8.dp),
@@ -3023,71 +3140,97 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.Bottom,
             ) {
-                IconButton(onClick = { picker.launch(arrayOf("*/*")) }) {
-                    Icon(Icons.Filled.AttachFile, "attach", Modifier.size(24.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                OutlinedTextField(
-                    value = draft,
-                    onValueChange = { vm.setDraft(it) },
-                    Modifier.weight(1f).testTag("composer"),
-                    placeholder = { Text("Message the agent", color = MaterialTheme.colorScheme.onSurfaceVariant) },
-                    shape = RoundedCornerShape(24.dp),
-                    minLines = 1,
-                    maxLines = 6,
-                    // offered once there is something long to write
-                    trailingIcon = if (draft.count { it == '\n' } >= 2 || draft.length > 160) {
-                        {
-                            IconButton(onClick = { expanded = true }) {
-                                Icon(
-                                    Icons.Filled.OpenInFull,
-                                    "expand the composer",
-                                    Modifier.size(18.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    } else null,
-                    colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                        focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                        focusedBorderColor = MaterialTheme.colorScheme.outline,
-                        unfocusedBorderColor = Color.Transparent,
-                    ),
-                )
-                // while the agent works, the send button queues the message and a
-                // small stop sits beside it, so you are never forced to stop first
-                if (busy) {
-                    IconButton(onClick = { vm.stop() }) {
-                        Icon(Icons.Filled.Stop, "stop", Modifier.size(22.dp), tint = MaterialTheme.colorScheme.error)
-                    }
-                }
-                Box(
-                    Modifier
-                        .size(48.dp)
-                        .testTag("send-button")
-                        .combinedClickable(
-                            enabled = sendable,
-                            onClick = send,
-                            // hold to choose how it joins a running turn. With
-                            // nothing running there is no choice: a hold sends.
-                            onLongClick = {
-                                if (draft.isNotBlank() || state.attachments.isNotEmpty()) {
-                                    if (busy) sendMenu = true else send()
-                                }
-                            },
+                // The composer is a plain M3 field with its buttons overlaid,
+                // not slotted. The trailingIcon slot centers whatever it is
+                // given, and it measures unbounded — a fillMaxHeight there blew
+                // the field to the full screen in rc6. So the buttons live as a
+                // sibling Row pinned to this Box's bottom end, and a 132dp
+                // spacer in the trailing slot reserves their parking space,
+                // keeping text clear.
+                // The reserve never changes (stop + attach + the send column at
+                // their widest), so the text width holds still when stop appears
+                // or expand offers itself.
+                Box(Modifier.weight(1f)) {
+                    OutlinedTextField(
+                        value = draft,
+                        onValueChange = { vm.setDraft(it) },
+                        Modifier.fillMaxWidth().testTag("composer"),
+                        placeholder = { Text("Message the agent", color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                        shape = RoundedCornerShape(Radius.field),
+                        minLines = 1,
+                        maxLines = 6,
+                        // A parking space, not a picture: this M3 overload has
+                        // no contentPadding, so the field cannot reserve the
+                        // overlay's width itself. The spacer holds 132dp —
+                        // stop + attach + the send column at their widest —
+                        // keeping text clear; the real buttons are siblings
+                        // below, pinned to the Box's bottom end, so they never
+                        // ride up as the draft grows. Zero height, so it never
+                        // drives the field taller; how M3 centers it is moot.
+                        trailingIcon = { Spacer(Modifier.width(132.dp)) },
+                        colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                            focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                            focusedBorderColor = MaterialTheme.colorScheme.outline,
+                            unfocusedBorderColor = Color.Transparent,
                         ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.Send,
-                        "send",
-                        Modifier.size(26.dp),
-                        tint = when {
-                            !sendable -> MaterialTheme.colorScheme.surfaceVariant
-                            draft.isBlank() && state.attachments.isEmpty() -> MaterialTheme.colorScheme.surfaceVariant
-                            else -> MaterialTheme.colorScheme.primary
-                        },
                     )
+                    Row(
+                        Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = 6.dp),
+                        verticalAlignment = Alignment.Bottom,
+                    ) {
+                        // Stop claims the far left while it is there: it is the
+                        // odd one out (the only button that ends work instead of
+                        // shaping the draft), so it sits apart from the pair.
+                        if (busy) {
+                            ComposerPill(
+                                icon = Icons.Filled.Stop,
+                                desc = "stop",
+                                onClick = { vm.stop() },
+                                tint = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                        ComposerPill(
+                            icon = Icons.Filled.AttachFile,
+                            desc = "attach",
+                            onClick = { picker.launch(arrayOf("*/*")) },
+                        )
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            // Expand keeps its slot from the first character.
+                            // It used to appear only once the draft was long
+                            // enough, and that shoved send sideways in the
+                            // middle of a sentence — a button that moves while
+                            // you are aiming at it is worse than one that is
+                            // briefly useless. So it is always here, and goes
+                            // inert until there is something to expand, the
+                            // same way a send with nothing to send recedes.
+                            val expandable = draft.count { it == '\n' } >= 2 || draft.length > 160
+                            ComposerPill(
+                                icon = Icons.Filled.OpenInFull,
+                                desc = "expand the composer",
+                                enabled = expandable,
+                                onClick = { expanded = true },
+                            )
+                            ComposerPill(
+                                icon = Icons.AutoMirrored.Filled.Send,
+                                desc = "send",
+                                enabled = sendable,
+                                tint = if (sendable) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                onClick = send,
+                                // hold to choose how it joins a running turn. With
+                                // nothing running there is no choice: a hold sends.
+                                onLongClick = {
+                                    if (draft.isNotBlank() || state.attachments.isNotEmpty()) {
+                                        if (busy) sendMenu = true else send()
+                                    }
+                                },
+                                modifier = Modifier.testTag("send-button"),
+                            )
+                        }
+                    }
                 }
                 if (sendMenu) {
                     val quote = replyTo?.let { quoteOf(it) }
@@ -3125,6 +3268,47 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * A round button for the composer, drawn as a filled disc rather than a bare
+ * glyph. Attach and Send used to be icons floating on grey, which read as
+ * decoration next to the field's outline; a pill says "pressable" at a glance
+ * and keeps the accent meaningful, because only Send and Stop carry colour.
+ *
+ * The visible disc is 38dp inside a 44dp target. Not padding for its own sake:
+ * a pill sized to its own target is a 44dp target, and a 44dp disc inside a
+ * 56dp-tall field swamps it. This way the touch area still clears the 48dp
+ * accessibility minimum's neighbourhood while the drawn button stays small.
+ */
+@Composable
+private fun ComposerPill(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    desc: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    onLongClick: (() -> Unit)? = null,
+    tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+    Box(modifier.size(44.dp), contentAlignment = Alignment.Center) {
+        Surface(
+            Modifier.size(38.dp),
+            shape = CircleShape,
+            // a disabled Send recedes rather than vanishing: you can still see
+            // where it is, so the reason the field looks inert is legible
+            color = if (enabled) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerLow,
+        ) {}
+        Box(
+            Modifier
+                .matchParentSize()
+                .combinedClickable(enabled = enabled, onClick = onClick, onLongClick = onLongClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, desc, Modifier.size(20.dp), tint = if (enabled) tint else muted)
         }
     }
 }

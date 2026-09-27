@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
@@ -18,6 +19,7 @@ import androidx.compose.material.icons.filled.ArrowDropUp
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.ExitToApp
+import androidx.compose.material.icons.filled.FormatSize
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.SettingsBrightness
@@ -29,6 +31,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -41,13 +44,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.sp
+import dev.jep.client.domain.model.TextSize
 import dev.jep.client.domain.model.ThemeMode
 import dev.jep.client.domain.model.TerminalAccess
+import dev.jep.client.presentation.theme.JepMono
+import dev.jep.client.presentation.theme.Radius
+import dev.jep.client.presentation.theme.Spacing
 
 // App-wide settings — preferences that belong to the person, not to one
 // conversation (that's the in-chat Settings panel). Theme lives here; so does
@@ -56,6 +62,7 @@ import dev.jep.client.domain.model.TerminalAccess
 @Composable
 fun SettingsScreen(
     theme: ThemeMode,
+    textSize: TextSize,
     terminalEnabled: Boolean,
     backgroundStreaming: Boolean,
     /** the code the daemon will accept next, when it has handed one over */
@@ -63,6 +70,7 @@ fun SettingsScreen(
     gateway: String?,
     onBack: () -> Unit,
     onTheme: (ThemeMode) -> Unit,
+    onTextSize: (TextSize) -> Unit,
     terminalAccess: TerminalAccess?,
     onUnlockTerminal: (String, (Boolean) -> Unit) -> Unit,
     onDisableTerminal: () -> Unit,
@@ -92,6 +100,7 @@ fun SettingsScreen(
                 ThemeRow("System", Icons.Filled.SettingsBrightness, theme == ThemeMode.SYSTEM) { onTheme(ThemeMode.SYSTEM) }
                 ThemeRow("Light", Icons.Filled.LightMode, theme == ThemeMode.LIGHT) { onTheme(ThemeMode.LIGHT) }
                 ThemeRow("Dark", Icons.Filled.DarkMode, theme == ThemeMode.DARK) { onTheme(ThemeMode.DARK) }
+                TextSizeRow(textSize, onTextSize)
             }
 
             item { SectionTitle("FEATURES", top = 18.dp) }
@@ -123,7 +132,7 @@ fun SettingsScreen(
             }
             if (terminalAccess?.allowed == false) {
                 item {
-                    Column(Modifier.padding(horizontal = 18.dp, vertical = 4.dp)) {
+                    Column(Modifier.padding(horizontal = Spacing.gutter, vertical = 4.dp)) {
                         Text(
                             "This gateway does not allow a terminal.",
                             fontSize = 13.sp,
@@ -150,7 +159,7 @@ fun SettingsScreen(
                                     "   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jep.tg.plist\n" +
                                     "3. reopen Settings and enable it here.",
                                 fontSize = 12.sp,
-                                fontFamily = FontFamily.Monospace,
+                                fontFamily = JepMono,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
@@ -170,7 +179,7 @@ fun SettingsScreen(
             item { SectionTitle("PAIRING", top = 18.dp) }
             item {
                 Row(
-                    Modifier.fillMaxWidth().clickable { forgetOpen = true }.padding(horizontal = 18.dp, vertical = 14.dp),
+                    Modifier.fillMaxWidth().clickable { forgetOpen = true }.padding(horizontal = Spacing.gutter, vertical = 13.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(Icons.Filled.ExitToApp, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.error)
@@ -322,7 +331,7 @@ private fun TerminalUnlockDialog(
 private fun SectionTitle(text: String, top: androidx.compose.ui.unit.Dp = 0.dp) {
     Text(
         text,
-        Modifier.padding(start = 18.dp, end = 18.dp, top = top, bottom = 8.dp),
+        Modifier.padding(start = Spacing.gutter, end = Spacing.gutter, top = top, bottom = 8.dp),
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -331,7 +340,7 @@ private fun SectionTitle(text: String, top: androidx.compose.ui.unit.Dp = 0.dp) 
 @Composable
 private fun ThemeRow(label: String, icon: ImageVector, selected: Boolean, onPick: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onPick).padding(horizontal = 18.dp, vertical = 12.dp),
+        Modifier.fillMaxWidth().clickable(onClick = onPick).padding(horizontal = Spacing.gutter, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(icon, null, Modifier.size(19.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -345,6 +354,46 @@ private fun ThemeRow(label: String, icon: ImageVector, selected: Boolean, onPick
     }
 }
 
+/**
+ * Text size, as a row of steps. Every option is labelled the size of a letter
+ * drawn at that size, so the choice previews itself; the segment carries a
+ * screen-reader name because "S" on its own says nothing spoken aloud.
+ */
+@Composable
+private fun TextSizeRow(size: TextSize, onPick: (TextSize) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = Spacing.gutter, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Filled.FormatSize, null, Modifier.size(19.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            "Text size",
+            Modifier.weight(1f).padding(start = 14.dp),
+            fontSize = 15.sp,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            TextSize.entries.forEach { option ->
+                val selected = option == size
+                Surface(
+                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                    shape = RoundedCornerShape(Radius.chip),
+                    modifier = Modifier
+                        .clickable { onPick(option) }
+                        .semantics { contentDescription = "Text size ${option.label}" },
+                ) {
+                    Text(
+                        option.label,
+                        Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                        fontSize = 12.sp,
+                        color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun SwitchRow(
     name: String,
@@ -355,7 +404,7 @@ private fun SwitchRow(
     onChange: (Boolean) -> Unit,
 ) {
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp),
+        Modifier.fillMaxWidth().padding(horizontal = Spacing.gutter, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(icon, null, Modifier.size(19.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -381,7 +430,7 @@ private fun InfoRow(label: String, value: String, onClick: (() -> Unit)? = null)
     Row(
         Modifier.fillMaxWidth()
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-            .padding(horizontal = 18.dp, vertical = 12.dp),
+            .padding(horizontal = Spacing.gutter, vertical = 11.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -389,7 +438,7 @@ private fun InfoRow(label: String, value: String, onClick: (() -> Unit)? = null)
         Text(
             value,
             fontSize = 12.sp,
-            fontFamily = FontFamily.Monospace,
+            fontFamily = JepMono,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }

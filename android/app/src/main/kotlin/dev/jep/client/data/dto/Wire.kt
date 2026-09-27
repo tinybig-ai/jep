@@ -277,6 +277,15 @@ data class AttachRes(val id: String, val name: String = "")
 @Serializable
 data class AskOptionDto(val id: String, val label: String, val style: String? = null)
 
+/** one question inside a `question` ask, each with its own choices */
+@Serializable
+data class AskQuestionDto(
+    val title: String = "",
+    val detail: String? = null,
+    val multiple: Boolean = false,
+    val options: List<AskOptionDto> = emptyList(),
+)
+
 @Serializable
 data class AskDto(
     val id: String,
@@ -285,6 +294,9 @@ data class AskDto(
     val detail: String? = null,
     val options: List<AskOptionDto> = emptyList(),
     val kind: String? = null,
+    /** present on a `question` ask that asked more than one thing: the grouping
+     *  is the answer's shape, not a display nicety */
+    val questions: List<AskQuestionDto> = emptyList(),
     val messageID: String? = null,
     val callID: String? = null,
     val at: Long? = null,

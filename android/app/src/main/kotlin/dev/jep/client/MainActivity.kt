@@ -57,6 +57,7 @@ class MainActivity : ComponentActivity() {
                     ThemeMode.LIGHT -> false
                     ThemeMode.SYSTEM -> isSystemInDarkTheme()
                 },
+                textScale = prefs.textSize.scale,
             ) {
                 Surface { JepApp(app) }
             }

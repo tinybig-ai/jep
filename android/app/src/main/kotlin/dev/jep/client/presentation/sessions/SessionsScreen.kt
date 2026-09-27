@@ -69,7 +69,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontFamily
+import dev.jep.client.presentation.theme.JepMono
+import dev.jep.client.presentation.theme.LocalSyntaxColors
+import dev.jep.client.presentation.theme.Radius
 import dev.jep.client.R
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -153,7 +155,7 @@ fun SessionsScreen(
                         Image(
                             painterResource(R.mipmap.ic_launcher),
                             null,
-                            Modifier.size(60.dp).clip(RoundedCornerShape(18.dp)),
+                            Modifier.size(60.dp).clip(RoundedCornerShape(Radius.card)),
                         )
                         Spacer(Modifier.width(12.dp))
                         Text("Jep")
@@ -286,7 +288,7 @@ private fun ImportDialog(
                                 (if (s.harness.isNotBlank()) "${s.harness} · " else "") +
                                     s.directory.trimEnd('/').split('/').takeLast(2).joinToString("/"),
                                 fontSize = 12.sp,
-                                fontFamily = FontFamily.Monospace,
+                                fontFamily = JepMono,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
                             )
@@ -372,7 +374,7 @@ private fun ArchivedDialog(
                                 Text(
                                     s.adapter ?: s.workspace.substringAfterLast('/'),
                                     fontSize = 12.sp,
-                                    fontFamily = FontFamily.Monospace,
+                                    fontFamily = JepMono,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
                                 )
@@ -454,7 +456,7 @@ private fun SessionRow(
                         if (session.subagents > 0) "  ·  ${session.subagents} subagent" + (if (session.subagents == 1) "" else "s") else ""
                     ),
                 fontSize = 13.sp,
-                fontFamily = FontFamily.Monospace,
+                fontFamily = JepMono,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
             )
@@ -490,8 +492,8 @@ private fun HarnessAvatar(harness: String?) {
     }
 }
 
-// the mark on a conversation that is working right now
-private val LiveMark = Color(0xFF4CAF50)
+// the mark on a conversation that is working right now — the theme's "live"
+// green, so it lifts in dark mode like the rest of the status colours
 
 // A pulse, not a spinner: a progress ring is indeterminate work you cannot
 // finish, while a slow glow is just "this is happening". One transition drives
@@ -505,12 +507,13 @@ private fun LiveDot() {
         animationSpec = infiniteRepeatable(tween(850, easing = LinearEasing), RepeatMode.Reverse),
         label = "pulse",
     )
+    val live = LocalSyntaxColors.current.live
     Box(
         Modifier.fillMaxSize().semantics { contentDescription = "running" },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(Icons.Filled.Circle, null, Modifier.fillMaxSize(), tint = LiveMark.copy(alpha = pulse * 0.30f))
-        Icon(Icons.Filled.Circle, null, Modifier.size(5.dp), tint = LiveMark.copy(alpha = pulse))
+        Icon(Icons.Filled.Circle, null, Modifier.fillMaxSize(), tint = live.copy(alpha = pulse * 0.30f))
+        Icon(Icons.Filled.Circle, null, Modifier.size(5.dp), tint = live.copy(alpha = pulse))
     }
 }
 
