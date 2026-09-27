@@ -51,3 +51,27 @@ ev '${prompt(t)}'
   assert.doesNotMatch(first.hookSpecificOutput.additionalContext, /typed on the desktop/)
   assert.equal(outputs[1], "", "caught up once, not on every message")
 })
+
+test("a reply sent with a quote catches up with its quote; tool results stay out", async () => {
+  // what jep's claude adapter writes for a quoted reply, then a tool result
+  const writer = path.join(await mkdtemp(path.join(os.tmpdir(), "jep-hook-w-")), "w.mjs")
+  await writeFile(
+    writer,
+    `import { appendFileSync } from "node:fs"
+const w = (o) => appendFileSync(process.argv[2], JSON.stringify({ entrypoint: "sdk-cli", timestamp: new Date().toISOString(), ...o }) + "\\n")
+w({ type: "user", message: { content: [{ type: "text", text: "[in reply to]\\n> shall I?" }, { type: "text", text: "yes, ship it" }] } })
+w({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "secret output" }] } })
+`,
+  )
+  const { outputs } = await window(
+    (t) => `
+sleep 1
+node ${writer} ${t}
+stamp
+ev '${prompt(t)}'
+`,
+  )
+  const ctx = JSON.parse(outputs[0]!).hookSpecificOutput.additionalContext as string
+  assert.match(ctx, /> shall I\?[\s\S]*yes, ship it/)
+  assert.doesNotMatch(ctx, /secret output/)
+})

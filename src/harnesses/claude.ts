@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url"
 import type { AgentRef, HarnessAdapter, HarnessSettingSpec, ModelRef, ModelCaps } from "../core/ports.ts"
 import type { AskRequest, DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionHold, SessionSummary, SkillDirs } from "../core/types.ts"
 import { resolveAgent } from "../core/agents.ts"
-import { withAttachments } from "../core/transcript.ts"
+import { quoteBlock, readQuoteBlock, withAttachments } from "../core/transcript.ts"
 
 // claude's `--agent` takes a subagent type jep can't enumerate reliably, so it
 // offers no switch here. A requested id (opencode's "build", say, left over from
@@ -410,7 +410,7 @@ export class ClaudeAdapter implements HarnessAdapter {
       // and neither is Claude Code talking to itself — the local-command
       // caveat, a slash command's name/args, its stdout
       if (d.isMeta || isLocalCommandWrapper(d.message?.content)) continue
-      const parts = foldResults(contentParts(d.message?.content), toolsByID)
+      const parts = foldResults(d.type === "user" ? userParts(d.message?.content) : contentParts(d.message?.content), toolsByID)
       // A turn whose whole content was tool results has nothing left to say:
       // every part folded onto an earlier call. Emitting it anyway is what put
       // an empty purple bubble on the phone after every single tool call.
@@ -440,12 +440,19 @@ export class ClaudeAdapter implements HarnessAdapter {
       filePaths?: string[]
       agent?: string
       harnessSettings?: Record<string, boolean>
+      quote?: string
     },
   ): Promise<Message> {
     const native = this.#real(sessionID)
     const pending = isPending(native)
+    // A quote goes in as a content block of its own, ahead of the message:
+    // that takes the user message on stdin as stream-json instead of as an
+    // argument. The transcript keeps the blocks apart, which is how
+    // messages() knows the quote without reading it out of the words.
+    const quote = opts?.quote?.trim() || undefined
 
     const args = ["-p", "--output-format", "stream-json", "--include-partial-messages", "--verbose"]
+    if (quote) args.push("--input-format", "stream-json")
     if (opts?.harnessSettings?.dangerouslySkipPermissions) args.push("--dangerously-skip-permissions")
     if (opts?.model?.modelID) args.push("--model", opts.model.modelID)
     const agent = resolveAgent(AGENTS, opts?.agent)
@@ -454,7 +461,7 @@ export class ClaudeAdapter implements HarnessAdapter {
     // attachments have no flag in print mode; naming the paths is what lets
     // the agent read them with its own tools
     const body = withAttachments(text, opts?.filePaths)
-    args.push(body)
+    if (!quote) args.push(body)
 
     // Route permission prompts to the phone. Without this, print mode has
     // nobody to ask and anything gated is simply refused — the turn comes back
@@ -490,8 +497,12 @@ export class ClaudeAdapter implements HarnessAdapter {
     const child = spawn(CLAUDE_BIN, args, {
       cwd: this.workspace,
       env: turnEnv(process.env, opts?.harnessSettings?.lowPriority === true),
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [quote ? "pipe" : "ignore", "pipe", "pipe"],
     })
+    if (quote) {
+      const content = [{ type: "text", text: quoteBlock(quote) }, { type: "text", text: body }]
+      child.stdin?.end(`${JSON.stringify({ type: "user", message: { role: "user", content } })}\n`)
+    }
     this.#running.set(native, child)
     if (!pending) void markRemoteTurn(this.#turnsDir, native)
 
@@ -1143,6 +1154,16 @@ function startBlock(block: any): Part | null {
 }
 
 // Anthropic content blocks -> jep parts.
+// A user message jep sent with a quote holds it as its own first content block
+// (see prompt()); anything else is read as it is.
+function userParts(content: any): Part[] {
+  if (Array.isArray(content) && content.length > 1 && content[0]?.type === "text") {
+    const quote = readQuoteBlock(String(content[0].text ?? ""))
+    if (quote) return [{ kind: "quote", text: quote }, ...contentParts(content.slice(1))]
+  }
+  return contentParts(content)
+}
+
 function contentParts(content: any): Part[] {
   if (typeof content === "string") return content.trim() ? [{ kind: "text", text: content }] : []
   if (!Array.isArray(content)) return []

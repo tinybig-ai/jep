@@ -74,6 +74,10 @@ export interface HarnessAdapter {
       agent?: string
       /** boolean settings declared by this harness, persisted per session */
       harnessSettings?: Record<string, boolean>
+      /** the words this message answers. The adapter hands them to its harness
+       * in whatever form it takes, and messages() gives them back as a quote
+       * part, never as text in the message (see quoteBlock) */
+      quote?: string
     },
   ): Promise<Message>
   /** @param opts.limit ask the harness for only the newest N, when it can

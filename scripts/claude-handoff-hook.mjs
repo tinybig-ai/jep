@@ -117,8 +117,16 @@ function phoneMessages(transcript, since) {
     if (d.entrypoint !== "sdk-cli" || d.isSidechain || d.isMeta) continue
     if (!(Date.parse(d.timestamp ?? "") > since)) continue
     const content = d.message?.content
-    if (d.type === "user" && typeof content === "string" && content.trim()) {
-      out.push({ who: "User (on the phone)", text: content.trim() })
+    // a reply sent with a quote is blocks of text (the quote, then the words);
+    // a tool result is blocks too, but not text ones, and is left out
+    const said =
+      typeof content === "string"
+        ? content.trim()
+        : Array.isArray(content) && content.length && content.every((c) => c?.type === "text")
+          ? content.map((c) => String(c.text ?? "").trim()).filter(Boolean).join("\n\n")
+          : ""
+    if (d.type === "user" && said) {
+      out.push({ who: "User (on the phone)", text: said })
     } else if (d.type === "assistant" && Array.isArray(content)) {
       const text = content.filter((c) => c?.type === "text" && c.text?.trim()).map((c) => c.text.trim()).join("\n\n")
       if (text) out.push({ who: "Assistant (on the phone)", text })

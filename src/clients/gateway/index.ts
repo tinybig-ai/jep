@@ -20,7 +20,7 @@ import type { AskRequest, DomainEvent, HarnessError, Message, Part } from "../..
 import { eventSession, isAborted } from "../../core/types.ts"
 import { describeError } from "../../core/errors.ts"
 import { usageOf } from "../../core/usage.ts"
-import { attachedPaths, splitQuote, stripInjectedContext, transcriptText, withQuote } from "../../core/transcript.ts"
+import { attachedPaths, stripInjectedContext, transcriptText } from "../../core/transcript.ts"
 import { newPairCode } from "../telegram/pair.ts"
 
 export interface GatewayDeps {
@@ -134,14 +134,8 @@ function cleanForDisplay(m: Message): Message {
       ? attachedPaths(stripInjectedContext(p.text)).map((fp) => ({ kind: "file" as const, filePath: fp, fileName: basename(fp), mimeType: mimeForPath(fp) }))
       : [],
   )
-  // a quote the message was sent with comes back as its own part, above it,
-  // not as a markdown block in the words
   const parts = m.parts
-    .flatMap((p): Part[] => {
-      if (p.kind !== "text") return [p]
-      const { quote, text } = splitQuote(transcriptText(p.text))
-      return quote ? [{ kind: "quote", text: quote }, { ...p, text }] : [{ ...p, text }]
-    })
+    .map((p) => (p.kind === "text" ? { ...p, text: transcriptText(p.text) } : p))
     .filter((p) => p.kind !== "text" || p.text.trim().length > 0)
   return { ...m, parts: [...parts, ...files] }
 }
@@ -728,7 +722,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     steer: boolean
     /** the client's own handle, so it can edit / cancel / force this while it waits */
     clientID?: string
-    /** the words this answers; reaches the harness as a quote block ahead of text */
+    /** the words this answers; the adapter hands it to its harness */
     quote?: string
     resolve: (r: TurnResult) => void
   }
@@ -830,12 +824,13 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     const ac = new AbortController()
     st.signal = ac
     try {
-      const message = await adapter.prompt(id, withQuote(next.text, next.quote), {
+      const message = await adapter.prompt(id, next.text, {
         timeoutMs: 0,
         filePaths: next.filePaths,
         ...(next.model ? { model: next.model } : {}),
         ...(next.agent ? { agent: next.agent } : {}),
         harnessSettings: harnessSettings.get(id) ?? {},
+        ...(next.quote ? { quote: next.quote } : {}),
         signal: ac.signal,
       })
       next.resolve({ status: 200, message })

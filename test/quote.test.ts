@@ -1,38 +1,39 @@
-// A quote is a jep concept: sent beside the words, handed to the harness as a
-// plain "> " block the model reads as a quote, and lifted back out of the
-// record so no client shows it as markdown typed into the message.
+// A quote is a jep concept: sent beside the words, handed by each adapter to
+// its harness in the most structured form that harness takes, and given back
+// by messages() as a quote part. The gateway only passes it through.
 import test from "node:test"
 import assert from "node:assert/strict"
 import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { splitQuote, withQuote } from "../src/core/transcript.ts"
+import { quoteBlock, readQuoteBlock, splitQuoteText, withQuoteText } from "../src/core/transcript.ts"
 import { startGateway } from "../src/clients/gateway/index.ts"
 import type { HarnessAdapter } from "../src/core/ports.ts"
 import type { Message, SessionSummary } from "../src/core/types.ts"
 
-test("a quote goes to the harness as a quote block and comes back whole", () => {
-  const sent = withQuote("do the second one", "first line\n\nsecond line")
-  assert.equal(sent, "> first line\n>\n> second line\n\ndo the second one")
-  assert.deepEqual(splitQuote(sent), { quote: "first line\n\nsecond line", text: "do the second one" })
+test("the block the model reads is headed, and reads back whole", () => {
+  const block = quoteBlock("first line\n\nsecond line")
+  assert.equal(block, "[in reply to]\n> first line\n>\n> second line")
+  assert.equal(readQuoteBlock(block), "first line\n\nsecond line")
+  // anything else is not one
+  assert.equal(readQuoteBlock("> first line"), null)
+  assert.equal(readQuoteBlock("[in reply to]\n> a\nnot quoted"), null)
 })
 
-test("no quote, nothing added", () => {
-  assert.equal(withQuote("hello"), "hello")
-  assert.equal(withQuote("hello", "  "), "hello")
+test("a text-only harness gets the block ahead of the message, and nothing else is taken back", () => {
+  const sent = withQuoteText("do the second one", "shall I?")
+  assert.equal(sent, "[in reply to]\n> shall I?\n\ndo the second one")
+  assert.deepEqual(splitQuoteText(sent), { quote: "shall I?", text: "do the second one" })
+  assert.equal(withQuoteText("hello"), "hello")
+  assert.equal(withQuoteText("hello", "  "), "hello")
+  // a blockquote you typed yourself is your own markdown, left alone
+  assert.deepEqual(splitQuoteText("> my own quote\n\nand my words"), { text: "> my own quote\n\nand my words" })
 })
 
-test("only a leading block with words after it is a quote", () => {
-  // a message that is all quote was typed that way
-  assert.deepEqual(splitQuote("> just this"), { text: "> just this" })
-  // a quote in the middle is the person's own markdown
-  assert.deepEqual(splitQuote("look:\n> this\n\nok"), { text: "look:\n> this\n\nok" })
-  assert.deepEqual(splitQuote("plain"), { text: "plain" })
-})
-
-test("the gateway hands the quote on, and serves it back as its own part", async () => {
+test("the gateway hands the quote to the adapter and serves its quote part", async () => {
   const session: SessionSummary = { id: "s1", title: "T", workspace: "/tmp/ws", createdAt: 1, updatedAt: 2 }
   const record: Message[] = []
+  let asked: { text: string; quote?: string } | undefined
   const adapter = {
     id: "fake",
     workspace: "/tmp/ws",
@@ -41,8 +42,9 @@ test("the gateway hands the quote on, and serves it back as its own part", async
     async createSession() { return session },
     async getSession(id: string) { return id === "s1" ? session : null },
     async listSessions() { return [session] },
-    async prompt(_id: string, text: string) {
-      record.push({ id: "u1", sessionID: "s1", role: "user", time: 1, parts: [{ kind: "text", text }] })
+    async prompt(_id: string, text: string, opts?: { quote?: string }) {
+      asked = { text, quote: opts?.quote }
+      record.push({ id: "u1", sessionID: "s1", role: "user", time: 1, parts: [{ kind: "quote", text: opts?.quote ?? "" }, { kind: "text", text }] })
       return { id: "a1", sessionID: "s1", role: "assistant", time: 2, parts: [{ kind: "text", text: "ok" }] } as Message
     },
     async deleteSession() { return true },
@@ -66,7 +68,8 @@ test("the gateway hands the quote on, and serves it back as its own part", async
     const { token } = (await pair.json()) as { token: string }
     const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" }
     await fetch(`${base}/prompt`, { method: "POST", headers, body: JSON.stringify({ id: "s1", text: "yes, that", quote: "shall I?" }) })
-    assert.equal((record[0]!.parts[0] as { text: string }).text, "> shall I?\n\nyes, that")
+    // the words untouched, the quote beside them
+    assert.deepEqual(asked, { text: "yes, that", quote: "shall I?" })
 
     const h = await fetch(`${base}/history`, { method: "POST", headers, body: JSON.stringify({ id: "s1" }) })
     const { messages } = (await h.json()) as { messages: Message[] }

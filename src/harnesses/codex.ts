@@ -6,6 +6,7 @@ import os from "node:os"
 import path from "node:path"
 import type { HarnessAdapter, ModelRef, ModelCaps } from "../core/ports.ts"
 import type { DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionSummary, SkillDirs } from "../core/types.ts"
+import { splitQuoteText, withQuoteText } from "../core/transcript.ts"
 
 /**
  * Codex CLI as a harness.
@@ -330,13 +331,13 @@ export class CodexAdapter implements HarnessAdapter {
 
     for (const { row, payload } of rows) {
       const time = Date.parse(row.timestamp ?? "") || Date.now()
-      const push = (role: "user" | "assistant", part: Part) => {
+      const push = (role: "user" | "assistant", part: Part | Part[]) => {
         const msg: Message = {
           id: toInternalId(`${native}:${payload.id ?? out.length}`),
           sessionID: toInternalId(native),
           role,
           time,
-          parts: [part],
+          parts: Array.isArray(part) ? part : [part],
         }
         out.push(msg)
         if (role === "assistant") lastAssistant = msg
@@ -377,7 +378,12 @@ export class CodexAdapter implements HarnessAdapter {
               if (lastTool) lastTool.output = result
               break
             }
-            push(payload.role === "user" ? "user" : "assistant", { kind: "text", text })
+            if (payload.role === "user") {
+              const { quote, text: words } = splitQuoteText(text)
+              push("user", quote ? [{ kind: "quote", text: quote }, { kind: "text", text: words }] : { kind: "text", text: words })
+            } else {
+              push("assistant", { kind: "text", text })
+            }
             break
           }
           case "reasoning": {
@@ -434,6 +440,7 @@ export class CodexAdapter implements HarnessAdapter {
       model?: ModelRef
       filePaths?: string[]
       agent?: string
+      quote?: string
     },
   ): Promise<Message> {
     const native = this.#real(sessionID)
@@ -444,7 +451,9 @@ export class CodexAdapter implements HarnessAdapter {
     for (const f of opts?.filePaths ?? []) args.push("-i", f)
     // resume keeps the thread; a pending session starts a fresh one
     if (!pending) args.push("resume", native)
-    args.push(text)
+    // codex takes nothing but text, so a quote is a headed block ahead of the
+    // message, and messages() takes back exactly that block (splitQuoteText)
+    args.push(withQuoteText(text, opts?.quote))
 
     const child = spawn(CODEX_BIN, args, { cwd: this.workspace, stdio: ["ignore", "pipe", "pipe"] })
     this.#running.set(native, child)

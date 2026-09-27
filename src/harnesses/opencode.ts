@@ -8,6 +8,7 @@ import type { AgentRef, HarnessAdapter, ModelRef, ModelCaps } from "../core/port
 import type { AskOption, DomainEvent, FileDiff, HarnessError, Message, Part, ProjectSummary, SessionSummary, SkillDirs } from "../core/types.ts"
 import { TurnAbortedError } from "../core/types.ts"
 import { resolveAgent } from "../core/agents.ts"
+import { quoteBlock, readQuoteBlock } from "../core/transcript.ts"
 import { parseOpencodeLogError } from "./opencode-log.ts"
 const OPENCODE_BIN = process.env.OPENCODE_BIN ?? "opencode"
 const MODEL_REF = process.env.JEP_MODEL ?? "localfree-models-proxy/auto"
@@ -130,6 +131,11 @@ function parseSse(raw: string): SseFrame[] {
 }
 
 function mapPart(part: any, workspace: string): Part {
+  // jep's own quote part (see prompt()): tagged when sent, so it is known
+  // without reading its words
+  if (part?.type === "text" && part?.metadata?.jep === "quote") {
+    return { kind: "quote", text: String(part.metadata.quote ?? readQuoteBlock(part.text ?? "") ?? "") }
+  }
   // opencode marks its own scaffolding `synthetic` — e.g. the
   // "Called the Read tool with the following input: …" text it inserts when a
   // file is attached, and the "Continue if you have next steps…" prompt it
@@ -579,7 +585,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
   async prompt(
     sessionID: string,
     text: string,
-    opts?: { timeoutMs?: number; signal?: AbortSignal; model?: ModelRef; filePaths?: string[]; agent?: string },
+    opts?: { timeoutMs?: number; signal?: AbortSignal; model?: ModelRef; filePaths?: string[]; agent?: string; quote?: string },
   ): Promise<Message> {
     const timeout = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS
     // a fresh turn invalidates the last turn's provider failure: whatever we
@@ -611,6 +617,9 @@ export class OpenCodeAdapter implements HarnessAdapter {
       const model = opts?.model ?? { providerID: defaultProvider, modelID: defaultModel }
       const agent = resolveAgent(AGENTS, opts?.agent)
       const parts = [
+        // a quote is a part of its own, tagged jep's, so it comes back as a
+        // quote and not as words in the message; the model reads its text
+        ...(opts?.quote?.trim() ? [{ type: "text", text: quoteBlock(opts.quote), metadata: { jep: "quote", quote: opts.quote.trim() } }] : []),
         { type: "text", text },
         ...(opts?.filePaths ?? []).map((fp) => ({ type: "file", mime: mimeFor(fp), url: pathToFileURL(fp).href })),
       ]

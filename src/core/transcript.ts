@@ -28,30 +28,36 @@ export const withAttachments = (text: string, paths: string[] = []): string =>
   paths.length ? `${text}\n\n${ATTACHMENT_HEADER}\n${paths.map((p) => `- ${p}`).join("\n")}` : text
 
 // A quote is part of a message: the words it answers, shown above it the way a
-// chat app shows a reply. The harness has no such idea, so it gets the quote as
-// a plain "> " block ahead of the message, which a model reads as a quote, and
-// the block is lifted back out of the record for display. Built here and split
-// here, so the two can't drift.
-export const withQuote = (text: string, quote?: string): string => {
-  const q = quote?.trim()
-  if (!q) return text
-  return `${q.split("\n").map((l) => (l.trim() ? `> ${l}` : ">")).join("\n")}\n\n${text}`
+// chat app shows a reply. No harness has a reply-to, and the model has to read
+// the quoted words, so each adapter hands them over in the most structured form
+// its harness takes (opencode: a part of its own, tagged; claude: a content
+// block of its own; codex: text only) and reads back only what it wrote. This
+// is the block the model reads, the same on every harness.
+export const QUOTE_HEADER = "[in reply to]"
+
+export const quoteBlock = (quote: string): string =>
+  `${QUOTE_HEADER}\n${quote.trim().split("\n").map((l) => (l.trim() ? `> ${l}` : ">")).join("\n")}`
+
+/** the quote in a block quoteBlock wrote, or null: the whole block must be one */
+export const readQuoteBlock = (block: string): string | null => {
+  if (!block.startsWith(`${QUOTE_HEADER}\n`)) return null
+  const lines = block.slice(QUOTE_HEADER.length + 1).trimEnd().split("\n")
+  if (!lines.every((l) => l.startsWith(">"))) return null
+  return lines.map((l) => l.replace(/^> ?/, "")).join("\n").trim() || null
 }
 
-/** a message's leading quote block, and the rest. Only a block of "> " lines
- *  at the very start with words after it counts: a message that is all quote
- *  was typed that way. */
-export const splitQuote = (text: string): { quote?: string; text: string } => {
-  const m = text.match(/^((?:>[^\n]*\n)+)\n+(?=\S)/)
-  if (!m) return { text }
-  const quote = m[1]!
-    .trimEnd()
-    .split("\n")
-    .map((l) => l.replace(/^> ?/, ""))
-    .join("\n")
-    .trim()
-  if (!quote) return { text }
-  return { quote, text: text.slice(m[0].length) }
+/** for a harness that takes only text: the block, a blank line, the message */
+export const withQuoteText = (text: string, quote?: string): string =>
+  quote?.trim() ? `${quoteBlock(quote)}\n\n${text}` : text
+
+/** undo withQuoteText, and nothing else: a message that does not open with
+ *  the header is left whole, whatever markdown it holds */
+export const splitQuoteText = (text: string): { quote?: string; text: string } => {
+  if (!text.startsWith(`${QUOTE_HEADER}\n`)) return { text }
+  const end = text.indexOf("\n\n")
+  if (end < 0) return { text }
+  const quote = readQuoteBlock(text.slice(0, end))
+  return quote ? { quote, text: text.slice(end + 2) } : { text }
 }
 
 // Anchored to the end and only over lines that are all "- <path>", so a message

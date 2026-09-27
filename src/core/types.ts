@@ -77,7 +77,7 @@ export interface FilePart {
   id?: string
 }
 
-/** the words a user message answers, shown above it (see withQuote) */
+/** the words a user message answers, shown above it (see quoteBlock) */
 export interface QuotePart {
   kind: "quote"
   text: string
