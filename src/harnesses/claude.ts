@@ -85,11 +85,19 @@ export const CLAUDE_SETTINGS: HarnessSettingSpec[] = [
 // Claude Code 2.1.283; it is Claude Code's behavior, not a documented API.
 export const LOW_PRIORITY_HEADER = "anthropic-usage-limit: slow"
 
-/** the environment a turn runs with: `lowPriority` adds the header to any already set */
+/**
+ * The environment a turn runs with. The setting decides the header either way:
+ * on adds it once, off takes out one the daemon's own environment may carry
+ * (the daemon started from a low-priority turn, say), so off is really off.
+ * Every other custom header is left as it was.
+ */
 export function turnEnv(base: NodeJS.ProcessEnv, lowPriority: boolean): NodeJS.ProcessEnv {
-  if (!lowPriority) return base
-  const existing = (base.ANTHROPIC_CUSTOM_HEADERS ?? "").split("\n").filter((l) => l.trim() && !/^anthropic-usage-limit\s*:/i.test(l))
-  return { ...base, ANTHROPIC_CUSTOM_HEADERS: [...existing, LOW_PRIORITY_HEADER].join("\n") }
+  const others = (base.ANTHROPIC_CUSTOM_HEADERS ?? "").split("\n").filter((l) => l.trim() && !/^anthropic-usage-limit\s*:/i.test(l))
+  const headers = lowPriority ? [...others, LOW_PRIORITY_HEADER] : others
+  const env = { ...base }
+  if (headers.length) env.ANTHROPIC_CUSTOM_HEADERS = headers.join("\n")
+  else delete env.ANTHROPIC_CUSTOM_HEADERS
+  return env
 }
 
 /**
@@ -108,6 +116,8 @@ const CLAUDE_HOME = process.env.CLAUDE_HOME ?? path.join(os.homedir(), ".claude"
 const PROJECTS_DIR = path.join(CLAUDE_HOME, "projects")
 // how long a transcript must stay quiet before its change is announced
 const CHANGE_QUIET_MS = Number(process.env.JEP_CHANGE_QUIET_MS ?? "") || 800
+// compacting runs a summarizing model turn, so it gets a turn-sized budget
+const COMPACT_TIMEOUT_MS = Number(process.env.JEP_COMPACT_TIMEOUT_MS ?? "") || 300_000
 
 // The MCP server Claude Code calls in place of a permission prompt (see
 // claude-ask-mcp.mjs). Spawned by Claude Code, not by us, which is why it is a
@@ -369,9 +379,24 @@ export class ClaudeAdapter implements HarnessAdapter {
       } catch {
         continue
       }
-      if (d.type !== "user" && d.type !== "assistant") continue
       // sidechains are Task-tool subagents: somebody else's turn, not yours
       if (d.isSidechain) continue
+      // A compaction is a transcript fact: Claude Code writes this boundary,
+      // then the summary it carries forward. The boundary becomes the same
+      // divider an opencode compaction draws; the summary is written for the
+      // model, so it stays out of the conversation, as it does in Claude Code.
+      if (d.type === "system" && d.subtype === "compact_boundary") {
+        out.push({
+          id: toInternalId(`${native}:${d.uuid ?? out.length}`),
+          sessionID: toInternalId(native),
+          role: "user",
+          time: Date.parse(d.timestamp ?? "") || Date.now(),
+          parts: [{ kind: "other", nativeType: "compaction" }],
+        })
+        continue
+      }
+      if (d.type !== "user" && d.type !== "assistant") continue
+      if (d.isCompactSummary) continue
       // and neither is Claude Code talking to itself — the local-command
       // caveat, a slash command's name/args, its stdout
       if (d.isMeta || isLocalCommandWrapper(d.message?.content)) continue
@@ -630,6 +655,43 @@ export class ClaudeAdapter implements HarnessAdapter {
       ...(cost !== undefined ? { cost } : {}),
       ...(model ? { model } : {}),
       ...(failure ? { error: failure } : {}),
+    }
+  }
+
+  // Compress the conversation: Claude Code's /compact, which it also runs from
+  // print mode (supportsNonInteractive). It writes a compact_boundary and the
+  // summary into the transcript, and the next --resume carries only those
+  // forward. Refused (false) while a turn owns the conversation.
+  async compact(sessionID: string): Promise<boolean> {
+    const native = this.#real(sessionID)
+    if (isPending(native) || this.#running.has(native)) return false
+    const child = spawn(CLAUDE_BIN, ["-p", "--output-format", "json", "--resume", native, "/compact"], {
+      cwd: this.workspace,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    })
+    this.#running.set(native, child)
+    let out = ""
+    child.stdout?.on("data", (c: Buffer) => (out += c.toString()))
+    const timer = setTimeout(() => child.kill("SIGTERM"), COMPACT_TIMEOUT_MS)
+    try {
+      const code = await new Promise<number | null>((resolve) => {
+        child.once("close", resolve)
+        child.once("error", () => resolve(null))
+      })
+      if (child.killed) throw new Error(`compacting timed out after ${Math.round(COMPACT_TIMEOUT_MS / 1000)}s`)
+      if (code !== 0) return false
+      try {
+        return (JSON.parse(out) as { is_error?: boolean }).is_error !== true
+      } catch {
+        return false
+      }
+    } finally {
+      clearTimeout(timer)
+      this.#running.delete(native)
+      this.#metaCache.clear()
+      // it rewrote the conversation from here: a desktop window must catch up
+      void markRemoteTurn(this.#turnsDir, native)
     }
   }
 

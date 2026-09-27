@@ -31,8 +31,11 @@ process.env.CLAUDE_HOME = dir
 
 const { ClaudeAdapter, turnEnv, LOW_PRIORITY_HEADER } = await import("../src/harnesses/claude.ts")
 
-test("the header is added to what is already there, never twice", () => {
+test("the header is added to what is already there, never twice, and off means off", () => {
   assert.equal(turnEnv({ A: "1" }, false).ANTHROPIC_CUSTOM_HEADERS, undefined)
+  // a daemon started from inside a low-priority turn inherits the header
+  assert.equal(turnEnv({ ANTHROPIC_CUSTOM_HEADERS: LOW_PRIORITY_HEADER }, false).ANTHROPIC_CUSTOM_HEADERS, undefined)
+  assert.equal(turnEnv({ ANTHROPIC_CUSTOM_HEADERS: `x-gateway: abc\n${LOW_PRIORITY_HEADER}` }, false).ANTHROPIC_CUSTOM_HEADERS, "x-gateway: abc")
   assert.equal(turnEnv({}, true).ANTHROPIC_CUSTOM_HEADERS, LOW_PRIORITY_HEADER)
   assert.equal(
     turnEnv({ ANTHROPIC_CUSTOM_HEADERS: "x-gateway: abc\nanthropic-usage-limit: fast" }, true).ANTHROPIC_CUSTOM_HEADERS,
