@@ -6,7 +6,7 @@
 // which stays in step with this file.
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
-import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises"
+import { mkdir, readdir, readFile, realpath, stat, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path"
 import type { HarnessAdapter, HarnessSettingSpec, SessionImport, Terminal } from "../../core/ports.ts"
@@ -880,9 +880,22 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     }
   }
 
-  // the only directories a client may read: our own data, and any workspace a
-  // harness is serving
-  const rootsFor = (): string[] => [resolve(deps.dataHome), ...deps.adapters().map(({ adapter }) => resolve(adapter.workspace))]
+  // the only directories a client may read: uploaded files (the phone's and
+  // Telegram's), and any workspace a harness is serving. The rest of dataHome
+  // holds tokens and credentials and is never served.
+  const rootsFor = (): string[] => [
+    resolve(attachmentRoot),
+    resolve(deps.dataHome, "uploads"),
+    ...deps.adapters().map(({ adapter }) => resolve(adapter.workspace)),
+  ]
+  const within = (abs: string, roots: string[]): boolean => roots.some((r) => abs === r || abs.startsWith(r + sep))
+  // the real path of a file inside the roots, or null: a symlink in a
+  // workspace must not reach outside it
+  const servedPath = async (abs: string): Promise<string | null> => {
+    const real = await realpath(abs)
+    const roots = await Promise.all(rootsFor().map((r) => realpath(r).catch(() => r)))
+    return within(real, roots) ? real : null
+  }
   /** a reader shows text; a whole 200 MB file in a sheet helps nobody */
   const READ_MAX = 2 << 20
 
@@ -941,23 +954,23 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       }
 
       // bytes for a file part, so the phone can render an image inline. The
-      // phone builds this from the part's filePath; only paths under jep's own
-      // data home or a served workspace are readable, so this is not a general
-      // file reader.
+      // phone builds this from the part's filePath; only uploaded files and
+      // served workspaces are readable (symlinks resolved), so this is not a
+      // general file reader.
       if (path === "/file" && req.method === "GET") {
         const encoded = url.searchParams.get("p") ?? ""
         const decoded = encoded ? Buffer.from(encoded, "base64url").toString("utf8") : ""
         if (!decoded) return json(res, 400, { error: "p required" })
         const abs = resolve(decoded)
-        if (!rootsFor().some((r) => abs === r || abs.startsWith(r + sep))) {
-          return json(res, 403, { error: "outside the served roots" })
-        }
+        if (!within(abs, rootsFor())) return json(res, 403, { error: "outside the served roots" })
         try {
-          const info = await stat(abs)
+          const real = await servedPath(abs)
+          if (!real) return json(res, 403, { error: "outside the served roots" })
+          const info = await stat(real)
           if (!info.isFile() || info.size > FILE_MAX) return json(res, 404, { error: "no such file" })
-          const body = await readFile(abs)
+          const body = await readFile(real)
           res.writeHead(200, { "content-type": mimeForPath(abs), "cache-control": "private, max-age=300" })
-          res.end(body)
+          return res.end(body)
         } catch {
           return json(res, 404, { error: "no such file" })
         }
@@ -1316,14 +1329,14 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const abs = isAbsolute(readPath)
           ? resolve(readPath)
           : resolve(adapter.workspace, readPath)
-        if (!rootsFor().some((r) => abs === r || abs.startsWith(r + sep))) {
-          return json(res, 403, { error: "outside the served roots" })
-        }
+        if (!within(abs, rootsFor())) return json(res, 403, { error: "outside the served roots" })
         try {
-          const info = await stat(abs)
+          const real = await servedPath(abs)
+          if (!real) return json(res, 403, { error: "outside the served roots" })
+          const info = await stat(real)
           if (!info.isFile()) return json(res, 404, { error: "no such file" })
           if (info.size > READ_MAX) return json(res, 413, { error: "too large to read here" })
-          return json(res, 200, { path: readPath, text: (await readFile(abs)).toString("utf8") })
+          return json(res, 200, { path: readPath, text: (await readFile(real)).toString("utf8") })
         } catch {
           return json(res, 404, { error: "no such file" })
         }

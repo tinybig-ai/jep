@@ -5,7 +5,7 @@ import type { HarnessAdapter } from "../src/core/ports.ts"
 import type { DomainEvent, Message, SessionSummary } from "../src/core/types.ts"
 import { TurnAbortedError } from "../src/core/types.ts"
 import { JEP_CONTEXT, JEP_CONTEXT_FOOTER } from "../src/core/transcript.ts"
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -143,12 +143,13 @@ async function startWith(
   a: ReturnType<typeof stallable>,
   workspace = a.adapter.workspace,
   liveness?: { turnIdleMs?: number; toolIdleMs?: number; idleGraceMs?: number; tickMs?: number },
-): Promise<{ base: string; headers: Record<string, string>; g: GatewayHandle }> {
+): Promise<{ base: string; headers: Record<string, string>; g: GatewayHandle; dataHome: string }> {
+  const dataHome = mkdtempSync(join(tmpdir(), "gw-q-"))
   const g = await startGateway({
     // the workspace the served roots are built from, so a test can point the
     // adapter at a real directory when resolution matters
     adapters: () => [{ name: "fake-ws", adapter: { ...a.adapter, workspace } }],
-    dataHome: mkdtempSync(join(tmpdir(), "gw-q-")),
+    dataHome,
     port: 0,
     pairCode: "TESTCODE",
     pairLimit: 100,
@@ -156,7 +157,7 @@ async function startWith(
   })
   const base = `http://127.0.0.1:${g.port}`
   const token = await pair(base, "TESTCODE")
-  return { base, headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, g }
+  return { base, headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, g, dataHome }
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -1336,6 +1337,42 @@ test("a relative link is read from the session's own workspace", async () => {
 
     const missing = await read("docs/nope.md")
     assert.equal(missing.status, 404)
+  } finally {
+    await g.close()
+  }
+})
+
+test("the served roots hold workspaces and uploads, never jep's own stores or a symlink out", async () => {
+  // dataHome also holds the device tokens and the mirrored provider
+  // credentials; a paired phone must not be able to read either
+  const ws = mkdtempSync(join(tmpdir(), "gw-ws-"))
+  const outside = mkdtempSync(join(tmpdir(), "gw-out-"))
+  writeFileSync(join(outside, "secret.txt"), "not yours")
+  writeFileSync(join(ws, "notes.md"), "in the workspace")
+  symlinkSync(join(outside, "secret.txt"), join(ws, "link.txt"))
+  const a = stallable()
+  const { base, headers, g, dataHome } = await startWith(a, ws)
+  mkdirSync(join(dataHome, "opencode"), { recursive: true })
+  writeFileSync(join(dataHome, "opencode", "auth.json"), "{\"key\":\"sk-test\"}")
+  mkdirSync(join(dataHome, "uploads"), { recursive: true })
+  writeFileSync(join(dataHome, "uploads", "photo.png"), "png")
+  try {
+    const file = async (p: string) => {
+      const res = await fetch(`${base}/file?p=${Buffer.from(p).toString("base64url")}`, { headers })
+      return { status: res.status, text: await res.text() }
+    }
+    const read = async (path: string) =>
+      (await fetch(`${base}/read`, { method: "POST", headers, body: JSON.stringify({ id: "s1", path }) })).status
+
+    assert.equal((await file(join(ws, "notes.md"))).text, "in the workspace")
+    assert.equal((await file(join(dataHome, "uploads", "photo.png"))).text, "png")
+    assert.equal((await file(join(dataHome, "opencode", "auth.json"))).status, 403)
+    assert.equal((await file(join(dataHome, "gateway-tokens.json"))).status, 403)
+    assert.equal((await file(join(ws, "link.txt"))).status, 403)
+    assert.equal(await read("link.txt"), 403)
+    assert.equal(await read(join(dataHome, "gateway-tokens.json")), 403)
+    // the server is still healthy after a served file (no second response)
+    assert.equal((await fetch(`${base}/health`)).status, 200)
   } finally {
     await g.close()
   }
