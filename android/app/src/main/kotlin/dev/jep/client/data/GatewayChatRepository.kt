@@ -299,12 +299,14 @@ private val json = Json { ignoreUnknownKeys = true; isLenient = true }
             batch
         }
 
-    override suspend fun prompt(sessionId: String, text: String, files: List<String>, clientID: String?, mode: SendMode): ChatMessage {
+    override suspend fun prompt(sessionId: String, text: String, files: List<String>, clientID: String?, mode: SendMode, quote: String?): ChatMessage {
         val body = buildJsonObject {
             put("id", sessionId)
             put("text", text)
             if (files.isNotEmpty()) put("files", JsonArray(files.map { JsonPrimitive(it) }))
             clientID?.let { put("clientID", it) }
+            // a jep quote, not markdown in the words: the daemon hands it on
+            quote?.takeIf { it.isNotBlank() }?.let { put("quote", it) }
             // the daemon steers by default; only say so when it should not
             when (mode) {
                 SendMode.STEER -> Unit

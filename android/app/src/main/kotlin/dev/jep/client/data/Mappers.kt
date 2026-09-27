@@ -173,6 +173,7 @@ private fun JsonElement.toolDiff(tool: String): String? {
 
 fun PartDto.toDomain(): ChatPart? = when (kind) {
     "text" -> text?.let { ChatPart.Text(it) }
+    "quote" -> text?.takeIf { it.isNotBlank() }?.let { ChatPart.Quote(it) }
     // Some providers expose reasoning token counts without any readable
     // reasoning text. Keep the usage in the message metadata, but don't create
     // an empty disclosure row from an empty `text` field.

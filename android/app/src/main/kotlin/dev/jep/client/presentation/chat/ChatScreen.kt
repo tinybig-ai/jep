@@ -49,6 +49,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.interaction.DragInteraction
@@ -1782,11 +1783,48 @@ private fun liveAsMessage(live: ChatViewModel.LiveTurn?): ChatMessage? {
 private fun messageText(message: ChatMessage): String =
     message.parts.filterIsInstance<ChatPart.Text>().joinToString("\n") { it.text }
 
+// what a reply carries of the message it answers: enough to know which one,
+// not the whole of a long answer
+private fun quoteOf(message: ChatMessage): String? {
+    val text = messageText(message).trim()
+    if (text.isEmpty()) return null
+    val lines = text.lines()
+    var q = lines.take(6).joinToString("\n")
+    if (q.length > 500) q = q.take(500).trimEnd()
+    return if (q.length < text.length) "$q…" else q
+}
+
+// A quote above the words it was answered with: a bar and the quoted words,
+// quieter than the message, cut to a few lines. It is a jep quote, not a
+// markdown block typed into the text.
+@Composable
+private fun QuoteBlock(text: String, ink: Color, modifier: Modifier = Modifier) {
+    Row(
+        modifier.height(IntrinsicSize.Min).semantics { contentDescription = "quoted message" },
+    ) {
+        Box(
+            Modifier
+                .width(3.dp)
+                .fillMaxHeight()
+                .background(ink.copy(alpha = 0.45f), RoundedCornerShape(2.dp)),
+        )
+        Text(
+            text,
+            Modifier.padding(start = 8.dp),
+            color = ink.copy(alpha = 0.7f),
+            fontSize = 13.sp,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
 // what a long-press copies: the whole turn, tool calls and thinking included
 private fun fullTurnText(message: ChatMessage): String =
     message.parts.joinToString("\n\n") { p ->
         when (p) {
             is ChatPart.Text -> p.text
+            is ChatPart.Quote -> p.text.lines().joinToString("\n") { "> $it" }
             is ChatPart.Reasoning -> "[thinking]\n${p.text}"
             is ChatPart.Tool ->
                 buildString {
@@ -1932,11 +1970,13 @@ private fun UserBubble(message: ChatMessage, onRetry: () -> Unit = {}) {
             Column(Modifier.padding(horizontal = 14.dp, vertical = 9.dp)) {
                 // a file must show in the person's own bubble too, or an image
                 // sent from another client (Telegram) is invisible here
+                val ink = if (pending) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onPrimaryContainer
                 message.parts.forEach { part ->
                     when (part) {
+                        is ChatPart.Quote -> QuoteBlock(part.text, ink, Modifier.padding(bottom = 6.dp))
                         is ChatPart.Text -> Text(
                             part.text,
-                            color = if (pending) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onPrimaryContainer,
+                            color = ink,
                             fontSize = 15.sp,
                         )
                         is ChatPart.File -> if (isImagePart(part)) {
@@ -1955,24 +1995,25 @@ private fun UserBubble(message: ChatMessage, onRetry: () -> Unit = {}) {
                         }
                         else -> Unit
                     }
-                    if (pending) {
-                        Row(
-                            Modifier.padding(top = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(
-                                Icons.Filled.ErrorOutline,
-                                null,
-                                Modifier.size(14.dp),
-                                tint = MaterialTheme.colorScheme.onErrorContainer,
-                            )
-                            Text(
-                                "Not sent — tap to retry",
-                                Modifier.padding(start = 5.dp),
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onErrorContainer,
-                            )
-                        }
+                }
+                // once per bubble, under everything it holds
+                if (pending) {
+                    Row(
+                        Modifier.padding(top = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.Filled.ErrorOutline,
+                            null,
+                            Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.onErrorContainer,
+                        )
+                        Text(
+                            "Not sent — tap to retry",
+                            Modifier.padding(start = 5.dp),
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                        )
                     }
                 }
             }
@@ -2252,6 +2293,7 @@ private fun PartView(part: ChatPart, streaming: Boolean, onOpenLink: (String) ->
         is ChatPart.Reasoning -> if (part.text.isNotBlank()) ReasoningRow(part, active = streaming)
         is ChatPart.Tool -> ToolRow(part)
         is ChatPart.File -> FileRow(part)
+        is ChatPart.Quote -> QuoteBlock(part.text, MaterialTheme.colorScheme.onSurface)
         ChatPart.Compaction -> Unit // a divider row renders the message, not its parts
         ChatPart.AutoContinue -> Unit // the anchor row renders the quiet note, not a bubble
         is ChatPart.Unsupported -> Unit
@@ -2844,6 +2886,7 @@ private fun QueuedBubble(q: ChatViewModel.Queued, onClick: () -> Unit) {
                 shape = RoundedCornerShape(18.dp),
             ) {
                 Column(Modifier.padding(horizontal = 14.dp, vertical = 9.dp)) {
+                    q.quote?.let { QuoteBlock(it, if (held) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f) else ink, Modifier.padding(bottom = 6.dp)) }
                     Text(
                         q.text,
                         color = if (held) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f) else ink,
@@ -2925,11 +2968,9 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
     val context = LocalContext.current
     var expanded by rememberSaveable { mutableStateOf(false) }
     val send: () -> Unit = {
-        // a swipe-armed reply rides along as a quoted block
-        val quote = replyTo?.let { m ->
-            messageText(m).trim().lineSequence().take(6).joinToString("\n") { "> $it" } + "\n\n"
-        } ?: ""
-        vm.send(quote + draft)
+        // a swipe-armed reply rides along as a quote, beside the words, never
+        // spliced into them as markdown
+        vm.send(draft, quote = replyTo?.let { quoteOf(it) })
         onCancelReply()
         expanded = false
     }
@@ -3049,9 +3090,7 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
                     )
                 }
                 if (sendMenu) {
-                    val quote = replyTo?.let { m ->
-                        messageText(m).trim().lineSequence().take(6).joinToString("\n") { "> $it" } + "\n\n"
-                    } ?: ""
+                    val quote = replyTo?.let { quoteOf(it) }
                     AlertDialog(
                         onDismissRequest = { sendMenu = false },
                         title = { Text("Send how?") },
@@ -3064,7 +3103,7 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
                                         Modifier
                                             .fillMaxWidth()
                                             .clickable {
-                                                vm.send(quote + draft, mode)
+                                                vm.send(draft, mode, quote)
                                                 sendMenu = false
                                                 onCancelReply()
                                                 expanded = false

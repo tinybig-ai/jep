@@ -112,6 +112,9 @@ data class TokenUsage(
 sealed interface ChatPart {
     data class Text(val text: String) : ChatPart
 
+    /** the words a message answers, drawn above it as a reply is in a chat app */
+    data class Quote(val text: String) : ChatPart
+
     data class Tool(
         val id: String?,
         val name: String,

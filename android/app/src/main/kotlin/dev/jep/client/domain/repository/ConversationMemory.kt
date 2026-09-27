@@ -28,4 +28,4 @@ data class SavedAttachment(val id: String, val name: String, val localUri: Strin
 data class SavedDraft(val text: String = "", val attachments: List<SavedAttachment> = emptyList())
 
 @Serializable
-data class SavedSend(val id: String, val body: String, val attachments: List<SavedAttachment> = emptyList(), val time: Long = 0)
+data class SavedSend(val id: String, val body: String, val attachments: List<SavedAttachment> = emptyList(), val time: Long = 0, val quote: String? = null)

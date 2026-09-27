@@ -582,6 +582,31 @@ class ChatScreenTest {
     }
 
     @Test
+    fun a_reply_sends_its_quote_beside_the_words_and_shows_it_as_a_quote() {
+        val turn = ChatMessage("m1", Role.ASSISTANT, 1, listOf(ChatPart.Text("shall I ship it?")))
+        val repo = FakeChatRepository(messages = listOf(turn))
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        repo.promptGate = gate
+        val vm = ChatViewModel(repo, "s1", "T")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(5_000) {
+            rule.onAllNodesWithText("shall I ship it?", substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNodeWithText("shall I ship it?", substring = true).performTouchInput { swipeRight() }
+        rule.waitUntil(3_000) { rule.onAllNodesWithContentDescription("cancel reply").fetchSemanticsNodes().isNotEmpty() }
+        rule.runOnUiThread { vm.setDraft("yes, ship it") }
+        rule.onNodeWithTag("send-button").performClick()
+        rule.waitUntil(5_000) { repo.prompts.isNotEmpty() }
+        // the words go as typed; the quote rides beside them
+        assertEquals("yes, ship it", repo.prompts.single())
+        assertEquals("shall I ship it?", repo.quotes.single())
+        // and the sent bubble draws a quote, not markdown
+        rule.waitUntil(5_000) { rule.onAllNodesWithContentDescription("quoted message").fetchSemanticsNodes().isNotEmpty() }
+        rule.onAllNodesWithText("> shall I ship it?", substring = true).assertCountEquals(0)
+        gate.complete(Unit)
+    }
+
+    @Test
     fun a_reply_offers_info_and_copy() {
         val turn = ChatMessage(
             id = "m1",

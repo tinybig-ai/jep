@@ -94,7 +94,7 @@ class ChatViewModel(
 
     /** a message typed while the agent was busy: held, shown as queued, handed
      * over when the current turn ends */
-    data class Queued(val id: String, val text: String, val attachments: List<Attachment> = emptyList(), val mode: SendMode = SendMode.STEER, /** served user message ids already present when this was queued, so an older message with the same words cannot clear it */ val seen: Set<String> = emptySet())
+    data class Queued(val id: String, val text: String, val attachments: List<Attachment> = emptyList(), val mode: SendMode = SendMode.STEER, val quote: String? = null, /** served user message ids already present when this was queued, so an older message with the same words cannot clear it */ val seen: Set<String> = emptySet())
 
     /** the turn being written right now, unit = streaming part */
     data class LiveTurn(
@@ -197,7 +197,8 @@ class ChatViewModel(
     /** Sends the daemon never took, kept with enough to try again. A message
      *  that failed on the way out is the one case where the transcript is ahead
      *  of the truth, so it has to be recoverable rather than decorative. */
-    private val outbox = mutableMapOf<String, Pair<String, List<Attachment>>>()
+    private data class Outgoing(val body: String, val files: List<Attachment>, val quote: String? = null)
+    private val outbox = mutableMapOf<String, Outgoing>()
 
     // who said what, from the harness's message events: a user message's parts
     // are echoed back during the turn and must never stream into the agent's row
@@ -486,7 +487,8 @@ class ChatViewModel(
         if (_state.value.draft != text) _state.update { it.copy(draft = text) }
     }
 
-    fun send(text: String, mode: SendMode = SendMode.STEER) {
+    /** `quote` is the words this answers: sent beside the text, never inside it */
+    fun send(text: String, mode: SendMode = SendMode.STEER, quote: String? = null) {
         val trimmed = text.trim()
         val files = _state.value.attachments
         // an image on its own is a valid message. The model still needs words, so
@@ -497,25 +499,25 @@ class ChatViewModel(
         // it is on its way; the composer starts empty again
         _state.update { it.copy(draft = "") }
         if (_state.value.sending) {
-            enqueue(body, files, mode)
+            enqueue(body, files, mode, quote)
             return
         }
-        sendNow(body, files)
+        sendNow(body, files, quote)
     }
 
     // The daemon owns the queue now: hand the message over with an id and a mode,
     // and it steers it in at the next tool boundary, waits for the turn to end, or
     // stops the turn and runs next, whichever the user asked for. The client keeps it on screen as queued until it
     // is picked up.
-    private fun enqueue(body: String, files: List<Attachment>, mode: SendMode) {
+    private fun enqueue(body: String, files: List<Attachment>, mode: SendMode, quote: String?) {
         val clientID = "q-${System.nanoTime()}"
         val seen = _state.value.messages.filter { it.role == Role.USER }.map { it.id }.toSet()
-        val q = Queued(clientID, body, files, mode, seen)
+        val q = Queued(clientID, body, files, mode, quote, seen)
         // "now" jumps the line, the way the daemon runs it
         _state.update { it.copy(queued = if (mode == SendMode.NOW) listOf(q) + it.queued else it.queued + q, attachments = emptyList()) }
         viewModelScope.launch {
             // resolves when its turn finishes, or at once if it was cancelled
-            runCatching { repo.prompt(sessionId, body, files.map { it.id }, clientID, mode) }
+            runCatching { repo.prompt(sessionId, body, files.map { it.id }, clientID, mode, quote) }
             _state.update { st ->
                 val rest = st.queued.filterNot { q -> q.id == clientID }
                 // this one is done; a turn is still active only if another waits
@@ -525,7 +527,7 @@ class ChatViewModel(
         }
     }
 
-    private fun sendNow(body: String, files: List<Attachment>) {
+    private fun sendNow(body: String, files: List<Attachment>, quote: String? = null) {
         // The optimistic row carries the prompt text and the attachments as
         // separate parts, never the prompt plus an "[attached: …]" suffix the
         // daemon would never produce.
@@ -536,13 +538,11 @@ class ChatViewModel(
             // the phone's own copy rides along, so an image shows in the bubble
             // straight away rather than as a blank space until the harness
             // ingests the message and hands back a path to fetch
-            parts = listOf(ChatPart.Text(body)) + files.map {
-                ChatPart.File(path = it.name, name = it.name, mimeType = it.mimeType, localUri = it.localUri)
-            },
+            parts = outgoingParts(body, files, quote),
         )
         val seq = ++turn
         optimistic.add(pending)
-        outbox[pending.id] = body to files
+        outbox[pending.id] = Outgoing(body, files, quote)
         persistOutbox()
         supersedeAsk()
         _state.update {
@@ -555,7 +555,7 @@ class ChatViewModel(
             )
         }
         viewModelScope.launch {
-            runCatching { repo.prompt(sessionId, body, files.map { it.id }) }
+            runCatching { repo.prompt(sessionId, body, files.map { it.id }, quote = quote) }
                 .onSuccess { final ->
                     if (seq != turn) return@onSuccess
                     optimistic.removeAll { it.id == pending.id }
@@ -627,7 +627,7 @@ class ChatViewModel(
         if (!_state.value.sending) {
             // nothing is running: it can go now
             _state.update { it.copy(queued = it.queued.filterNot { q -> q.id == id }) }
-            sendNow(item.text, item.attachments)
+            sendNow(item.text, item.attachments, item.quote)
             return
         }
         _state.update { st -> st.copy(queued = listOf(item.copy(mode = SendMode.NOW)) + st.queued.filterNot { q -> q.id == id }) }
@@ -903,6 +903,13 @@ class ChatViewModel(
         }
     }
 
+    // a message on its way, drawn the way the record will draw it: the quote
+    // above the words, the attachments after them
+    private fun outgoingParts(body: String, files: List<Attachment>, quote: String?): List<ChatPart> =
+        listOfNotNull(quote?.takeIf { it.isNotBlank() }?.let { ChatPart.Quote(it) }) +
+            ChatPart.Text(body) +
+            files.map { ChatPart.File(path = it.name, name = it.name, mimeType = it.mimeType, localUri = it.localUri) }
+
     private fun Attachment.saved() = SavedAttachment(id, name, localUri, mimeType)
     private fun SavedAttachment.live() = Attachment(id, name, localUri, mimeType)
 
@@ -910,7 +917,7 @@ class ChatViewModel(
         memory.saveOutbox(
             sessionId,
             outbox.map { (id, entry) ->
-                SavedSend(id, entry.first, entry.second.map { it.saved() }, optimistic.firstOrNull { it.id == id }?.time ?: 0L)
+                SavedSend(id, entry.body, entry.files.map { it.saved() }, optimistic.firstOrNull { it.id == id }?.time ?: 0L, entry.quote)
             },
         )
     }
@@ -927,14 +934,13 @@ class ChatViewModel(
         val sends = memory.loadOutbox(sessionId)
         if (sends.isNotEmpty()) {
             val rows = sends.map { s ->
-                outbox[s.id] = s.body to s.attachments.map { it.live() }
+                val files = s.attachments.map { it.live() }
+                outbox[s.id] = Outgoing(s.body, files, s.quote)
                 ChatMessage(
                     id = s.id,
                     role = Role.USER,
                     time = s.time,
-                    parts = listOf(ChatPart.Text(s.body)) + s.attachments.map {
-                        ChatPart.File(path = it.name, name = it.name, mimeType = it.mimeType, localUri = it.localUri)
-                    },
+                    parts = outgoingParts(s.body, files, s.quote),
                     undelivered = true,
                 )
             }
@@ -967,7 +973,7 @@ class ChatViewModel(
     /** Send an undelivered message again. Tapping the dimmed bubble is the
      *  affordance: a message the harness never saw is not a message yet. */
     fun retrySend(id: String) {
-        val (body, files) = outbox[id] ?: return
+        val (body, files, quote) = outbox[id] ?: return
         val st = _state.value
         if (st.messages.none { it.id == id && it.undelivered }) return
         // put it back in flight: the bubble loses its dimmed state the moment the
@@ -981,7 +987,7 @@ class ChatViewModel(
         }
         val seq = ++turn
         viewModelScope.launch {
-            runCatching { repo.prompt(sessionId, body, files.map { it.id }) }
+            runCatching { repo.prompt(sessionId, body, files.map { it.id }, quote = quote) }
                 .onSuccess { final ->
                     if (seq != turn) return@onSuccess
                     optimistic.removeAll { it.id == id }
