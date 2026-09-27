@@ -794,25 +794,6 @@ fun ChatScreen(
                 )
             }
         }
-        // compaction outlives the menu that started it: a tap closes the
-        // dropdown, so the "Compacting…" label there would never be seen.
-        // The banner under the status line is where work-in-progress lives.
-        AnimatedVisibility(state.compacting) {
-            Surface(color = MaterialTheme.colorScheme.surfaceVariant) {
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
-                    Text(
-                        "Compacting…",
-                        Modifier.padding(start = 10.dp),
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
         AnimatedVisibility(state.failure != null || state.notice != null) {
             Surface(color = MaterialTheme.colorScheme.surfaceVariant) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -954,6 +935,26 @@ fun ChatScreen(
                 if (at >= 0) scope.launch {
                     followLatest = false
                     listState.animateScrollToItem(at + if (state.loadingOlder) 1 else 0)
+                }
+            }
+        }
+        // compaction outlives the menu that started it: a tap closes the
+        // dropdown, so the "Compacting…" label there would never be seen.
+        // It sits just above the composer, where your eyes already are: a
+        // banner up by the title bar went unnoticed.
+        AnimatedVisibility(state.compacting) {
+            Surface(color = MaterialTheme.colorScheme.surfaceVariant) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+                    Text(
+                        "Compacting…",
+                        Modifier.padding(start = 10.dp),
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }
