@@ -1,0 +1,44 @@
+name: Jep
+options:
+  bundleIdPrefix: dev.jep
+  deploymentTarget:
+    iOS: "17.0"
+packages:
+  JepKit:
+    path: ../JepKit
+targets:
+  Jep:
+    type: application
+    platform: iOS
+    sources:
+      - Jep
+    dependencies:
+      - package: JepKit
+    entitlements:
+      path: Jep/Jep.entitlements
+      properties:
+        aps-environment: development
+    info:
+      path: Jep/Info.plist
+      properties:
+        CFBundleDisplayName: jep
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UIBackgroundModes: [remote-notification]
+        NSPhotoLibraryUsageDescription: Attach photos to a message for the agent.
+        NSLocalNetworkUsageDescription: jep talks to the gateway on your own network.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        CFBundleURLTypes:
+          - CFBundleURLName: dev.jep.client
+            CFBundleURLSchemes: [jep]
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.jep.client
+        SWIFT_VERSION: "5.10"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""

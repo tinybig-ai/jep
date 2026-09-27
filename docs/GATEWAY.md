@@ -74,7 +74,7 @@ plain clients).
 | `POST /archived` | (none) | `{items[]}`: the archived conversations, same shape as `/sessions` |
 | `POST /delete` | `{id}` | `{ok}`: removes the session from the harness |
 | `POST /attach` | raw octets, `?id=<session>&name=<name>` | `{id,name}`: buffers up to 32 MB under `<DATA_HOME>/attachments`; the id feeds the next `/prompt`'s `files` |
-| `POST /push/register` | `{token}` | `{ok,devices}`: remember this device's FCM token (503 without push configured) |
+| `POST /push/register` | `{token}` | `{ok,devices}`: remember this device's push token: an FCM token, or `apns:<hex>` from iOS (503 without push configured) |
 | `POST /push/unregister` | `{token}` | `{ok,devices}`: forget it |
 | `POST /restart` | `{quiet?,maxWait?}` | `{ok,quietMs,maxWaitMs}`: arm a restart; the daemon exits once no turn has been active for `quiet` s (default 5), or at `maxWait` s (default 180), and launchd brings it back |
 | `GET /stream` | (none) | SSE, never ends |

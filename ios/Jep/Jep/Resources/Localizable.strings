@@ -1,0 +1,5 @@
+/* APNs alerts carry these keys; the daemon never writes the words */
+"JEP_TURN_FINISHED" = "Reply finished";
+"JEP_ASK_REQUESTED" = "Waiting for your answer: %@";
+"JEP_ASK_TITLE" = "Waiting for your answer";
+"JEP_ASK_BODY" = "The agent needs a decision to continue.";
