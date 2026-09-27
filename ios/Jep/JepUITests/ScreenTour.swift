@@ -110,7 +110,7 @@ final class ScreenTour: XCTestCase {
             }
 
             if tap(button("chat menu")), tap(button("Changes")) {
-                if tap(app.staticTexts["src/auth/session.ts"].firstMatch) {
+                if tap(app.buttons.containing(NSPredicate(format: "label CONTAINS 'session.ts'")).firstMatch) {
                     sleep(2)
                     shot("25-file-reader")
                     close()
@@ -121,11 +121,14 @@ final class ScreenTour: XCTestCase {
 
         app.terminate()
         launch(dark: true)
-        if app.staticTexts["Fix flaky login test"].waitForExistence(timeout: 15) {
-            shot("26-sessions-dark")
+        sleep(4)
+        shot("26-dark")
+        if !app.staticTexts["Fix flaky login test"].exists { back() }
+        if app.staticTexts["Fix flaky login test"].waitForExistence(timeout: 10) {
+            shot("27-sessions-dark")
             if tap(app.staticTexts["Fix flaky login test"].firstMatch) {
                 sleep(2)
-                shot("27-chat-dark")
+                shot("28-chat-dark")
             }
         }
     }

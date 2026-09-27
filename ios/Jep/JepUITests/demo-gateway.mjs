@@ -111,6 +111,7 @@ http.createServer((req, res) => {
   const path = new URL(req.url, "http://x").pathname
   if (path === "/stream") {
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" })
+    res.write(": ok\n\n")
     const beat = setInterval(() => res.write(": beat\n\n"), 10_000)
     req.on("close", () => clearInterval(beat))
     return

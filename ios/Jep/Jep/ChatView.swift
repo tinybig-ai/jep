@@ -55,6 +55,10 @@ struct ChatView: View {
             }
             .onChange(of: rows.last?.id) { _, _ in
                 withAnimation(.snappy) { proxy.scrollTo("end-sentinel", anchor: .bottom) }
+                Task {
+                    try? await Task.sleep(nanoseconds: 300_000_000)
+                    proxy.scrollTo("end-sentinel", anchor: .bottom)
+                }
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) { banners(st) }

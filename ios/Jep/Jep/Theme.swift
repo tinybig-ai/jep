@@ -98,31 +98,23 @@ extension ThemeMode {
     }
 }
 
-enum Harness {
-    static func icon(_ id: String?) -> String {
-        switch id {
-        case "claude": "sparkle"
-        case "codex": "chevron.left.forwardslash.chevron.right"
-        default: "terminal"
-        }
-    }
-    static func tint(_ id: String?) -> Color {
-        switch id {
-        case "claude": .orange
-        case "codex": .teal
-        default: .purple
-        }
-    }
-}
-
 struct HarnessAvatar: View {
     let harness: String?
     var body: some View {
-        Image(systemName: Harness.icon(harness))
-            .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(Harness.tint(harness))
+        mark
+            .foregroundStyle(.secondary)
             .frame(width: 36, height: 36)
             .glass(Circle())
+            .accessibilityLabel(harness ?? "harness")
+    }
+
+    @ViewBuilder private var mark: some View {
+        switch harness {
+        case "opencode", "codex", "claude":
+            Image("harness-\(harness ?? "")").resizable().scaledToFit().frame(width: 19, height: 19)
+        default:
+            Image(systemName: "cpu").font(.system(size: 16, weight: .semibold))
+        }
     }
 }
 
