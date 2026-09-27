@@ -61,7 +61,7 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertEqual(s.state.queued.map(\.text), ["two"])
         XCTAssertEqual(s.state.queued.first?.mode, .afterReply)
         await queued?.value
-        XCTAssertEqual(gw.bodies("/prompt").last?["steer"] as? Bool, false)
+        XCTAssertEqual(gw.bodies("/prompt").first { $0["text"] as? String == "two" }?["steer"] as? Bool, false)
         gate.continuation.yield()
         await first?.value
     }

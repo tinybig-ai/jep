@@ -180,6 +180,7 @@ struct UsageSheet: View {
 
 struct DiffSheet: View {
     let chat: ChatStore
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         SheetFrame(title: "Changes") {
@@ -189,7 +190,13 @@ struct DiffSheet: View {
                         ContentUnavailableView("No changes", systemImage: "checkmark.circle")
                     } else {
                         List(diffs, id: \.self) { d in
-                            Button { chat.openFile(d.file) } label: {
+                            Button {
+                                dismiss()
+                                Task {
+                                    try? await Task.sleep(nanoseconds: 450_000_000)
+                                    chat.openFile(d.file)
+                                }
+                            } label: {
                                 HStack {
                                     Text(d.file).jepFont(13, design: .monospaced).lineLimit(1).truncationMode(.head)
                                     Spacer()
