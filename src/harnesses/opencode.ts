@@ -5,7 +5,7 @@ import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { Agent } from "undici"
 import type { AgentRef, HarnessAdapter, ModelRef, ModelCaps } from "../core/ports.ts"
-import type { AskOption, DomainEvent, FileDiff, HarnessError, Message, Part, ProjectSummary, SessionSummary, SkillDirs } from "../core/types.ts"
+import type { AskOption, AskQuestion, DomainEvent, FileDiff, HarnessError, Message, Part, ProjectSummary, SessionSummary, SkillDirs } from "../core/types.ts"
 import { TurnAbortedError } from "../core/types.ts"
 import { resolveAgent } from "../core/agents.ts"
 import { quoteBlock, readQuoteBlock } from "../core/transcript.ts"
@@ -50,6 +50,26 @@ const askAnchor = (tool: unknown): { messageID?: string; at: number } => {
 }
 const toNativeId = (id: string) =>
   id.startsWith(`${HARNESS_NS}://`) ? id.slice(HARNESS_NS.length + 3) : id
+
+// A client answers a whole multi-question ask in one option id: a JSON array of
+// the option ids it picked, so the harness gets every answer at once (it cannot
+// accept a partial reply — the turn stays parked until the answers arrive
+// together). A one-question ask still sends the bare id, and a bare id is not
+// valid JSON, so JSON is only attempted for something that looks like an array.
+export function parseOptionIDs(optionID: string): string[] {
+  const trimmed = optionID.trim()
+  if (trimmed.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(trimmed)
+      if (Array.isArray(parsed)) {
+        return parsed.filter((x): x is string => typeof x === "string" && x.length > 0)
+      }
+    } catch {
+      // not JSON after all: fall through and treat it as a single id
+    }
+  }
+  return optionID ? [optionID] : []
+}
 
 // Two listings of the same store seen through different scopes: union them by
 // id, the project-scoped entry winning a tie. One opencode data home can hold
@@ -310,8 +330,10 @@ export class OpenCodeAdapter implements HarnessAdapter {
   // A question ask is answered by LABEL, not by jep's option id, and the ids
   // carry a truncated label (and a question index) that opencode would not
   // recognise. So the real label of each option is remembered here, keyed by
-  // the ask id, when the ask is surfaced — the reply needs it back.
-  #questionLabels = new Map<string, Map<string, string>>()
+  // the ask id, when the ask is surfaced — the reply needs it back. The count
+  // is kept too: the harness wants one answer list per question, in order, so
+  // the reply has to be the right length whether or not every slot was filled.
+  #questionLabels = new Map<string, { count: number; labels: Map<string, string> }>()
   // provider failures (429 / usage cap / upstream 5xx) parsed out of opencode's
   // own stderr, keyed by native session id. opencode logs these but never
   // emits a session.error for them, so without this a rate-limited turn just
@@ -738,6 +760,22 @@ export class OpenCodeAdapter implements HarnessAdapter {
     return [...(permissions ?? []), ...(questions ?? [])].some((r) => (r as { id?: string })?.id === askID)
   }
 
+  // The harness takes one list of labels per question, in order. The client
+  // sends every answer in one call, so this splits the option ids it picked and
+  // drops each label into its question's slot: several labels land in one slot
+  // when the question allowed a multiple choice, and a question nobody touched
+  // keeps its empty list rather than shifting the ones after it along.
+  #answersFor(entry: { count: number; labels: Map<string, string> }, optionID: string): string[][] {
+    const out: string[][] = Array.from({ length: Math.max(entry.count, 1) }, () => [])
+    for (const id of parseOptionIDs(optionID)) {
+      const label = entry.labels.get(id) ?? id
+      const prefix = id.slice(0, id.indexOf(":"))
+      const qi = /^\d+$/.test(prefix) ? Number(prefix) : 0
+      out[qi >= 0 && qi < out.length ? qi : 0]!.push(label)
+    }
+    return out
+  }
+
   // opencode's own three answers, passed straight through: "always" is a
   // standing rule it saves, not a second "once", so collapsing them into a
   // boolean would throw away the only one of the three that changes anything
@@ -750,13 +788,12 @@ export class OpenCodeAdapter implements HarnessAdapter {
       // endpoint, and by LABEL: jep's option id carries a truncated label and a
       // question index, which opencode would not recognise. The real label was
       // remembered when the ask was surfaced.
-      const labels = this.#questionLabels.get(askID)
-      if (labels) {
-        const label = labels.get(optionID) ?? optionID
+      const entry = this.#questionLabels.get(askID)
+      if (entry) {
         this.#questionLabels.delete(askID)
         await this.#json(`/question/${encodeURIComponent(askID)}/reply`, {
           method: "POST",
-          body: JSON.stringify({ answers: [[label]] }),
+          body: JSON.stringify({ answers: this.#answersFor(entry, optionID) }),
         })
         return true
       }
@@ -912,31 +949,49 @@ export class OpenCodeAdapter implements HarnessAdapter {
           text: props.field === "text" ? (props.delta ?? "") as string : "",
         }
       case "question.asked": {
-        // the `question` tool: the model parked the turn on the human. Each
-        // question carries its own choices; option ids are "<question idx>:<label>"
+        // the `question` tool: the model parked the turn on the human. It may
+        // ask several questions at once, and the harness answers them with ONE
+        // list of labels per question, in order. So each question is kept whole
+        // here and carries its own choices; option ids are "<question idx>:<label>"
         // so a tap names both the slot it fills and the answer it carries.
+        //
+        // This used to flatten every question's options into one list under a
+        // title taken from the first question only, while replying with a
+        // single answer list — so a two-question ask showed six undifferentiated
+        // buttons, and question two could never be answered at all.
         const questions = (Array.isArray(props.questions) ? props.questions : []) as Array<{
           question?: string
           header?: string
+          multiple?: boolean
           options?: Array<{ label?: string }>
         }>
-        const options: AskOption[] = []
+        const flat: AskOption[] = []
         const labels = new Map<string, string>()
-        questions.forEach((q, qi) => {
+        const grouped: AskQuestion[] = questions.map((q, qi) => {
+          const opts: AskOption[] = []
           for (const o of q.options ?? []) {
             const label = String(o?.label ?? "").trim()
             if (label) {
               const id = `${qi}:${label.slice(0, 28)}`
-              options.push({ id, label: label.slice(0, 64) })
+              const option = { id, label: label.slice(0, 64) }
+              opts.push(option)
+              flat.push(option)
               labels.set(id, label)
             }
+          }
+          return {
+            title: (q.header || q.question || "question").trim(),
+            ...(q.question ? { detail: q.question } : {}),
+            ...(q.multiple ? { multiple: true } : {}),
+            options: opts,
           }
         })
         const askID = (props.id as string) ?? ""
         if (askID) {
           if (this.#questionLabels.size > 2_000) this.#questionLabels.clear()
-          this.#questionLabels.set(askID, labels)
+          this.#questionLabels.set(askID, { count: grouped.length, labels })
         }
+        const first = grouped[0]
         return {
           type: "ask.requested",
           sessionID: sessionID ?? "",
@@ -944,9 +999,12 @@ export class OpenCodeAdapter implements HarnessAdapter {
             id: askID,
             sessionID: sessionID ?? "",
             kind: "question",
-            title: questions[0]?.header || questions[0]?.question || "question",
-            ...(questions.length ? { detail: questions.map((q) => q.question ?? "").filter(Boolean).join("\n\n") } : {}),
-            options,
+            // one question reads as itself; several say how many, because a
+            // title naming only the first is how the others went unasked
+            title: grouped.length > 1 ? `${grouped.length} questions` : first?.title || "question",
+            ...(grouped.length === 1 && first?.detail ? { detail: first.detail } : {}),
+            options: flat,
+            ...(grouped.length ? { questions: grouped } : {}),
             ...askAnchor(props.tool),
           },
         }

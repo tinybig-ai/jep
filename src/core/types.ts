@@ -163,6 +163,19 @@ export interface AskOption {
   style?: "success" | "danger"
 }
 
+// One question inside a `question` ask. The harness's question tool takes an
+// array of questions and answers them with one list of labels per question, in
+// order — so the grouping is the ANSWER's shape, not a display nicety.
+export interface AskQuestion {
+  /** one line: what is being asked */
+  title: string
+  /** the question in full, when the title alone doesn't carry it */
+  detail?: string
+  /** true when more than one of `options` may be chosen for this question */
+  multiple?: boolean
+  options: AskOption[]
+}
+
 export interface AskRequest {
   id: string
   sessionID: string
@@ -171,6 +184,15 @@ export interface AskRequest {
   /** the command, the path, the question's own context — shown under the title */
   detail?: string
   options: AskOption[]
+  /** A `question` ask may ask several things at once, and each is answered
+   *  separately. Flattening them into `options` — which is what this used to
+   *  do — merged every question's choices into one list under a title naming
+   *  only the first, so a pick could not be traced back to the question it
+   *  answered and only the first question could ever be replied to. Clients
+   *  that understand `questions` group by it; the flat `options` remain for
+   *  the answer plumbing and for a single-question ask. Absent on a permission
+   *  ask, which is one yes/once/always. */
+  questions?: AskQuestion[]
   /** permission asks answer once/always/reject; questions carry their own choices */
   kind?: "permission" | "question"
   /** Where in the transcript it was raised: the message, and the tool call that

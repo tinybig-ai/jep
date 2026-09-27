@@ -3243,10 +3243,28 @@ export class TelegramBot {
     // Telegram's 64-byte callback_data cap and reject the whole menu.
     if (isQuestion) {
       const lines = [`❓ ${ask.title}`]
-      if (ask.detail) lines.push("", ...ask.detail.split("\n\n"))
-      ask.options.forEach((o, i) => {
-        lines.push(`${i + 1}. ${o.label.replace(/\s+/g, " ").trim().slice(0, 40)}`)
-      })
+      // A `question` ask can ask several things at once. Each is listed under
+      // its own heading with its own choices, numbered straight through, so a
+      // number can be traced back to the question it answers. The flat `options`
+      // are in the same question-then-option order, so a number pasted from here
+      // still names the option the button carries.
+      const groups = ask.questions && ask.questions.length ? ask.questions : null
+      if (groups) {
+        let n = 0
+        for (const q of groups) {
+          lines.push("", q.title)
+          if (q.detail && q.detail !== q.title) lines.push(q.detail)
+          for (const o of q.options) {
+            n += 1
+            lines.push(`${n}. ${o.label.replace(/\s+/g, " ").trim().slice(0, 40)}`)
+          }
+        }
+      } else {
+        if (ask.detail) lines.push("", ...ask.detail.split("\n\n"))
+        ask.options.forEach((o, i) => {
+          lines.push(`${i + 1}. ${o.label.replace(/\s+/g, " ").trim().slice(0, 40)}`)
+        })
+      }
       const numbered: InlineButton[] = ask.options.map((o, i) => {
         const b = btn(String(i + 1), `askq:${i}`)
         return o.style ? styled(b, o.style) : b

@@ -304,6 +304,141 @@ test("a question ask is answered by its label, on the questions route", async ()
   }
 })
 
+test("a multi-question ask keeps each question's own choices, and answers them together", async () => {
+  // The harness asks several questions at once and answers them with one list
+  // of labels per question, in order. jep used to flatten every question's
+  // options into one list under a title naming only the first, and reply with a
+  // single answer list — so the six buttons of a two-question ask were
+  // indistinguishable, and the second question could never be answered at all.
+  const asked = {
+    type: "question.asked",
+    properties: {
+      sessionID: "ses_a",
+      id: "que_multi",
+      questions: [
+        {
+          header: "Which composer?",
+          question: "Where do the buttons go?",
+          options: [{ label: "Inline" }, { label: "Beside" }],
+        },
+        {
+          header: "Stacking?",
+          question: "Which stacks vertically?",
+          options: [{ label: "Maximize above attach" }, { label: "Attach above maximize" }],
+        },
+      ],
+    },
+  }
+  const posts: Array<{ path: string; body: string }> = []
+  const open: { feed?: import("node:http").ServerResponse } = {}
+  const server = createServer((req, res) => {
+    const url = new URL(req.url ?? "/", "http://127.0.0.1")
+    if (url.pathname === "/event") {
+      res.writeHead(200, { "content-type": "text/event-stream" })
+      res.write(`data: ${JSON.stringify(asked)}\n\n`)
+      open.feed = res
+      return
+    }
+    let body = ""
+    req.on("data", (c) => (body += c))
+    req.on("end", () => {
+      posts.push({ path: url.pathname, body })
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end("{}")
+    })
+  })
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r))
+  const port = (server.address() as { port: number }).port
+  const adapter = new OpenCodeAdapter({} as any, WS, `http://127.0.0.1:${port}`)
+  const ac = new AbortController()
+  try {
+    for await (const evt of adapter.events(ac.signal)) {
+      assert.equal(evt.type, "ask.requested")
+      if (evt.type !== "ask.requested") break
+      const ask = evt.ask
+      assert.equal(ask.kind, "question")
+      assert.equal(ask.title, "2 questions", "a title naming only the first question is how the rest went unasked")
+      assert.equal(ask.questions?.length, 2, "both questions survive as themselves")
+      assert.deepEqual(
+        ask.questions?.map((q) => q.options.map((o) => o.label)),
+        [["Inline", "Beside"], ["Maximize above attach", "Attach above maximize"]],
+        "each question keeps only its own choices",
+      )
+      assert.equal(ask.questions?.[1]?.title, "Stacking?", "the second question keeps its own header")
+      break
+    }
+    // both answers, in one call: the harness cannot take a partial reply
+    const compound = JSON.stringify(["0:Inline", "1:Maximize above attach"])
+    assert.equal(await adapter.respondAsk("opencode://ses_a", "que_multi", compound), true)
+    assert.equal(posts.length, 1, "the reply must be exactly one post")
+    assert.equal(posts[0]!.path, "/question/que_multi/reply")
+    assert.deepEqual(
+      JSON.parse(posts[0]!.body),
+      { answers: [["Inline"], ["Maximize above attach"]] },
+      "one answer list per question, in the order they were asked",
+    )
+  } finally {
+    ac.abort()
+    open.feed?.end()
+    await new Promise<void>((r) => server.close(() => r()))
+  }
+})
+
+test("an unanswered question leaves its slot empty without shifting the rest", async () => {
+  // A question nobody touched must not pull the later answers up into its slot:
+  // the harness reads the list positionally, so a shift answers the wrong thing.
+  const asked = {
+    type: "question.asked",
+    properties: {
+      sessionID: "ses_a",
+      id: "que_gap",
+      questions: [
+        { header: "One", options: [{ label: "A" }] },
+        { header: "Two", options: [{ label: "B" }] },
+        { header: "Three", options: [{ label: "C" }] },
+      ],
+    },
+  }
+  const posts: Array<{ path: string; body: string }> = []
+  const open: { feed?: import("node:http").ServerResponse } = {}
+  const server = createServer((req, res) => {
+    const url = new URL(req.url ?? "/", "http://127.0.0.1")
+    if (url.pathname === "/event") {
+      res.writeHead(200, { "content-type": "text/event-stream" })
+      res.write(`data: ${JSON.stringify(asked)}\n\n`)
+      open.feed = res
+      return
+    }
+    let body = ""
+    req.on("data", (c) => (body += c))
+    req.on("end", () => {
+      posts.push({ path: url.pathname, body })
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end("{}")
+    })
+  })
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r))
+  const port = (server.address() as { port: number }).port
+  const adapter = new OpenCodeAdapter({} as any, WS, `http://127.0.0.1:${port}`)
+  const ac = new AbortController()
+  try {
+    for await (const evt of adapter.events(ac.signal)) {
+      if (evt.type === "ask.requested") break
+    }
+    // question 1 (index 1) was skipped
+    assert.equal(await adapter.respondAsk("opencode://ses_a", "que_gap", JSON.stringify(["0:A", "2:C"])), true)
+    assert.deepEqual(
+      JSON.parse(posts[0]!.body),
+      { answers: [["A"], [], ["C"]] },
+      "the skipped question keeps its own empty slot",
+    )
+  } finally {
+    ac.abort()
+    open.feed?.end()
+    await new Promise<void>((r) => server.close(() => r()))
+  }
+})
+
 test("another harness's session id is not ours, and is never sent to opencode", async () => {
   let hits = 0
   const server = createServer((_req, res) => {
