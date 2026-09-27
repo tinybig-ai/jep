@@ -7,7 +7,7 @@ const now = Date.now()
 const min = 60_000
 
 const session = (id, title, workspace, harness, ago, extra = {}) => ({
-  id, title, workspace, harness, adapter: harness, subagents: 0, active: false,
+  id, title, workspace: `~/code/${workspace}`, harness, adapter: workspace, subagents: 0, active: false,
   createdAt: now - ago - 3600_000, updatedAt: now - ago, seenAt: now - ago - min, ...extra,
 })
 const sessions = [

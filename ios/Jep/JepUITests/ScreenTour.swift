@@ -25,7 +25,7 @@ final class ScreenTour: XCTestCase {
     @discardableResult
     private func tap(_ e: XCUIElement, timeout: TimeInterval = 6) -> Bool {
         guard e.waitForExistence(timeout: timeout) else { return false }
-        e.tap()
+        e.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         return true
     }
 
