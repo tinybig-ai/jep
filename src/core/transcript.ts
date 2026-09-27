@@ -27,6 +27,33 @@ export const ATTACHMENT_HEADER = "Attached files:"
 export const withAttachments = (text: string, paths: string[] = []): string =>
   paths.length ? `${text}\n\n${ATTACHMENT_HEADER}\n${paths.map((p) => `- ${p}`).join("\n")}` : text
 
+// A quote is part of a message: the words it answers, shown above it the way a
+// chat app shows a reply. The harness has no such idea, so it gets the quote as
+// a plain "> " block ahead of the message, which a model reads as a quote, and
+// the block is lifted back out of the record for display. Built here and split
+// here, so the two can't drift.
+export const withQuote = (text: string, quote?: string): string => {
+  const q = quote?.trim()
+  if (!q) return text
+  return `${q.split("\n").map((l) => (l.trim() ? `> ${l}` : ">")).join("\n")}\n\n${text}`
+}
+
+/** a message's leading quote block, and the rest. Only a block of "> " lines
+ *  at the very start with words after it counts: a message that is all quote
+ *  was typed that way. */
+export const splitQuote = (text: string): { quote?: string; text: string } => {
+  const m = text.match(/^((?:>[^\n]*\n)+)\n+(?=\S)/)
+  if (!m) return { text }
+  const quote = m[1]!
+    .trimEnd()
+    .split("\n")
+    .map((l) => l.replace(/^> ?/, ""))
+    .join("\n")
+    .trim()
+  if (!quote) return { text }
+  return { quote, text: text.slice(m[0].length) }
+}
+
 // Anchored to the end and only over lines that are all "- <path>", so a message
 // that merely talks about attached files keeps its words.
 const ATTACHMENT_BLOCK = new RegExp(`\\n{2}${ATTACHMENT_HEADER}\\n(?:- [^\\n]+(?:\\n|$))+$`)

@@ -77,6 +77,13 @@ export interface FilePart {
   id?: string
 }
 
+/** the words a user message answers, shown above it (see withQuote) */
+export interface QuotePart {
+  kind: "quote"
+  text: string
+  id?: string
+}
+
 export interface OtherPart {
   kind: "other"
   nativeType: string
@@ -89,6 +96,7 @@ export type Part =
   | ReasoningPart
   | SnapshotPart
   | FilePart
+  | QuotePart
   | OtherPart
 
 export interface Message {
