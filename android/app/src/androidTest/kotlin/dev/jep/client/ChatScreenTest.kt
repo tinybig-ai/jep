@@ -1087,11 +1087,13 @@ class ChatScreenTest {
         val vm = ChatViewModel(repo, "s1", "T")
         rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
         rule.waitForIdle()
-        // the expand button holds its slot from the first character, so send
-        // never shifts sideways mid-typing; it goes live once there is
-        // something worth expanding
-        rule.onAllNodesWithContentDescription("expand the composer").assertCountEquals(1)
+        // expand is offered only at four lines, where the field is finally tall
+        // enough to hold the whole cluster inside its own border
+        rule.onAllNodesWithContentDescription("expand the composer").assertCountEquals(0)
         rule.runOnUiThread { vm.setDraft("first line\nsecond line\nthird line") }
+        rule.waitForIdle()
+        rule.onAllNodesWithContentDescription("expand the composer").assertCountEquals(0)
+        rule.runOnUiThread { vm.setDraft("first line\nsecond line\nthird line\nfourth line") }
         rule.waitForIdle()
         rule.onNodeWithContentDescription("expand the composer").performClick()
         rule.waitUntil(5_000) { rule.onAllNodesWithTag("full-composer").fetchSemanticsNodes().isNotEmpty() }

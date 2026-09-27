@@ -133,11 +133,16 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -458,6 +463,21 @@ internal fun askIsSpent(ask: Ask?, askChoice: String?): Boolean = ask != null &&
  * are answering in words, and sending comes back.
  */
 internal fun canSend(ask: Ask?, askChoice: String?): Boolean = ask == null || askIsSpent(ask, askChoice)
+
+/**
+ * Whether a draft is worth a full-screen editor: once it is four lines tall.
+ *
+ * Four is not arbitrary. The composer's controls are a column at the field's
+ * bottom end, and adding expand makes that column 90dp: a 1-3 line field is
+ * shorter than that, so the pills hang out through the top of the field. Four
+ * lines is the first draft tall enough to hold the whole cluster inside its
+ * own border, which is why expand appears exactly there and not before.
+ *
+ * Takes a line count, not a draft: characters per line change with the
+ * field's width and with the text size the reader picked, so any character
+ * count is a guess that a reader with large text loses.
+ */
+internal fun isWorthExpanding(lines: Int): Boolean = lines >= 4
 
 // The conversation. Reads like the reference: the harness speaks in marked-up
 // paragraphs, tool calls collapse to one quiet row each, the person answers
@@ -3136,6 +3156,36 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
                     }
                 }
             }
+            // How tall the draft really is, measured the way the field will lay
+            // it out: the same style, the same width, the reader's own text
+            // size. A character count cannot do this — the characters per line
+            // fall as the text grows and as the reader's text size grows, so
+            // the same 320 characters is three lines for one reader and six for
+            // another, and only the layout knows which.
+            //
+            // Always measured against the base reserve, never the wider one
+            // expand would add. Narrower text can only add lines, so a draft
+            // that reaches four here still has four after the reserve grows:
+            // the answer cannot flip back and make the buttons jump.
+            val measurer = rememberTextMeasurer()
+            val draftStyle = MaterialTheme.typography.bodyLarge
+            // the field's own 16dp insets, plus the base reserve, is what the
+            // words actually get to wrap in
+            val insetsPx = with(LocalDensity.current) { 164.dp.toPx() }
+            var fieldPx by remember { mutableIntStateOf(0) }
+            val draftLines = remember(draft, fieldPx, draftStyle, insetsPx) {
+                val room = fieldPx - insetsPx
+                if (draft.isBlank() || room <= 0f) {
+                    1
+                } else {
+                    measurer.measure(
+                        AnnotatedString(draft),
+                        style = draftStyle,
+                        constraints = Constraints(maxWidth = room.toInt()),
+                    ).lineCount
+                }
+            }
+            val expandable = isWorthExpanding(draftLines)
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.Bottom,
@@ -3144,13 +3194,16 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
                 // not slotted. The trailingIcon slot centers whatever it is
                 // given, and it measures unbounded — a fillMaxHeight there blew
                 // the field to the full screen in rc6. So the buttons live as a
-                // sibling Row pinned to this Box's bottom end, and a 132dp
-                // spacer in the trailing slot reserves their parking space,
-                // keeping text clear.
-                // The reserve never changes (stop + attach + the send column at
-                // their widest), so the text width holds still when stop appears
-                // or expand offers itself.
-                Box(Modifier.weight(1f)) {
+                // sibling Row pinned to this Box's bottom end, and a spacer in
+                // the trailing slot reserves exactly their width, keeping text
+                // clear of them.
+                //
+                // The reserve is the base cluster (stop + attach + send) and
+                // grows by expand's own 44dp only while expand is offered, so
+                // the usual draft gives its text back the width. Stop's slot is
+                // permanent even when nothing is running, so starting a turn
+                // never reflows the words under your cursor.
+                Box(Modifier.weight(1f).onSizeChanged { fieldPx = it.width }) {
                     OutlinedTextField(
                         value = draft,
                         onValueChange = { vm.setDraft(it) },
@@ -3159,15 +3212,7 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
                         shape = RoundedCornerShape(Radius.field),
                         minLines = 1,
                         maxLines = 6,
-                        // A parking space, not a picture: this M3 overload has
-                        // no contentPadding, so the field cannot reserve the
-                        // overlay's width itself. The spacer holds 132dp —
-                        // stop + attach + the send column at their widest —
-                        // keeping text clear; the real buttons are siblings
-                        // below, pinned to the Box's bottom end, so they never
-                        // ride up as the draft grows. Zero height, so it never
-                        // drives the field taller; how M3 centers it is moot.
-                        trailingIcon = { Spacer(Modifier.width(132.dp)) },
+                        trailingIcon = { Spacer(Modifier.width(if (expandable) 178.dp else 132.dp)) },
                         colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
                             unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
                             focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
@@ -3199,21 +3244,20 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(2.dp),
                         ) {
-                            // Expand keeps its slot from the first character.
-                            // It used to appear only once the draft was long
-                            // enough, and that shoved send sideways in the
-                            // middle of a sentence — a button that moves while
-                            // you are aiming at it is worse than one that is
-                            // briefly useless. So it is always here, and goes
-                            // inert until there is something to expand, the
-                            // same way a send with nothing to send recedes.
-                            val expandable = draft.count { it == '\n' } >= 2 || draft.length > 160
-                            ComposerPill(
-                                icon = Icons.Filled.OpenInFull,
-                                desc = "expand the composer",
-                                enabled = expandable,
-                                onClick = { expanded = true },
-                            )
+                            // Offered only once the draft really is four
+                            // lines tall, and then it is not merely useful but
+                            // necessary: see isWorthExpanding. It stays out of
+                            // the cluster until then, because a permanently
+                            // reserved slot makes the column taller than a
+                            // short field and pushes the pills out through the
+                            // top of it.
+                            if (expandable) {
+                                ComposerPill(
+                                    icon = Icons.Filled.OpenInFull,
+                                    desc = "expand the composer",
+                                    onClick = { expanded = true },
+                                )
+                            }
                             ComposerPill(
                                 icon = Icons.AutoMirrored.Filled.Send,
                                 desc = "send",
