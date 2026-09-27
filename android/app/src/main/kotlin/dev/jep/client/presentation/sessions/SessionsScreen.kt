@@ -411,10 +411,6 @@ private fun SessionRow(
             .padding(horizontal = 18.dp, vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (selecting) {
-            Checkbox(checked = selected, onCheckedChange = { onToggleSelect() })
-            Spacer(Modifier.width(6.dp))
-        }
         HarnessAvatar(session.harness)
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -460,6 +456,13 @@ private fun SessionRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
             )
+        }
+        // The tick lives at the row's end, where a picking hand reaches: the
+        // left is the avatar's, and moving the mark away from the thing it
+        // selects would reflow every title the moment select mode starts.
+        if (selecting) {
+            Spacer(Modifier.width(6.dp))
+            Checkbox(checked = selected, onCheckedChange = { onToggleSelect() })
         }
     }
 }
