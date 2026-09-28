@@ -308,7 +308,7 @@ repo today and in their own repos tomorrow, without touching the core.
 npm install          # dev deps: typescript, @types/node · runtime: undici
 npm run check        # tsc typecheck + node --test suite (~1s, no network)
 npm run test:e2e     # opt-in: replays fixtures against a REAL harness (~45s)
-npm run tg:mock      # replay a Telegram fixture, dump every wire call
+npm run tg:mock      # replay a Telegram fixture against the echo harness, dump every wire call
 ```
 
 The rendering pipeline is pure and deterministic (markdown → HTML/rich blocks,

@@ -46,7 +46,8 @@ turns, and notifications, talking to the daemon over the gateway.
 
 - the jep daemon running with the **gateway** enabled (see below)
 - a network path to your machine: Tailscale, a VPN, or the LAN
-- Android Studio (or just a JDK + the Android SDK) to build the app
+- Android Studio (or just JDK 17+ and the Android SDK) to build the app;
+  Gradle uses whichever JDK `JAVA_HOME` points at
 
 ## Setup
 

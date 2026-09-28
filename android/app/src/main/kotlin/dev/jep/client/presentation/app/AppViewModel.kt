@@ -90,10 +90,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     /** point at a different gateway: a new machine, so a new pairing code */
     fun reconnect(address: String, code: String, onResult: (Boolean) -> Unit) {
-        pair(address, code) { ok, _ ->
-            if (ok) _gateway.value = pairing.baseUrl
-            onResult(ok)
-        }
+        pair(address, code) { ok, _ -> onResult(ok) }
     }
 
     fun setTheme(mode: ThemeMode) {
@@ -259,6 +256,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             runCatching { attempt.pair(base, code) }
                 .onSuccess { token ->
                     pairing.save(base, token)
+                    _gateway.value = pairing.baseUrl
                     _paired.value = true
                     connect()
                     onDone(true, null)

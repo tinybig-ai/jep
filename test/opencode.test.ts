@@ -604,3 +604,30 @@ test("standing a permission ask down answers it reject", async () => {
     await new Promise<void>((r) => server.close(() => r()))
   }
 })
+
+test("events() retries a subscription that fails while the server comes up", async () => {
+  let hits = 0
+  const srv = createServer((req, res) => {
+    if (req.url?.startsWith("/event") && ++hits === 1) {
+      req.socket.destroy()
+      return
+    }
+    res.writeHead(200, { "content-type": "text/event-stream" })
+    res.write(`data: ${JSON.stringify({ type: "server.connected", properties: {} })}\n\n`)
+  })
+  await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r))
+  const base = `http://127.0.0.1:${(srv.address() as { port: number }).port}`
+  const ac = new AbortController()
+  try {
+    const adapter = new OpenCodeAdapter({} as any, WS, base)
+    for await (const evt of adapter.events(ac.signal)) {
+      assert.equal(evt.type, "server.connected")
+      break
+    }
+    assert.equal(hits, 2)
+  } finally {
+    ac.abort()
+    srv.closeAllConnections()
+    srv.close()
+  }
+})

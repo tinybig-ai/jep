@@ -15,11 +15,14 @@ jobs:
     # `npm run check` is typecheck + the unit suite: no network, no harness, ~5s.
     # It is the same gate CONTRIBUTING asks contributors to run.
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [24, 26]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 26
+          node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
       - run: npm run check
@@ -49,10 +52,9 @@ jobs:
             npm install /pkg/jep-*.tgz --omit=dev
             node node_modules/.bin/jep --version
             node node_modules/.bin/jep --help
-            # a real machine needs a real agent: jep refuses to boot without one
-            npm install -g opencode-ai
+            # the echo harness needs nothing installed: a cold machine boots
             mkdir -p /ws
-            timeout 90 env JEP_TG_MOCK=1 JEP_TG_PAIR_CODE=TESTCODE JEP_GW_PORT=18932 JEP_WORKSPACES=/ws \
+            timeout 90 env JEP_HARNESS=echo JEP_TG_MOCK=1 JEP_TG_PAIR_CODE=TESTCODE JEP_GW_PORT=18932 JEP_WORKSPACES=/ws \
               node node_modules/.bin/jep < node_modules/jep/fixture/telegram-mock.jsonl > /tmp/mock.log 2>&1 || true
             cat /tmp/mock.log
             grep -q "mode: MOCK" /tmp/mock.log

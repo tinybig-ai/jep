@@ -9,12 +9,14 @@ OPTIONAL. jep-tg boots and runs without it.
 
 One process hosts both adapters (`src/app/tg.ts` composition root). The gateway is
 `src/clients/gateway/index.ts: startGateway(deps)`, enabled when `JEP_GW_PORT` is set, bound
-on 0.0.0.0 so a phone reaches it over Tailscale or the LAN. No TLS: the
+on 0.0.0.0 so a phone reaches it over Tailscale or the LAN (`JEP_GW_BIND` narrows
+it to one interface, e.g. your Tailscale IP or `127.0.0.1`). No TLS: the
 transport rides inside the network's own encryption (WireGuard), like SSH.
 
 Tokens live in `<DATA_HOME>/gateway-tokens.json`; the pairing code prints once
 at boot and is readable any time with `npm run pair` (env `JEP_GW_PAIR_CODE`
-pins it). Every endpoint except `/health` and `/pair` wants
+pins it). `npm run unpair` forgets every paired device at once; the running
+gateway refuses their tokens from the next request. Every endpoint except `/health` and `/pair` wants
 `Authorization: Bearer <token>` (also accepted as `?token=` on the stream, for
 plain clients).
 
