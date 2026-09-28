@@ -163,7 +163,10 @@ final class ScreenTour: XCTestCase {
                 shot("32-html-rendered")
                 sleep(5)
                 shot("32b-html-rendered-later")
-                if tap(button("Source"), timeout: 2) { shot("33-html-source") }
+                if tap(button("Source"), timeout: 2) {
+                    shot("33-html-source")
+                    if tap(button("Page"), timeout: 2) { sleep(3); shot("33b-html-page-again") }
+                }
                 close()
             }
             if tap(app.links["file link"].firstMatch, timeout: 3) {
