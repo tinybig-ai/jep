@@ -1,6 +1,7 @@
 import { startOpenCodeServer } from "../harnesses/opencode.ts"
 import { startCodexAdapter } from "../harnesses/codex.ts"
 import { CLAUDE_SETTINGS, startClaudeAdapter } from "../harnesses/claude.ts"
+import { startEchoAdapter } from "../harnesses/echo.ts"
 import type { HarnessAdapter, HarnessSettingSpec, HarnessSupervisor } from "../core/ports.ts"
 
 /**
@@ -64,6 +65,21 @@ function seal(defs: HarnessDef[]): HarnessInfo[] {
 
 function defineHarnesses(opts: HarnessOpts): HarnessDef[] {
   return [
+    // offered only when asked for: it answers every prompt with its own words
+    ...(DEFAULT_HARNESS === "echo"
+      ? [
+          {
+            id: "echo",
+            icon: "🔷",
+            async start(workspace: string): Promise<HarnessAdapter> {
+              return startEchoAdapter(workspace)
+            },
+            async available(): Promise<boolean> {
+              return true
+            },
+          },
+        ]
+      : []),
     {
       id: "opencode",
       icon: "🔵",

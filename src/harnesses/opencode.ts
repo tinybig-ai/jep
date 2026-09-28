@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
-import { Agent } from "undici"
+import { Agent, fetch, type RequestInit } from "undici"
 import type { AgentRef, HarnessAdapter, ModelRef, ModelCaps } from "../core/ports.ts"
 import type { AskOption, AskQuestion, DomainEvent, FileDiff, HarnessError, Message, Part, ProjectSummary, SessionSummary, SkillDirs } from "../core/types.ts"
 import { TurnAbortedError } from "../core/types.ts"
@@ -28,11 +28,10 @@ const AGENTS: AgentRef[] = [
 // 5-minute fetch timeouts (undici's headersTimeout/bodyTimeout), and the whole
 // point of the adapter is that a long run is not an error. Zero disables the
 // wall-clock ceilings; liveness is owned by the caller's idle watchdog instead.
-// The cast bridges two structurally-divergent copies of undici's types — the
-// npm package's and @types/node's bundled undici-types; at runtime they are
-// the same Dispatcher and the global fetch accepts it.
-type FetchDispatcher = NonNullable<Parameters<typeof fetch>[1]>["dispatcher"]
-const NO_TIMEOUT_AGENT = new Agent({ headersTimeout: 0, bodyTimeout: 0 }) as unknown as FetchDispatcher
+// fetch comes from the same undici package as the Agent: Node's built-in fetch
+// bundles its own undici and rejects a dispatcher from another copy.
+const EVENT_RETRIES = [250, 1_000, 3_000]
+const NO_TIMEOUT_AGENT = new Agent({ headersTimeout: 0, bodyTimeout: 0 })
 
 // Namespaces every session id we expose at the port boundary, so ids from
 // different harness adapters can never collide and stay stable across
@@ -368,7 +367,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
     return `${this.endpoint}${path}${sep}directory=${encodeURIComponent(this.workspace)}`
   }
 
-  async #json<T>(path: string, init?: RequestInit): Promise<T> {
+  async #json<T>(path: string, init?: Omit<RequestInit, "headers"> & { headers?: Record<string, string> }): Promise<T> {
     // read-only control calls can hang forever behind a busy/stalled serve
     // server; a hard timeout turns those into a clear error instead.
     const res = await fetch(this.#url(path), {
@@ -849,13 +848,21 @@ export class OpenCodeAdapter implements HarnessAdapter {
     const controller = new AbortController()
     const onAbort = () => controller.abort()
     signal?.addEventListener("abort", onAbort, { once: true })
-    let res: Response
-    try {
-      res = await fetch(this.#url("/event"), { signal: controller.signal, dispatcher: NO_TIMEOUT_AGENT })
-    } catch (err) {
-      // losing this subscription means no live streaming for the whole turn
-      if (!controller.signal.aborted) console.error(`[events] subscribe failed: ${(err as Error)?.message ?? err}`)
-      return
+    let res: Awaited<ReturnType<typeof fetch>> | undefined
+    // losing this subscription means no live streaming for the whole turn, so
+    // a blip (the server mid-restart) gets a few tries before giving up
+    for (let attempt = 0; !res; attempt++) {
+      try {
+        res = await fetch(this.#url("/event"), { signal: controller.signal, dispatcher: NO_TIMEOUT_AGENT })
+      } catch (err) {
+        if (controller.signal.aborted) return
+        if (attempt >= EVENT_RETRIES.length) {
+          console.error(`[events] subscribe failed: ${(err as Error)?.message ?? err}`)
+          signal?.removeEventListener("abort", onAbort)
+          return
+        }
+        await new Promise((r) => setTimeout(r, EVENT_RETRIES[attempt]))
+      }
     }
     if (!res.body) return
     const reader = res.body.getReader()

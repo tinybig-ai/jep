@@ -20,10 +20,11 @@
   "scripts": {
     "start": "node --experimental-strip-types src/app/tg.ts",
     "tg": "node --experimental-strip-types src/app/tg.ts",
-    "tg:mock": "JEP_TG_PAIR_CODE=TESTCODE JEP_TG_MOCK=1 node --experimental-strip-types src/app/tg.ts < fixture/telegram-mock.jsonl",
+    "tg:mock": "JEP_HARNESS=${JEP_HARNESS:-echo} JEP_TG_PAIR_CODE=TESTCODE JEP_TG_MOCK=1 node --experimental-strip-types src/app/tg.ts < fixture/telegram-mock.jsonl",
     "probe": "node --experimental-strip-types src/app/probe.ts",
     "probe:harness": "node --experimental-strip-types src/app/probe-harness.ts",
     "pair": "node --experimental-strip-types src/app/paircode.ts",
+    "unpair": "node --experimental-strip-types src/app/unpair.ts",
     "build": "tsc -p tsconfig.build.json",
     "prepare": "npm run build",
     "typecheck": "tsc",

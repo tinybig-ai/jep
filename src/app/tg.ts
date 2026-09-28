@@ -469,6 +469,7 @@ async function main() {
       },
       dataHome: DATA_HOME,
       port: Number(process.env.JEP_GW_PORT),
+      host: process.env.JEP_GW_BIND || undefined,
       pairCode: process.env.JEP_GW_PAIR_CODE,
     })
     console.error(`gateway: POST /pair {"code":…} on http://<tailscale-or-lan-ip>:${process.env.JEP_GW_PORT}`)
