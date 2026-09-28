@@ -942,6 +942,10 @@ fun ChatScreen(
                         }
                     }
                 }
+                // sent, and the harness has not written a word back yet
+                if (busy && !askPending && rows.firstOrNull { it is Row.Msg }?.let { (it as Row.Msg).m.role } != Role.ASSISTANT) {
+                    item(key = "awaiting-reply") { RespondingMark() }
+                }
                 // Keep the visible queue in send order, after the newest message.
                 items(queuedDisplay.size, key = { "queued-${queuedDisplay[it].id}" }) { i ->
                     QueuedBubble(queuedDisplay[i]) {
@@ -2086,6 +2090,15 @@ private fun UserBubble(message: ChatMessage, onRetry: () -> Unit = {}) {
 }
 
 @Composable
+private fun RespondingMark() {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        CircularProgressIndicator(Modifier.size(13.dp), strokeWidth = 2.dp)
+        Spacer(Modifier.size(8.dp))
+        Text("responding…", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
 private fun AssistantBody(
     message: ChatMessage,
     onInfo: (ChatMessage) -> Unit,
@@ -2117,13 +2130,7 @@ private fun AssistantBody(
         }
         // still working: a quiet spinner at the end of the reply, so a pause
         // between parts (thinking, a tool call) never looks like an ending
-        if (responding) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                CircularProgressIndicator(Modifier.size(13.dp), strokeWidth = 2.dp)
-                Spacer(Modifier.size(8.dp))
-                Text("responding…", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
+        if (responding) RespondingMark()
         message.error?.let {
             Text(it, color = MaterialTheme.colorScheme.error, fontSize = 14.sp)
         }

@@ -67,6 +67,14 @@ struct ChatView: View {
                         RowView(row: row, chat: chat, liveId: st.live?.messageId, onQuote: setQuote)
                             .id(row.id)
                     }
+                    if (st.sending || st.live != nil) && (st.ask == nil || askIsSpent(st.ask, st.askChoice)) {
+                        Label {
+                            Text("responding…").jepFont(12).foregroundStyle(.secondary)
+                        } icon: {
+                            ProgressView().controlSize(.mini)
+                        }
+                        .id("responding")
+                    }
                     Color.clear.frame(height: 1).id("end-sentinel")
                 }
                 .padding(.horizontal, 14)
