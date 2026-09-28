@@ -61,6 +61,9 @@ npm run tg:mock        # replay a Telegram fixture against the echo harness, dum
 npm run probe:harness -- <id>   # run the port compliance suite against a harness
 ```
 
+No agent CLI installed? `JEP_HARNESS=echo npm start` runs the daemon on the
+built-in echo harness, which answers every prompt with its own text.
+
 `npm run check` is the one that must be green before a PR. Use
 `node --experimental-strip-types --check <file>` for a fast syntax-only answer
 mid-edit.
