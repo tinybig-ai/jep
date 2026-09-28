@@ -7,6 +7,12 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.viewinterop.AndroidView
+import android.webkit.WebViewClient
+import android.webkit.WebView
+import android.webkit.WebResourceRequest
+import androidx.compose.ui.platform.UriHandler
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.CompositingStrategy
@@ -516,6 +522,17 @@ fun ChatScreen(
     }
     // a file tapped in a message: this conversation is the one that can resolve
     // a relative path against its own workspace, so it takes the hand-off
+    // a file:// link names a file on the machine running the agent, never on
+    // this phone, so it opens in the reader through the gateway like any path
+    val systemUris = LocalUriHandler.current
+    val uriHandler = remember(systemUris) {
+        object : UriHandler {
+            override fun openUri(uri: String) {
+                val path = localFilePath(uri)
+                if (path != null) vm.openFile(path) else systemUris.openUri(uri)
+            }
+        }
+    }
     val tappedFile by OpenedFile.pending.collectAsState()
     LaunchedEffect(tappedFile) {
         tappedFile?.let {
@@ -921,7 +938,10 @@ fun ChatScreen(
                         is Row.PastAsk -> AskBar(row.entry.ask, vm, spent = true, choiceId = row.entry.choice)
                         is Row.Compaction -> CompactionRow(row.m)
                         is Row.AutoContinue -> AutoContinueRow(row.m)
-                        is Row.Msg -> CompositionLocalProvider(LocalFileUrl provides { path -> vm.fileUrl(path) }) {
+                        is Row.Msg -> CompositionLocalProvider(
+                            LocalFileUrl provides { path -> vm.fileUrl(path) },
+                            LocalUriHandler provides uriHandler,
+                        ) {
                             MessageRow(
                                 row.m,
                                 onInfo = { infoMsg = it },
@@ -1417,21 +1437,23 @@ private val RowVInset = 3.dp
 /** How the reader shows a file. The store is small and pure on purpose — a path
  *  in, an engine and two defaults out — so what the reader does with any file is
  *  testable without a screen, and adding a format is one line here. */
-internal enum class FileEngine { Markdown, Code, Text }
+internal enum class FileEngine { Markdown, Html, Code, Text }
 
 private val MARKDOWN_EXT = setOf("md", "markdown", "mdx")
+private val HTML_EXT = setOf("html", "htm")
 private val DIFF_EXT = setOf("diff", "patch")
 private val CODE_EXT = setOf(
     "kt", "kts", "java", "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "rb", "go", "rs", "swift",
     "c", "h", "cc", "cpp", "hpp", "cs", "php", "sh", "zsh", "bash", "zsh", "sql", "toml", "yaml",
     "yml", "ini", "gradle", "lua", "pl", "r", "scala", "dart", "ex", "exs", "erl", "hs", "clj",
-    "vue", "svelte", "css", "scss", "less", "html", "htm", "xml", "json", "csv", "tsv", "lock",
+    "vue", "svelte", "css", "scss", "less", "xml", "json", "csv", "tsv", "lock",
 )
 
 internal fun fileEngineFor(path: String): FileEngine {
     val ext = path.substringAfterLast('.', "").lowercase()
     return when (ext) {
         in MARKDOWN_EXT -> FileEngine.Markdown
+        in HTML_EXT -> FileEngine.Html
         in DIFF_EXT, in CODE_EXT -> FileEngine.Code
         // anything unrecognised is prose: readable beats clever, and a file with
         // no extension at all is far more often notes than binary
@@ -1449,7 +1471,7 @@ private fun FileSheet(open: ChatViewModel.OpenFile, onClose: () -> Unit) {
     // one option, and it belongs to markdown: there is nothing to configure
     // about prose or source, and a menu that changes shape as you use it is worse
     // than a menu with one entry. Everything wraps — this is a phone.
-    val canRender = engine == FileEngine.Markdown
+    val canRender = engine == FileEngine.Markdown || engine == FileEngine.Html
     var render by remember(open.path) { mutableStateOf(canRender) }
     var options by remember { mutableStateOf(false) }
     val down = rememberScrollState()
@@ -1512,6 +1534,7 @@ private fun FileSheet(open: ChatViewModel.OpenFile, onClose: () -> Unit) {
                         fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    render && engine == FileEngine.Html -> HtmlView(open.text.orEmpty())
                     render && engine == FileEngine.Markdown -> Markdown(
                         markdownState = rendered,
                         typography = readerTypography(),
@@ -1521,13 +1544,40 @@ private fun FileSheet(open: ChatViewModel.OpenFile, onClose: () -> Unit) {
                         open.text.orEmpty(),
                         Modifier.verticalScroll(down),
                         fontSize = 13.sp,
-                        fontFamily = if (engine == FileEngine.Code) JepMono else FontFamily.Default,
+                        fontFamily = if (engine == FileEngine.Code || engine == FileEngine.Html) JepMono else FontFamily.Default,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
                 }
             }
         }
     }
+}
+
+/**
+ * An HTML file drawn as a page. It has no origin and no file access, so it can
+ * reach nothing on the phone; a tapped link leaves for the browser rather than
+ * navigating the reader away from the file.
+ */
+@Composable
+private fun HtmlView(html: String) {
+    val uris = LocalUriHandler.current
+    AndroidView(
+        modifier = Modifier.fillMaxSize(),
+        factory = { ctx ->
+            WebView(ctx).apply {
+                settings.javaScriptEnabled = true
+                settings.allowFileAccess = false
+                settings.allowContentAccess = false
+                webViewClient = object : WebViewClient() {
+                    override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                        runCatching { uris.openUri(request.url.toString()) }
+                        return true
+                    }
+                }
+                loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
+            }
+        },
+    )
 }
 
 // The terminal fills this window rather than a Dialog — a Dialog is its own
@@ -2184,6 +2234,13 @@ internal fun linkDestination(raw: String): String? {
     val path = target.substringBefore('#').substringBefore('?').removePrefix("./")
     if (path.isEmpty()) return null
     return "jep://file?path=" + URLEncoder.encode(path, "UTF-8")
+}
+
+/** the path a file:// link names, or null for any other link */
+internal fun localFilePath(uri: String): String? {
+    if (!uri.startsWith("file:", ignoreCase = true)) return null
+    val path = runCatching { java.net.URI(uri).path }.getOrNull()
+    return path?.takeIf { it.isNotEmpty() }
 }
 
 // `[label](target)`, and images `![alt](target)`. Only the destination is

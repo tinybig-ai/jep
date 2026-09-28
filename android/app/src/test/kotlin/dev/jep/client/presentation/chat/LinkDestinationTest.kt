@@ -75,4 +75,12 @@ class LinkDestinationTest {
         val md = "just prose, and `docs/a.md` in a code span, and a bare docs/a.md"
         assertEquals(md, withLocalLinks(md))
     }
+
+    @Test
+    fun `a file link names a path on the agent's machine`() {
+        assertEquals("/private/tmp/a b.html", localFilePath("file:///private/tmp/a%20b.html"))
+        assertEquals("/tmp/x.md", localFilePath("FILE:///tmp/x.md"))
+        assertNull(localFilePath("https://example.com/a"))
+        assertNull(localFilePath("jep://file?path=a.md"))
+    }
 }
