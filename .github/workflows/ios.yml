@@ -49,8 +49,7 @@ jobs:
         run: |
           xcodebuild -project Jep.xcodeproj -scheme Jep \
             -destination 'generic/platform=iOS Simulator' \
-            CODE_SIGNING_ALLOWED=NO build | tail -n 60
-          exit ${PIPESTATUS[0]}
+            CODE_SIGNING_ALLOWED=NO build > "$RUNNER_TEMP/build.log" || { grep -E "error:" -A3 "$RUNNER_TEMP/build.log" | head -80; exit 1; }; tail -n 20 "$RUNNER_TEMP/build.log"
       - name: Test JepKit on iOS
         working-directory: ios/JepKit
         run: |
