@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.FormatSize
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.SettingsBrightness
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -65,6 +66,8 @@ fun SettingsScreen(
     textSize: TextSize,
     terminalEnabled: Boolean,
     backgroundStreaming: Boolean,
+    /** whether the conversation list is grouped into projects */
+    groupByProject: Boolean = false,
     /** the code the daemon will accept next, when it has handed one over */
     knownCode: String?,
     gateway: String?,
@@ -75,6 +78,7 @@ fun SettingsScreen(
     onUnlockTerminal: (String, (Boolean) -> Unit) -> Unit,
     onDisableTerminal: () -> Unit,
     onBackgroundStreaming: (Boolean) -> Unit,
+    onGroupByProject: (Boolean) -> Unit = {},
     onReconnect: (String, String, (Boolean) -> Unit) -> Unit,
     onForgetPairing: () -> Unit,
 ) {
@@ -128,6 +132,19 @@ fun SettingsScreen(
                     icon = Icons.Filled.Notifications,
                     checked = backgroundStreaming,
                     onChange = onBackgroundStreaming,
+                )
+            }
+            item { SectionTitle("CONVERSATIONS", top = 18.dp) }
+            item {
+                SwitchRow(
+                    name = "Group conversations by project",
+                    subtitle = if (groupByProject)
+                        "the list shows one folder per row; open one for its conversations"
+                    else
+                        "off: every conversation in one newest-first list",
+                    icon = Icons.Filled.Folder,
+                    checked = groupByProject,
+                    onChange = onGroupByProject,
                 )
             }
             if (terminalAccess?.allowed == false) {

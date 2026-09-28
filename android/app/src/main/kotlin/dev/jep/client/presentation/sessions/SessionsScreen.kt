@@ -10,6 +10,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.MarkEmailRead
 import androidx.compose.material.icons.filled.MarkEmailUnread
 import androidx.compose.material.icons.filled.PushPin
@@ -50,6 +51,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.material.icons.filled.Archive
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -59,9 +61,12 @@ import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.activity.compose.BackHandler
 import dev.jep.client.domain.model.ImportableSession
 import androidx.compose.foundation.layout.offset
 import androidx.compose.runtime.remember
@@ -71,6 +76,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import dev.jep.client.presentation.theme.JepMono
 import dev.jep.client.presentation.theme.LocalSyntaxColors
 import dev.jep.client.presentation.theme.Radius
@@ -112,10 +118,20 @@ fun SessionsScreen(
     importable: List<ImportableSession>?,
     onLoadImportable: () -> Unit,
     onImport: (ImportableSession) -> Unit,
+    /** group the list into projects (one row per directory) instead of a flat list */
+    grouped: Boolean = false,
 ) {
     var importOpen by remember { mutableStateOf(false) }
     var archivedOpen by remember { mutableStateOf(false) }
     var confirmImport by remember { mutableStateOf<ImportableSession?>(null) }
+    // Which project is open (its directory), when the list is grouped. Kept in
+    // the screen rather than the app's navigation: a project is a glance at one
+    // list, not a place, and back is the only way out of it.
+    var openProject by rememberSaveable { mutableStateOf<String?>(null) }
+    // Turning grouping off while a project is open must not leave a flat list
+    // filtered to that one project, so the drill-in is dropped with the mode.
+    LaunchedEffect(grouped) { if (!grouped) openProject = null }
+    BackHandler(enabled = grouped && openProject != null) { openProject = null }
     Scaffold(
         floatingActionButton = {
             ExtendedFloatingActionButton(
@@ -159,8 +175,28 @@ fun SessionsScreen(
                     },
                 )
             } else TopAppBar(
+                navigationIcon = {
+                    // inside a project the only way out is back, so the bar
+                    // grows one — the logo is replaced by where you are
+                    if (grouped && openProject != null) {
+                        IconButton(onClick = { openProject = null }) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "back to projects")
+                        }
+                    }
+                },
                 title = {
-                    Row(
+                    val dir = openProject
+                    if (grouped && dir != null) {
+                        Column {
+                            Text(projectName(dir, sessions.filter { projectDir(it) == dir }))
+                            Text(
+                                "${sessions.count { projectDir(it) == dir }} conversation" +
+                                    (if (sessions.count { projectDir(it) == dir } == 1) "" else "s"),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    } else Row(
                         // the harness icons in the rows below start at 18dp, and the
                         // logo's mipmap carries its own transparent margin, so the
                         // apple sits further right than the marks it lines up with
@@ -218,10 +254,30 @@ fun SessionsScreen(
                 ) {
                     CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 3.dp)
                 }
-            } else {
+            } else if (grouped && openProject == null) {
+                // one row per project: the conversations, by the directory they
+                // were started in, newest project first. Pinning a conversation
+                // lifts its project too, so the pin is not buried a level down.
+                val projects = groupedProjects(sessions)
                 LazyColumn(Modifier.fillMaxSize()) {
-                    items(sessions.size) { i ->
-                        val s = sessions[i]
+                    items(projects.size) { i ->
+                        val (dir, list) = projects[i]
+                        ProjectRow(
+                            name = projectName(dir, list),
+                            dir = dir,
+                            count = list.size,
+                            unread = list.any { unread.contains(it.id) },
+                            active = list.any { it.active },
+                            pinned = list.any { it.pinned },
+                            onClick = { openProject = dir },
+                        )
+                    }
+                }
+            } else {
+                val shown = if (grouped && openProject != null) sessions.filter { projectDir(it) == openProject } else sessions
+                LazyColumn(Modifier.fillMaxSize()) {
+                    items(shown.size) { i ->
+                        val s = shown[i]
                         val row = @Composable {
                             SessionRow(
                                 session = s,
@@ -555,5 +611,86 @@ private fun ago(epoch: Long): String {
         minutes < 60 -> "${minutes}m"
         minutes < 60 * 24 -> "${minutes / 60}h"
         else -> "${minutes / (60 * 24)}d"
+    }
+}
+
+/** the directory a conversation belongs to — the project it groups under */
+internal fun projectDir(s: SessionSummary): String = s.workspace.ifBlank { s.adapter ?: "unknown" }
+
+/**
+ * The projects in the list, each with its conversations.
+ *
+ * A project's place is its newest conversation's — the folder you were in a
+ * minute ago is first — except that a pinned conversation lifts its whole
+ * project, so a pin is not buried a level down. Within a project the sessions
+ * keep the daemon's order, which is already pinned first.
+ */
+internal fun groupedProjects(sessions: List<SessionSummary>): List<Pair<String, List<SessionSummary>>> =
+    sessions.groupBy { projectDir(it) }.entries
+        .sortedWith(
+            compareByDescending<Map.Entry<String, List<SessionSummary>>> { e -> e.value.any { it.pinned } }
+                .thenByDescending { e -> e.value.maxOf { it.updatedAt } },
+        )
+        .map { it.key to it.value }
+
+/** what to call a project: the workspace's friendly name, else its folder name */
+internal fun projectName(dir: String, sessions: List<SessionSummary>): String =
+    sessions.firstNotNullOfOrNull { it.adapter?.takeIf { a -> a.isNotBlank() } }
+        ?: dir.trimEnd('/').substringAfterLast('/').ifBlank { dir }
+
+// One row per project in the grouped view: the folder, how many conversations
+// are in it, and the same live/unread marks a conversation row carries, rolled
+// up so the project tells you whether anything in it needs you.
+@Composable
+private fun ProjectRow(
+    name: String,
+    dir: String,
+    count: Int,
+    unread: Boolean,
+    active: Boolean,
+    pinned: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 18.dp, vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(34.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceContainer),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Filled.Folder, "project", Modifier.size(19.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (pinned) {
+                    Icon(Icons.Filled.PushPin, "pinned", Modifier.size(12.dp), tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(5.dp))
+                }
+                Text(
+                    name,
+                    Modifier.weight(1f),
+                    fontSize = 16.sp,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    maxLines = 1,
+                )
+                // the same slot a conversation row keeps, so the marks line up
+                Box(Modifier.padding(top = 3.dp).size(9.dp), contentAlignment = Alignment.Center) {
+                    when {
+                        active -> LiveDot()
+                        unread -> Icon(Icons.Filled.Circle, "unread", Modifier.fillMaxSize(), tint = MaterialTheme.colorScheme.primary)
+                    }
+                }
+            }
+            Text(
+                "$count conversation" + (if (count == 1) "" else "s"),
+                fontSize = 13.sp,
+                fontFamily = JepMono,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }

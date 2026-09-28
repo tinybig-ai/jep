@@ -68,6 +68,7 @@ data class Prefs(
     val textSize: TextSize,
     val terminalEnabled: Boolean,
     val backgroundStreaming: Boolean,
+    val groupByProject: Boolean = false,
 )
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
@@ -80,7 +81,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     /** how the screens tell the device what the person is looking at */
     val attention: Attention = dev.jep.client.device.DeviceAttention(application)
 
-    private val _prefs = MutableStateFlow(Prefs(settings.theme, settings.textSize, settings.terminalEnabled, settings.backgroundStreaming))
+    private val _prefs = MutableStateFlow(Prefs(settings.theme, settings.textSize, settings.terminalEnabled, settings.backgroundStreaming, settings.groupByProject))
     val prefs = _prefs.asStateFlow()
 
     // the gateway we're pointed at — changes when re-paired, and the Settings
@@ -122,6 +123,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun setBackgroundStreaming(enabled: Boolean) {
         settings.setBackgroundStreaming(enabled)
         _prefs.value = _prefs.value.copy(backgroundStreaming = enabled)
+    }
+
+    fun setGroupByProject(enabled: Boolean) {
+        settings.setGroupByProject(enabled)
+        _prefs.value = _prefs.value.copy(groupByProject = enabled)
     }
 
     fun disableTerminal() {

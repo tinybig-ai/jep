@@ -47,6 +47,7 @@ fun JepApp(app: AppViewModel) {
                 textSize = prefs.textSize,
                 terminalEnabled = prefs.terminalEnabled,
                 backgroundStreaming = prefs.backgroundStreaming,
+                groupByProject = prefs.groupByProject,
                 knownCode = app.pairing.nextCode,
                 terminalAccess = app.termAccess.collectAsState().value,
                 gateway = app.gateway.collectAsState().value,
@@ -56,6 +57,7 @@ fun JepApp(app: AppViewModel) {
                 onUnlockTerminal = { code, done -> app.enableTerminal(code, done) },
                 onDisableTerminal = { app.disableTerminal() },
                 onBackgroundStreaming = { app.setBackgroundStreaming(it) },
+                onGroupByProject = { app.setGroupByProject(it) },
                 onReconnect = { address, code, done -> app.reconnect(address, code, done) },
                 onForgetPairing = { app.forgetPairing() },
             )
@@ -88,6 +90,7 @@ fun JepApp(app: AppViewModel) {
             importable = app.importable.collectAsState().value,
             onLoadImportable = { app.loadImportable() },
             onImport = { app.importSession(it.id) },
+            grouped = app.prefs.collectAsState().value.groupByProject,
             onArchive = { app.archive(it) },
             unread = app.unread.collectAsState().value,
             archived = app.archived.collectAsState().value,

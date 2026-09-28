@@ -31,7 +31,15 @@ class AppSettings(private val prefs: SharedPreferences) {
     val backgroundStreaming: Boolean
         get() = (prefs.all[KEY_STREAM] as? Boolean) ?: true
 
+    /** Whether the conversation list is grouped into projects (one row per
+     * directory) instead of a flat, newest-first list. A view preference, so it
+     * lives on the device rather than on any conversation. */
+    val groupByProject: Boolean
+        get() = (prefs.all[KEY_GROUP_PROJECT] as? Boolean) ?: false
+
     fun setTheme(mode: ThemeMode) = prefs.edit().putString(KEY_THEME, mode.name).apply()
+
+    fun setGroupByProject(enabled: Boolean) = prefs.edit().putBoolean(KEY_GROUP_PROJECT, enabled).apply()
 
     fun setTextSize(size: TextSize) = prefs.edit().putString(KEY_TEXT_SIZE, size.name).apply()
 
@@ -44,5 +52,6 @@ class AppSettings(private val prefs: SharedPreferences) {
         const val KEY_TEXT_SIZE = "app_text_size"
         const val KEY_TERMINAL = "app_terminal_enabled"
         const val KEY_STREAM = "app_background_streaming"
+        const val KEY_GROUP_PROJECT = "app_group_by_project"
     }
 }
