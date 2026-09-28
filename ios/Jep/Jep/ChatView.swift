@@ -26,7 +26,32 @@ struct ChatView: View {
     var body: some View {
         let st = chat.state
         let rows = displayRows(st)
-        ScrollViewReader { proxy in
+        dialogs(transcript(st, rows)
+        .safeAreaInset(edge: .top, spacing: 0) { banners(st) }
+        .safeAreaInset(edge: .bottom, spacing: 0) { bottom(st) }
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { toolbar(st) }
+        .environment(\.openURL, OpenURLAction { url in
+            if let path = localLinkPath(url) {
+                chat.openFile(path)
+                return .handled
+            }
+            return .systemAction
+        })
+        .onChange(of: statusSummary(st)) { _, now in status = retainStatus(status, now) }
+        .onAppear {
+            status = retainStatus(status, statusSummary(st))
+            chat.loadModels()
+            chat.loadHarnessSettings(quiet: true)
+        }
+        .sheet(item: $sheet) { s in sheetView(s) }
+        .sheet(item: Binding(get: { chat.state.openFile.map { IdentifiedFile(file: $0) } }, set: { if $0 == nil { chat.closeFile() } })) { f in
+            FileReaderView(file: f.file, chat: chat)
+        })
+    }
+
+    private func transcript(_ st: ChatState, _ rows: [Row]) -> some View {
+        return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     if st.hasMore {
@@ -61,27 +86,10 @@ struct ChatView: View {
                 }
             }
         }
-        .safeAreaInset(edge: .top, spacing: 0) { banners(st) }
-        .safeAreaInset(edge: .bottom, spacing: 0) { bottom(st) }
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar { toolbar(st) }
-        .environment(\.openURL, OpenURLAction { url in
-            if let path = localLinkPath(url) {
-                chat.openFile(path)
-                return .handled
-            }
-            return .systemAction
-        })
-        .onChange(of: statusSummary(st)) { _, now in status = retainStatus(status, now) }
-        .onAppear {
-            status = retainStatus(status, statusSummary(st))
-            chat.loadModels()
-            chat.loadHarnessSettings(quiet: true)
-        }
-        .sheet(item: $sheet) { s in sheetView(s) }
-        .sheet(item: Binding(get: { chat.state.openFile.map { IdentifiedFile(file: $0) } }, set: { if $0 == nil { chat.closeFile() } })) { f in
-            FileReaderView(file: f.file, chat: chat)
-        }
+    }
+
+    private func dialogs(_ content: some View) -> some View {
+        content
         .alert("Delete this conversation?", isPresented: $deleteOpen) {
             Button("Delete", role: .destructive) {
                 Task { if await chat.delete() { app.back(); app.refresh() } }
