@@ -161,6 +161,8 @@ final class ScreenTour: XCTestCase {
             if tap(app.links["preview page"].firstMatch, timeout: 3) {
                 sleep(3)
                 shot("32-html-rendered")
+                sleep(5)
+                shot("32b-html-rendered-later")
                 if tap(button("Source"), timeout: 2) { shot("33-html-source") }
                 close()
             }

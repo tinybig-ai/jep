@@ -153,7 +153,11 @@ http.createServer(async (req, res) => {
   if (path === "/prompt") {
     await new Promise(r => setTimeout(r, 6000))
     res.writeHead(200, { "content-type": "application/json" })
-    res.end(JSON.stringify({ message: { id: `r${Date.now()}`, role: "assistant", time: Date.now(), parts: [{ kind: "text", text: "On it." }] } }))
+    const t = Date.now()
+    const reply = { id: `r${t}`, role: "assistant", time: t, parts: [{ kind: "text", text: "On it." }] }
+    // the record keeps the turn, as the real gateway's does, so a refresh after the reply still shows it
+    if (body.id === "s2") themeMessages.push({ id: `u${t}`, role: "user", time: t - 6000, parts: [{ kind: "text", text: String(body.text ?? "") }] }, reply)
+    res.end(JSON.stringify({ message: reply }))
     return
   }
   const route = routes[path]

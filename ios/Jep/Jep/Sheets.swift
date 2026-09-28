@@ -339,6 +339,7 @@ struct FileReaderView: View {
                             Text(text).jepFont(13, design: .monospaced).textSelection(.enabled).padding().fixedSize()
                         }
                     }
+                    .defaultScrollAnchor(.topLeading)
                     .environment(\.openURL, OpenURLAction { url in
                         if let p = localLinkPath(url) {
                             chat.openFile(p)
