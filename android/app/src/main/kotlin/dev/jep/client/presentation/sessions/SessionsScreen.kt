@@ -12,6 +12,7 @@ import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MarkEmailRead
 import androidx.compose.material.icons.filled.MarkEmailUnread
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material3.Checkbox
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.Image
@@ -41,6 +42,7 @@ import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -102,6 +104,8 @@ fun SessionsScreen(
     onClearSelection: () -> Unit = {},
     onArchiveSelected: () -> Unit = {},
     onMarkSelected: (Boolean) -> Unit = {},
+    /** hold the picked conversations at the top, or release them */
+    onPinSelected: (Boolean) -> Unit = {},
     /** conversations archived a moment ago, restorable while this is non-empty */
     undo: List<SessionSummary> = emptyList(),
     onUndoArchive: () -> Unit = {},
@@ -132,6 +136,17 @@ fun SessionsScreen(
                     },
                     title = { Text("${selection.size} selected") },
                     actions = {
+                        // one toggle rather than pin and unpin side by side: it
+                        // reads as the state those rows are in
+                        val allPinned = sessions.filter { it.id in selection }.all { it.pinned } &&
+                            sessions.any { it.id in selection }
+                        IconButton(onClick = { onPinSelected(!allPinned) }) {
+                            Icon(
+                                Icons.Filled.PushPin,
+                                if (allPinned) "unpin selected" else "pin selected",
+                                tint = if (allPinned) MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                            )
+                        }
                         IconButton(onClick = onArchiveSelected) {
                             Icon(Icons.Filled.Archive, "archive selected")
                         }
@@ -411,10 +426,6 @@ private fun SessionRow(
             .padding(horizontal = 18.dp, vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (selecting) {
-            Checkbox(checked = selected, onCheckedChange = { onToggleSelect() })
-            Spacer(Modifier.width(6.dp))
-        }
         HarnessAvatar(session.harness)
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -447,19 +458,39 @@ private fun SessionRow(
                     }
                 }
             }
-            Text(
-                // workspace, harness, and — when it spawned any — how many
-                // subagents it has (they're reachable from the conversation)
-                (
-                    listOfNotNull(session.adapter ?: session.workspace.substringAfterLast('/').ifBlank { null }, session.harness)
-                        .joinToString(" · ") +
-                        if (session.subagents > 0) "  ·  ${session.subagents} subagent" + (if (session.subagents == 1) "" else "s") else ""
-                    ),
-                fontSize = 13.sp,
-                fontFamily = JepMono,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // a pinned row says so where the eye already is, in the line
+                // that describes it — not as another badge in the corner
+                if (session.pinned) {
+                    Icon(
+                        Icons.Filled.PushPin,
+                        "pinned",
+                        Modifier.size(12.dp),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.width(5.dp))
+                }
+                Text(
+                    // workspace, harness, and — when it spawned any — how many
+                    // subagents it has (they're reachable from the conversation)
+                    (
+                        listOfNotNull(session.adapter ?: session.workspace.substringAfterLast('/').ifBlank { null }, session.harness)
+                            .joinToString(" · ") +
+                            if (session.subagents > 0) "  ·  ${session.subagents} subagent" + (if (session.subagents == 1) "" else "s") else ""
+                        ),
+                    fontSize = 13.sp,
+                    fontFamily = JepMono,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
+        }
+        // The tick lives at the row's end, where a picking hand reaches: the
+        // left is the avatar's, and moving the mark away from the thing it
+        // selects would reflow every title the moment select mode starts.
+        if (selecting) {
+            Spacer(Modifier.width(6.dp))
+            Checkbox(checked = selected, onCheckedChange = { onToggleSelect() })
         }
     }
 }

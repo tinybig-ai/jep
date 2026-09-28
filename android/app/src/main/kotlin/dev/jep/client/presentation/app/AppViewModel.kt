@@ -233,7 +233,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 .onFailure { _notice.value = "gateway unreachable: ${it.message}" }
             // the creation picker lists the same served workspaces; keep them
             // fresh with the session list so "New conversation" is never empty
-            runCatching { r.workspaces() }.onSuccess { _workspaces.value = it }
+            runCatching { r.workspaces() }.onSuccess { _workspaces.value = byRecency(it) }
             _busy.value = false
             if (refreshQueued) {
                 refreshQueued = false
@@ -298,6 +298,40 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _selection.value = emptySet()
         ids.forEach { if (read) markRead(it) else markUnread(it) }
     }
+
+    // Pinning holds a conversation at the top of the list. The daemon owns the
+    // fact (so the phone and Telegram agree, and a reinstall keeps the pins),
+    // but the list is re-sorted here at once rather than waiting for a reload:
+    // a pin that visibly does nothing until the next refresh reads as broken.
+    fun pinSelected(pinned: Boolean) {
+        val ids = _selection.value
+        if (ids.isEmpty()) return
+        _selection.value = emptySet()
+        pinAll(ids, pinned)
+    }
+
+    fun togglePin(session: SessionSummary) = pinAll(setOf(session.id), !session.pinned)
+
+    private fun pinAll(ids: Set<String>, pinned: Boolean) {
+        val r = repo ?: return
+        if (ids.isEmpty()) return
+        _sessions.value = pinFirst(_sessions.value.map { if (it.id in ids) it.copy(pinned = pinned) else it })
+        viewModelScope.launch {
+            var failed = false
+            for (id in ids) {
+                val done = runCatching { if (pinned) r.pinSession(id) else r.unpinSession(id) }.getOrDefault(false)
+                if (!done) failed = true
+            }
+            if (failed) {
+                _notice.value = "couldn't change the pin — the list is being reloaded"
+                refresh()
+            }
+        }
+    }
+
+    /** pinned conversations first, then by recency — the daemon's own order */
+    private fun pinFirst(sessions: List<SessionSummary>): List<SessionSummary> =
+        sessions.sortedWith(compareByDescending<SessionSummary> { it.pinned }.thenByDescending { it.updatedAt })
 
     private fun archiveAll(sessions: List<SessionSummary>) {
         val r = repo ?: return
@@ -457,10 +491,33 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 selected?.let { loadNewHarnessOptions(r, it) }
             }
             runCatching { r.workspaces() }.onSuccess { w ->
-                _workspaces.value = w
-                _newChat.update { it.copy(workspaces = w) }
+                val ordered = byRecency(w)
+                _workspaces.value = ordered
+                _newChat.update { it.copy(workspaces = ordered) }
             }
         }
+    }
+
+    /**
+     * The served workspaces, most recently used first.
+     *
+     * A folder's place comes from the newest conversation in it, not from the
+     * order the gateway happens to list them: the picker is opened to start
+     * work in a project you were just in, and a stable alphabetical list buries
+     * that under folders untouched for weeks. Folders with no conversation keep
+     * their served order, after the ones with history.
+     */
+    private fun byRecency(workspaces: List<Workspace>): List<Workspace> {
+        val lastUsed = HashMap<String, Long>()
+        for (s in _sessions.value) {
+            if (s.workspace.isBlank()) continue
+            val seen = lastUsed[s.workspace]
+            if (seen == null || s.updatedAt > seen) lastUsed[s.workspace] = s.updatedAt
+        }
+        if (lastUsed.isEmpty()) return workspaces
+        val used = workspaces.filter { lastUsed.containsKey(it.dir) }.sortedByDescending { lastUsed[it.dir] }
+        val fresh = workspaces.filterNot { lastUsed.containsKey(it.dir) }
+        return used + fresh
     }
 
     fun closeNewChat() {

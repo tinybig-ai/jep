@@ -90,6 +90,8 @@ class FakeChatRepository(
     override suspend fun importSession(sessionId: String) = true
     override suspend fun archiveSession(sessionId: String) = true
     override suspend fun unarchiveSession(sessionId: String) = true
+    override suspend fun pinSession(sessionId: String) = true
+    override suspend fun unpinSession(sessionId: String) = true
     override suspend fun terminalStatus() = TerminalAccess(allowed = true, authorized = false)
     override suspend fun unlockTerminal(code: String) = true
     override suspend fun lockTerminal() = true

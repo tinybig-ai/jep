@@ -26,6 +26,8 @@ data class SessionDto(
     val harness: String? = null,
     // when it was last looked at, on any device (0 = never)
     val seenAt: Long = 0,
+    // held above the rest of the list, whatever moved most recently
+    val pinned: Boolean = false,
 )
 
 @Serializable

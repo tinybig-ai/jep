@@ -237,6 +237,12 @@ private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     override suspend fun unarchiveSession(sessionId: String): Boolean =
         post("/unarchive", payload("id" to sessionId)).first in 200..299
 
+    override suspend fun pinSession(sessionId: String): Boolean =
+        post("/pin", payload("id" to sessionId)).first in 200..299
+
+    override suspend fun unpinSession(sessionId: String): Boolean =
+        post("/unpin", payload("id" to sessionId)).first in 200..299
+
     override suspend fun terminalStatus(): TerminalAccess {
         val r = decode("/term", TermStatusRes.serializer(), "{}")
         return TerminalAccess(r.allowed, r.authorized)
