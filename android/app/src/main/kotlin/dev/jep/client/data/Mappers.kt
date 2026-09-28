@@ -140,7 +140,7 @@ private fun JsonElement.lineChange(tool: String): Pair<Int, Int>? {
     fun str(k: String): JsonElement? = obj[k]
     return when (tool.lowercase()) {
         "write" -> str("content")?.let { lines(it) to 0 }
-        "edit" -> if (str("oldString") != null || str("newString") != null) lines(str("oldString")) to lines(str("newString")) else null
+        "edit" -> if (str("oldString") != null || str("newString") != null) lines(str("newString")) to lines(str("oldString")) else null
         "multi-edit", "multiedit" -> {
             val edits = str("edits") as? JsonArray ?: return null
             var add = 0
