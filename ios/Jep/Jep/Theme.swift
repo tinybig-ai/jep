@@ -18,6 +18,16 @@ extension View {
         #endif
     }
 
+    /// iOS 26 sheets are Liquid Glass already; older ones get a material
+    @ViewBuilder
+    func legacySheetMaterial() -> some View {
+        if #available(iOS 26, *) {
+            self
+        } else {
+            self.presentationBackground(.thinMaterial)
+        }
+    }
+
     func glassCapsule() -> some View { glass(Capsule()) }
     func glassCard(_ radius: CGFloat = 18) -> some View { glass(RoundedRectangle(cornerRadius: radius, style: .continuous)) }
 

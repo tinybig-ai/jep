@@ -63,7 +63,7 @@ struct SessionsView: View {
                     Button("Import external session", systemImage: "square.and.arrow.down") { importOpen = true }
                     Button("Settings", systemImage: "gearshape") { store.openSettings() }
                 } label: {
-                    Image(systemName: "ellipsis.circle").accessibilityLabel("sessions menu")
+                    Image(systemName: "ellipsis").accessibilityLabel("sessions menu")
                 }
             }
         } else {
