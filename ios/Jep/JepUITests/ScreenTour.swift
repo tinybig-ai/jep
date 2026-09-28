@@ -96,7 +96,7 @@ final class ScreenTour: XCTestCase {
             shot("13-chat-ask")
 
             let groups = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Read 3'")).firstMatch
-            if tap(groups, timeout: 2) { shot("14-tool-group-open"); groups.tap() }
+            if tap(groups, timeout: 2) { shot("14-tool-group-open"); tap(button("hide this work"), timeout: 2) }
 
             let sheets: [(String, String)] = [
                 ("Model", "16-model"), ("Agent", "17-agent"), ("Settings", "18-chat-settings"), ("Usage", "19-usage"),
