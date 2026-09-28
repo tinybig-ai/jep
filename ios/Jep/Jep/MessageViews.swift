@@ -234,7 +234,54 @@ struct WorkView: View {
             .buttonStyle(.plain)
             .accessibilityLabel(open ? "hide this work" : title)
             if open {
-                ForEach(Array(parts.enumerated()), id: \.offset) { _, p in PartView(part: p, chat: chat) }
+                WorkWindow(follow: running, count: parts.count) {
+                    ForEach(Array(parts.enumerated()), id: \.offset) { _, p in PartView(part: p, chat: chat) }
+                }
+            }
+        }
+    }
+}
+
+/// a window of limited height over an opened stretch of work; the steps scroll
+/// inside it and fade out towards its edges
+struct WorkWindow<Content: View>: View {
+    var follow: Bool
+    var count: Int
+    @ViewBuilder let content: Content
+    @State private var height: CGFloat = 0
+    private let limit: CGFloat = 280
+    private let fade: CGFloat = 20
+
+    var body: some View {
+        let clipped = height > limit
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    content
+                    Color.clear.frame(height: 0).id("work-end")
+                }
+                .padding(.vertical, clipped ? fade : 0)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(height: min(height, limit))
+            .mask {
+                if clipped {
+                    LinearGradient(
+                        stops: [
+                            .init(color: .clear, location: 0),
+                            .init(color: .black, location: fade / limit),
+                            .init(color: .black, location: 1 - fade / limit),
+                            .init(color: .clear, location: 1),
+                        ],
+                        startPoint: .top, endPoint: .bottom
+                    )
+                } else {
+                    Rectangle()
+                }
+            }
+            .onChange(of: count, initial: true) {
+                if follow { proxy.scrollTo("work-end", anchor: .bottom) }
             }
         }
     }

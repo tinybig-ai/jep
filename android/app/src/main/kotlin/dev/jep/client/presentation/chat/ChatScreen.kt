@@ -7,6 +7,11 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.foundation.ScrollState
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -2247,8 +2252,17 @@ private fun WorkRow(parts: List<ChatPart>, durationMs: Long? = null, active: Boo
             )
         }
         if (open) {
+            val scroll = rememberScrollState()
+            // while the turn runs, the window follows its newest step
+            LaunchedEffect(parts.size, active, scroll.maxValue) {
+                if (active) scroll.scrollTo(scroll.maxValue)
+            }
             Column(
-                Modifier.fillMaxWidth().padding(start = RowInset, top = 2.dp, end = RowInset),
+                Modifier.fillMaxWidth()
+                    .padding(start = RowInset, top = 2.dp, end = RowInset)
+                    .heightIn(max = WorkWindow)
+                    .fadeEdges(scroll)
+                    .verticalScroll(scroll),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 parts.forEach { PartView(it, streaming = false) }
@@ -2256,6 +2270,26 @@ private fun WorkRow(parts: List<ChatPart>, durationMs: Long? = null, active: Boo
         }
     }
 }
+
+private val WorkWindow = 280.dp
+private val EdgeFade = 24.dp
+
+/** fades the content out towards whichever edge still has more to scroll to */
+private fun Modifier.fadeEdges(scroll: ScrollState): Modifier =
+    graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+        .drawWithContent {
+            drawContent()
+            val fade = EdgeFade.toPx().coerceAtMost(size.height / 2)
+            if (scroll.canScrollBackward) {
+                drawRect(Brush.verticalGradient(0f to Color.Transparent, 1f to Color.Black, endY = fade), blendMode = BlendMode.DstIn)
+            }
+            if (scroll.canScrollForward) {
+                drawRect(
+                    Brush.verticalGradient(0f to Color.Black, 1f to Color.Transparent, startY = size.height - fade, endY = size.height),
+                    blendMode = BlendMode.DstIn,
+                )
+            }
+        }
 
 /**
  * A run of work — tool calls and thinking with nothing said between them —
