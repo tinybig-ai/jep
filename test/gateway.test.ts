@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { positiveInt, restartWhenQuiet, startGateway, type GatewayHandle } from "../src/clients/gateway/index.ts"
+import { positiveInt, restartWhenQuiet, revokeGatewayTokens, startGateway, type GatewayHandle } from "../src/clients/gateway/index.ts"
 import type { HarnessAdapter } from "../src/core/ports.ts"
 import type { DomainEvent, Message, SessionSummary } from "../src/core/types.ts"
 import { TurnAbortedError } from "../src/core/types.ts"
@@ -1626,6 +1626,34 @@ test("/harness-settings says whether the conversation's harness can compact", as
     assert.equal(await ask(), false, "no compact port: the phone shows no Compact row")
     a.compact = async () => true
     assert.equal(await ask(), true)
+  } finally {
+    await g.close()
+  }
+})
+
+test("unpair revokes every device token without a restart", async () => {
+  const { base, headers, g, dataHome } = await startWith(stallable())
+  try {
+    assert.equal((await fetch(`${base}/sessions`, { method: "POST", headers })).status, 200)
+    await sleep(20) // a distinct mtime from the pairing write
+    assert.equal(await revokeGatewayTokens(dataHome), 1)
+    assert.equal((await fetch(`${base}/sessions`, { method: "POST", headers })).status, 401)
+  } finally {
+    await g.close()
+  }
+})
+
+test("the gateway listens on the configured host", async () => {
+  const g = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter: fakeAdapter() }],
+    dataHome: mkdtempSync(join(tmpdir(), "gw-bind-")),
+    port: 0,
+    host: "127.0.0.1",
+    pairCode: "TESTCODE",
+  })
+  try {
+    const res = await fetch(`http://127.0.0.1:${g.port}/health`)
+    assert.equal(res.status, 200)
   } finally {
     await g.close()
   }

@@ -52,6 +52,8 @@ export interface GatewayDeps {
   push?: PushNotifier
   dataHome: string
   port: number
+  /** interface to listen on; every interface when omitted */
+  host?: string
   /** pinned pairing code; generated fresh per boot when omitted */
   pairCode?: string
   /** attempts per address per minute before the pair gate slams shut; a
@@ -167,6 +169,18 @@ async function loadTokens(dataHome: string): Promise<Map<string, number>> {
   } catch {
     return new Map()
   }
+}
+
+const tokenFileStamp = async (dataHome: string): Promise<number> =>
+  (await stat(join(dataHome, TOKEN_FILE)).catch(() => null))?.mtimeMs ?? 0
+
+/** Forget every paired device. The running gateway notices the file change
+ * on the next request, so a revoked token stops working without a restart. */
+export async function revokeGatewayTokens(dataHome: string): Promise<number> {
+  const tokens = await loadTokens(dataHome)
+  await saveTokens(dataHome, new Map())
+  await saveTerminalTokens(dataHome, new Set())
+  return tokens.size
 }
 
 const saveTokens = async (dataHome: string, tokens: Map<string, number>): Promise<void> => {
@@ -447,6 +461,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   // code and mints a fresh one, so a code seen once is never valid again
   let pairCode = deps.pairCode ?? newPairCode()
   let tokens = await loadTokens(deps.dataHome)
+  let tokensStamp = await tokenFileStamp(deps.dataHome)
   // this client's pairing surface, reported through the shared admin port so
   // tooling never reads gateway files directly
   const pairingAdmin: PairingAdmin = {
@@ -934,6 +949,12 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
 
       // everything below is token-gated
       const token = tokenOf(req, url)
+      const stamp = await tokenFileStamp(deps.dataHome)
+      if (stamp !== tokensStamp) {
+        tokens = await loadTokens(deps.dataHome)
+        tokensStamp = stamp
+        for (const t of [...terminalTokens]) if (!tokens.has(t)) terminalTokens.delete(t)
+      }
       if (!token || !tokens.has(token)) return json(res, 401, { error: "pair first" })
 
       if (path === "/stream" && req.method === "GET") {
@@ -1721,7 +1742,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     }
   })
 
-  await new Promise<void>((resolve) => server.listen(deps.port, "0.0.0.0", resolve))
+  await new Promise<void>((resolve) => server.listen(deps.port, deps.host ?? "0.0.0.0", resolve))
   const bound = (server.address() as { port: number }).port
   console.error(`[gw] listening on :${bound}  ·  pairing code: ${pairCode}`)
 

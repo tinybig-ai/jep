@@ -57,7 +57,7 @@ the run entry point, and `npm start` as the dev one.
 ```sh
 npm run check          # tsc typecheck + node --test, ~1s, no network; the gate
 npm run test:e2e       # opt-in: replays fixtures against a REAL harness (~45s)
-npm run tg:mock        # replay a Telegram fixture, dump every wire call
+npm run tg:mock        # replay a Telegram fixture against the echo harness, dump every wire call
 npm run probe:harness -- <id>   # run the port compliance suite against a harness
 ```
 
