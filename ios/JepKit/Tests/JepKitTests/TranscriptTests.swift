@@ -102,17 +102,34 @@ final class TranscriptTests: XCTestCase {
         XCTAssertEqual(withLocalLinks(plain), plain)
     }
 
-    func testToolRunsGroup() {
-        let a = ChatMessage(id: "a", role: .assistant, time: 1, parts: [tool("t1"), tool("t2")])
-        let b = ChatMessage(id: "b", role: .assistant, time: 2, parts: [tool("t3")])
-        let c = ChatMessage(id: "c", role: .assistant, time: 3, parts: [tool("t4")])
-        XCTAssertEqual(groupToolRuns([rowFor(a), rowFor(b)]).count, 2)
-        let grouped = groupToolRuns([rowFor(a), rowFor(b), rowFor(c)])
-        XCTAssertEqual(grouped.count, 1)
-        guard case .tools(let calls) = grouped[0] else { return XCTFail("expected a tool group") }
-        XCTAssertEqual(calls.count, 4)
-        let mixed = ChatMessage(id: "d", role: .assistant, time: 4, parts: [tool("t5", "bash")])
-        XCTAssertEqual(groupToolRuns([rowFor(a), rowFor(b), rowFor(mixed)]).count, 3)
+    func testWorkMessagesFoldInOrder() {
+        let a = ChatMessage(id: "a", role: .assistant, time: 1_000, parts: [.unsupported("step"), tool("t1", "edit")], durationMs: 5_000)
+        let b = ChatMessage(id: "b", role: .assistant, time: 10_000, parts: [.reasoning("hm", durationMs: 1_000)])
+        let c = ChatMessage(id: "c", role: .assistant, time: 60_000, parts: [tool("t3", "bash")], durationMs: 14_000)
+        let say = ChatMessage(id: "s", role: .assistant, time: 80_000, parts: [.text("done")])
+        let grouped = groupWorkRuns([rowFor(say), rowFor(c), rowFor(b), rowFor(a)])
+        XCTAssertEqual(keys(grouped), ["s", "work-a"])
+        guard case .work(_, let parts, let ms) = grouped[1] else { return XCTFail("expected a work fold") }
+        XCTAssertEqual(parts.map { $0.toolCall?.id ?? "think" }, ["t1", "think", "t3"])
+        XCTAssertEqual(ms, 73_000)
+        XCTAssertEqual(workTitle(parts, durationMs: ms), "Worked for 1m 13s · edited 1 file, ran 1 command")
+        // one work message stays itself; the held one too; so does anything that says something
+        XCTAssertEqual(keys(groupWorkRuns([rowFor(a)])), ["a"])
+        XCTAssertEqual(keys(groupWorkRuns([rowFor(c), rowFor(b), rowFor(a)], hold: "c")), ["c", "work-a"])
+        let mixed = ChatMessage(id: "d", role: .assistant, time: 4, parts: [.text("looking"), tool("t5", "bash")])
+        XCTAssertEqual(keys(groupWorkRuns([rowFor(c), rowFor(mixed), rowFor(a)])), ["c", "d", "a"])
+    }
+
+    func testWorkInsideAMessageFolds() {
+        let parts: [ChatPart] = [.text("looking"), .reasoning("a", durationMs: nil), tool("t1", "edit"), .unsupported("step"),
+                                 .reasoning(" ", durationMs: nil), tool("t2", "read"), .text("done"), tool("t3")]
+        let rows = collapseTranscript(parts)
+        XCTAssertEqual(rows, [.one(.text("looking")), .group([.reasoning("a", durationMs: nil), tool("t1", "edit"), tool("t2", "read")]), .one(.text("done")), .one(tool("t3"))])
+        XCTAssertEqual(collapseTranscript([tool("t1"), tool("t2")], keep: ["t1"]), [.one(tool("t1")), .one(tool("t2"))])
+        XCTAssertEqual(workTitle([tool("t1", "edit"), tool("t2", "edit"), tool("t3", "grep"), tool("t4", "grep")]), "Edited 2 files, searched 2 searches")
+        XCTAssertEqual(workTitle([.reasoning("a", durationMs: 1_000), .reasoning("b", durationMs: 2_000)]), "Thought for 3s")
+        XCTAssertEqual(workTitle([tool("t1", "bash"), tool("t2")], active: true), "Working · ran 1 command, read 1 file")
+        XCTAssertEqual(fmtSpan(7_500_000), "2h 5m")
     }
 
     func testQuoteTruncates() {

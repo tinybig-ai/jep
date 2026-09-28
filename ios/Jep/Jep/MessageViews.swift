@@ -72,11 +72,12 @@ struct MessageRow: View {
 
     private var assistant: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(collapseTranscript(message.parts).enumerated()), id: \.offset) { _, row in
+            let last = message.parts.last { if case .unsupported = $0 { false } else { true } }
+            ForEach(Array(collapseTranscript(message.parts, keep: Set(cards.keys)).enumerated()), id: \.offset) { _, row in
                 switch row {
-                case .group(let tools):
-                    ToolGroupView(tools: tools, chat: chat, cards: cards)
-                case .one(let part, _):
+                case .group(let parts):
+                    WorkView(parts: parts, chat: chat, active: streaming && parts.last == last)
+                case .one(let part):
                     PartView(part: part, chat: chat, streaming: streaming, cards: cards)
                 }
             }
@@ -203,28 +204,37 @@ struct ToolView: View {
     }
 }
 
-struct ToolGroupView: View {
-    let tools: [ToolCall]
+struct WorkView: View {
+    let parts: [ChatPart]
+    var durationMs: Int64?
     let chat: ChatStore
-    var cards: [String: [Row]] = [:]
+    var active = false
     @State private var open = false
 
     var body: some View {
+        let tools = parts.compactMap(\.toolCall)
+        let added = tools.reduce(0) { $0 + ($1.added ?? 0) }
+        let removed = tools.reduce(0) { $0 + ($1.removed ?? 0) }
+        let running = active || tools.contains { $0.status == .running || $0.status == .pending }
+        let failed = tools.contains { $0.status == .error }
+        let title = workTitle(parts, durationMs: durationMs, active: running)
         VStack(alignment: .leading, spacing: 6) {
             Button {
                 withAnimation(.snappy) { open.toggle() }
             } label: {
-                HStack {
-                    Image(systemName: "square.stack.3d.up").foregroundStyle(.secondary)
-                    Text(toolGroupSummary(tools)).jepFont(13)
-                    Spacer()
+                HStack(spacing: 6) {
+                    Text(title).jepFont(13).lineLimit(1)
+                        .foregroundStyle(failed ? AnyShapeStyle(.red) : running ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                    if added > 0 { Text("+\(added)").jepFont(12, design: .monospaced).foregroundStyle(.green) }
+                    if removed > 0 { Text("-\(removed)").jepFont(12, design: .monospaced).foregroundStyle(.red) }
                     Image(systemName: open ? "chevron.up" : "chevron.down").font(.caption2).foregroundStyle(.tertiary)
+                    Spacer(minLength: 0)
                 }
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(open ? "hide these calls" : toolGroupSummary(tools))
+            .accessibilityLabel(open ? "hide this work" : title)
             if open {
-                ForEach(Array(tools.enumerated()), id: \.offset) { _, t in ToolView(tool: t, chat: chat) }
+                ForEach(Array(parts.enumerated()), id: \.offset) { _, p in PartView(part: p, chat: chat) }
             }
         }
     }
