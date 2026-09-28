@@ -2211,7 +2211,7 @@ internal fun withLocalLinks(markdown: String): String =
  */
 @Composable
 private fun WorkRow(parts: List<ChatPart>, durationMs: Long? = null, active: Boolean = false) {
-    var open by remember(parts) { mutableStateOf(false) }
+    var open by remember { mutableStateOf(false) }
     val tools = parts.filterIsInstance<ChatPart.Tool>()
     val anyFailed = tools.any { it.status == ToolStatus.ERROR }
     val anyRunning = active || tools.any { it.status == ToolStatus.RUNNING || it.status == ToolStatus.PENDING }
