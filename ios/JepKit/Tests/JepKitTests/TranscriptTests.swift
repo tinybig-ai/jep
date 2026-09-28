@@ -92,6 +92,8 @@ final class TranscriptTests: XCTestCase {
         XCTAssertNil(linkDestination("   "))
         XCTAssertNil(linkDestination("?only=query"))
         XCTAssertEqual(localLinkPath(URL(string: "jep://file?path=docs%2Fa.md")!), "docs/a.md")
+        XCTAssertEqual(localLinkPath(URL(string: "file:///private/tmp/a%20b.html")!), "/private/tmp/a b.html")
+        XCTAssertNil(localLinkPath(URL(string: "https://example.com/a")!))
     }
 
     func testLocalLinksInMarkdown() {
@@ -141,6 +143,7 @@ final class TranscriptTests: XCTestCase {
     func testFileKinds() {
         XCTAssertEqual(fileEngineFor("README.md"), .markdown)
         XCTAssertEqual(fileEngineFor("a/b.swift"), .code)
+        XCTAssertEqual(fileEngineFor("out/Taste.HTML"), .html)
         XCTAssertEqual(fileEngineFor("notes.txt"), .text)
         XCTAssertTrue(isImagePart(FilePart(path: "x.png", name: nil, mimeType: nil)))
         XCTAssertTrue(isImagePart(FilePart(path: "x", name: nil, mimeType: "image/jpeg")))

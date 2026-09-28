@@ -930,6 +930,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     const roots = await Promise.all(rootsFor().map((r) => realpath(r).catch(() => r)))
     return within(real, roots) ? real : null
   }
+  const OUTSIDE = "only files in a served workspace or uploads can be opened"
   /** a reader shows text; a whole 200 MB file in a sheet helps nobody */
   const READ_MAX = 2 << 20
 
@@ -1002,10 +1003,10 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const decoded = encoded ? Buffer.from(encoded, "base64url").toString("utf8") : ""
         if (!decoded) return json(res, 400, { error: "p required" })
         const abs = resolve(decoded)
-        if (!within(abs, rootsFor())) return json(res, 403, { error: "outside the served roots" })
+        if (!within(abs, rootsFor())) return json(res, 403, { error: OUTSIDE })
         try {
           const real = await servedPath(abs)
-          if (!real) return json(res, 403, { error: "outside the served roots" })
+          if (!real) return json(res, 403, { error: OUTSIDE })
           const info = await stat(real)
           if (!info.isFile() || info.size > FILE_MAX) return json(res, 404, { error: "no such file" })
           const body = await readFile(real)
@@ -1371,10 +1372,10 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const abs = isAbsolute(readPath)
           ? resolve(readPath)
           : resolve(adapter.workspace, readPath)
-        if (!within(abs, rootsFor())) return json(res, 403, { error: "outside the served roots" })
+        if (!within(abs, rootsFor())) return json(res, 403, { error: OUTSIDE })
         try {
           const real = await servedPath(abs)
-          if (!real) return json(res, 403, { error: "outside the served roots" })
+          if (!real) return json(res, 403, { error: OUTSIDE })
           const info = await stat(real)
           if (!info.isFile()) return json(res, 404, { error: "no such file" })
           if (info.size > READ_MAX) return json(res, 413, { error: "too large to read here" })

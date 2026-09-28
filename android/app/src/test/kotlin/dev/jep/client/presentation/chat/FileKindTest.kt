@@ -29,6 +29,13 @@ class FileEngineTest {
     }
 
     @Test
+    fun `html gets the rendered engine`() {
+        for (path in listOf("taste.html", "out/Index.HTM")) {
+            assertEquals(path, FileEngine.Html, fileEngineFor(path))
+        }
+    }
+
+    @Test
     fun `a diff reads as code, and wraps too`() {
         assertEquals(FileEngine.Code, fileEngineFor("changes.diff"))
     }

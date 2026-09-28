@@ -346,8 +346,10 @@ public func linkDestination(_ raw: String) -> String? {
     return "jep://file?path=" + formEncode(path)
 }
 
-/// the path a jep://file link names, or nil for any other link
+/// the path a jep://file link names, or a file:// link (a file on the machine
+/// running the agent, never on this phone); nil for any other link
 public func localLinkPath(_ url: URL) -> String? {
+    if url.scheme?.lowercased() == "file" { return url.path.isEmpty ? nil : url.path }
     guard url.scheme == "jep", url.host == "file" else { return nil }
     return URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "path" }?.value
 }
@@ -384,15 +386,16 @@ public func withLocalLinks(_ markdown: String) -> String {
     return out
 }
 
-public enum FileEngine: Sendable { case markdown, code, text }
+public enum FileEngine: Sendable { case markdown, html, code, text }
 
 private let markdownExt: Set = ["md", "markdown", "mdx"]
+private let htmlExt: Set = ["html", "htm"]
 private let diffExt: Set = ["diff", "patch"]
 private let codeExt: Set = [
     "kt", "kts", "java", "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "rb", "go", "rs", "swift",
     "c", "h", "cc", "cpp", "hpp", "cs", "php", "sh", "zsh", "bash", "sql", "toml", "yaml",
     "yml", "ini", "gradle", "lua", "pl", "r", "scala", "dart", "ex", "exs", "erl", "hs", "clj",
-    "vue", "svelte", "css", "scss", "less", "html", "htm", "xml", "json", "csv", "tsv", "lock",
+    "vue", "svelte", "css", "scss", "less", "xml", "json", "csv", "tsv", "lock",
 ]
 
 func fileExtension(_ path: String) -> String {
@@ -403,6 +406,7 @@ func fileExtension(_ path: String) -> String {
 public func fileEngineFor(_ path: String) -> FileEngine {
     let ext = fileExtension(path)
     if markdownExt.contains(ext) { return .markdown }
+    if htmlExt.contains(ext) { return .html }
     if diffExt.contains(ext) || codeExt.contains(ext) { return .code }
     return .text
 }

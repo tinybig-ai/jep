@@ -1,5 +1,6 @@
 import JepKit
 import SwiftUI
+import WebKit
 
 private struct SheetFrame<Content: View>: View {
     let title: String
@@ -317,20 +318,24 @@ struct FileReaderView: View {
     let file: OpenFile
     let chat: ChatStore
     @Environment(\.dismiss) private var dismiss
+    @State private var source = false
 
     var body: some View {
+        let html = fileEngineFor(file.path) == .html
         NavigationStack {
             Group {
                 if file.loading {
                     ProgressView()
                 } else if let e = file.error {
                     ContentUnavailableView(e, systemImage: "doc.questionmark")
+                } else if let text = file.text, html, !source {
+                    HTMLView(html: text).ignoresSafeArea(edges: .bottom)
                 } else if let text = file.text {
                     ScrollView([.vertical, .horizontal]) {
                         switch fileEngineFor(file.path) {
                         case .markdown:
                             MarkdownView(text: text).padding().frame(maxWidth: 700)
-                        case .code, .text:
+                        case .code, .text, .html:
                             Text(text).jepFont(13, design: .monospaced).textSelection(.enabled).padding().fixedSize()
                         }
                     }
@@ -347,11 +352,44 @@ struct FileReaderView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+                if html, file.text != nil {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button(source ? "Page" : "Source", systemImage: source ? "doc.richtext" : "chevron.left.forwardslash.chevron.right") { source.toggle() }
+                    }
+                }
                 if let text = file.text {
                     ToolbarItem(placement: .primaryAction) {
                         ShareLink(item: text) { Image(systemName: "square.and.arrow.up") }
                     }
                 }
+            }
+        }
+    }
+}
+
+/// an HTML file drawn as a page, with no origin and no file access; a tapped
+/// link leaves for the browser rather than navigating away from the file
+struct HTMLView: UIViewRepresentable {
+    let html: String
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> WKWebView {
+        let view = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        view.navigationDelegate = context.coordinator
+        view.loadHTMLString(html, baseURL: nil)
+        return view
+    }
+
+    func updateUIView(_ view: WKWebView, context: Context) {}
+
+    final class Coordinator: NSObject, WKNavigationDelegate {
+        func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
+            if action.navigationType == .linkActivated, let url = action.request.url {
+                UIApplication.shared.open(url)
+                decisionHandler(.cancel)
+            } else {
+                decisionHandler(.allow)
             }
         }
     }
