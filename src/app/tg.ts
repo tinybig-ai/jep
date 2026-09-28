@@ -242,6 +242,7 @@ const unreadable = (dir: string): string =>
   `${dir} can't be read — macOS file protection (Full Disk Access), or the volume is gone. See docs/PROCESSES.md`
 
 async function main() {
+  mkdirSync(DATA_HOME, { recursive: true })
   syncOpenCodeAuth()
   const mockMode = process.env.JEP_TG_MOCK === "1"
   // servers a previous daemon lost on a hard restart: without this sweep the
