@@ -95,8 +95,19 @@ final class ScreenTour: XCTestCase {
             app.swipeUp()
             shot("13-chat-ask")
 
-            let groups = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Read 3'")).firstMatch
-            if tap(groups, timeout: 2) { shot("14-tool-group-open"); tap(button("hide this work"), timeout: 2) }
+            let fold = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Read 3'")).firstMatch
+            if fold.waitForExistence(timeout: 2) {
+                // bring it clear of the glass toolbar before tapping
+                for _ in 0..<6 where fold.frame.minY < app.frame.height * 0.3 {
+                    let top = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
+                    top.press(forDuration: 0.05, thenDragTo: top.withOffset(CGVector(dx: 0, dy: 150)))
+                }
+                shot("13b-work-fold")
+                if tap(fold, timeout: 2) {
+                    shot("14-work-fold-open")
+                    tap(button("hide this work"), timeout: 2)
+                }
+            }
 
             let sheets: [(String, String)] = [
                 ("Model", "16-model"), ("Agent", "17-agent"), ("Settings", "18-chat-settings"), ("Usage", "19-usage"),
