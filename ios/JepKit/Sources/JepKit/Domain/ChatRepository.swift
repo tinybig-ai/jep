@@ -99,6 +99,8 @@ public protocol ChatRepository: AnyObject, Sendable {
     func subagents(sessionId: String) async throws -> [SessionSummary]
     func archiveSession(sessionId: String) async throws -> Bool
     func unarchiveSession(sessionId: String) async throws -> Bool
+    func pinSession(sessionId: String) async throws -> Bool
+    func unpinSession(sessionId: String) async throws -> Bool
     func skills(sessionId: String) async throws -> SkillSet
     func setSkill(sessionId: String, path: String, disabled: Bool) async throws -> Bool
     func mcp(sessionId: String) async throws -> [McpServer]
