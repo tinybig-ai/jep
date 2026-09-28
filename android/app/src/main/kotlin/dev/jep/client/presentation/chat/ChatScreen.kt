@@ -234,9 +234,10 @@ internal sealed interface Row {
         override val key: String get() = "ask-${entry.ask.id}"
     }
 
-    /** several tool-only messages standing in for one line */
-    data class Tools(val tools: List<ChatPart.Tool>) : Row {
-        override val key: String get() = "tools-${tools.firstOrNull()?.id ?: "run"}"
+    /** several work-only messages (tool calls, thinking) standing in for one
+     *  line; `durationMs` is how long they took, when the harness timed them */
+    data class Work(val id: String, val parts: List<ChatPart>, val durationMs: Long? = null) : Row {
+        override val key: String get() = "work-$id"
     }
 
     /** the harness folded the conversation; a divider, not a bubble */
@@ -259,27 +260,31 @@ internal fun rowFor(m: ChatMessage, cards: Map<String, List<Row>> = emptyMap()):
 }
 
 /**
- * The tool calls of a message that carries nothing else, or null when it says
- * something. opencode emits one message per step, so a turn's tool calls arrive
- * as a run of messages that each hold one call and a step marker — which is why
- * grouping inside a message never saw them, and why the run has to be found
- * across messages.
+ * The work of a message that says nothing: its tool calls and thinking, or null
+ * when it carries anything a person should read. opencode emits one message per
+ * step, so a turn's work arrives as a run of messages that each hold a call or a
+ * thought and a step marker — which is why the run has to be found across them.
  */
-internal fun toolOnlyCalls(m: ChatMessage): List<ChatPart.Tool>? {
-    val tools = m.parts.filterIsInstance<ChatPart.Tool>()
-    if (tools.isEmpty()) return null
-    val onlyToolsOrMarkers = m.parts.all { it is ChatPart.Tool || it is ChatPart.Unsupported }
-    return if (onlyToolsOrMarkers) tools else null
+internal fun workParts(m: ChatMessage): List<ChatPart>? {
+    if (m.role != Role.ASSISTANT) return null
+    if (!m.parts.all { it is ChatPart.Tool || it is ChatPart.Reasoning || it is ChatPart.Unsupported }) return null
+    val work = m.parts.filter { it is ChatPart.Tool || (it is ChatPart.Reasoning && it.text.isNotBlank()) }
+    return work.ifEmpty { null }
 }
 
-/** Collapse a run of tool-only messages of the same kind into one row. */
-internal fun groupToolRuns(rows: List<Row>): List<Row> {
+/**
+ * Collapse a run of work-only messages into one "Worked for …" row. `hold` is a
+ * message that stays itself — the newest one while the turn is still going, so
+ * its spinner and live thinking stay in view.
+ */
+internal fun groupWorkRuns(rows: List<Row>, hold: String? = null): List<Row> {
     val out = ArrayList<Row>(rows.size)
     var run = mutableListOf<Row.Msg>()
     fun flush() {
-        // three is where the noise starts; one or two still read as themselves
-        if (run.size > 2) {
-            out += Row.Tools(run.flatMap { toolOnlyCalls(it.m) ?: emptyList() })
+        if (run.size > 1) {
+            // rows are newest first; the work reads in the order it happened
+            val oldest = run.asReversed()
+            out += Row.Work(oldest[0].m.id, oldest.flatMap { workParts(it.m).orEmpty() }, workSpan(oldest.map { it.m }))
         } else {
             out += run
         }
@@ -287,23 +292,24 @@ internal fun groupToolRuns(rows: List<Row>): List<Row> {
     }
     for (row in rows) {
         // a message carrying a card is never folded away: the card must show
-        val calls = (row as? Row.Msg)?.takeIf { it.cards.isEmpty() }?.let { toolOnlyCalls(it.m) }
-        when {
-            calls == null -> {
-                flush()
-                out += row
-            }
-            // only a run of the same tool collapses: an alternation is the order
-            // the work happened in
-            run.isNotEmpty() && toolOnlyCalls(run[0].m)?.firstOrNull()?.name != calls.firstOrNull()?.name -> {
-                flush()
-                run.add(row as Row.Msg)
-            }
-            else -> run.add(row as Row.Msg)
+        val msg = (row as? Row.Msg)?.takeIf { it.cards.isEmpty() && it.m.id != hold && workParts(it.m) != null }
+        if (msg == null) {
+            flush()
+            out += row
+        } else {
+            run.add(msg)
         }
     }
     flush()
     return out
+}
+
+/** first start to last finish, or null when the harness gave no times */
+internal fun workSpan(messages: List<ChatMessage>): Long? {
+    if (messages.isEmpty()) return null
+    val start = messages.minOf { it.time }
+    val end = messages.maxOf { it.time + (it.durationMs ?: 0) }
+    return (end - start).takeIf { start > 0 && it > 0 }
 }
 
 /**
@@ -575,8 +581,10 @@ fun ChatScreen(
     val ordered = remember(rendered) { rendered.asReversed() }
     val ask = state.ask
     val liveMessageId = state.live?.messageId
-    val rows = remember(ordered, ask, state.askAt, liveMessageId, state.askAfter, state.pastAsks) {
-        groupToolRuns(transcriptRows(ordered, ask, state.askAt, liveMessageId, state.askAfter, state.pastAsks))
+    val rows = remember(ordered, ask, state.askAt, liveMessageId, state.askAfter, state.pastAsks, state.sending) {
+        val raw = transcriptRows(ordered, ask, state.askAt, liveMessageId, state.askAfter, state.pastAsks)
+        val hold = if (state.sending || state.live != null) raw.firstOrNull { it is Row.Msg }?.key else null
+        groupWorkRuns(raw, hold)
     }
     val displayRows = remember(rows) { rows.asReversed() }
     val askAnswered = remember(ask, state.askChoice) { askIsSpent(ask, state.askChoice) }
@@ -903,7 +911,7 @@ fun ChatScreen(
                 val busy = state.sending || state.live != null
                 items(displayRows.size, key = { displayRows[it].key }) { i ->
                     when (val row = displayRows[i]) {
-                        is Row.Tools -> ToolGroupRow(row.tools)
+                        is Row.Work -> WorkRow(row.parts, row.durationMs)
                         is Row.Pending -> AskBar(row.ask, vm, spent = askAnswered, choiceId = state.askChoice)
                         is Row.PastAsk -> AskBar(row.entry.ask, vm, spent = true, choiceId = row.entry.choice)
                         is Row.Compaction -> CompactionRow(row.m)
@@ -2094,11 +2102,14 @@ private fun AssistantBody(
     Column(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         collapseTranscript(message.parts, cards.keys).forEach { row ->
             when (row) {
-                is TranscriptRow.Group -> ToolGroupRow(row.tools)
+                is TranscriptRow.Group -> WorkRow(
+                    row.parts,
+                    active = responding && row.parts.last() === message.parts.lastOrNull { it !is ChatPart.Unsupported },
+                )
                 is TranscriptRow.One -> {
                     PartView(
                         row.part,
-                        streaming = responding && row.sources.last() === message.parts.last(),
+                        streaming = responding && row.part === message.parts.last(),
                     )
                     (row.part as? ChatPart.Tool)?.id?.let { cards[it] }?.forEach { cardView(it) }
                 }
@@ -2174,17 +2185,6 @@ internal fun withLocalLinks(markdown: String): String =
     }
 
 /**
- * A run of the same tool call, as one line. It opens to the calls it stands for —
- * the work is still all there, it is just not spelled out in full while you are
- * reading around it.
- */
-/**
- * A run of the same tool call, as one line — styled exactly like the call rows
- * it stands for, because it is one of them. It opens to those calls, which are
- * themselves ordinary rows, so nothing about the expanded state looks like a
- * different kind of thing.
- */
-/**
  * Holds a disclosure's header still on screen while the block changes height.
  *
  * The transcript runs bottom-up, so the edge that holds still when a block opens
@@ -2198,10 +2198,11 @@ internal fun withLocalLinks(markdown: String): String =
  * which is the way a fold is expected to open.
  */
 @Composable
-private fun ToolGroupRow(tools: List<ChatPart.Tool>) {
-    var open by remember(tools) { mutableStateOf(false) }
+private fun WorkRow(parts: List<ChatPart>, durationMs: Long? = null, active: Boolean = false) {
+    var open by remember(parts) { mutableStateOf(false) }
+    val tools = parts.filterIsInstance<ChatPart.Tool>()
     val anyFailed = tools.any { it.status == ToolStatus.ERROR }
-    val anyRunning = tools.any { it.status == ToolStatus.RUNNING || it.status == ToolStatus.PENDING }
+    val anyRunning = active || tools.any { it.status == ToolStatus.RUNNING || it.status == ToolStatus.PENDING }
     val added = tools.sumOf { it.added ?: 0 }
     val removed = tools.sumOf { it.removed ?: 0 }
     val syntax = LocalSyntaxColors.current
@@ -2210,18 +2211,21 @@ private fun ToolGroupRow(tools: List<ChatPart.Tool>) {
         anyRunning -> MaterialTheme.colorScheme.primary
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
-    // The title carries the row inset, exactly like an ungrouped row — not the
-    // screen edge, and not a second inset on top of one. It is a heading, but
-    // it still has to line up with the rows it stands among; flush to the edge
-    // it read as a different kind of thing, and double-inset as a quotation.
-    // The calls it opens keep the same inset, so an opened group still lines up
-    // with the rows around it.
+    // The title carries the row inset, exactly like an ungrouped row, and the
+    // parts it opens keep it too, so an opened fold lines up with its neighbours.
     Column(Modifier.fillMaxWidth().padding(vertical = RowVInset)) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = RowInset).clickable { open = !open },
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(toolGroupSummary(tools), style = MaterialTheme.typography.labelMedium, color = tint)
+            Text(
+                workTitle(parts, durationMs, anyRunning),
+                style = MaterialTheme.typography.labelMedium,
+                color = tint,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
             if (added > 0) {
                 Text("+$added", style = MaterialTheme.typography.labelMedium, fontFamily = JepMono, color = syntax.added, modifier = Modifier.padding(start = 6.dp))
             }
@@ -2230,86 +2234,56 @@ private fun ToolGroupRow(tools: List<ChatPart.Tool>) {
             }
             Icon(
                 if (open) Icons.Filled.ArrowDropUp else Icons.Filled.ArrowDropDown,
-                if (open) "hide these calls" else "show these calls",
+                if (open) "hide this work" else "show this work",
                 Modifier.size(16.dp),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         if (open) {
-            Column(Modifier.fillMaxWidth().padding(start = RowInset, top = 2.dp, end = RowInset)) {
-                tools.forEach { ToolRow(it) }
+            Column(
+                Modifier.fillMaxWidth().padding(start = RowInset, top = 2.dp, end = RowInset),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                parts.forEach { PartView(it, streaming = false) }
             }
         }
     }
 }
 
 /**
- * Consecutive tool calls of the same kind collapse into one row.
- *
- * A turn that reads seventeen files, or edits six of them, was seventeen or six
- * identical-looking lines in the transcript — noise that made a turn expensive to
- * read and to review. Grouping is by consecutive runs of the same tool, never
- * across kinds: a read/edit/test alternation is the order the work happened in,
- * and collapsing that would throw away the thing you were reading for.
+ * A run of work — tool calls and thinking with nothing said between them —
+ * collapses into one row. A turn that read, thought, edited and ran its way to
+ * an answer was a column of "Edited …", "Thought for 2s", "Ran a command" lines
+ * between the two things it said; that is one stretch of work, and it reads as
+ * one line titled by what is inside it. A lone call or thought stays itself: a
+ * fold around one line costs a tap for nothing.
  */
 internal sealed interface TranscriptRow {
-    /** `sources` are the parts it stands for: itself, or the run of thinking
-     *  blocks it merged (so "is this the part still streaming" can be asked) */
-    data class One(val part: ChatPart, val sources: List<ChatPart> = listOf(part)) : TranscriptRow
-    data class Group(val tools: List<ChatPart.Tool>) : TranscriptRow
+    data class One(val part: ChatPart) : TranscriptRow
+    data class Group(val parts: List<ChatPart>) : TranscriptRow
 }
 
 internal fun collapseTranscript(parts: List<ChatPart>, keep: Set<String> = emptySet()): List<TranscriptRow> {
     val out = ArrayList<TranscriptRow>(parts.size)
-    var run = mutableListOf<ChatPart.Tool>()
+    var run = mutableListOf<ChatPart>()
     fun flush() {
-        // Three is where the noise starts. One or two calls side by side still
-        // read as themselves, and wrapping them in a disclosure costs a tap for
-        // no gain.
-        if (run.size > 2) out += TranscriptRow.Group(run.toList()) else run.forEach { out += TranscriptRow.One(it) }
+        if (run.size > 1) out += TranscriptRow.Group(run.toList()) else run.forEach { out += TranscriptRow.One(it) }
         run = mutableListOf()
     }
-    // Back-to-back thinking is one thought: a model that reasons in several
-    // blocks between two actions showed a stack of "Thought for 2s" rows, each
-    // to be opened on its own. They open as one disclosure now.
-    var thinking = mutableListOf<ChatPart.Reasoning>()
-    fun flushThinking() {
-        when (thinking.size) {
-            0 -> Unit
-            1 -> out += TranscriptRow.One(thinking[0])
+    for (part in parts) {
+        when {
+            // step markers and blank thinking neither show nor break a run
+            part is ChatPart.Unsupported -> Unit
+            part is ChatPart.Reasoning && part.text.isBlank() -> Unit
+            part is ChatPart.Reasoning -> run.add(part)
+            // a call with a card under it stays its own row, so the card has a place
+            part is ChatPart.Tool && part.id !in keep -> run.add(part)
             else -> {
-                val took = thinking.mapNotNull { it.durationMs }
-                val merged = ChatPart.Reasoning(
-                    thinking.joinToString("\n\n") { it.text.trim() },
-                    if (took.size == thinking.size) took.sum() else null,
-                )
-                out += TranscriptRow.One(merged, thinking.toList())
+                flush()
+                out += TranscriptRow.One(part)
             }
         }
-        thinking = mutableListOf()
     }
-    for (part in parts) {
-        val tool = part as? ChatPart.Tool
-        if (part is ChatPart.Reasoning) {
-            flush()
-            // a blank block (reasoning tokens with no readable text) neither
-            // shows nor breaks a run
-            if (part.text.isNotBlank()) thinking.add(part)
-            continue
-        }
-        flushThinking()
-        // a call with a card under it stays its own row, so the card has a place
-        if (tool == null || tool.id in keep) {
-            flush()
-            out += TranscriptRow.One(part)
-        } else if (run.isNotEmpty() && run[0].name != tool.name) {
-            flush()
-            run.add(tool)
-        } else {
-            run.add(tool)
-        }
-    }
-    flushThinking()
     flush()
     return out
 }
@@ -2322,23 +2296,51 @@ private val TOOL_VERB = mapOf(
     "multiedit" to "Edited", "multi-edit" to "Edited",
 )
 
-/** "Read 17 files", "Edited 6 files +128 -94", "Ran 3 commands" */
-internal fun toolGroupSummary(tools: List<ChatPart.Tool>): String {
-    val kind = tools[0].name.lowercase()
+private fun toolCount(kind: String, n: Int): String {
     val verb = TOOL_VERB[kind] ?: kind.replaceFirstChar { it.uppercase() }
     val noun = when (kind) {
-        "read", "edit", "write", "patch", "multiedit", "multi-edit" -> "files"
-        "bash" -> "commands"
-        "grep" -> "searches"
-        "glob" -> "matches"
-        else -> "calls"
+        "read", "edit", "write", "patch", "multiedit", "multi-edit" -> "file"
+        "bash" -> "command"
+        "grep" -> "search"
+        "glob" -> "match"
+        else -> "call"
     }
-    // No line counts here. The row that draws this title also draws the added
-    // and removed totals itself, in mono and in the diff's own colours — this
-    // used to append them as text too, so every edited-file group read
-    // "Edited 6 files +12 -3 +12 -3", the counts once in grey and once in
-    // colour. One rendering of a number, from the one place that styles it.
-    return "$verb ${tools.size} $noun"
+    val plural = if (n == 1) noun else if (noun.endsWith("ch")) noun + "es" else noun + "s"
+    return "$verb $n $plural"
+}
+
+/**
+ * The title of a fold of work, from what is inside it: "Worked for 1m 13s ·
+ * edited 6 files, ran 2 commands", "Thought for 12s", or just "Read 3 files"
+ * when nothing was timed. No line counts: the row draws those itself, in the
+ * diff's own colours.
+ */
+internal fun workTitle(parts: List<ChatPart>, durationMs: Long? = null, active: Boolean = false): String {
+    val tools = parts.filterIsInstance<ChatPart.Tool>()
+    if (tools.isEmpty()) {
+        if (active) return "Thinking"
+        val took = parts.mapNotNull { (it as? ChatPart.Reasoning)?.durationMs }
+        val ms = durationMs ?: took.sum().takeIf { took.size == parts.size }
+        return if (ms != null && ms >= 1000) "Thought for ${fmtSpan(ms)}" else "Thought"
+    }
+    val counts = tools.groupBy { it.name.lowercase() }.map { (kind, calls) -> toolCount(kind, calls.size) }
+    val rest = counts.joinToString(", ") { c -> c.replaceFirstChar { it.lowercase() } }
+    val said = rest.replaceFirstChar { it.uppercase() }
+    return when {
+        active -> "Working · $rest"
+        durationMs != null && durationMs >= 1000 -> "Worked for ${fmtSpan(durationMs)} · $rest"
+        else -> said
+    }
+}
+
+/** 42s, 1m 13s, 2h 5m */
+internal fun fmtSpan(ms: Long): String {
+    val s = ms / 1000
+    return when {
+        s < 60 -> "${s}s"
+        s < 3600 -> "${s / 60}m ${s % 60}s"
+        else -> "${s / 3600}h ${(s / 60) % 60}m"
+    }
 }
 
 @Composable
