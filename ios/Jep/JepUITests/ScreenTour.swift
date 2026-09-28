@@ -10,7 +10,7 @@ final class ScreenTour: XCTestCase {
     }
 
     private func launch(dark: Bool) {
-        app.launchArguments = ["-app_terminal_enabled", "true", "-app_theme", dark ? "DARK" : "LIGHT"]
+        app.launchArguments = ["-app_terminal_enabled", "true", "-app_theme", dark ? "DARK" : "LIGHT", "-app_text_size", "SMALL"]
         app.launch()
     }
 

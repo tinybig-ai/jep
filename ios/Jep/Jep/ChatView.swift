@@ -161,7 +161,7 @@ struct ChatView: View {
                 Button("Copy session id", systemImage: "number") { UIPasteboard.general.string = chat.sessionId }
                 Button("Delete conversation", systemImage: "trash", role: .destructive) { deleteOpen = true }
             } label: {
-                Image(systemName: "ellipsis.circle").accessibilityLabel("chat menu")
+                Image(systemName: "ellipsis").accessibilityLabel("chat menu")
             }
         }
     }
@@ -266,9 +266,11 @@ struct ChatView: View {
                 Button {
                     if st.sending { sendHowOpen = true } else { send(.steer) }
                 } label: {
-                    Image(systemName: "arrow.up").font(.system(size: 17, weight: .bold)).foregroundStyle(.white)
-                        .frame(width: 40, height: 40).background(Circle().fill(hasText && sendable ? Color.accentColor : Color.gray))
+                    Image(systemName: "arrow.up").font(.system(size: 17, weight: .bold))
+                        .frame(width: 26, height: 26)
                 }
+                .buttonBorderShape(.circle)
+                .glassProminentButton()
                 .disabled(!hasText || !sendable)
                 .accessibilityLabel("send")
             }

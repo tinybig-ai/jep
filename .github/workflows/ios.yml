@@ -24,9 +24,23 @@ jobs:
 
   # The app itself: proof it compiles for the Simulator, nothing signed.
   app:
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+      - name: Use the newest Xcode
+        run: |
+          x=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          [ -n "$x" ] && sudo xcode-select -s "$x"
+          xcodebuild -version
+          # the newest iPhone on the newest iOS runtime: Liquid Glass needs iOS 26
+          udid=$(xcrun simctl list devices available -j | python3 -c "
+          import json,sys
+          d=json.load(sys.stdin)['devices']
+          rs=sorted((r for r in d if 'iOS' in r), key=lambda r: [int(x) for x in r.split('iOS-')[1].split('-')])
+          ph=[x for x in d[rs[-1]] if x['name'].startswith('iPhone') and 'Pro' in x['name'] and 'Max' not in x['name']] or [x for x in d[rs[-1]] if x['name'].startswith('iPhone')]
+          print(ph[0]['udid'])")
+          echo "UDID=$udid" >> "$GITHUB_ENV"
+          xcrun simctl list devices | grep "$udid"
       - name: Generate the Xcode project
         working-directory: ios/Jep
         run: brew install xcodegen && xcodegen generate
@@ -40,14 +54,28 @@ jobs:
       - name: Test JepKit on iOS
         working-directory: ios/JepKit
         run: |
-          xcodebuild -scheme JepKit -destination 'platform=iOS Simulator,name=iPhone 16' test | tail -n 40
+          xcodebuild -scheme JepKit -destination "id=$UDID" test | tail -n 40
           exit ${PIPESTATUS[0]}
 
   # Drives every screen against a canned gateway and keeps the screenshots.
   screens:
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+      - name: Use the newest Xcode
+        run: |
+          x=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          [ -n "$x" ] && sudo xcode-select -s "$x"
+          xcodebuild -version
+          # the newest iPhone on the newest iOS runtime: Liquid Glass needs iOS 26
+          udid=$(xcrun simctl list devices available -j | python3 -c "
+          import json,sys
+          d=json.load(sys.stdin)['devices']
+          rs=sorted((r for r in d if 'iOS' in r), key=lambda r: [int(x) for x in r.split('iOS-')[1].split('-')])
+          ph=[x for x in d[rs[-1]] if x['name'].startswith('iPhone') and 'Pro' in x['name'] and 'Max' not in x['name']] or [x for x in d[rs[-1]] if x['name'].startswith('iPhone')]
+          print(ph[0]['udid'])")
+          echo "UDID=$udid" >> "$GITHUB_ENV"
+          xcrun simctl list devices | grep "$udid"
       - name: Start the demo gateway
         run: node ios/Jep/JepUITests/demo-gateway.mjs 8931 &
       - name: Generate the Xcode project
@@ -55,9 +83,7 @@ jobs:
         run: brew install xcodegen && xcodegen generate
       - name: Boot the Simulator
         run: |
-          udid=$(xcrun simctl list devices available -j | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; print(next(x['udid'] for r in d for x in d[r] if x['name']=='iPhone 16'))")
-          echo "UDID=$udid" >> "$GITHUB_ENV"
-          xcrun simctl boot "$udid" && xcrun simctl bootstatus "$udid"
+          xcrun simctl boot "$UDID" && xcrun simctl bootstatus "$UDID"
       - name: Screen tour
         working-directory: ios/Jep
         run: |
