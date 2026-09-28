@@ -126,7 +126,10 @@ struct ChatView: View {
         if let live = liveAsMessage(st.live) {
             if let i = served.firstIndex(where: { $0.id == live.id }) { rendered[i] = live } else { rendered.append(live) }
         }
-        let rows = groupToolRuns(transcriptRows(rendered.reversed(), ask: st.ask, askAt: st.askAt, liveMessageId: st.live?.messageId, askAfter: st.askAfter, past: st.pastAsks))
+        let raw = transcriptRows(rendered.reversed(), ask: st.ask, askAt: st.askAt, liveMessageId: st.live?.messageId, askAfter: st.askAfter, past: st.pastAsks)
+        let busy = st.sending || st.live != nil
+        let hold = busy ? raw.first(where: { if case .msg = $0 { true } else { false } })?.id : nil
+        let rows = groupWorkRuns(raw, hold: hold)
         return rows.reversed()
     }
 
@@ -367,8 +370,8 @@ struct RowView: View {
             AskCard(ask: ask, chat: chat, spent: askIsSpent(chat.state.ask, chat.state.askChoice) && chat.state.ask?.id == ask.id, choice: chat.state.ask?.id == ask.id ? chat.state.askChoice : nil)
         case .pastAsk(let entry):
             AskCard(ask: entry.ask, chat: chat, spent: true, choice: entry.choice)
-        case .tools(let calls):
-            ToolGroupView(tools: calls, chat: chat)
+        case .work(_, let parts, let ms):
+            WorkView(parts: parts, durationMs: ms, chat: chat)
         case .compaction:
             Divider().overlay(Text("compaction complete").jepFont(11).foregroundStyle(.secondary).padding(.horizontal, 8).background(.background))
                 .padding(.vertical, 8)

@@ -11,8 +11,9 @@ public enum Row: Equatable, Identifiable, Sendable {
     case pending(Ask)
     /// an earlier card, spent: kept in place as the record of what was asked
     case pastAsk(AskEntry)
-    /// several tool-only messages standing in for one line
-    case tools([ToolCall])
+    /// several work-only messages (tool calls, thinking) standing in for one line;
+    /// `id` is the oldest message's, `durationMs` how long they took when timed
+    case work(id: String, parts: [ChatPart], durationMs: Int64?)
     case compaction(ChatMessage)
     case autoContinue(ChatMessage)
 
@@ -21,7 +22,7 @@ public enum Row: Equatable, Identifiable, Sendable {
         case .msg(let m, _): m.id
         case .pending(let a): "ask-\(a.id)"
         case .pastAsk(let e): "ask-\(e.ask.id)"
-        case .tools(let t): "tools-\(t.first?.id ?? "run")"
+        case .work(let id, _, _): "work-\(id)"
         case .compaction(let m), .autoContinue(let m): m.id
         }
     }
@@ -33,40 +34,53 @@ public func rowFor(_ m: ChatMessage, cards: [String: [Row]] = [:]) -> Row {
     return .msg(m, cards: cards)
 }
 
-/// The tool calls of a message that carries nothing else, or nil when it says something.
-public func toolOnlyCalls(_ m: ChatMessage) -> [ToolCall]? {
-    let tools = m.parts.compactMap(\.toolCall)
-    if tools.isEmpty { return nil }
-    let only = m.parts.allSatisfy { p in
-        if case .tool = p { return true }
-        if case .unsupported = p { return true }
-        return false
-    }
-    return only ? tools : nil
+private func isBlankThought(_ p: ChatPart) -> Bool {
+    if case .reasoning(let t, _) = p { return t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    return false
 }
 
-/// Collapse a run of more than two tool-only messages of the same kind into one row.
-public func groupToolRuns(_ rows: [Row]) -> [Row] {
+private func isWork(_ p: ChatPart) -> Bool {
+    switch p {
+    case .tool: true
+    case .reasoning: !isBlankThought(p)
+    default: false
+    }
+}
+
+/// The work of a message that says nothing — its tool calls and thinking — or nil
+/// when it carries anything a person should read. opencode emits one message per
+/// step, so a turn's work arrives as a run of messages that has to be found across them.
+public func workParts(_ m: ChatMessage) -> [ChatPart]? {
+    guard m.role == .assistant else { return nil }
+    let only = m.parts.allSatisfy { p in
+        switch p {
+        case .tool, .reasoning, .unsupported: true
+        default: false
+        }
+    }
+    guard only else { return nil }
+    let work = m.parts.filter(isWork)
+    return work.isEmpty ? nil : work
+}
+
+/// Collapse a run of work-only messages into one "Worked for …" row. `hold` stays
+/// itself — the newest message while the turn is still going, so it streams in view.
+public func groupWorkRuns(_ rows: [Row], hold: String? = nil) -> [Row] {
     var out: [Row] = []
     var run: [ChatMessage] = []
     func flush() {
-        if run.count > 2 {
-            out.append(.tools(run.flatMap { toolOnlyCalls($0) ?? [] }))
+        if run.count > 1 {
+            // rows are newest first; the work reads in the order it happened
+            let oldest = Array(run.reversed())
+            out.append(.work(id: oldest[0].id, parts: oldest.flatMap { workParts($0) ?? [] }, durationMs: workSpan(oldest)))
         } else {
             out.append(contentsOf: run.map { rowFor($0) })
         }
         run = []
     }
     for row in rows {
-        var calls: [ToolCall]?
-        var msg: ChatMessage?
-        if case .msg(let m, let cards) = row, cards.isEmpty {
-            calls = toolOnlyCalls(m)
-            msg = m
-        }
-        if let calls, let msg {
-            if let first = run.first, toolOnlyCalls(first)?.first?.name != calls.first?.name { flush() }
-            run.append(msg)
+        if case .msg(let m, let cards) = row, cards.isEmpty, m.id != hold, workParts(m) != nil {
+            run.append(m)
         } else {
             flush()
             out.append(row)
@@ -74,6 +88,14 @@ public func groupToolRuns(_ rows: [Row]) -> [Row] {
     }
     flush()
     return out
+}
+
+/// first start to last finish, or nil when the harness gave no times
+public func workSpan(_ messages: [ChatMessage]) -> Int64? {
+    guard let start = messages.map(\.time).min(),
+          let end = messages.map({ $0.time + ($0.durationMs ?? 0) }).max() else { return nil }
+    let span = end - start
+    return start > 0 && span > 0 ? span : nil
 }
 
 /// The transcript with ask cards spliced in where they were raised, newest first
@@ -168,53 +190,34 @@ public func canSend(_ ask: Ask?, _ askChoice: String?) -> Bool { ask == nil || a
 /// A draft is worth a full-screen editor once it is four lines tall.
 public func isWorthExpanding(lines: Int) -> Bool { lines >= 4 }
 
-/// One row of a message's body: a part, or a run of the same tool folded into one line.
+/// One row of a message's body: a part, or a stretch of work — tool calls and
+/// thinking with nothing said between them — folded into one line titled by what
+/// is inside it. A lone call or thought stays itself.
 public enum TranscriptRow: Equatable, Sendable {
-    /// `sources` are the parts it stands for: itself, or the thinking blocks it merged
-    case one(ChatPart, sources: [ChatPart])
-    case group([ToolCall])
+    case one(ChatPart)
+    case group([ChatPart])
 }
 
 public func collapseTranscript(_ parts: [ChatPart], keep: Set<String> = []) -> [TranscriptRow] {
     var out: [TranscriptRow] = []
-    var run: [ToolCall] = []
+    var run: [ChatPart] = []
     func flush() {
-        if run.count > 2 { out.append(.group(run)) } else { out.append(contentsOf: run.map { .one(.tool($0), sources: [.tool($0)]) }) }
+        if run.count > 1 { out.append(.group(run)) } else { out.append(contentsOf: run.map { .one($0) }) }
         run = []
     }
-    var thinking: [(String, Int64?)] = []
-    func flushThinking() {
-        switch thinking.count {
-        case 0: break
-        case 1:
-            let p = ChatPart.reasoning(thinking[0].0, durationMs: thinking[0].1)
-            out.append(.one(p, sources: [p]))
-        default:
-            let took = thinking.compactMap(\.1)
-            let merged = ChatPart.reasoning(
-                thinking.map { $0.0.trimmingCharacters(in: .whitespacesAndNewlines) }.joined(separator: "\n\n"),
-                durationMs: took.count == thinking.count ? took.reduce(0, +) : nil
-            )
-            out.append(.one(merged, sources: thinking.map { .reasoning($0.0, durationMs: $0.1) }))
-        }
-        thinking = []
-    }
     for part in parts {
-        if case .reasoning(let text, let ms) = part {
+        switch part {
+        // step markers and blank thinking neither show nor break a run
+        case .unsupported: continue
+        case .reasoning where isBlankThought(part): continue
+        case .reasoning: run.append(part)
+        // a call with a card under it stays its own row, so the card has a place
+        case .tool(let t) where !(t.id.map { keep.contains($0) } ?? false): run.append(part)
+        default:
             flush()
-            if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { thinking.append((text, ms)) }
-            continue
-        }
-        flushThinking()
-        if let tool = part.toolCall, !(tool.id.map { keep.contains($0) } ?? false) {
-            if let first = run.first, first.name != tool.name { flush() }
-            run.append(tool)
-        } else {
-            flush()
-            out.append(.one(part, sources: [part]))
+            out.append(.one(part))
         }
     }
-    flushThinking()
     flush()
     return out
 }
@@ -225,19 +228,55 @@ private let toolVerb: [String: String] = [
     "multiedit": "Edited", "multi-edit": "Edited",
 ]
 
-/// "Read 17 files", "Edited 6 files", "Ran 3 commands"
-public func toolGroupSummary(_ tools: [ToolCall]) -> String {
-    let kind = (tools.first?.name ?? "").lowercased()
+private func toolCount(_ kind: String, _ n: Int) -> String {
     let verb = toolVerb[kind] ?? (kind.prefix(1).uppercased() + kind.dropFirst())
     let noun: String
     switch kind {
-    case "read", "edit", "write", "patch", "multiedit", "multi-edit": noun = "files"
-    case "bash": noun = "commands"
-    case "grep": noun = "searches"
-    case "glob": noun = "matches"
-    default: noun = "calls"
+    case "read", "edit", "write", "patch", "multiedit", "multi-edit": noun = "file"
+    case "bash": noun = "command"
+    case "grep": noun = "search"
+    case "glob": noun = "match"
+    default: noun = "call"
     }
-    return "\(verb) \(tools.count) \(noun)"
+    let plural = n == 1 ? noun : noun.hasSuffix("ch") ? noun + "es" : noun + "s"
+    return "\(verb) \(n) \(plural)"
+}
+
+/// The title of a fold of work, from what is inside it: "Worked for 1m 13s ·
+/// edited 6 files, ran 2 commands", "Thought for 12s", or "Read 3 files" when
+/// nothing was timed. Line counts are drawn beside it, never inside it.
+public func workTitle(_ parts: [ChatPart], durationMs: Int64? = nil, active: Bool = false) -> String {
+    let tools = parts.compactMap(\.toolCall)
+    if tools.isEmpty {
+        if active { return "Thinking" }
+        let took = parts.compactMap { p -> Int64? in if case .reasoning(_, let ms) = p { return ms }; return nil }
+        let ms = durationMs ?? (took.count == parts.count ? took.reduce(0, +) : nil)
+        if let ms, ms >= 1000 { return "Thought for \(fmtSpan(ms))" }
+        return "Thought"
+    }
+    var kinds: [String] = []
+    var counts: [String: Int] = [:]
+    for t in tools {
+        let k = t.name.lowercased()
+        if counts[k] == nil { kinds.append(k) }
+        counts[k, default: 0] += 1
+    }
+    let rest = kinds.map { k -> String in
+        let c = toolCount(k, counts[k]!)
+        return c.prefix(1).lowercased() + c.dropFirst()
+    }.joined(separator: ", ")
+    let said = rest.prefix(1).uppercased() + rest.dropFirst()
+    if active { return "Working · \(rest)" }
+    if let d = durationMs, d >= 1000 { return "Worked for \(fmtSpan(d)) · \(rest)" }
+    return said
+}
+
+/// 42s, 1m 13s, 2h 5m
+public func fmtSpan(_ ms: Int64) -> String {
+    let s = ms / 1000
+    if s < 60 { return "\(s)s" }
+    if s < 3600 { return "\(s / 60)m \(s % 60)s" }
+    return "\(s / 3600)h \((s / 60) % 60)m"
 }
 
 private let toolSubjectKeys = ["command", "filePath", "file_path", "path", "pattern", "query", "description", "url"]
