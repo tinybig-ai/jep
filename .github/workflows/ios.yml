@@ -69,7 +69,7 @@ jobs:
           xcodebuild -project Jep.xcodeproj -scheme Jep \
             -destination "id=$UDID" \
             -resultBundlePath "$RUNNER_TEMP/tour.xcresult" \
-            CODE_SIGNING_ALLOWED=NO test | tail -n 60
+            CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= test | tail -n 60
           code=${PIPESTATUS[0]}
           kill -INT $rec; wait $rec
           exit $code

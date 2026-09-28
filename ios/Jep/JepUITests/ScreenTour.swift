@@ -91,13 +91,6 @@ final class ScreenTour: XCTestCase {
             let groups = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Read 3'")).firstMatch
             if tap(groups, timeout: 2) { shot("14-tool-group-open"); groups.tap() }
 
-            let composer = app.textViews["composer"].exists ? app.textViews["composer"] : app.textFields["composer"]
-            if tap(composer, timeout: 3) {
-                composer.typeText("Also add a regression test")
-                shot("15-composer")
-                app.swipeDown()
-            }
-
             let sheets: [(String, String)] = [
                 ("Model", "16-model"), ("Agent", "17-agent"), ("Settings", "18-chat-settings"), ("Usage", "19-usage"),
                 ("Changes", "20-changes"), ("Git", "21-git"), ("Subagents", "22-subagents"), ("Terminal", "23-terminal"), ("Rename", "24-rename"),
@@ -110,12 +103,19 @@ final class ScreenTour: XCTestCase {
             }
 
             if tap(button("chat menu")), tap(button("Changes")) {
-                if tap(app.buttons.containing(NSPredicate(format: "label CONTAINS 'session.ts'")).firstMatch) {
+                if tap(app.buttons.matching(NSPredicate(format: "label CONTAINS 'session.ts'")).firstMatch) {
                     sleep(2)
                     shot("25-file-reader")
                     close()
                 }
             }
+            let composer = app.textViews["composer"].exists ? app.textViews["composer"] : app.textFields["composer"]
+            if tap(composer, timeout: 3) {
+                composer.typeText("Also add a regression test")
+                shot("25b-composer")
+                app.swipeDown()
+            }
+
             back()
         }
 
