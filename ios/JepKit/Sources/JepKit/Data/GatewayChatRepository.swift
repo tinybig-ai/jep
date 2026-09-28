@@ -202,6 +202,8 @@ public final class GatewayChatRepository: ChatRepository, @unchecked Sendable {
     public func importSession(sessionId: String) async throws -> Bool { try await ok("/import", ["id": sessionId]) }
     public func archiveSession(sessionId: String) async throws -> Bool { try await ok("/archive", ["id": sessionId]) }
     public func unarchiveSession(sessionId: String) async throws -> Bool { try await ok("/unarchive", ["id": sessionId]) }
+    public func pinSession(sessionId: String) async throws -> Bool { try await ok("/pin", ["id": sessionId]) }
+    public func unpinSession(sessionId: String) async throws -> Bool { try await ok("/unpin", ["id": sessionId]) }
 
     public func terminalStatus() async throws -> TerminalAccess {
         let r = try await decode("/term", TermStatusRes.self)

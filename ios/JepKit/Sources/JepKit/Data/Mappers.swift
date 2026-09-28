@@ -5,7 +5,7 @@ import Foundation
 
 extension SessionDto {
     func toDomain() -> SessionSummary {
-        SessionSummary(id: id, title: title, workspace: workspace, createdAt: createdAt, updatedAt: updatedAt, adapter: adapter, harness: harness, subagents: subagents, active: active, seenAt: seenAt)
+        SessionSummary(id: id, title: title, workspace: workspace, createdAt: createdAt, updatedAt: updatedAt, adapter: adapter, harness: harness, subagents: subagents, active: active, seenAt: seenAt, pinned: pinned)
     }
 }
 

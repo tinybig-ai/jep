@@ -69,6 +69,8 @@ struct SessionsView: View {
         } else {
             ToolbarItem(placement: .topBarLeading) { Button("Cancel") { store.clearSelection() } }
             ToolbarItemGroup(placement: .topBarTrailing) {
+                let allPinned = store.sessions.filter { store.selection.contains($0.id) }.allSatisfy(\.pinned)
+                Button(allPinned ? "Unpin" : "Pin", systemImage: allPinned ? "pin.slash" : "pin") { store.pinSelected(!allPinned) }
                 Button("Mark read", systemImage: "envelope.open") { store.markSelected(read: true) }
                 Button("Mark unread", systemImage: "envelope.badge") { store.markSelected(read: false) }
                 Button("Archive", systemImage: "archivebox") { store.archiveSelected() }
@@ -127,7 +129,10 @@ struct SessionRow: View {
                     Spacer()
                     Text(relativeTime(session.updatedAt)).jepFont(12).foregroundStyle(.secondary)
                 }
-                HStack(spacing: 6) {
+                HStack(spacing: 5) {
+                    if session.pinned {
+                        Image(systemName: "pin.fill").font(.system(size: 10)).foregroundStyle(.tint).accessibilityLabel("pinned")
+                    }
                     Text(subtitle).jepFont(13).foregroundStyle(.secondary).lineLimit(1)
                     Spacer()
                     if unread { Circle().fill(.tint).frame(width: 8, height: 8) }

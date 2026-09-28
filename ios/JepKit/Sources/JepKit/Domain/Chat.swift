@@ -30,8 +30,10 @@ public struct SessionSummary: Equatable, Hashable, Identifiable, Sendable {
     public var active: Bool
     /// when it was last looked at on any device, as the daemon keeps it (0 = never)
     public var seenAt: Int64
+    /// held at the top of the list; the daemon keeps it
+    public var pinned: Bool
 
-    public init(id: String, title: String, workspace: String = "", createdAt: Int64 = 0, updatedAt: Int64 = 0, adapter: String? = nil, harness: String? = nil, subagents: Int = 0, active: Bool = false, seenAt: Int64 = 0) {
+    public init(id: String, title: String, workspace: String = "", createdAt: Int64 = 0, updatedAt: Int64 = 0, adapter: String? = nil, harness: String? = nil, subagents: Int = 0, active: Bool = false, seenAt: Int64 = 0, pinned: Bool = false) {
         self.id = id
         self.title = title
         self.workspace = workspace
@@ -42,6 +44,7 @@ public struct SessionSummary: Equatable, Hashable, Identifiable, Sendable {
         self.subagents = subagents
         self.active = active
         self.seenAt = seenAt
+        self.pinned = pinned
     }
 }
 

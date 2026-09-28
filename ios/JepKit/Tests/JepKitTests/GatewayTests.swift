@@ -21,6 +21,21 @@ final class GatewayTests: XCTestCase {
         XCTAssertEqual(gw.calls.first?.auth, "Bearer tok")
     }
 
+    func testPinRoundTrip() async throws {
+        let gw = FakeGateway()
+        gw.on("/sessions", json: #"{"items":[{"id":"a","title":"A","pinned":true},{"id":"b","title":"B"}]}"#)
+        gw.on("/pin", json: #"{"ok":true,"pinned":true}"#)
+        gw.on("/unpin", json: #"{"ok":true,"pinned":false}"#)
+        let repo = GatewayChatRepository(base: "http://gw", token: { "tok" }, http: gw)
+        let list = try await repo.sessions()
+        XCTAssertEqual(list.map(\.pinned), [true, false])
+        let pinned = try await repo.pinSession(sessionId: "b")
+        let unpinned = try await repo.unpinSession(sessionId: "a")
+        XCTAssertTrue(pinned && unpinned)
+        XCTAssertEqual(gw.bodies("/pin").first?["id"] as? String, "b")
+        XCTAssertEqual(gw.bodies("/unpin").first?["id"] as? String, "a")
+    }
+
     func testPromptModes() async throws {
         let gw = FakeGateway()
         gw.on("/prompt", json: #"{"message":{"id":"a1","role":"assistant","time":2,"parts":[{"kind":"text","text":"ok"}]}}"#)

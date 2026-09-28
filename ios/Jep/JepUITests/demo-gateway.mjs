@@ -55,7 +55,7 @@ const asks = [{
 const routes = {
   "/pair": () => ({ token: "demo-token", nextCode: "482913" }),
   "/health": () => ({ ok: true }),
-  "/sessions": () => ({ items: sessions }),
+  "/sessions": () => ({ items: [...sessions].sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || b.updatedAt - a.updatedAt) }),
   "/archived": () => ({ items: [session("s9", "Spike: websocket transport", "api", "claude", 9 * 86400_000)] }),
   "/importable": () => ({ sessions: [
     { harness: "claude", id: "ext1", title: "Refactor billing webhooks", directory: "~/code/billing", updated: now - 5 * 3600_000 },
@@ -107,8 +107,18 @@ const routes = {
   "/seen": () => ({ ok: true }),
 }
 
-http.createServer((req, res) => {
+http.createServer(async (req, res) => {
   const path = new URL(req.url, "http://x").pathname
+  if (path === "/pin" || path === "/unpin") {
+    let body = ""
+    for await (const chunk of req) body += chunk
+    const { id } = JSON.parse(body || "{}")
+    const item = sessions.find(s => s.id === id)
+    if (item) item.pinned = path === "/pin"
+    res.writeHead(200, { "content-type": "application/json" })
+    res.end(JSON.stringify({ ok: true, pinned: !!item?.pinned }))
+    return
+  }
   if (path === "/stream") {
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" })
     res.write(": ok\n\n")

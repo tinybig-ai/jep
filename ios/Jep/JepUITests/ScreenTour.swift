@@ -62,6 +62,13 @@ final class ScreenTour: XCTestCase {
         XCTAssertTrue(app.staticTexts["Fix flaky login test"].waitForExistence(timeout: 15))
         shot("03-sessions")
 
+        let notes = app.staticTexts["Write release notes for 0.4"].firstMatch
+        if notes.waitForExistence(timeout: 4) {
+            notes.press(forDuration: 1.0)
+            shot("03a-select")
+            if tap(button("Pin")) { sleep(1); shot("03b-pinned") }
+        }
+
         if tap(button("sessions menu")) { shot("04-sessions-menu") }
         if tap(button("Archived")) { shot("05-archived"); close() }
         if tap(button("sessions menu")), tap(button("Import external session")) { shot("06-import"); close() }

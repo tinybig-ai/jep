@@ -243,6 +243,34 @@ public final class AppStore {
         archiveAll(chosen)
     }
 
+    /// pinned first, re-sorted at once; the daemon owns the fact
+    public func pinSelected(_ pinned: Bool) {
+        let ids = selection
+        if ids.isEmpty { return }
+        selection = []
+        pinAll(ids, pinned)
+    }
+
+    public func togglePin(_ s: SessionSummary) { pinAll([s.id], !s.pinned) }
+
+    private func pinAll(_ ids: Set<String>, _ pinned: Bool) {
+        guard let r = repo, !ids.isEmpty else { return }
+        sessions = sessions
+            .map { s in var s = s; if ids.contains(s.id) { s.pinned = pinned }; return s }
+            .sorted { $0.pinned != $1.pinned ? $0.pinned : $0.updatedAt > $1.updatedAt }
+        Task {
+            var failed = false
+            for id in ids {
+                let done = (try? await (pinned ? r.pinSession(sessionId: id) : r.unpinSession(sessionId: id))) ?? false
+                if !done { failed = true }
+            }
+            if failed {
+                notice = "couldn't change the pin — the list is being reloaded"
+                refresh()
+            }
+        }
+    }
+
     public func markSelected(read isRead: Bool) {
         let ids = selection
         if ids.isEmpty { return }
