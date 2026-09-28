@@ -150,7 +150,8 @@ final class ScreenTour: XCTestCase {
                 if tap(long, timeout: 2) {
                     sleep(1)
                     shot("30-work-window-top")
-                    let inside = long.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).withOffset(CGVector(dx: 0, dy: 160))
+                    // opened, the header is relabelled, so the drag starts from it by its new name
+                    let inside = button("hide this work").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).withOffset(CGVector(dx: 0, dy: 160))
                     inside.press(forDuration: 0.05, thenDragTo: inside.withOffset(CGVector(dx: 0, dy: -120)))
                     sleep(1)
                     shot("31-work-window-middle")
