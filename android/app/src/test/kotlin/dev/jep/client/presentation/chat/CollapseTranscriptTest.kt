@@ -4,120 +4,104 @@ import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
 import dev.jep.client.domain.model.Role
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Consecutive tool calls of the same kind, as one row.
- *
- * Grouping is by consecutive runs of the same tool and never across kinds: a
- * read/edit/test alternation is the order the work happened in, and collapsing
- * that would throw away the thing you were reading the transcript for.
+ * A stretch of work — tool calls and thinking with nothing said between them —
+ * as one row titled by what is inside it.
  */
 class CollapseTranscriptTest {
 
     private fun tool(name: String, id: String, added: Int? = null, removed: Int? = null) =
         ChatPart.Tool(id = id, name = name, status = null, title = null, added = added, removed = removed)
 
+    private fun think(t: String, ms: Long? = null) = ChatPart.Reasoning(t, ms)
+
     private fun text(t: String) = ChatPart.Text(t)
+
+    private fun label(p: ChatPart): String = when (p) {
+        is ChatPart.Text -> p.text
+        is ChatPart.Tool -> p.id.orEmpty()
+        is ChatPart.Reasoning -> "think:" + p.text
+        else -> "?"
+    }
 
     private fun shape(rows: List<TranscriptRow>): List<String> = rows.map { row ->
         when (row) {
-            is TranscriptRow.One -> {
-                val part = row.part
-                "one:" + when (part) {
-                    is ChatPart.Text -> part.text
-                    is ChatPart.Tool -> part.id.orEmpty()
-                    else -> "?"
-                }
-            }
-            is TranscriptRow.Group -> "group:" + row.tools.joinToString(",") { it.id.orEmpty() }
+            is TranscriptRow.One -> "one:" + label(row.part)
+            is TranscriptRow.Group -> "group:" + row.parts.joinToString(",") { label(it) }
         }
     }
 
     @Test
-    fun `a run of three or more becomes one row`() {
-        val rows = collapseTranscript(listOf(tool("read", "1"), tool("read", "2"), tool("read", "3")))
-        assertEquals(listOf("group:1,2,3"), shape(rows))
-    }
-
-    @Test
-    fun `two calls are not worth a disclosure`() {
-        val rows = collapseTranscript(listOf(tool("read", "1"), tool("read", "2")))
-        assertEquals(listOf("one:1", "one:2"), shape(rows))
-    }
-
-    @Test
-    fun `a lone tool is left exactly as it was`() {
-        // a group of one is a wrapper around something already readable
-        val rows = collapseTranscript(listOf(tool("bash", "1")))
-        assertEquals(listOf("one:1"), shape(rows))
-    }
-
-    @Test
-    fun `an alternation of tools keeps its order`() {
+    fun `tools and thoughts between two things said are one fold`() {
         val rows = collapseTranscript(
-            listOf(tool("read", "1"), tool("edit", "2"), tool("read", "3"), tool("bash", "4")),
+            listOf(text("looking"), think("a"), tool("edit", "1"), tool("read", "2"), think("b"), tool("bash", "3"), text("done")),
         )
-        assertEquals(listOf("one:1", "one:2", "one:3", "one:4"), shape(rows))
+        assertEquals(listOf("one:looking", "group:think:a,1,2,think:b,3", "one:done"), shape(rows))
     }
 
     @Test
-    fun `a run broken by prose is two runs, and only long ones count`() {
+    fun `a lone call or thought is left as it was`() {
+        assertEquals(listOf("one:1"), shape(collapseTranscript(listOf(tool("bash", "1")))))
+        assertEquals(listOf("one:think:a", "one:x"), shape(collapseTranscript(listOf(think("a"), text("x")))))
+    }
+
+    @Test
+    fun `step markers and blank thinking neither show nor break a run`() {
         val rows = collapseTranscript(
-            listOf(
-                tool("read", "1"), tool("read", "2"), tool("read", "3"),
-                text("here"),
-                tool("read", "4"), tool("read", "5"),
-            ),
+            listOf(tool("read", "1"), ChatPart.Unsupported("step-finish"), think("  "), tool("edit", "2")),
         )
-        assertEquals(listOf("group:1,2,3", "one:here", "one:4", "one:5"), shape(rows))
+        assertEquals(listOf("group:1,2"), shape(rows))
     }
 
     @Test
-    fun `a group title carries no line counts of its own`() {
-        val tools = listOf(
-            tool("edit", "1", added = 10, removed = 2),
-            tool("edit", "2", added = 118, removed = 92),
+    fun `a call with a card under it breaks the run`() {
+        val rows = collapseTranscript(listOf(tool("read", "1"), tool("bash", "2"), tool("read", "3")), setOf("2"))
+        assertEquals(listOf("one:1", "one:2", "one:3"), shape(rows))
+    }
+
+    @Test
+    fun `the title says what is inside`() {
+        val parts = listOf(
+            tool("edit", "1", added = 10, removed = 2), think("hm", 2_000), tool("edit", "2"),
+            tool("bash", "3"), tool("read", "4"),
         )
-        // The row draws +128 -94 beside this, in mono and in the diff's own
-        // colours. If the summary also spelled them out they would appear twice.
-        assertEquals("Edited 2 files", toolGroupSummary(tools))
+        // line counts are drawn beside the title, never inside it
+        assertEquals("Edited 2 files, ran 1 command, read 1 file", workTitle(parts))
+        assertEquals("Worked for 1m 13s · edited 2 files, ran 1 command, read 1 file", workTitle(parts, 73_000))
+        assertEquals("Working · edited 2 files, ran 1 command, read 1 file", workTitle(parts, 73_000, active = true))
     }
 
     @Test
-    fun `a read run says how many files`() {
-        assertEquals("Read 17 files", toolGroupSummary(List(17) { tool("read", "$it") }))
+    fun `only thinking is a thought, timed when every part was`() {
+        assertEquals("Thought for 3s", workTitle(listOf(think("a", 1_000), think("b", 2_000))))
+        assertEquals("Thought", workTitle(listOf(think("a", 1_000), think("b"))))
     }
 
     @Test
-    fun `a run with no line changes says nothing about them`() {
-        assertEquals("Ran 3 commands", toolGroupSummary(List(3) { tool("bash", "$it") }))
+    fun `an unfamiliar tool still counts`() {
+        assertEquals("Weird 2 calls", workTitle(listOf(tool("weird", "1"), tool("weird", "2"))))
+        assertEquals("Searched 2 searches", workTitle(listOf(tool("grep", "1"), tool("grep", "2"))))
     }
 
     @Test
-    fun `an unfamiliar tool still reads as a run`() {
-        val summary = toolGroupSummary(listOf(tool("weird", "1"), tool("weird", "2")))
-        assertTrue(summary, summary.startsWith("Weird 2 "))
+    fun `spans read the way a person says them`() {
+        assertEquals("42s", fmtSpan(42_400))
+        assertEquals("1m 13s", fmtSpan(73_000))
+        assertEquals("2h 5m", fmtSpan(7_500_000))
     }
 
     // ---- across messages, which is where opencode actually puts them ----
 
-    private fun toolMsg(id: String, name: String, added: Int? = null, removed: Int? = null) =
-        Row.Msg(
-            ChatMessage(
-                id,
-                Role.ASSISTANT,
-                0,
-                listOf(ChatPart.Unsupported("step-finish"), tool(name, id, added, removed)),
-            ),
-        )
+    private fun workMsg(id: String, time: Long, vararg parts: ChatPart, took: Long? = null) =
+        Row.Msg(ChatMessage(id, Role.ASSISTANT, time, listOf(ChatPart.Unsupported("step-finish")) + parts, durationMs = took))
 
     private fun sayMsg(id: String) = Row.Msg(ChatMessage(id, Role.ASSISTANT, 0, listOf(text("done"))))
 
     private fun shapeRows(rows: List<Row>): List<String> = rows.map { row ->
         when (row) {
-            is Row.Tools -> "tools:" + row.tools.joinToString(",") { it.id.orEmpty() }
+            is Row.Work -> "work:" + row.parts.joinToString(",") { label(it) }
             is Row.Msg -> "msg:" + row.m.id
             is Row.Pending -> "ask:" + row.ask.id
             is Row.PastAsk -> "past-ask:" + row.entry.ask.id
@@ -127,77 +111,48 @@ class CollapseTranscriptTest {
     }
 
     @Test
-    fun `a run of tool-only messages collapses, which is how the harness reports them`() {
-        // opencode emits one message per step, so four reads are four messages
-        val rows = groupToolRuns(listOf(toolMsg("m1", "read"), toolMsg("m2", "read"), toolMsg("m3", "read"), sayMsg("m4")))
-        assertEquals(listOf("tools:m1,m2,m3", "msg:m4"), shapeRows(rows))
-    }
-
-    @Test
-    fun `two tool messages are not worth a disclosure`() {
-        val rows = groupToolRuns(listOf(toolMsg("m1", "read"), toolMsg("m2", "read")))
-        assertEquals(listOf("msg:m1", "msg:m2"), shapeRows(rows))
-    }
-
-    @Test
-    fun `a message that says something is never swallowed into a group`() {
-        val says = Row.Msg(
-            ChatMessage("m2", Role.ASSISTANT, 0, listOf(text("looking now"), tool("read", "t1"))),
+    fun `a run of work-only messages is one fold, in the order it happened`() {
+        // rows are newest first; opencode emits one message per step
+        val rows = groupWorkRuns(
+            listOf(sayMsg("m4"), workMsg("m3", 3, tool("bash", "t3")), workMsg("m2", 2, think("b")), workMsg("m1", 1, tool("edit", "t1"))),
         )
-        val rows = groupToolRuns(listOf(toolMsg("m1", "read"), says, toolMsg("m3", "read")))
-        assertEquals(listOf("msg:m1", "msg:m2", "msg:m3"), shapeRows(rows))
+        assertEquals(listOf("msg:m4", "work:t1,think:b,t3"), shapeRows(rows))
+        assertEquals("work-m1", rows[1].key)
     }
 
     @Test
-    fun `an alternation of tool messages keeps its order`() {
-        val rows = groupToolRuns(
-            listOf(toolMsg("m1", "read"), toolMsg("m2", "read"), toolMsg("m3", "read"),
-                   toolMsg("m4", "edit"), toolMsg("m5", "edit"), toolMsg("m6", "edit")),
+    fun `the fold is timed from the first start to the last finish`() {
+        val rows = groupWorkRuns(
+            listOf(workMsg("m2", 60_000, tool("bash", "t2"), took = 13_000), workMsg("m1", 1_000, tool("read", "t1"), took = 5_000)),
         )
-        assertEquals(listOf("tools:m1,m2,m3", "tools:m4,m5,m6"), shapeRows(rows))
+        assertEquals(72_000L, (rows.single() as Row.Work).durationMs)
     }
 
     @Test
-    fun `the grouped row carries the totals of everything in it`() {
-        val rows = groupToolRuns(
-            listOf(
-                toolMsg("m1", "edit", added = 10, removed = 1),
-                toolMsg("m2", "edit", added = 5, removed = 2),
-                toolMsg("m3", "edit", added = 1, removed = 0),
-            ),
+    fun `one work message stays a message, and folds inside itself`() {
+        val rows = groupWorkRuns(listOf(workMsg("m1", 1, tool("read", "t1"), tool("read", "t2"))))
+        assertEquals(listOf("msg:m1"), shapeRows(rows))
+    }
+
+    @Test
+    fun `a message that says something is never swallowed`() {
+        val says = Row.Msg(ChatMessage("m2", Role.ASSISTANT, 0, listOf(text("looking now"), tool("read", "t1"))))
+        val rows = groupWorkRuns(listOf(workMsg("m3", 3, tool("read", "a")), says, workMsg("m1", 1, tool("read", "b"))))
+        assertEquals(listOf("msg:m3", "msg:m2", "msg:m1"), shapeRows(rows))
+    }
+
+    @Test
+    fun `the held message stays itself while the turn is live`() {
+        val rows = groupWorkRuns(
+            listOf(workMsg("m3", 3, tool("bash", "c")), workMsg("m2", 2, tool("read", "b")), workMsg("m1", 1, tool("read", "a"))),
+            hold = "m3",
         )
-        val group = rows.filterIsInstance<Row.Tools>().single()
-        assertEquals("Edited 3 files", toolGroupSummary(group.tools))
+        assertEquals(listOf("msg:m3", "work:a,b"), shapeRows(rows))
     }
 
     @Test
-    fun `back-to-back thinking opens as one disclosure`() {
-        val a = ChatPart.Reasoning("first thought", 1_000)
-        val b = ChatPart.Reasoning("second thought", 2_000)
-        val rows = collapseTranscript(listOf(a, b, text("answer")))
-        assertEquals(2, rows.size)
-        val merged = (rows[0] as TranscriptRow.One).part as ChatPart.Reasoning
-        assertEquals("first thought\n\nsecond thought", merged.text)
-        assertEquals(3_000L, merged.durationMs)
-        // the merged row still knows the part that streams last
-        assertTrue((rows[0] as TranscriptRow.One).sources.last() === b)
-    }
-
-    @Test
-    fun `an action between two thoughts keeps them apart, and a blank one is invisible`() {
-        val rows = collapseTranscript(
-            listOf(ChatPart.Reasoning("one"), ChatPart.Reasoning("  "), tool("bash", "t1"), ChatPart.Reasoning("two")),
-        )
-        assertEquals(
-            listOf("one", "t1", "two"),
-            rows.map { r -> when (val p = (r as TranscriptRow.One).part) { is ChatPart.Reasoning -> p.text; is ChatPart.Tool -> p.id.orEmpty(); else -> "?" } },
-        )
-    }
-
-    @Test
-    fun `a thought with no recorded duration makes the merged one unknown, not short`() {
-        val merged = (collapseTranscript(listOf(ChatPart.Reasoning("a", 1_000), ChatPart.Reasoning("b"))).single() as TranscriptRow.One).part
-        assertEquals(null, (merged as ChatPart.Reasoning).durationMs)
+    fun `the user's own messages never fold`() {
+        val user = Row.Msg(ChatMessage("u", Role.USER, 0, listOf(ChatPart.Unsupported("x"), tool("read", "t"))))
+        assertEquals(listOf("msg:u", "msg:w"), shapeRows(groupWorkRuns(listOf(user, workMsg("w", 1, tool("read", "a"))))))
     }
 }
-
