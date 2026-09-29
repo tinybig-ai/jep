@@ -482,6 +482,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   let tokensStamp = await tokenFileStamp(deps.dataHome)
   // this client's pairing surface, reported through the shared admin port so
   // tooling never reads gateway files directly
+  let listening: number | undefined
   const pairingAdmin: PairingAdmin = {
     client: "gateway",
     status: () => ({
@@ -490,6 +491,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       code: pairCode,
       owner: null,
       devices: tokens.size,
+      port: listening,
       hint: "enter the address, then this code",
     }),
   }
@@ -1779,6 +1781,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
 
   await new Promise<void>((resolve) => server.listen(deps.port, deps.host ?? "0.0.0.0", resolve))
   const bound = (server.address() as { port: number }).port
+  listening = bound
   console.error(`[gw] listening on :${bound}  ·  pairing code: ${pairCode}`)
 
   return {

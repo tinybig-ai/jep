@@ -102,12 +102,22 @@ struct ChatHost: View {
 }
 
 enum DeepLink {
-    /// jep://session?id=… opens that conversation
+    /// jep://session?id=… opens that conversation; jep://pair?address=…&code=… (the
+    /// macOS menu-bar QR) pairs, but only while unpaired, so a stray link can't
+    /// move the app to another gateway
     @MainActor
     static func open(_ url: URL, _ store: AppStore) {
-        guard url.scheme == "jep", url.host == "session",
-              let id = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "id" })?.value
-        else { return }
-        store.openSessionById(id)
+        guard url.scheme == "jep" else { return }
+        let q = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        let value = { (name: String) in q.first(where: { $0.name == name })?.value }
+        switch url.host {
+        case "session":
+            if let id = value("id") { store.openSessionById(id) }
+        case "pair":
+            guard !store.paired, let address = value("address"), let code = value("code") else { return }
+            Task { _ = await store.pair(address: address, code: code) }
+        default:
+            return
+        }
     }
 }

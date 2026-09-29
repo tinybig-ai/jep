@@ -129,6 +129,7 @@ Each client has its own setup and command surface:
 - **Telegram bot** → [clients/telegram](docs/clients/telegram.md):
   pair it from your chat, then text it. Rich messages, voice notes, git and
   usage screens, and a streaming stop/steer loop.
+- **macOS menu bar** → [clients/macos](docs/clients/macos.md): daemon status and a QR to pair a phone.
 - **iOS app** → [clients/ios](docs/clients/ios.md): the same app for iPhone and iPad, in SwiftUI.
 - **Android app** → [clients/android](docs/clients/android.md):
   Point it at the gateway, pair, and you have conversations, streaming turns,

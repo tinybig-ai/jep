@@ -1,0 +1,38 @@
+name: macos
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths: ["macos/**", ".github/workflows/macos.yml"]
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # JepBarCore is Foundation-only: its tests run on Linux.
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: '6.1'
+      - name: Test JepBarCore
+        working-directory: macos/JepBar
+        run: swift test
+
+  # The menu-bar app itself: proof it builds on a Mac.
+  bar:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use the newest Xcode
+        run: |
+          x=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          [ -n "$x" ] && sudo xcode-select -s "$x"
+          xcodebuild -version
+      - name: Build
+        working-directory: macos/JepBar
+        run: swift build -c release

@@ -35,6 +35,13 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="jep" android:host="file" />
             </intent-filter>
+            <!-- jep://pair?address=…&code=…, the QR the macOS menu-bar app shows -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="jep" android:host="pair" />
+            </intent-filter>
         </activity>
 
         <service

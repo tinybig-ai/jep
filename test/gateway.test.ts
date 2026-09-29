@@ -525,6 +525,7 @@ test("the gateway reports its pairing state through the admin port", async () =>
     assert.equal(before.code, "TESTCODE")
     assert.equal(before.owner, null)
     assert.equal(before.devices, 0)
+    assert.equal(before.port, g.port, "the port a pairing QR needs")
 
     let changes = 0
     g.pairingAdmin.onChange = () => {

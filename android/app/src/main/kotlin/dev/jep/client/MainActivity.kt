@@ -42,6 +42,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         ensureNotificationPermission()
         fileFrom(intent)
+        pairFrom(intent)
 
         // the socket outlives screens; the service is what keeps it alive —
         // unless the person has turned background streaming off, in which case
@@ -88,6 +89,7 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         intent.getStringExtra(EXTRA_SESSION)?.let { app.openSessionById(it) }
         fileFrom(intent)
+        pairFrom(intent)
     }
 
     /**
@@ -100,6 +102,15 @@ class MainActivity : ComponentActivity() {
         val data = intent.data ?: return
         if (data.scheme != "jep" || data.host != "file") return
         data.getQueryParameter("path")?.let { dev.jep.client.presentation.chat.OpenedFile.offer(it) }
+    }
+
+    /** a scanned pairing QR; ignored once paired, so a stray link can't move the app to another gateway */
+    private fun pairFrom(intent: Intent) {
+        val data = intent.data ?: return
+        if (data.scheme != "jep" || data.host != "pair" || app.paired.value) return
+        val address = data.getQueryParameter("address") ?: return
+        val code = data.getQueryParameter("code") ?: return
+        app.pair(address, code) { _, _ -> }
     }
 
     private fun ensureNotificationPermission() {
