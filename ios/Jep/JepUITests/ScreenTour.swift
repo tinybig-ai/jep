@@ -137,6 +137,57 @@ final class ScreenTour: XCTestCase {
             back()
         }
 
+        let theme = app.staticTexts["Add dark mode to settings"].firstMatch
+        if tap(theme) {
+            sleep(2)
+            shot("29-long-work")
+            let long = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'read 14 files'")).firstMatch
+            if long.waitForExistence(timeout: 3) {
+                for _ in 0..<6 where long.frame.minY < app.frame.height * 0.3 {
+                    let top = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
+                    top.press(forDuration: 0.05, thenDragTo: top.withOffset(CGVector(dx: 0, dy: 150)))
+                }
+                if tap(long, timeout: 2) {
+                    sleep(1)
+                    shot("30-work-window-top")
+                    // opened, the header is relabelled, so the drag starts from it by its new name
+                    let inside = button("hide this work").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).withOffset(CGVector(dx: 0, dy: 160))
+                    inside.press(forDuration: 0.05, thenDragTo: inside.withOffset(CGVector(dx: 0, dy: -120)))
+                    sleep(1)
+                    shot("31-work-window-middle")
+                    tap(button("hide this work"), timeout: 2)
+                }
+            }
+            if tap(app.links["preview page"].firstMatch, timeout: 3) {
+                sleep(3)
+                shot("32-html-rendered")
+                sleep(5)
+                shot("32b-html-rendered-later")
+                if tap(button("Source"), timeout: 2) {
+                    shot("33-html-source")
+                    if tap(button("Page"), timeout: 2) { sleep(3); shot("33b-html-page-again") }
+                }
+                close()
+            }
+            if tap(app.links["file link"].firstMatch, timeout: 3) {
+                sleep(3)
+                shot("34-file-link-opened")
+                close()
+            }
+            let box = app.textViews["composer"].exists ? app.textViews["composer"] : app.textFields["composer"]
+            if tap(box, timeout: 3) {
+                box.typeText("Make the cards rounder")
+                if tap(button("send"), timeout: 2) {
+                    shot("35-responding-at-once")
+                    sleep(3)
+                    shot("36-still-responding")
+                    sleep(5)
+                    shot("37-replied")
+                }
+            }
+            back()
+        }
+
         app.terminate()
         launch(dark: true)
         sleep(4)

@@ -339,6 +339,7 @@ struct FileReaderView: View {
                             Text(text).jepFont(13, design: .monospaced).textSelection(.enabled).padding().fixedSize()
                         }
                     }
+                    .defaultScrollAnchor(.topLeading)
                     .environment(\.openURL, OpenURLAction { url in
                         if let p = localLinkPath(url) {
                             chat.openFile(p)
@@ -372,7 +373,7 @@ struct FileReaderView: View {
 struct HTMLView: UIViewRepresentable {
     let html: String
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeCoordinator() -> Coordinator { Coordinator(html: html) }
 
     func makeUIView(context: Context) -> WKWebView {
         let view = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
@@ -384,6 +385,14 @@ struct HTMLView: UIViewRepresentable {
     func updateUIView(_ view: WKWebView, context: Context) {}
 
     final class Coordinator: NSObject, WKNavigationDelegate {
+        let html: String
+        init(html: String) { self.html = html }
+
+        // a page whose web process died (or never started) draws blank; load it again
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            webView.loadHTMLString(html, baseURL: nil)
+        }
+
         func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
             if action.navigationType == .linkActivated, let url = action.request.url {
                 UIApplication.shared.open(url)
