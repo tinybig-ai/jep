@@ -393,6 +393,9 @@ struct ImageViewer: View {
     let image: UIImage?
     @Environment(\.dismiss) private var dismiss
     @State private var scale: CGFloat = 1
+    @State private var settledScale: CGFloat = 1
+    @State private var offset: CGSize = .zero
+    @State private var settledOffset: CGSize = .zero
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -400,11 +403,31 @@ struct ImageViewer: View {
             if let image {
                 Image(uiImage: image).resizable().scaledToFit()
                     .scaleEffect(scale)
-                    .gesture(MagnifyGesture().onChanged { scale = max(1, $0.magnification) }.onEnded { _ in withAnimation { scale = max(1, min(scale, 4)) } })
+                    .offset(offset)
+                    .onTapGesture(count: 2) { withAnimation { zoom(to: scale > 1 ? 1 : 2.5) } }
+                    .gesture(MagnifyGesture()
+                        .onChanged { scale = max(1, settledScale * $0.magnification) }
+                        .onEnded { _ in withAnimation { zoom(to: min(scale, 5)) } }
+                        .simultaneously(with: DragGesture()
+                            .onChanged { d in
+                                guard scale > 1 else { return }
+                                offset = CGSize(width: settledOffset.width + d.translation.width,
+                                                height: settledOffset.height + d.translation.height)
+                            }
+                            .onEnded { _ in settledOffset = offset }))
             }
             Button { dismiss() } label: { Image(systemName: "xmark").padding(12).glass(Circle()) }
                 .padding()
                 .accessibilityLabel("dismiss")
+        }
+    }
+
+    private func zoom(to s: CGFloat) {
+        scale = s
+        settledScale = s
+        if s == 1 {
+            offset = .zero
+            settledOffset = .zero
         }
     }
 }
