@@ -2534,12 +2534,12 @@ private fun ImageThumb(part: ChatPart.File) {
 
 @Composable
 private fun ImageViewer(url: String, name: String, onClose: () -> Unit) {
-    Dialog(onDismissRequest = onClose) {
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         AsyncImage(
             model = url,
             contentDescription = name,
             contentScale = ContentScale.Fit,
-            modifier = Modifier.fillMaxWidth().clickable(onClick = onClose),
+            modifier = Modifier.fillMaxSize().background(Color.Black).clickable(onClick = onClose),
         )
     }
 }
