@@ -384,11 +384,12 @@ private val json = Json { ignoreUnknownKeys = true; isLenient = true }
         throw ApiFailure(code, reason)
     }
 
-    override fun fileUrl(path: String): String {
+    override fun fileUrl(path: String, sessionId: String?): String {
         // the pairing token rides in the query because the image loader fetches
         // this URL on its own, outside the repository's header path
         val enc = Base64.encodeToString(path.toByteArray(Charsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
-        return "$base/file?p=$enc&token=${token() ?: ""}"
+        val id = sessionId?.let { "&id=" + URLEncoder.encode(it, "UTF-8") } ?: ""
+        return "$base/file?p=$enc$id&token=${token() ?: ""}"
     }
 
     override suspend fun respond(askId: String, optionId: String): Boolean =

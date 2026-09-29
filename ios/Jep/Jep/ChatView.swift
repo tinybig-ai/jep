@@ -45,8 +45,11 @@ struct ChatView: View {
             chat.loadHarnessSettings(quiet: true)
         }
         .sheet(item: $sheet) { s in sheetView(s) }
-        .sheet(item: Binding(get: { chat.state.openFile.map { IdentifiedFile(file: $0) } }, set: { if $0 == nil { chat.closeFile() } })) { f in
+        .sheet(item: openFile(image: false)) { f in
             FileReaderView(file: f.file, chat: chat)
+        }
+        .fullScreenCover(item: openFile(image: true)) { f in
+            ImageViewer(image: f.file.image.flatMap(UIImage.init(data:)))
         })
     }
 
@@ -343,6 +346,16 @@ struct ChatView: View {
         case .rename: RenameSheet(chat: chat)
         case .terminal: TerminalView(chat: chat)
         }
+    }
+}
+
+extension ChatView {
+    /// an opened image link shows in the image viewer; any other file in the reader
+    func openFile(image: Bool) -> Binding<IdentifiedFile?> {
+        Binding(
+            get: { chat.state.openFile.flatMap { (fileEngineFor($0.path) == .image) == image ? IdentifiedFile(file: $0) : nil } },
+            set: { if $0 == nil { chat.closeFile() } }
+        )
     }
 }
 

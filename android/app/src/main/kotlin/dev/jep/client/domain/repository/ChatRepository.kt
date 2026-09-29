@@ -192,8 +192,9 @@ interface ChatRepository {
     /** compress the conversation's context; false when the harness refused */
     suspend fun compact(sessionId: String): Boolean
     /** a fetchable URL for a file part's bytes: the gateway's authenticated
-     * `/file` route, so a client can render an image it did not attach itself */
-    fun fileUrl(path: String): String
+     * `/file` route, so a client can render an image it did not attach itself.
+     * A relative path is in [sessionId]'s workspace. */
+    fun fileUrl(path: String, sessionId: String? = null): String
     suspend fun respond(askId: String, optionId: String): Boolean
 
     /** stand an ask down without answering it — the person replied in their own

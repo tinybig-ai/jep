@@ -112,6 +112,8 @@ class ChatViewModel(
         val text: String? = null,
         val error: String? = null,
         val tooBig: Boolean = false,
+        /** an image is shown from its bytes, not read as text */
+        val url: String? = null,
     )
 
     data class UiState(
@@ -835,7 +837,7 @@ class ChatViewModel(
     }
 
     /** a fetchable URL for a file part's bytes (the gateway's /file route) */
-    fun fileUrl(path: String): String = repo.fileUrl(path)
+    fun fileUrl(path: String): String = repo.fileUrl(path, sessionId)
 
     fun stop() {
         // Stop has to take effect on the screen at once. The turn is over the
@@ -1025,6 +1027,10 @@ class ChatViewModel(
     fun openFile(path: String) {
         val clean = path.trim().removePrefix("./")
         if (clean.isEmpty() || clean.contains("://")) return
+        if (fileEngineFor(clean) == FileEngine.Image) {
+            _state.update { it.copy(openFile = OpenFile(clean, loading = false, url = repo.fileUrl(clean, sessionId))) }
+            return
+        }
         _state.update { it.copy(openFile = OpenFile(clean)) }
         viewModelScope.launch {
             runCatching { repo.readFile(sessionId, clean) }

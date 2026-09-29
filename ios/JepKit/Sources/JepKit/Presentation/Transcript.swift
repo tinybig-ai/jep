@@ -367,6 +367,19 @@ func formEncode(_ s: String) -> String {
 
 private let linkTarget = try! NSRegularExpression(pattern: #"(!?\[[^\]]*\])\(([^)\s]+)((?:\s+"[^"]*")?)\)"#)
 
+/// workspace or file:// images a message links to, for thumbnails under it
+public func linkedImages(_ markdown: String) -> [String] {
+    let ns = markdown as NSString
+    var out: [String] = []
+    for m in linkTarget.matches(in: markdown, range: NSRange(location: 0, length: ns.length)) {
+        guard let dest = linkDestination(ns.substring(with: m.range(at: 2))),
+              let url = URL(string: dest), let path = localLinkPath(url),
+              fileEngineFor(path) == .image, !out.contains(path) else { continue }
+        out.append(path)
+    }
+    return out
+}
+
 /// markdown with every relative link target rewritten by `linkDestination`
 public func withLocalLinks(_ markdown: String) -> String {
     let ns = markdown as NSString
@@ -386,7 +399,7 @@ public func withLocalLinks(_ markdown: String) -> String {
     return out
 }
 
-public enum FileEngine: Sendable { case markdown, html, code, text }
+public enum FileEngine: Sendable { case markdown, html, image, code, text }
 
 private let markdownExt: Set = ["md", "markdown", "mdx"]
 private let htmlExt: Set = ["html", "htm"]
@@ -407,6 +420,7 @@ public func fileEngineFor(_ path: String) -> FileEngine {
     let ext = fileExtension(path)
     if markdownExt.contains(ext) { return .markdown }
     if htmlExt.contains(ext) { return .html }
+    if imageExts.contains(ext) { return .image }
     if diffExt.contains(ext) || codeExt.contains(ext) { return .code }
     return .text
 }

@@ -22,6 +22,13 @@ class FileEngineTest {
     }
 
     @Test
+    fun `images get the image engine, not the text reader`() {
+        for (path in listOf("imdb/taste-light.png", "a.JPG", "b.webp", "c.svg")) {
+            assertEquals(path, FileEngine.Image, fileEngineFor(path))
+        }
+    }
+
+    @Test
     fun `code opens as source, and still wraps`() {
         for (path in listOf("src/app/tg.ts", "build.gradle.kts", "main.py", "styles.css", "a.json")) {
             assertEquals(path, FileEngine.Code, fileEngineFor(path))

@@ -145,6 +145,11 @@ final class TranscriptTests: XCTestCase {
         XCTAssertEqual(fileEngineFor("a/b.swift"), .code)
         XCTAssertEqual(fileEngineFor("out/Taste.HTML"), .html)
         XCTAssertEqual(fileEngineFor("notes.txt"), .text)
+        XCTAssertEqual(fileEngineFor("imdb/taste-light.png"), .image)
+        XCTAssertEqual(
+            linkedImages("see [l](imdb/taste-light.png), ![d](./imdb/d.jpg), [a](file:///tmp/a.webp), [p](imdb/taste.html), [w](https://x.dev/a.png), [l](imdb/taste-light.png)"),
+            ["imdb/taste-light.png", "imdb/d.jpg", "/tmp/a.webp"]
+        )
         XCTAssertTrue(isImagePart(FilePart(path: "x.png", name: nil, mimeType: nil)))
         XCTAssertTrue(isImagePart(FilePart(path: "x", name: nil, mimeType: "image/jpeg")))
         XCTAssertFalse(isImagePart(FilePart(path: "x.pdf", name: nil, mimeType: "application/pdf")))

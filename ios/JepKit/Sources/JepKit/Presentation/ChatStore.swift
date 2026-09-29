@@ -65,6 +65,8 @@ public struct OpenFile: Equatable, Sendable {
     public var text: String?
     public var error: String?
     public var tooBig = false
+    /// an image is shown from its bytes, not read as text
+    public var image: Data?
 }
 
 public struct ChatState: Equatable, Sendable {
@@ -874,7 +876,7 @@ public final class ChatStore {
     // MARK: files
 
     /// a file part's bytes, fetched with the pairing token
-    public func fileBytes(_ path: String) async throws -> Data { try await repo.fileBytes(path: path) }
+    public func fileBytes(_ path: String) async throws -> Data { try await repo.fileBytes(path: path, sessionId: sessionId) }
 
     /// Open a file the transcript linked to; the daemon resolves and checks roots.
     @discardableResult
@@ -885,6 +887,15 @@ public final class ChatStore {
         update { $0.openFile = OpenFile(path: clean) }
         return Task {
             do {
+                if fileEngineFor(clean) == .image {
+                    let data = try await repo.fileBytes(path: clean, sessionId: sessionId)
+                    update { st in
+                        guard st.openFile?.path == clean else { return }
+                        st.openFile?.loading = false
+                        st.openFile?.image = data
+                    }
+                    return
+                }
                 let text = try await repo.readFile(sessionId: sessionId, path: clean)
                 update { st in
                     guard st.openFile?.path == clean else { return }

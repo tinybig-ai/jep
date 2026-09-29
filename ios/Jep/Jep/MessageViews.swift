@@ -103,7 +103,19 @@ struct PartView: View {
     var body: some View {
         switch part {
         case .text(let t):
-            MarkdownView(text: t)
+            VStack(alignment: .leading, spacing: 6) {
+                MarkdownView(text: t)
+                let images = linkedImages(t)
+                if !images.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(images, id: \.self) { p in
+                                FileView(file: FilePart(path: p, name: (p as NSString).lastPathComponent, mimeType: nil), chat: chat)
+                            }
+                        }
+                    }
+                }
+            }
         case .quote(let q):
             QuoteChip(text: q)
         case .reasoning(let t, let ms):
@@ -357,14 +369,16 @@ struct FileView: View {
             image = img
             return
         }
-        if let cached = ImageCache.shared.image(file.path) {
+        // a relative path names a file in this conversation's workspace
+        let key = file.path.hasPrefix("/") ? file.path : chat.sessionId + ":" + file.path
+        if let cached = ImageCache.shared.image(key) {
             image = cached
             return
         }
         do {
             let data = try await chat.fileBytes(file.path)
             if let img = UIImage(data: data) {
-                ImageCache.shared.put(file.path, img)
+                ImageCache.shared.put(key, img)
                 image = img
             } else {
                 failed = true

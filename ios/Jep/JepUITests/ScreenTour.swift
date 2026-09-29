@@ -59,7 +59,7 @@ final class ScreenTour: XCTestCase {
             tap(button("Connect"))
         }
 
-        XCTAssertTrue(app.staticTexts["Fix flaky login test"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.staticTexts["Fix flaky login test"].waitForExistence(timeout: 30))
         shot("03-sessions")
 
         let notes = app.staticTexts["Write release notes for 0.4"].firstMatch

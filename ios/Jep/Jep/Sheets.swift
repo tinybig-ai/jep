@@ -335,7 +335,7 @@ struct FileReaderView: View {
                         switch fileEngineFor(file.path) {
                         case .markdown:
                             MarkdownView(text: text).padding().frame(maxWidth: 700)
-                        case .code, .text, .html:
+                        case .code, .text, .html, .image:
                             Text(text).jepFont(13, design: .monospaced).textSelection(.enabled).padding().fixedSize()
                         }
                     }
