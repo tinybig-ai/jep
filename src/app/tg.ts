@@ -16,6 +16,7 @@ import { ChatStore } from "../clients/telegram/store.ts"
 import { ReminderStore } from "../clients/telegram/reminders.ts"
 import type { PairingAdmin } from "../core/pairing.ts"
 import type { PushNotifier } from "../core/push.ts"
+import { detach } from "../core/detach.ts"
 
 const FIXTURE = join(import.meta.dirname, "..", "..", "fixture")
 const DEFAULT_WORKSPACES = ["workspace-alpha", "workspace-beta"].map((n) => join(FIXTURE, n))
@@ -369,8 +370,17 @@ async function main() {
     clearTimeout(giveUp)
     process.exit(0)
   }
-  process.once("SIGTERM", () => void shutdown("SIGTERM"))
-  process.once("SIGINT", () => void shutdown("SIGINT"))
+  process.once("SIGTERM", () => detach("shutdown", shutdown("SIGTERM")))
+  process.once("SIGINT", () => detach("shutdown", shutdown("SIGINT")))
+
+  // The last line of defence behind detach() and the lint that enforces it:
+  // a rejection nobody handled (a plain .mjs, a dependency's own promise) is
+  // a bug to log, not a reason to take Telegram, the phone and every harness
+  // down with it. A synchronous throw still ends the process: state it left
+  // half-changed is not safe to keep running on, and launchd restarts us.
+  process.on("unhandledRejection", (err) => {
+    console.error(`[bug] unhandled rejection, daemon kept running: ${(err as Error)?.stack ?? err}`)
+  })
 
   // only offer harnesses that are actually installed here — a picker row that
   // always fails is worse than no row
@@ -514,7 +524,7 @@ async function main() {
   // be up: the machine has often just woken, which is what kills the long poll
   // an hour at a time. A blip here used to leave the slash-command menu stale
   // until the next restart, so retry a few times before giving up.
-  void (async () => {
+  detach("register bot commands", (async () => {
     for (let attempt = 1; attempt <= 5; attempt++) {
       try {
         await tg.setMyCommands(TelegramBot.commands)
@@ -525,7 +535,7 @@ async function main() {
         await sleep(Math.min(1_000 * 2 ** (attempt - 1), 30_000))
       }
     }
-  })()
+  })())
 
   let offset = 0
   let backoff = 1_000

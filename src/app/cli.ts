@@ -6,6 +6,7 @@ import { tmpdir } from "node:os"
 import { startOpenCodeServer } from "../harnesses/opencode.ts"
 import { runComplianceSuite, assertAdapterImplements } from "../core/compliance.ts"
 import type { HarnessAdapter } from "../core/ports.ts"
+import { detach } from "../core/detach.ts"
 
 const FIXTURE = join(import.meta.dirname, "..", "..", "fixture")
 const DEFAULT_WORKSPACES = ["workspace-alpha", "workspace-beta"].map((n) => join(FIXTURE, n))
@@ -55,7 +56,7 @@ async function startAll() {
     assertAdapterImplements(ad)
     ws.adapter = ad
   }
-  watchApprovals()
+  detach("approval watch", watchApprovals())
 }
 
 async function watchApprovals() {
@@ -164,7 +165,7 @@ async function handle(cmd: string, arg: string) {
       const controller = new AbortController()
       running = { controller, sessionID }
       say(`  ${sessionLabel(activeWs)} › ${arg}`)
-      void runTurn(ad, sessionID, arg, controller)
+      detach("turn", runTurn(ad, sessionID, arg, controller))
       break
     }
     case "log": {
@@ -297,7 +298,7 @@ process.on("SIGINT", () => {
 })
 
 process.on("exit", () => {
-  for (const ws of workspaces) void ws.adapter?.close()
+  for (const ws of workspaces) detach("close", ws.adapter?.close())
 })
 
 async function main() {

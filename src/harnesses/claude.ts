@@ -9,6 +9,7 @@ import type { AgentRef, HarnessAdapter, HarnessSettingSpec, ModelRef, ModelCaps 
 import type { AskRequest, DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionHold, SessionSummary, SkillDirs } from "../core/types.ts"
 import { resolveAgent } from "../core/agents.ts"
 import { quoteBlock, readQuoteBlock, withAttachments } from "../core/transcript.ts"
+import { detach } from "../core/detach.ts"
 
 // claude's `--agent` takes a subagent type jep can't enumerate reliably, so it
 // offers no switch here. A requested id (opencode's "build", say, left over from
@@ -504,7 +505,7 @@ export class ClaudeAdapter implements HarnessAdapter {
       child.stdin?.end(`${JSON.stringify({ type: "user", message: { role: "user", content } })}\n`)
     }
     this.#running.set(native, child)
-    if (!pending) void markRemoteTurn(this.#turnsDir, native)
+    if (!pending) detach("phone-turn stamp", markRemoteTurn(this.#turnsDir, native))
 
     let realID = pending ? "" : native
     const parts: Part[] = []
@@ -681,7 +682,7 @@ export class ClaudeAdapter implements HarnessAdapter {
       if (realID) this.#running.delete(realID)
       // stamped again at the end: the desktop window must count everything
       // this turn wrote, not only that it began
-      if (realID || !pending) void markRemoteTurn(this.#turnsDir, realID || native)
+      if (realID || !pending) detach("phone-turn stamp", markRemoteTurn(this.#turnsDir, realID || native))
       // the turn is over, so any card it raised is unanswerable now — say so
       // rather than leaving it standing on whatever client is showing it
       this.#standDownAsks(realID || native, "the turn ended before this was answered")
@@ -735,7 +736,7 @@ export class ClaudeAdapter implements HarnessAdapter {
       this.#running.delete(native)
       this.#metaCache.clear()
       // it rewrote the conversation from here: a desktop window must catch up
-      void markRemoteTurn(this.#turnsDir, native)
+      detach("phone-turn stamp", markRemoteTurn(this.#turnsDir, native))
     }
   }
 

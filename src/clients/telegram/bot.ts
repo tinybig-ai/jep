@@ -46,6 +46,7 @@ import type { Pairing } from "./pair.ts"
 import type { ChatStore, HeldPrompt, VerbositySettings, DetailMode, VerbosityLayout, PendingPrompt } from "./store.ts"
 import type { ReminderRecord, ReminderStore } from "./reminders.ts"
 import { matchModel } from "./model-match.ts"
+import { detach } from "../../core/detach.ts"
 
 interface Ws {
   name: string
@@ -1076,9 +1077,9 @@ export class TelegramBot {
     })
     this.#turns.set(chatID, next)
     // drop the entry once it's the last one, so idle chats don't accumulate
-    void next.then(() => {
+    detach("turn queue cleanup", next.then(() => {
       if (this.#turns.get(chatID) === next) this.#turns.delete(chatID)
-    })
+    }))
     return item
   }
 
@@ -2371,7 +2372,7 @@ export class TelegramBot {
     // alive on the expiry beat, and the frame never outlives the flood guard.
     const keepAlive = setInterval(() => {
       if (finished || draftMode === "none") return
-      void renderLive()
+      detach("live render", renderLive())
     }, 1_000)
 
     const clearPlaceholder = async (body: string) => {

@@ -54,11 +54,14 @@
     "typecheck": "tsc",
     "test": "node --test \"test/*.test.ts\"",
     "test:e2e": "JEP_E2E=1 node --test --test-timeout=300000 test/e2e.test.ts",
-    "check": "npm run typecheck && npm test"
+    "lint": "eslint src",
+    "check": "npm run typecheck && npm run lint && npm test"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
-    "typescript": "^5.9.0"
+    "eslint": "^10.11.0",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.71.0"
   },
   "dependencies": {
     "undici": "^8.10.2"

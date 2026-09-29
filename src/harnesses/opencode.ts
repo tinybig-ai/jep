@@ -10,6 +10,7 @@ import { TurnAbortedError } from "../core/types.ts"
 import { resolveAgent } from "../core/agents.ts"
 import { quoteBlock, readQuoteBlock } from "../core/transcript.ts"
 import { parseOpencodeLogError } from "./opencode-log.ts"
+import { detach } from "../core/detach.ts"
 const OPENCODE_BIN = process.env.OPENCODE_BIN ?? "opencode"
 const MODEL_REF = process.env.JEP_MODEL ?? "localfree-models-proxy/auto"
 const DEFAULT_TIMEOUT_MS = 180_000
@@ -615,7 +616,8 @@ export class OpenCodeAdapter implements HarnessAdapter {
     const controller = new AbortController()
     const onAbort = () => {
       controller.abort()
-      void this.abort(sessionID)
+      // opencode may be the thing that hung: this abort can time out too
+      detach(`abort ${sessionID}`, this.abort(sessionID))
     }
     opts?.signal?.addEventListener("abort", onAbort, { once: true })
     // timeoutMs: 0 disables the absolute deadline. A real agent turn can run

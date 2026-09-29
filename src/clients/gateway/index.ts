@@ -22,6 +22,7 @@ import { describeError } from "../../core/errors.ts"
 import { usageOf } from "../../core/usage.ts"
 import { attachedPaths, stripInjectedContext, transcriptText } from "../../core/transcript.ts"
 import { newPairCode } from "../telegram/pair.ts"
+import { detach } from "../../core/detach.ts"
 
 export interface GatewayDeps {
   // called lazily and repeatedly: the Telegram bot can spawn more workspace
@@ -706,7 +707,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
             if (st?.running && st.waiting[0]?.steer) st.signal?.abort()
           }
           broadcast(evt)
-          void wake(evt)
+          detach("wake a waiting turn", wake(evt))
         }
       } catch {
         /* feed died — resubscribe below */
@@ -721,7 +722,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       if (pumps.has(adapter)) continue
       const signal = new AbortController()
       pumps.set(adapter, signal)
-      void pump(adapter, signal.signal)
+      detach("event pump", pump(adapter, signal.signal))
     }
   }
   ensurePumps()
@@ -818,7 +819,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       if (pe) {
         console.error(`[watchdog] provider error (gateway session ${id}): ${describeError(pe)}`)
         endTurn(id, st, { kind: "provider", error: pe }, "watchdog-provider-error")
-        void adapter?.abort(id).catch(() => {})
+        detach(`abort ${id}`, adapter?.abort(id))
         continue
       }
       const v = judgeTurn({
@@ -834,7 +835,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         `[watchdog] turn stalled ${Math.round(v.elapsedMs / 1000)}s (ceiling ${Math.round(v.ceilingMs / 1000)}s, tools=${st.runningTools.size}${v.wedgedMs !== undefined ? `, ${v.tool} wedged ${Math.round(v.wedgedMs / 60_000)}m` : ""}, gateway session ${id})`,
       )
       endTurn(id, st, { kind: "stall", elapsedMs: v.elapsedMs, ...(v.tool ? { tool: v.tool } : {}) }, "watchdog-stall")
-      void adapter?.abort(id).catch(() => {})
+      detach(`abort ${id}`, adapter?.abort(id))
     }
   }, liveness.tickMs)
   watchdogTimer.unref()
@@ -850,7 +851,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     const adapter = await ensureListed(id)
     if (!adapter) {
       next.resolve({ status: 404, error: "no such session" })
-      void runNext(id)
+      detach(`turn queue ${id}`, runNext(id))
       return
     }
     st.running = next
@@ -887,7 +888,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       st.idleGrace = undefined
       // the turn wrote to the record; a snapshot from during it must not outlive it
       msgCache.delete(id)
-      void runNext(id)
+      detach(`turn queue ${id}`, runNext(id))
     }
   }
 
@@ -948,7 +949,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     res.end(JSON.stringify(body))
   }
 
-  const server = createServer(async (req, res) => {
+  const handle = async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? "/", "http://local")
     const path = url.pathname
     const ip = req.socket.remoteAddress ?? "?"
@@ -1728,7 +1729,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           // queue normally: the pump steers it in at the next tool boundary
           st.waiting.push(pending)
         }
-        void runNext(id)
+        detach(`turn queue ${id}`, runNext(id))
         const result = await done
         if (result.message) return json(res, 200, { message: result.message })
         if (result.aborted) return json(res, 200, { aborted: true })
@@ -1777,7 +1778,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       if (!res.headersSent) json(res, 500, { error: "internal" })
       else res.end()
     }
-  })
+  }
+  // a request that throws past its own handling is a log line, not a crash
+  const server = createServer((req, res) => detach(`gateway ${req.method ?? "?"} ${req.url ?? ""}`, handle(req, res)))
 
   await new Promise<void>((resolve) => server.listen(deps.port, deps.host ?? "0.0.0.0", resolve))
   const bound = (server.address() as { port: number }).port
