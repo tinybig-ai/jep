@@ -328,12 +328,6 @@ struct FileReaderView: View {
                     ProgressView()
                 } else if let e = file.error {
                     ContentUnavailableView(e, systemImage: "doc.questionmark")
-                } else if let data = file.image, let img = UIImage(data: data) {
-                    ScrollView([.vertical, .horizontal]) {
-                        Image(uiImage: img).resizable().scaledToFit().padding()
-                    }
-                } else if file.image != nil {
-                    ContentUnavailableView("couldn't show this image", systemImage: "photo")
                 } else if let text = file.text, html, !source {
                     HTMLView(html: text).ignoresSafeArea(edges: .bottom)
                 } else if let text = file.text {

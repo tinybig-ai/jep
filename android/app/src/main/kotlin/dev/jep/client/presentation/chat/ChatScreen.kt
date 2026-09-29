@@ -1053,7 +1053,10 @@ fun ChatScreen(
         }
         Composer(vm, replyTo) { replyTo = null }
     }
-    state.openFile?.let { open -> FileSheet(open, onClose = { vm.closeFile() }) }
+    state.openFile?.let { open ->
+        if (open.url != null) ImageViewer(open.url, open.path) { vm.closeFile() }
+        else FileSheet(open, onClose = { vm.closeFile() })
+    }
     if (termVisible) TerminalOverlay(vm, onClose = { termVisible = false })
     if (subsOpen) SubagentsDialog(vm, onOpen = { onOpenSession(it); subsOpen = false }, onDismiss = { subsOpen = false })
     }
@@ -1529,12 +1532,6 @@ private fun FileSheet(open: ChatViewModel.OpenFile, onClose: () -> Unit) {
                         open.error,
                         fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.error,
-                    )
-                    open.url != null -> AsyncImage(
-                        model = open.url,
-                        contentDescription = open.path,
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier.fillMaxSize(),
                     )
                     open.tooBig -> Text(
                         "too large to read here — ${open.text?.length ?: 0} characters",
@@ -2254,6 +2251,16 @@ internal fun localFilePath(uri: String): String? {
 // touched, and only when it is relative, so a quoted title after it survives.
 private val LINK_TARGET = Regex("""(!?\[[^\]]*\])\(([^)\s]+)((?:\s+"[^"]*")?)\)""")
 
+/** workspace or file:// images a message links to, for thumbnails under it */
+internal fun linkedImages(markdown: String): List<String> =
+    LINK_TARGET.findAll(markdown).mapNotNull { m ->
+        val raw = m.groupValues[2]
+        val path = localFilePath(raw)
+            ?: raw.takeIf { linkDestination(it)?.startsWith("jep://file") == true }
+                ?.trim()?.substringBefore('#')?.substringBefore('?')?.removePrefix("./")
+        path?.takeIf { fileEngineFor(it) == FileEngine.Image }
+    }.distinct().toList()
+
 internal fun withLocalLinks(markdown: String): String =
     LINK_TARGET.replace(markdown) { m ->
         val dest = linkDestination(m.groupValues[2]) ?: return@replace m.value
@@ -2451,21 +2458,16 @@ internal fun fmtSpan(ms: Long): String {
 @Composable
 private fun PartView(part: ChatPart, streaming: Boolean, onOpenLink: (String) -> Unit = {}) {
     when (part) {
-        is ChatPart.Text -> Markdown(
-            withLocalLinks(part.text + if (streaming) " ▍" else ""),
-            // A link has to look like one before anyone taps it. 0.43 has no
-            // colour slot for links anywhere — markdownColor covers text, code,
-            // tables and dividers — so the style comes from the typography's
-            // textLink, and the app's own accent is what it should be.
-            typography = markdownTypography(
-                textLink = TextLinkStyles(
-                    style = SpanStyle(
-                        color = MaterialTheme.colorScheme.primary,
-                        textDecoration = TextDecoration.Underline,
-                    ),
-                ),
-            ),
-        )
+        is ChatPart.Text -> Column {
+            TextPart(part, streaming)
+            val images = remember(part.text) { linkedImages(part.text) }
+            if (images.isNotEmpty()) Row(
+                Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                for (path in images) ImageThumb(ChatPart.File(path, path.substringAfterLast('/'), null))
+            }
+        }
         is ChatPart.Reasoning -> if (part.text.isNotBlank()) ReasoningRow(part, active = streaming)
         is ChatPart.Tool -> ToolRow(part)
         is ChatPart.File -> FileRow(part)
@@ -2474,6 +2476,25 @@ private fun PartView(part: ChatPart, streaming: Boolean, onOpenLink: (String) ->
         ChatPart.AutoContinue -> Unit // the anchor row renders the quiet note, not a bubble
         is ChatPart.Unsupported -> Unit
     }
+}
+
+@Composable
+private fun TextPart(part: ChatPart.Text, streaming: Boolean) {
+    Markdown(
+        withLocalLinks(part.text + if (streaming) " ▍" else ""),
+        // A link has to look like one before anyone taps it. 0.43 has no
+        // colour slot for links anywhere — markdownColor covers text, code,
+        // tables and dividers — so the style comes from the typography's
+        // textLink, and the app's own accent is what it should be.
+        typography = markdownTypography(
+            textLink = TextLinkStyles(
+                style = SpanStyle(
+                    color = MaterialTheme.colorScheme.primary,
+                    textDecoration = TextDecoration.Underline,
+                ),
+            ),
+        ),
+    )
 }
 
 // How a file part becomes a fetchable URL: the gateway's authenticated /file
@@ -2508,15 +2529,18 @@ private fun ImageThumb(part: ChatPart.File) {
             .clip(RoundedCornerShape(Radius.control))
             .clickable(enabled = url.isNotBlank()) { open = true },
     )
-    if (open) {
-        Dialog(onDismissRequest = { open = false }) {
-            AsyncImage(
-                model = url,
-                contentDescription = part.name ?: "image",
-                contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxWidth().clickable { open = false },
-            )
-        }
+    if (open) ImageViewer(url, part.name ?: "image") { open = false }
+}
+
+@Composable
+private fun ImageViewer(url: String, name: String, onClose: () -> Unit) {
+    Dialog(onDismissRequest = onClose) {
+        AsyncImage(
+            model = url,
+            contentDescription = name,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.fillMaxWidth().clickable(onClick = onClose),
+        )
     }
 }
 

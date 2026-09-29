@@ -837,7 +837,7 @@ class ChatViewModel(
     }
 
     /** a fetchable URL for a file part's bytes (the gateway's /file route) */
-    fun fileUrl(path: String): String = repo.fileUrl(path)
+    fun fileUrl(path: String): String = repo.fileUrl(path, sessionId)
 
     fun stop() {
         // Stop has to take effect on the screen at once. The turn is over the

@@ -15,6 +15,17 @@ import org.junit.Test
 class LinkDestinationTest {
 
     @Test
+    fun `image links in a message become thumbnails, other links do not`() {
+        val md = "see [light](imdb/taste-light.png), ![dark](./imdb/taste-dark.jpg) and " +
+            "[abs](file:///tmp/a.webp), not [page](imdb/taste.html) or [web](https://x.dev/a.png); " +
+            "again [light](imdb/taste-light.png)"
+        assertEquals(
+            listOf("imdb/taste-light.png", "imdb/taste-dark.jpg", "/tmp/a.webp"),
+            linkedImages(md),
+        )
+    }
+
+    @Test
     fun `absolute links are left for the platform`() {
         for (url in listOf(
             "https://example.com/x",

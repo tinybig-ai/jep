@@ -876,7 +876,7 @@ public final class ChatStore {
     // MARK: files
 
     /// a file part's bytes, fetched with the pairing token
-    public func fileBytes(_ path: String) async throws -> Data { try await repo.fileBytes(path: path) }
+    public func fileBytes(_ path: String) async throws -> Data { try await repo.fileBytes(path: path, sessionId: sessionId) }
 
     /// Open a file the transcript linked to; the daemon resolves and checks roots.
     @discardableResult
