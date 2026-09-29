@@ -1488,7 +1488,13 @@ private fun FileSheet(open: ChatViewModel.OpenFile, onClose: () -> Unit) {
     // with no content minimizes itself — which is what you saw.
     val rendered = rememberMarkdownState(open.text.orEmpty(), retainState = true)
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(onDismissRequest = onClose, sheetState = sheetState) {
+    // a WebView can't hand drags to the sheet, so the sheet would take them all
+    // and the page would never scroll; it still closes from the scrim or back
+    ModalBottomSheet(
+        onDismissRequest = onClose,
+        sheetState = sheetState,
+        sheetGesturesEnabled = !(render && engine == FileEngine.Html),
+    ) {
         Column(
             Modifier.fillMaxWidth().padding(horizontal = 18.dp).padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
