@@ -50,7 +50,7 @@ struct MessageRow: View {
                     case .file(let f):
                         FileView(file: f, chat: chat)
                     case .text(let t):
-                        MarkdownView(text: t)
+                        MarkdownView(text: t, flat: true)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 10)
                             .background(Color.accentColor.opacity(0.18), in: RoundedRectangle(cornerRadius: 18, style: .continuous))

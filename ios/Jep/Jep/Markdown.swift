@@ -97,6 +97,8 @@ func inline(_ s: String) -> AttributedString {
 struct MarkdownView: View {
     let text: String
     var size: CGFloat = 16
+    /// every block at `size`: headings only get bolder
+    var flat = false
 
     var body: some View {
         let blocks = parseMarkdown(withLocalLinks(text))
@@ -114,7 +116,7 @@ struct MarkdownView: View {
         case .paragraph(let s):
             Text(inline(s)).jepFont(size)
         case .heading(let level, let s):
-            Text(inline(s)).jepFont(size + CGFloat(max(0, 4 - level)) * 2 + 1, .semibold)
+            Text(inline(s)).jepFont(flat ? size : size + CGFloat(max(0, 4 - level)) * 2 + 1, .semibold)
         case .bullet(let s, let depth, let marker):
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(marker).jepFont(size).foregroundStyle(.secondary)
@@ -127,9 +129,9 @@ struct MarkdownView: View {
                 Text(inline(s)).jepFont(size).foregroundStyle(.secondary)
             }
         case .code(let s, let lang):
-            CodeBlock(code: s, lang: lang)
+            CodeBlock(code: s, lang: lang, size: flat ? size : 13)
         case .table(let rows):
-            TableBlock(rows: rows)
+            TableBlock(rows: rows, size: flat ? size : 14)
         case .rule:
             Divider()
         }
@@ -139,6 +141,7 @@ struct MarkdownView: View {
 struct CodeBlock: View {
     let code: String
     var lang: String?
+    var size: CGFloat = 13
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -153,7 +156,7 @@ struct CodeBlock: View {
                 .accessibilityLabel("Copy code")
             }
             ScrollView(.horizontal, showsIndicators: false) {
-                Text(code).jepFont(13, design: .monospaced).fixedSize(horizontal: true, vertical: false)
+                Text(code).jepFont(size, design: .monospaced).fixedSize(horizontal: true, vertical: false)
             }
         }
         .padding(10)
@@ -163,6 +166,7 @@ struct CodeBlock: View {
 
 struct TableBlock: View {
     let rows: [String]
+    var size: CGFloat = 14
 
     var body: some View {
         let cells = rows
@@ -175,7 +179,7 @@ struct TableBlock: View {
                 ForEach(Array(cells.enumerated()), id: \.offset) { i, row in
                     GridRow {
                         ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
-                            Text(inline(cell)).jepFont(14, i == 0 ? .semibold : .regular)
+                            Text(inline(cell)).jepFont(size, i == 0 ? .semibold : .regular)
                         }
                     }
                     if i == 0 { Divider() }
