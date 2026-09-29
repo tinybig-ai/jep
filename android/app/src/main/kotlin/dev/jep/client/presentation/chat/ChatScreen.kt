@@ -171,6 +171,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.SpanStyle
 import dev.jep.client.presentation.theme.JepMono
@@ -197,6 +199,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import androidx.compose.ui.unit.sp
 import com.mikepenz.markdown.m3.Markdown
+import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
 import com.mikepenz.markdown.model.rememberMarkdownState
 import kotlinx.coroutines.flow.first
@@ -2101,11 +2104,7 @@ private fun UserBubble(message: ChatMessage, onRetry: () -> Unit = {}) {
                 message.parts.forEach { part ->
                     when (part) {
                         is ChatPart.Quote -> QuoteBlock(part.text, ink, Modifier.padding(bottom = 6.dp))
-                        is ChatPart.Text -> Text(
-                            part.text,
-                            color = ink,
-                            fontSize = 15.sp,
-                        )
+                        is ChatPart.Text -> UserText(part.text, ink)
                         is ChatPart.File -> if (isImagePart(part)) {
                             ImageThumb(part)
                         } else {
@@ -2493,6 +2492,24 @@ private fun TextPart(part: ChatPart.Text, streaming: Boolean) {
                     textDecoration = TextDecoration.Underline,
                 ),
             ),
+        ),
+    )
+}
+
+/** What the person typed, as Markdown, but all at one size: headings are bold, not bigger. */
+@Composable
+private fun UserText(text: String, ink: Color) {
+    val body = TextStyle(color = ink, fontSize = 15.sp)
+    val mono = body.copy(fontFamily = JepMono)
+    val bold = body.copy(fontWeight = FontWeight.SemiBold)
+    Markdown(
+        withLocalLinks(text),
+        colors = markdownColor(text = ink),
+        typography = markdownTypography(
+            h1 = bold, h2 = bold, h3 = bold, h4 = bold, h5 = bold, h6 = bold,
+            text = body, paragraph = body, quote = body, ordered = body, bullet = body, list = body,
+            table = body, code = mono, inlineCode = mono,
+            textLink = TextLinkStyles(style = SpanStyle(color = ink, textDecoration = TextDecoration.Underline)),
         ),
     )
 }
