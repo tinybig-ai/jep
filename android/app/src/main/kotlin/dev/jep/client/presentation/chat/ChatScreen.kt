@@ -4,7 +4,6 @@ import android.content.Context
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.platform.rememberNestedScrollInteropConnection
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.graphics.graphicsLayer
@@ -1485,7 +1484,13 @@ private fun FileSheet(open: ChatViewModel.OpenFile, onClose: () -> Unit) {
     // with no content minimizes itself — which is what you saw.
     val rendered = rememberMarkdownState(open.text.orEmpty(), retainState = true)
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(onDismissRequest = onClose, sheetState = sheetState) {
+    // a WebView can't hand drags to the sheet, so the sheet would take them all
+    // and the page would never scroll; it still closes from the scrim or back
+    ModalBottomSheet(
+        onDismissRequest = onClose,
+        sheetState = sheetState,
+        sheetGesturesEnabled = !(render && engine == FileEngine.Html),
+    ) {
         Column(
             Modifier.fillMaxWidth().padding(horizontal = 18.dp).padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -1566,13 +1571,10 @@ private fun FileSheet(open: ChatViewModel.OpenFile, onClose: () -> Unit) {
 @Composable
 private fun HtmlView(html: String) {
     val uris = LocalUriHandler.current
-    // the sheet only sees drags a child passes up through nested scroll, which a
-    // View doesn't do on its own; without this the sheet takes every drag
     AndroidView(
-        modifier = Modifier.fillMaxSize().nestedScroll(rememberNestedScrollInteropConnection()),
+        modifier = Modifier.fillMaxSize(),
         factory = { ctx ->
             WebView(ctx).apply {
-                isNestedScrollingEnabled = true
                 settings.javaScriptEnabled = true
                 settings.allowFileAccess = false
                 settings.allowContentAccess = false
