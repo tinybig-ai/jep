@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.rememberNestedScrollInteropConnection
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.graphics.graphicsLayer
@@ -1565,10 +1566,13 @@ private fun FileSheet(open: ChatViewModel.OpenFile, onClose: () -> Unit) {
 @Composable
 private fun HtmlView(html: String) {
     val uris = LocalUriHandler.current
+    // the sheet only sees drags a child passes up through nested scroll, which a
+    // View doesn't do on its own; without this the sheet takes every drag
     AndroidView(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().nestedScroll(rememberNestedScrollInteropConnection()),
         factory = { ctx ->
             WebView(ctx).apply {
+                isNestedScrollingEnabled = true
                 settings.javaScriptEnabled = true
                 settings.allowFileAccess = false
                 settings.allowContentAccess = false
