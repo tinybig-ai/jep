@@ -21,3 +21,6 @@ android/local.properties
 android/keystore.properties
 *.jks
 *.keystore
+
+# SwiftPM build state
+macos/JepBar/.build/

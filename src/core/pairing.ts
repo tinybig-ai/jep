@@ -8,6 +8,8 @@ export interface PairingStatus {
   code?: string
   owner?: string | null
   devices: number
+  /** the port a client listens on, when it has one */
+  port?: number
   hint?: string
 }
 
