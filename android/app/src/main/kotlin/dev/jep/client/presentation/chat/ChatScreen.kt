@@ -1437,7 +1437,7 @@ private val RowVInset = 3.dp
 /** How the reader shows a file. The store is small and pure on purpose — a path
  *  in, an engine and two defaults out — so what the reader does with any file is
  *  testable without a screen, and adding a format is one line here. */
-internal enum class FileEngine { Markdown, Html, Code, Text }
+internal enum class FileEngine { Markdown, Html, Image, Code, Text }
 
 private val MARKDOWN_EXT = setOf("md", "markdown", "mdx")
 private val HTML_EXT = setOf("html", "htm")
@@ -1454,6 +1454,7 @@ internal fun fileEngineFor(path: String): FileEngine {
     return when (ext) {
         in MARKDOWN_EXT -> FileEngine.Markdown
         in HTML_EXT -> FileEngine.Html
+        in IMAGE_EXTS -> FileEngine.Image
         in DIFF_EXT, in CODE_EXT -> FileEngine.Code
         // anything unrecognised is prose: readable beats clever, and a file with
         // no extension at all is far more often notes than binary
@@ -1528,6 +1529,12 @@ private fun FileSheet(open: ChatViewModel.OpenFile, onClose: () -> Unit) {
                         open.error,
                         fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.error,
+                    )
+                    open.url != null -> AsyncImage(
+                        model = open.url,
+                        contentDescription = open.path,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize(),
                     )
                     open.tooBig -> Text(
                         "too large to read here — ${open.text?.length ?: 0} characters",

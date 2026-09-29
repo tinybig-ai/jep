@@ -386,7 +386,7 @@ public func withLocalLinks(_ markdown: String) -> String {
     return out
 }
 
-public enum FileEngine: Sendable { case markdown, html, code, text }
+public enum FileEngine: Sendable { case markdown, html, image, code, text }
 
 private let markdownExt: Set = ["md", "markdown", "mdx"]
 private let htmlExt: Set = ["html", "htm"]
@@ -407,6 +407,7 @@ public func fileEngineFor(_ path: String) -> FileEngine {
     let ext = fileExtension(path)
     if markdownExt.contains(ext) { return .markdown }
     if htmlExt.contains(ext) { return .html }
+    if imageExts.contains(ext) { return .image }
     if diffExt.contains(ext) || codeExt.contains(ext) { return .code }
     return .text
 }

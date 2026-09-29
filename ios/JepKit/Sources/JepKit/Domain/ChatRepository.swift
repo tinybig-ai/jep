@@ -121,7 +121,8 @@ public protocol ChatRepository: AnyObject, Sendable {
     func stop(sessionId: String) async throws -> Bool
     func compact(sessionId: String) async throws -> Bool
     /// a file part's bytes (images, attachments), fetched with the pairing token
-    func fileBytes(path: String) async throws -> Data
+    /// a relative path is in `sessionId`'s workspace
+    func fileBytes(path: String, sessionId: String?) async throws -> Data
     func respond(askId: String, optionId: String) async throws -> Bool
     func reject(askId: String) async throws -> Bool
     func readFile(sessionId: String, path: String) async throws -> String
@@ -137,6 +138,10 @@ public protocol ChatRepository: AnyObject, Sendable {
 }
 
 public extension ChatRepository {
+    func fileBytes(path: String) async throws -> Data {
+        try await fileBytes(path: path, sessionId: nil)
+    }
+
     func history(sessionId: String, limit: Int = 0) async throws -> HistoryBatch {
         try await history(sessionId: sessionId, limit: limit, before: 0, have: 0)
     }

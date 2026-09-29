@@ -146,7 +146,7 @@ class FakeChatRepository(
         if (compactAnswer) return true
         throw dev.jep.client.data.GatewayChatRepository.ApiFailure(409, "the harness refused to compact")
     }
-    override fun fileUrl(path: String) = "http://test/file"
+    override fun fileUrl(path: String, sessionId: String?) = "http://test/file"
     override suspend fun respond(askId: String, optionId: String) = true
     override suspend fun reject(askId: String) = true
     override suspend fun readFile(sessionId: String, path: String) = "# $path\n\nfake contents for tests"

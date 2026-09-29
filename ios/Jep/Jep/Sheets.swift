@@ -328,6 +328,12 @@ struct FileReaderView: View {
                     ProgressView()
                 } else if let e = file.error {
                     ContentUnavailableView(e, systemImage: "doc.questionmark")
+                } else if let data = file.image, let img = UIImage(data: data) {
+                    ScrollView([.vertical, .horizontal]) {
+                        Image(uiImage: img).resizable().scaledToFit().padding()
+                    }
+                } else if file.image != nil {
+                    ContentUnavailableView("couldn't show this image", systemImage: "photo")
                 } else if let text = file.text, html, !source {
                     HTMLView(html: text).ignoresSafeArea(edges: .bottom)
                 } else if let text = file.text {
@@ -335,7 +341,7 @@ struct FileReaderView: View {
                         switch fileEngineFor(file.path) {
                         case .markdown:
                             MarkdownView(text: text).padding().frame(maxWidth: 700)
-                        case .code, .text, .html:
+                        case .code, .text, .html, .image:
                             Text(text).jepFont(13, design: .monospaced).textSelection(.enabled).padding().fixedSize()
                         }
                     }

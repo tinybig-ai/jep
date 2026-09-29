@@ -1409,6 +1409,11 @@ test("the served roots hold workspaces and uploads, never jep's own stores or a 
     assert.equal((await file(join(dataHome, "opencode", "auth.json"))).status, 403)
     assert.equal((await file(join(dataHome, "gateway-tokens.json"))).status, 403)
     assert.equal((await file(join(ws, "link.txt"))).status, 403)
+    // a relative path is in the named session's workspace, and still roots-checked
+    const rel = async (p: string) =>
+      (await fetch(`${base}/file?p=${Buffer.from(p).toString("base64url")}&id=s1`, { headers })).text()
+    assert.equal(await rel("notes.md"), "in the workspace")
+    assert.equal((await fetch(`${base}/file?p=${Buffer.from("link.txt").toString("base64url")}&id=s1`, { headers })).status, 403)
     assert.equal(await read("link.txt"), 403)
     assert.equal(await read(join(dataHome, "gateway-tokens.json")), 403)
     // the server is still healthy after a served file (no second response)

@@ -298,19 +298,21 @@ public final class GatewayChatRepository: ChatRepository, @unchecked Sendable {
         throw ApiFailure(status: status, message: reason)
     }
 
-    public func fileBytes(path: String) async throws -> Data {
-        guard let req = fileRequest(path: path) else { throw ApiFailure(status: 0, message: "bad file path") }
+    public func fileBytes(path: String, sessionId: String?) async throws -> Data {
+        guard let req = fileRequest(path: path, sessionId: sessionId) else { throw ApiFailure(status: 0, message: "bad file path") }
         let (status, data) = try await http.send(req)
         guard (200..<300).contains(status) else { throw failure(status, data) }
         return data
     }
 
-    func fileRequest(path: String) -> URLRequest? {
+    func fileRequest(path: String, sessionId: String? = nil) -> URLRequest? {
         let enc = Data(path.utf8).base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
-        guard let url = URL(string: "\(base)/file?p=\(enc)") else { return nil }
+        var parts = URLComponents(string: "\(base)/file")
+        parts?.queryItems = [URLQueryItem(name: "p", value: enc)] + (sessionId.map { [URLQueryItem(name: "id", value: $0)] } ?? [])
+        guard let url = parts?.url else { return nil }
         var req = URLRequest(url: url)
         // the token rides a header, never the URL, so it can't end up in a log
         if let t = token() { req.setValue("Bearer \(t)", forHTTPHeaderField: "authorization") }

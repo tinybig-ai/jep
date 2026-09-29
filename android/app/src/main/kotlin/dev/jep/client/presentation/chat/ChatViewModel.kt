@@ -112,6 +112,8 @@ class ChatViewModel(
         val text: String? = null,
         val error: String? = null,
         val tooBig: Boolean = false,
+        /** an image is shown from its bytes, not read as text */
+        val url: String? = null,
     )
 
     data class UiState(
@@ -1025,6 +1027,10 @@ class ChatViewModel(
     fun openFile(path: String) {
         val clean = path.trim().removePrefix("./")
         if (clean.isEmpty() || clean.contains("://")) return
+        if (fileEngineFor(clean) == FileEngine.Image) {
+            _state.update { it.copy(openFile = OpenFile(clean, loading = false, url = repo.fileUrl(clean, sessionId))) }
+            return
+        }
         _state.update { it.copy(openFile = OpenFile(clean)) }
         viewModelScope.launch {
             runCatching { repo.readFile(sessionId, clean) }

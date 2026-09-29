@@ -997,12 +997,15 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       // bytes for a file part, so the phone can render an image inline. The
       // phone builds this from the part's filePath; only uploaded files and
       // served workspaces are readable (symlinks resolved), so this is not a
-      // general file reader.
+      // general file reader. A relative path, as a transcript link gives, is in
+      // the workspace of the session named by `id`, as with /read.
       if (path === "/file" && req.method === "GET") {
         const encoded = url.searchParams.get("p") ?? ""
         const decoded = encoded ? Buffer.from(encoded, "base64url").toString("utf8") : ""
         if (!decoded) return json(res, 400, { error: "p required" })
-        const abs = resolve(decoded)
+        const sid = url.searchParams.get("id")
+        const owner = !isAbsolute(decoded) && sid ? await ensureListed(sid) : null
+        const abs = owner ? resolve(owner.workspace, decoded) : resolve(decoded)
         if (!within(abs, rootsFor())) return json(res, 403, { error: OUTSIDE })
         try {
           const real = await servedPath(abs)
