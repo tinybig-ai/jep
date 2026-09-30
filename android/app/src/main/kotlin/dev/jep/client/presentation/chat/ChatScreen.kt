@@ -976,7 +976,13 @@ fun ChatScreen(
                 }
                 // sent, and the harness has not written a word back yet
                 if (busy && !askPending && rows.firstOrNull { it is Row.Msg }?.let { (it as Row.Msg).m.role } != Role.ASSISTANT) {
-                    item(key = "awaiting-reply") { RespondingMark() }
+                    item(key = "awaiting-reply") {
+                        // a row of its own, so it takes the inset a message row
+                        // gets from MessageRow; bare, it sat against the edge
+                        Box(Modifier.padding(horizontal = RowInset, vertical = RowVInset).testTag("awaiting-reply")) {
+                            RespondingMark()
+                        }
+                    }
                 }
                 // Keep the visible queue in send order, after the newest message.
                 items(queuedDisplay.size, key = { "queued-${queuedDisplay[it].id}" }) { i ->

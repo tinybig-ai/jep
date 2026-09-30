@@ -607,6 +607,24 @@ class ChatScreenTest {
     }
 
     @Test
+    fun the_spinner_before_the_first_word_lines_up_with_the_messages() {
+        val repo = FakeChatRepository(
+            messages = listOf(ChatMessage("a1", Role.ASSISTANT, 1, listOf(ChatPart.Text("an earlier answer")))),
+        )
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        repo.promptGate = gate
+        val vm = ChatViewModel(repo, "s1", "T")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(5_000) { rule.onAllNodesWithText("an earlier answer").fetchSemanticsNodes().isNotEmpty() }
+        rule.runOnUiThread { vm.send("go") }
+        rule.waitUntil(5_000) { rule.onAllNodesWithTag("awaiting-reply").fetchSemanticsNodes().isNotEmpty() }
+        val spinner = rule.onNodeWithTag("awaiting-reply").fetchSemanticsNode().boundsInRoot.left
+        val message = rule.onNodeWithTag("message-row-a1").fetchSemanticsNode().boundsInRoot.left
+        assertEquals("the spinner starts where a message does", message, spinner, 1f)
+        gate.complete(Unit)
+    }
+
+    @Test
     fun a_reply_offers_info_and_copy() {
         val turn = ChatMessage(
             id = "m1",
