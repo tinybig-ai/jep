@@ -10,10 +10,10 @@ jep is a remote control for **opencode**, **codex** and **claude**, reachable
 from **Telegram**, the **Android app**, or any client behind the
 [gateway](docs/GATEWAY.md). Your code stays on your machine.
 
-[![](https://img.shields.io/badge/version-0.1.0-3d6aa8)](package.json)
+[![](https://img.shields.io/badge/version-0.2.0-3d6aa8)](package.json)
 [![](https://img.shields.io/badge/Node-%E2%89%A526-339933)](package.json)
 [![](https://img.shields.io/badge/adapters-opencode%20%C2%B7%20codex%20%C2%B7%20claude-26a269)](src/app/harnesses.ts)
-[![](https://img.shields.io/badge/clients-Telegram%20%C2%B7%20Android-643891)](docs/GATEWAY.md)
+[![](https://img.shields.io/badge/clients-Telegram%20%C2%B7%20Android%20%C2%B7%20iOS%20%C2%B7%20macOS-643891)](docs/GATEWAY.md)
 [![](https://img.shields.io/badge/license-mit-576b91)](LICENSE)
 
 [![check](https://github.com/tinybig-ai/jep/actions/workflows/check.yml/badge.svg)](https://github.com/tinybig-ai/jep/actions/workflows/check.yml)
@@ -77,10 +77,23 @@ Two minutes to your first agent reply from wherever you are.
 - **Node ≥ 26** (the daemon runs native TypeScript, no build step)
 - at least one agent CLI installed: **opencode**, **codex**, or **claude**
 
+### Download
+
+Every [release](https://github.com/tinybig-ai/jep/releases/latest) carries:
+
+- **`jep-<version>.apk`**: the signed Android app. Install it on the phone.
+- **`JepBar-<version>.zip`**: the macOS menu-bar app (status and a pairing
+  QR). Unzip it into Applications. It isn't notarized yet, so open it the first
+  time with right-click → Open.
+- **iOS**: not on the App Store or TestFlight yet. Build it from Xcode; see
+  [clients/ios](docs/clients/ios.md).
+
+The daemon is on npm: `npm install -g @tinybig-ai/jep`, then run `jep`.
+
 ### 0. One command, no checkout
 
 ```sh
-JEP_TG_TOKEN=<from @BotFather> npx --yes github:tinybig-ai/jep
+JEP_TG_TOKEN=<from @BotFather> npx --yes @tinybig-ai/jep
 ```
 
 This runs the Telegram bot. The same daemon serves the Android app and other

@@ -1,7 +1,8 @@
 name: release
 
-# Push a tag like v0.2.0 to build a signed release APK and attach it to the
-# GitHub Release for that tag. The signing key comes from repository secrets
+# Push a tag like v0.2.0 to build a signed release APK and the macOS menu-bar
+# app, attach both to the GitHub Release for that tag, and publish the daemon
+# to npm when NPM_TOKEN is set. The signing key comes from repository secrets
 # and is written to a temp file on the runner; it is never committed.
 #
 # One-time setup is in docs/RELEASING.md: generate a keystore, then add
@@ -72,3 +73,70 @@ jobs:
           else
             gh release create "$GITHUB_REF_NAME" "$apk#$asset" --generate-notes --title "$GITHUB_REF_NAME"
           fi
+
+  # The macOS menu-bar app, as a zipped JepBar.app. Ad-hoc signed only (no
+  # Apple Developer ID yet), so the first open is right-click → Open.
+  jepbar:
+    needs: apk
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use the newest Xcode
+        run: |
+          x=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          [ -n "$x" ] && sudo xcode-select -s "$x"
+          xcodebuild -version
+      - name: Build JepBar.app
+        working-directory: macos/JepBar
+        run: |
+          swift build -c release --arch arm64 --arch x86_64
+          bin=$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/JepBar
+          app=JepBar.app/Contents
+          mkdir -p "$app/MacOS"
+          cp "$bin" "$app/MacOS/JepBar"
+          cat > "$app/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>CFBundleExecutable</key><string>JepBar</string>
+            <key>CFBundleIdentifier</key><string>ai.tinybig.jepbar</string>
+            <key>CFBundleName</key><string>JepBar</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>${GITHUB_REF_NAME#v}</string>
+            <key>CFBundleVersion</key><string>${GITHUB_RUN_NUMBER}</string>
+            <key>LSMinimumSystemVersion</key><string>14.0</string>
+            <key>LSUIElement</key><true/>
+          </dict></plist>
+          PLIST
+          codesign --force --sign - JepBar.app
+          ditto -c -k --keepParent JepBar.app "JepBar-${GITHUB_REF_NAME#v}.zip"
+      - name: Attach JepBar to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" "macos/JepBar/JepBar-${GITHUB_REF_NAME#v}.zip" --clobber
+
+  # The daemon on npm as @tinybig-ai/jep. Skipped until NPM_TOKEN is set.
+  npm:
+    needs: apk
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm provenance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::notice::NPM_TOKEN is not set; skipping npm publish (see docs/RELEASING.md)"
+            exit 0
+          fi
+          [ "v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME" ] || {
+            echo "::error::package.json version does not match $GITHUB_REF_NAME"; exit 1; }
+          npm ci
+          npm publish --provenance
