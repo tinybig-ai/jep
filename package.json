@@ -1,12 +1,37 @@
 {
-  "name": "jep",
-  "version": "0.1.0",
+  "name": "@tinybig-ai/jep",
+  "version": "0.2.0",
   "type": "module",
-  "private": true,
+  "description": "One interface for every coding agent: a hexagonal core with Telegram, Android and gateway clients (opencode, codex, claude)",
+  "license": "MIT",
+  "author": "Cemre Karakas",
+  "homepage": "https://github.com/tinybig-ai/jep#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tinybig-ai/jep.git"
+  },
+  "bugs": {
+    "url": "https://github.com/tinybig-ai/jep/issues"
+  },
+  "keywords": [
+    "coding-agent",
+    "opencode",
+    "claude-code",
+    "codex",
+    "remote-control",
+    "telegram",
+    "android",
+    "ios"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "bin": {
     "jep": "bin/jep.mjs"
   },
-  "engines": {"node": ">=22.6.0"},
+  "engines": {
+    "node": ">=22.6.0"
+  },
   "files": [
     "dist",
     "bin",
@@ -16,7 +41,6 @@
     "tsconfig.json",
     "tsconfig.build.json"
   ],
-  "description": "One interface for every coding agent: a hexagonal core with Telegram, Android and gateway clients (opencode, codex, claude)",
   "scripts": {
     "start": "node --experimental-strip-types src/app/tg.ts",
     "tg": "node --experimental-strip-types src/app/tg.ts",

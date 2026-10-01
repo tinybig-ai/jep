@@ -6,11 +6,20 @@ key. See [CONTRIBUTING](../CONTRIBUTING.md) for the contribution flow and
 
 ## What actually ships
 
-- **The daemon / CLI** has no build artifact. It runs from source
-  (`npx --yes github:tinybig-ai/jep`, or a checkout), so "shipping" it means
-  merging to `main`. Its version is `package.json`.
+- **The daemon / CLI** is published to npm as
+  [`@tinybig-ai/jep`](https://www.npmjs.com/package/@tinybig-ai/jep) (the bare
+  `jep` name belongs to an unrelated package). It also runs from source
+  (`npx --yes github:tinybig-ai/jep`, or a checkout). Its version is
+  `package.json`, and the release job refuses to publish if it doesn't match
+  the tag.
 - **The Android client** ships as a **signed APK** attached to a GitHub Release.
   Its `versionName`/`versionCode` are stamped from the tag at build time.
+- **The macOS menu-bar app** ships as `JepBar-<version>.zip` on the same
+  Release, a universal `JepBar.app`. It is ad-hoc signed, not notarized (that
+  needs an Apple Developer ID), so the first open is right-click → Open.
+- **The iOS app** is not distributed yet: TestFlight and the App Store need an
+  Apple Developer account. Users build it from Xcode
+  ([clients/ios](clients/ios.md)).
 
 ## One-time: the signing key
 
@@ -29,6 +38,11 @@ up once:
 3. Nothing else. The workflow decodes the key to a temp file at build time; the
    keystore and `android/keystore.properties` are gitignored.
 
+For npm, add an `NPM_TOKEN` secret too: a granular access token from
+https://www.npmjs.com/settings/~/tokens with read and write on the
+`@tinybig-ai` scope. Without it the npm job skips with a notice and the rest of
+the release still ships.
+
 Debug builds and PRs need none of this.
 
 ## Cutting a release
@@ -45,7 +59,8 @@ Debug builds and PRs need none of this.
 5. The `release` workflow builds the signed APK, stamps it with the tag's
    version (`versionName=0.2.0`, `versionCode` from the run number), and attaches
    it to the GitHub Release for that tag. Watch the run.
-6. Verify: the Release has `jep-0.2.0.apk`. Optionally install it:
+6. Verify: the Release has `jep-0.2.0.apk` and `JepBar-0.2.0.zip`, and
+   `npm view @tinybig-ai/jep version` prints `0.2.0`. Optionally install it:
    `adb install jep-0.2.0.apk`.
 
 ## When it goes wrong

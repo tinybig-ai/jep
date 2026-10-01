@@ -6,6 +6,11 @@ its own. Every 2 seconds it reads the `pairing-status.json` the daemon writes to
 `JEP_DATA_HOME` (default `~/.local/share/jep-tg`, the same one `npm run pair`
 reads) and calls the gateway's `/health`.
 
+Download `JepBar-<version>.zip` from the
+[latest release](https://github.com/tinybig-ai/jep/releases/latest), unzip it
+into Applications, and open it the first time with right-click → Open (it isn't
+notarized). Or run it from a checkout:
+
 ```sh
 cd macos/JepBar && swift run -c release
 ```

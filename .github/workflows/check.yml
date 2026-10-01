@@ -49,13 +49,13 @@ jobs:
           options: -v /tmp:/pkg -w /app
           run: |
             set -e
-            npm install /pkg/jep-*.tgz --omit=dev
+            npm install /pkg/tinybig-ai-jep-*.tgz --omit=dev
             node node_modules/.bin/jep --version
             node node_modules/.bin/jep --help
             # the echo harness needs nothing installed: a cold machine boots
             mkdir -p /ws
             timeout 90 env JEP_HARNESS=echo JEP_TG_MOCK=1 JEP_TG_PAIR_CODE=TESTCODE JEP_GW_PORT=18932 JEP_WORKSPACES=/ws \
-              node node_modules/.bin/jep < node_modules/jep/fixture/telegram-mock.jsonl > /tmp/mock.log 2>&1 || true
+              node node_modules/.bin/jep < node_modules/@tinybig-ai/jep/fixture/telegram-mock.jsonl > /tmp/mock.log 2>&1 || true
             cat /tmp/mock.log
             grep -q "mode: MOCK" /tmp/mock.log
             grep -q "Paired" /tmp/mock.log
