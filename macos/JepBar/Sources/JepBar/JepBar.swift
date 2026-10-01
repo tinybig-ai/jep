@@ -14,7 +14,7 @@ struct JepBarApp: App {
         MenuBarExtra {
             Panel(model: model)
         } label: {
-            Image(systemName: model.up ? "circle.fill" : "circle.dotted")
+            Image(nsImage: appleIcon(filled: model.up))
         }
         .menuBarExtraStyle(.window)
     }
@@ -67,6 +67,9 @@ final class Model {
 
 struct Panel: View {
     @Bindable var model: Model
+    // A shared or recorded screen must not hand out a working pairing. The QR
+    // and the code stay hidden until asked for, and hide again on their own.
+    @State private var revealed = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -77,17 +80,26 @@ struct Panel: View {
                 Text(status).font(.caption).foregroundStyle(.secondary)
             }
             if let link = model.link, let code = model.pairing?.code {
-                QRView(text: link).frame(width: 220, height: 220).frame(maxWidth: .infinity)
+                PairingQR(link: link, revealed: $revealed)
                 Text("Scan with the phone's camera, or enter:").font(.caption).foregroundStyle(.secondary)
                 if model.hosts.count > 1 {
                     Picker("Address", selection: $model.host) {
-                        ForEach(model.hosts, id: \.self) { Text("\($0):\(model.pairing?.port ?? 0)").tag(Optional($0)) }
+                        ForEach(model.hosts, id: \.self) { Text(verbatim: "\($0):\(model.pairing?.port ?? 0)").tag(Optional($0)) }
                     }
                     .labelsHidden()
                 } else if let h = model.host {
-                    Text("\(h):\(model.pairing?.port ?? 0)").font(.system(.body, design: .monospaced)).textSelection(.enabled)
+                    Text(verbatim: "\(h):\(model.pairing?.port ?? 0)").font(.system(.body, design: .monospaced)).textSelection(.enabled)
                 }
-                Text(code).font(.system(.title2, design: .monospaced).weight(.semibold)).textSelection(.enabled)
+                Group {
+                    if revealed {
+                        Text(code).textSelection(.enabled)
+                    } else {
+                        Text(String(repeating: "•", count: code.count)).foregroundStyle(.secondary)
+                    }
+                }
+                .font(.system(.title2, design: .monospaced).weight(.semibold))
+                // a pairing spent on one phone mints the next code; it starts hidden
+                .onChange(of: code) { revealed = false }
             } else {
                 Text(hint).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
@@ -100,6 +112,12 @@ struct Panel: View {
         }
         .padding(16)
         .frame(width: 280)
+        .onDisappear { revealed = false }
+        .task(id: revealed) {
+            guard revealed else { return }
+            try? await Task.sleep(for: .seconds(60))
+            revealed = false
+        }
     }
 
     private var status: String {
@@ -115,19 +133,79 @@ struct Panel: View {
     }
 }
 
+/// The pairing QR, hidden behind a blur until revealed. The blurred one is a
+/// decoy for a random code, not the real link: a blur can sometimes be undone,
+/// and a decoy has nothing to recover.
+struct PairingQR: View {
+    let link: String
+    @Binding var revealed: Bool
+    @State private var decoy = PairingQR.decoyLink()
+
+    var body: some View {
+        ZStack {
+            QRView(text: revealed ? link : decoy)
+                .blur(radius: revealed ? 0 : 9)
+                .animation(.easeOut(duration: 0.2), value: revealed)
+            if revealed {
+                VStack {
+                    HStack {
+                        Spacer()
+                        Button { revealed = false } label: { Image(systemName: "eye.slash") }
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(.white.opacity(0.8))
+                            .help("Hide the pairing code")
+                    }
+                    Spacer()
+                }
+                .padding(10)
+            } else {
+                Button { revealed = true } label: { Label("Show pairing code", systemImage: "eye") }
+                    .controlSize(.large)
+            }
+        }
+        .frame(width: 220, height: 220)
+        .frame(maxWidth: .infinity)
+        .onChange(of: revealed) { if !revealed { decoy = PairingQR.decoyLink() } }
+    }
+
+    private static func decoyLink() -> String {
+        let alphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
+        let code = String((0..<9).map { _ in alphabet.randomElement()! })
+        return "jep://pair?address=100.64.0.1:8931&code=\(code)"
+    }
+}
+
+/// White modules on a clear ground, over a dark glass card: transparent, and
+/// still white-on-dark in a light-mode panel, where white on the bare panel
+/// would vanish. Phone cameras read an inverted code like a normal one.
 struct QRView: View {
     let text: String
 
     var body: some View {
-        if let image { Image(nsImage: image).interpolation(.none).resizable().scaledToFit().padding(8).background(.white, in: RoundedRectangle(cornerRadius: 8)) }
+        if let image {
+            Image(nsImage: image)
+                .interpolation(.none)
+                .resizable()
+                .scaledToFit()
+                .padding(16)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+                .background(.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 14))
+                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.18)))
+                .environment(\.colorScheme, .dark)
+        }
     }
 
     private var image: NSImage? {
         let f = CIFilter.qrCodeGenerator()
         f.message = Data(text.utf8)
         f.correctionLevel = "M"
-        guard let out = f.outputImage, let cg = CIContext().createCGImage(out, from: out.extent) else { return nil }
-        return NSImage(cgImage: cg, size: out.extent.size)
+        guard let qr = f.outputImage else { return nil }
+        let tint = CIFilter.falseColor()
+        tint.inputImage = qr
+        tint.color0 = CIColor(red: 1, green: 1, blue: 1, alpha: 1)
+        tint.color1 = CIColor(red: 0, green: 0, blue: 0, alpha: 0)
+        guard let out = tint.outputImage, let cg = CIContext().createCGImage(out, from: qr.extent) else { return nil }
+        return NSImage(cgImage: cg, size: qr.extent.size)
     }
 }
 #else
