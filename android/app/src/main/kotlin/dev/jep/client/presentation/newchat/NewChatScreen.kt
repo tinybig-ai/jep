@@ -200,7 +200,7 @@ private fun Form(
             // for the directory if it isn't serving it yet.
             SelectRow(
                 title = "Quick conversation",
-                subtitle = "a throwaway folder — just pick a harness",
+                subtitle = "a throwaway folder",
                 selected = state.pod,
                 onClick = onSelectPod,
                 icon = { Icon(Icons.Filled.Bolt, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary) },

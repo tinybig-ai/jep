@@ -29,7 +29,7 @@ struct NewChatView: View {
                             .frame(width: 24)
                         VStack(alignment: .leading) {
                             Text("Quick conversation").jepFont(15)
-                            Text("a throwaway folder — just pick a harness").jepFont(12).foregroundStyle(.secondary).lineLimit(1)
+                            Text("a throwaway folder").jepFont(12).foregroundStyle(.secondary).lineLimit(1)
                         }
                         Spacer()
                         if st.pod { Image(systemName: "checkmark").foregroundStyle(.tint) }
