@@ -56,8 +56,13 @@ mkdir -p "$data_home" "$(dirname "$log")" "$HOME/Library/LaunchAgents"
 case "$root/" in
   "$HOME/Documents/"*|"$HOME/Desktop/"*|"$HOME/Downloads/"*|"$HOME/Library/Mobile Documents/"*|/Volumes/*)
     say "note: $root is inside a folder macOS protects."
-    say "      The daemon needs Full Disk Access for $node, or a checkout"
-    say "      somewhere unprotected. Checking which applies…"
+    say "      A launchd job can read it only with Full Disk Access for $node,"
+    say "      and a grant like that is fragile: even when this probe passes"
+    say "      today, a later restart can hang on the same read. A checkout"
+    say "      somewhere unprotected (~/code works) makes the daemon"
+    say "      deterministic and is the reliable option — and the same applies"
+    say "      to every JEP_WORKSPACES directory, which the daemon must also"
+    say "      read. Checking which case applies now…"
     ;;
 esac
 
@@ -117,7 +122,9 @@ say "access check: a launchd job can read $root ✓"
 cp "$root/scripts/jep-daemon.sh" "$data_home/jep-daemon.sh"
 chmod +x "$data_home/jep-daemon.sh"
 
-cat > "$plist" <<PLIST
+new_plist="$plist.jep-new"
+trap 'rm -f "$new_plist"' EXIT
+cat > "$new_plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -135,6 +142,7 @@ cat > "$plist" <<PLIST
     <key>JEP_TG_TOKEN</key><string>$token</string>
     <key>JEP_DATA_HOME</key><string>$data_home</string>
     <key>JEP_WORKSPACES</key><string>$workspaces</string>
+    <key>UV_THREADPOOL_SIZE</key><string>32</string>
     <key>XDG_DATA_HOME</key><string>$HOME/.local/share</string>
     <key>PATH</key><string>$HOME/.local/bin:$HOME/.opencode/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
@@ -147,9 +155,25 @@ cat > "$plist" <<PLIST
 </dict>
 </plist>
 PLIST
+# An operator setting (JEP_GW_PORT, JEP_FCM_KEY, JEP_BROWSE_ROOT, …) is not
+# this script's to choose, so a re-run — after a checkout move, a reinstall —
+# carries any variables from the existing plist that this script does not
+# manage over into the fresh one. Regenerating and dropping them would turn
+# the phone client off by surprise.
+managed="JEP_ROOT JEP_NODE JEP_TG_TOKEN JEP_DATA_HOME JEP_WORKSPACES XDG_DATA_HOME PATH UV_THREADPOOL_SIZE"
+if [ -f "$plist" ]; then
+  for key in $(plutil -extract EnvironmentVariables xml1 -o - "$plist" 2>/dev/null | sed -nE 's/.*<key>([^<]+)<\/key>.*/\1/p' || true); do
+    case " $managed " in *" $key "*) continue ;; esac
+    value=$(plutil -extract "EnvironmentVariables.$key" raw -o - "$plist" 2>/dev/null) || continue
+    plutil -insert "EnvironmentVariables.$key" -string "$value" "$new_plist" 2>/dev/null \
+      || plutil -replace "EnvironmentVariables.$key" -string "$value" "$new_plist"
+  done
+fi
 # the token lives in here
-chmod 600 "$plist"
-plutil -lint "$plist" >/dev/null || die "generated a malformed plist ($plist)"
+chmod 600 "$new_plist"
+plutil -lint "$new_plist" >/dev/null || die "generated a malformed plist ($new_plist)"
+mv "$new_plist" "$plist"
+trap - EXIT
 
 before=$(wc -c < "$log" 2>/dev/null || echo 0)
 # bootout returns before the job is gone, and bootstrapping over a job that is

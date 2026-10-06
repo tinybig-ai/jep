@@ -240,6 +240,14 @@ That loses `KeepAlive`, so it is a stopgap. The durable fixes are to grant
 Security), or to move the repo out of `~/Documents` (`~/Desktop` and
 `~/Downloads` are protected the same way; anywhere else is not).
 
+**Prefer the move.** A Full Disk Access grant is fragile on part of a routine:
+it can stop being honored on a later restart (observed), so the failure recurs
+out of nowhere while the repo lives under a protected folder. An unprotected
+checkout needs no grant, so a restart can never hang on this again. The same
+applies to **every workspace** the daemon spawns harnesses for: any of them
+under `~/Documents`, `~/Desktop`, `~/Downloads`, iCloud Drive, or a removable
+volume is equally unreadable from a launchd context.
+
 Mock replay of a fixture:
 
 ```sh
