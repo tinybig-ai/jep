@@ -166,8 +166,8 @@ fun SessionsScreen(
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
                     navigationIcon = {
                         CompositionLocalProvider(LocalMinimumInteractiveComponentEnforcement provides false) {
-                            IconButton(onClick = onClearSelection, Modifier.size(36.dp)) {
-                                Icon(Icons.Filled.Close, "cancel selection", Modifier.size(20.dp))
+                            IconButton(onClick = onClearSelection, Modifier.size(40.dp)) {
+                                Icon(Icons.Filled.Close, "cancel selection", Modifier.size(22.dp))
                             }
                         }
                     },
@@ -178,22 +178,22 @@ fun SessionsScreen(
                         val allPinned = sessions.filter { it.id in selection }.all { it.pinned } &&
                             sessions.any { it.id in selection }
                         CompositionLocalProvider(LocalMinimumInteractiveComponentEnforcement provides false) {
-                        IconButton(onClick = { onPinSelected(!allPinned) }, Modifier.size(36.dp)) {
+                        IconButton(onClick = { onPinSelected(!allPinned) }, Modifier.size(40.dp)) {
                             Icon(
                                 Icons.Filled.PushPin,
                                 if (allPinned) "unpin selected" else "pin selected",
-                                Modifier.size(20.dp),
+                                Modifier.size(22.dp),
                                 tint = if (allPinned) MaterialTheme.colorScheme.primary else LocalContentColor.current,
                             )
                         }
-                        IconButton(onClick = onArchiveSelected, Modifier.size(36.dp)) {
-                            Icon(Icons.Filled.Archive, "archive selected", Modifier.size(20.dp))
+                        IconButton(onClick = onArchiveSelected, Modifier.size(40.dp)) {
+                            Icon(Icons.Filled.Archive, "archive selected", Modifier.size(22.dp))
                         }
-                        IconButton(onClick = { onMarkSelected(true) }, Modifier.size(36.dp)) {
-                            Icon(Icons.Filled.MarkEmailRead, "mark as read", Modifier.size(20.dp))
+                        IconButton(onClick = { onMarkSelected(true) }, Modifier.size(40.dp)) {
+                            Icon(Icons.Filled.MarkEmailRead, "mark as read", Modifier.size(22.dp))
                         }
-                        IconButton(onClick = { onMarkSelected(false) }, Modifier.size(36.dp)) {
-                            Icon(Icons.Filled.MarkEmailUnread, "mark as unread", Modifier.size(20.dp))
+                        IconButton(onClick = { onMarkSelected(false) }, Modifier.size(40.dp)) {
+                            Icon(Icons.Filled.MarkEmailUnread, "mark as unread", Modifier.size(22.dp))
                         }
                         }
                     },
@@ -206,8 +206,8 @@ fun SessionsScreen(
                     // grows one — the logo is replaced by where you are
                     if (grouped && openProject != null) {
                         CompositionLocalProvider(LocalMinimumInteractiveComponentEnforcement provides false) {
-                            IconButton(onClick = { onOpenProject(null) }, Modifier.size(36.dp)) {
-                                Icon(Icons.AutoMirrored.Filled.ArrowBack, "back to projects", Modifier.size(20.dp))
+                            IconButton(onClick = { onOpenProject(null) }, Modifier.size(40.dp)) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, "back to projects", Modifier.size(22.dp))
                             }
                         }
                     }
@@ -241,15 +241,15 @@ fun SessionsScreen(
                     // compact bars: the material 48dp target reads huge next to
                     // 20dp glyphs, so the enforcement goes off for this bar only
                     CompositionLocalProvider(LocalMinimumInteractiveComponentEnforcement provides false) {
-                        IconButton(onClick = { importOpen = true; onLoadImportable() }, Modifier.size(36.dp)) {
-                            Icon(Icons.Filled.Link, "import a session", Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        IconButton(onClick = { importOpen = true; onLoadImportable() }, Modifier.size(40.dp)) {
+                            Icon(Icons.Filled.Link, "import a session", Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         // archive hid conversations with no way back to them
-                        IconButton(onClick = { archivedOpen = true; onLoadArchived() }, Modifier.size(36.dp)) {
-                            Icon(Icons.Filled.Inventory2, "archived conversations", Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        IconButton(onClick = { archivedOpen = true; onLoadArchived() }, Modifier.size(40.dp)) {
+                            Icon(Icons.Filled.Inventory2, "archived conversations", Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        IconButton(onClick = onSettings, Modifier.size(36.dp)) {
-                            Icon(Icons.Filled.Settings, "settings", Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        IconButton(onClick = onSettings, Modifier.size(40.dp)) {
+                            Icon(Icons.Filled.Settings, "settings", Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 },
