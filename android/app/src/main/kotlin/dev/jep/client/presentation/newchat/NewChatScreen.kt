@@ -6,6 +6,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -239,10 +241,11 @@ private fun Form(
         item {
             Button(
                 onClick = onCreate,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp).height(38.dp),
+                contentPadding = PaddingValues(),
                 enabled = !state.creating,
             ) {
-                Text(if (state.creating) "Starting…" else "Create conversation")
+                Text(if (state.creating) "Starting…" else "Create conversation", fontSize = 14.sp)
             }
         }
     }
@@ -391,10 +394,11 @@ private fun Browser(
         }
         Button(
             onClick = { b?.let { onSelectPath(it.cwd) } },
-            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp).height(38.dp),
+            contentPadding = PaddingValues(),
             enabled = b != null && !state.loadingBrowse,
         ) {
-            Text("Use this folder")
+            Text("Use this folder", fontSize = 14.sp)
         }
     }
 }

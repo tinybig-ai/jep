@@ -31,7 +31,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Refresh
@@ -56,6 +55,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Inventory2
@@ -79,7 +79,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import dev.jep.client.presentation.theme.JepMono
 import dev.jep.client.presentation.theme.LocalSyntaxColors
-import dev.jep.client.presentation.theme.Radius
 import dev.jep.client.R
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -139,11 +138,12 @@ fun SessionsScreen(
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = onNew,
+                modifier = Modifier.height(42.dp),
                 containerColor = MaterialTheme.colorScheme.primary,
                 contentColor = MaterialTheme.colorScheme.onPrimary,
             ) {
-                Icon(Icons.Filled.Add, null)
-                Text(" New conversation")
+                Icon(Icons.Filled.Add, null, Modifier.size(18.dp))
+                Text(" New conversation", fontSize = 13.sp)
             }
         },
     ) { pad ->
@@ -203,17 +203,16 @@ fun SessionsScreen(
                         }
                     } else Row(
                         // the harness icons in the rows below start at 18dp, and the
-                        // mark carries its own transparent margin, so the apple
-                        // sits further right than the marks it lines up with
-                        Modifier.offset(x = (-12).dp),
+                        // mark carries a small transparent margin of its own
+                        Modifier.offset(x = (-4).dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Image(
                             painterResource(R.drawable.jep_mark),
                             null,
-                            Modifier.size(60.dp).clip(RoundedCornerShape(Radius.card)),
+                            Modifier.size(32.dp),
                         )
-                        Spacer(Modifier.width(12.dp))
+                        Spacer(Modifier.width(8.dp))
                         Text("Jep")
                     }
                 },

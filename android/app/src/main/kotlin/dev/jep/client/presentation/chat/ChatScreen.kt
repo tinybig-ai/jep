@@ -1674,7 +1674,7 @@ private fun TerminalBody(vm: ChatViewModel, modifier: Modifier = Modifier) {
                 .forEach { (key, label) ->
                     OutlinedButton(
                         onClick = { scope.launch { vm.termKey(key) } },
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 2.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 0.dp),
                     ) { Text(label, fontSize = 12.sp) }
                 }
         }
@@ -3013,9 +3013,9 @@ private fun AskBar(ask: Ask, vm: ChatViewModel, spent: Boolean, choiceId: String
                 OutlinedButton(
                     onClick = { vm.spendAsk(ask.id) },
                     enabled = !spent,
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 4.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 2.dp),
                 ) {
-                    Text("Something else", fontSize = 14.sp, maxLines = 1)
+                    Text("Something else", fontSize = 13.sp, maxLines = 1)
                 }
             }
         }
@@ -3047,10 +3047,10 @@ private fun AskChoices(
                         disabledContainerColor = MaterialTheme.colorScheme.primaryContainer,
                         disabledContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
                     ),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 4.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 2.dp),
                     modifier = Modifier.semantics { contentDescription = "${option.label}, chosen" },
                 ) {
-                    Text(option.label, fontSize = 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(option.label, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
             } else {
                 // Deny reads as what it is: the harness marks it danger,
@@ -3061,9 +3061,9 @@ private fun AskChoices(
                     colors = if (option.danger) ButtonDefaults.outlinedButtonColors(
                         contentColor = MaterialTheme.colorScheme.error,
                     ) else ButtonDefaults.outlinedButtonColors(),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 4.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 2.dp),
                 ) {
-                    Text(option.label, fontSize = 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(option.label, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
