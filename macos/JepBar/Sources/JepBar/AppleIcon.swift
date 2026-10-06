@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 
 // The menu-bar mark: an apple, filled while the gateway answers and outlined
@@ -49,3 +50,4 @@ func appleIcon(filled: Bool) -> NSImage {
     image.accessibilityDescription = filled ? "jep: running" : "jep: not running"
     return image
 }
+#endif

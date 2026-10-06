@@ -143,6 +143,7 @@ class NewChatScreenTest {
                 onHarness = {},
                 onHarnessSetting = { _, _ -> },
                 onSelectWorkspace = { _, _ -> },
+                onSelectPod = {},
                 onSelectPath = {},
                 onOpenBrowse = {},
                 onCloseBrowse = onCloseBrowse,
