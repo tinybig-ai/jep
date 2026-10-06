@@ -1076,6 +1076,47 @@ test("a pinned conversation leads the list whatever its age", async () => {
   }
 })
 
+test("a harness that misses its listing budget degrades instead of hanging the list", async () => {
+  const fastRow: SessionSummary = { id: "fast", title: "Fast", workspace: "/tmp/ws", createdAt: 1, updatedAt: 2 }
+  const fast = fakeAdapter()
+  const fastAdapter = { ...fast, listSessions: async () => [fastRow] }
+  // a serve process that stopped answering: accepts nothing, settles never
+  const hung = { ...fakeAdapter(), listSessions: () => new Promise<SessionSummary[]>(() => {}) }
+  const g = await startGateway({
+    adapters: () => [
+      { name: "fast-ws", adapter: fastAdapter },
+      { name: "hung-ws", adapter: hung },
+    ],
+    dataHome: mkdtempSync(join(tmpdir(), "gw-degraded-")),
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+    listBudgetMs: 150,
+  })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const token = await pair(base, "TESTCODE")
+    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" }
+    type Row = SessionSummary & { pinned?: boolean }
+    const started = Date.now()
+    const res = (await (
+      await fetch(`${base}/sessions`, { method: "POST", headers, body: "{}" })
+    ).json()) as { items?: Row[]; degraded?: Array<{ name: string; harness: string; error: string }> }
+    const elapsed = Date.now() - started
+
+    // the working harness still shows its conversations…
+    assert.deepEqual(res.items?.map((s) => s.id), ["fast"])
+    // …the hung one is named, not silently absent
+    assert.equal(res.degraded?.[0]?.harness, "fake")
+    assert.equal(res.degraded?.[0]?.name, "hung-ws")
+    assert.match(res.degraded?.[0]?.error ?? "", /did not answer in 150ms/)
+    // and none of it waited on the one that never answers
+    assert.ok(elapsed < 1000, `took ${elapsed}ms for a listing one harness never answers`)
+  } finally {
+    await g.close()
+  }
+})
+
 test("/compact advances to the harness and 501s when it isn't offered", async () => {
   const a = fakeAdapter()
   const calls: string[] = []

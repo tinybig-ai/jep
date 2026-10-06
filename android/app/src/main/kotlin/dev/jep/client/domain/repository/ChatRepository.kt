@@ -17,6 +17,7 @@ import dev.jep.client.domain.model.McpServer
 import dev.jep.client.domain.model.Model
 import dev.jep.client.domain.model.Role
 import dev.jep.client.domain.model.SessionSummary
+import dev.jep.client.domain.model.SessionsList
 import dev.jep.client.domain.model.SkillSet
 import dev.jep.client.domain.model.TerminalAccess
 import dev.jep.client.domain.model.Usage
@@ -99,7 +100,7 @@ sealed interface ChatEvent {
 
 interface ChatRepository {
     suspend fun pair(baseUrl: String, code: String): String
-    suspend fun sessions(): List<SessionSummary>
+    suspend fun sessions(): SessionsList
     /** the workspaces (and harnesses) a conversation may be created in */
     suspend fun workspaces(): List<Workspace>
     /** the harnesses installed on the machine, and the default */

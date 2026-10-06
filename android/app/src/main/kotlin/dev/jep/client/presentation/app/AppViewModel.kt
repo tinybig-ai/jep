@@ -197,6 +197,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _sessions = MutableStateFlow<List<SessionSummary>>(emptyList())
     val sessions = _sessions.asStateFlow()
 
+    // harnesses that missed the daemon's listing budget — one line per harness,
+    // ready to show in a banner on the sessions screen
+    private val _degraded = MutableStateFlow<List<String>>(emptyList())
+    val degraded = _degraded.asStateFlow()
+
     private val _busy = MutableStateFlow(false)
     val busy = _busy.asStateFlow()
 
@@ -272,12 +277,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             var anyActive = false
             runCatching { r.sessions() }
                 .onSuccess { list ->
-                    _sessions.value = list
+                    _sessions.value = list.items
+                    _degraded.value = list.degraded.map { it.banner() }
                     recomputeUnread()
                     _notice.value = null
-                    anyActive = list.any { it.active }
+                    anyActive = list.items.any { it.active }
                 }
-                .onFailure { _notice.value = "gateway unreachable: ${it.message}" }
+                .onFailure {
+                    _notice.value = "gateway unreachable: ${it.message}"
+                    _degraded.value = emptyList()
+                }
             // the creation picker lists the same served workspaces; keep them
             // fresh with the session list so "New conversation" is never empty
             runCatching { r.workspaces() }.onSuccess { _workspaces.value = byRecency(it) }
@@ -502,9 +511,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val r = repo ?: return
         viewModelScope.launch {
             runCatching { r.sessions() }.onSuccess { list ->
-                _sessions.value = list
+                _sessions.value = list.items
                 recomputeUnread()
-                list.firstOrNull { it.id == sessionId }?.let { open(it) }
+                list.items.firstOrNull { it.id == sessionId }?.let { open(it) }
             }
         }
     }

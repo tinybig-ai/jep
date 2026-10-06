@@ -97,6 +97,7 @@ fun JepApp(app: AppViewModel) {
             app.sessions.collectAsState().value,
             busy,
             notice,
+            degraded = app.degraded.collectAsState().value,
             onOpen = { app.open(it) },
             onNew = { app.openNewChat() },
             onRefresh = { app.refresh() },

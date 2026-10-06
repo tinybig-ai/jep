@@ -44,6 +44,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.LocalMinimumInteractiveComponentEnforcement
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -96,6 +97,8 @@ fun SessionsScreen(
     sessions: List<SessionSummary>,
     busy: Boolean,
     notice: String?,
+    /** harnesses the gateway couldn't list — each one is a banner line */
+    degraded: List<String> = emptyList(),
     onOpen: (SessionSummary) -> Unit,
     onNew: () -> Unit,
     onRefresh: () -> Unit,
@@ -261,6 +264,18 @@ fun SessionsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 14.sp,
                 )
+            }
+degraded.forEach { line ->
+                // a harness stopped answering: its conversations are missing, and
+                // the banner says so instead of letting the list look complete
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                    shape = RoundedCornerShape(Radius.card),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                ) {
+                    Text(line, Modifier.padding(horizontal = 12.dp, vertical = 10.dp), fontSize = 13.sp)
+                }
             }
             PullToRefreshBox(
                 isRefreshing = busy,

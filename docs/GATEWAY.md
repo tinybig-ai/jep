@@ -26,7 +26,7 @@ plain clients).
 |---|---|---|
 | `POST /pair` | `{code}` | `{token}` (5 tries / 60 s) |
 | `GET /health` | (none) | `{ok,paired}` |
-| `POST /sessions` | (none) | `{items[]}` all sessions, every adapter merged, client renames applied; each carries `adapter` (workspace name), `harness` (engine id) and `pod` (its workspace is a daemon-conjured throwaway dir) for display |
+| `POST /sessions` | (none) | `{items[]}` all sessions, every adapter merged, client renames applied; each carries `adapter` (workspace name), `harness` (engine id) and `pod` (its workspace is a daemon-conjured throwaway dir) for display. A harness that misses the daemon's listing budget (~6s) is reported in `degraded[]` (`{name,harness,error}`, the conversations from it are missing) instead of holding the whole list up; clients show it as a banner |
 | `POST /workspaces` | (none) | `{items[]}` of `{name,harness,dir,pod}`: what a conversation may be created in, for creation-time selection; `pod` marks a daemon-conjured throwaway directory |
 | `POST /harnesses` | (none) | `{harnesses[],default}`: the harnesses installed here |
 | `POST /browse` | `{path?}` | `{cwd,root,parent,dirs[]}`: folders under `cwd` (`{name,git}`), bounded to `JEP_BROWSE_ROOT` (default `$HOME`); `parent` is null at the root |
@@ -71,7 +71,7 @@ plain clients).
 | `POST /seen` | `{id,at?}` | `{ok,seenAt}`: the conversation was looked at (`at` defaults to now; the later time is kept); `at: 0` marks it unread. Persisted in `<DATA_HOME>/gateway-seen.json`, and every `/sessions` item carries `seenAt` |
 | `POST /archive` | `{id}` | `{ok,archived}`: hide a conversation from `/sessions` without deleting it; persisted in `<DATA_HOME>/gateway-archived.json` |
 | `POST /unarchive` | `{id}` | `{ok,archived}`: put it back |
-| `POST /archived` | (none) | `{items[]}`: the archived conversations, same shape as `/sessions` |
+| `POST /archived` | (none) | `{items[]}`: the archived conversations, same shape as `/sessions` (including `degraded[]` when a harness missed its listing budget) |
 | `POST /delete` | `{id}` | `{ok}`: removes the session from the harness |
 | `POST /attach` | raw octets, `?id=<session>&name=<name>` | `{id,name}`: buffers up to 32 MB under `<DATA_HOME>/attachments`; the id feeds the next `/prompt`'s `files` |
 | `POST /push/register` | `{token}` | `{ok,devices}`: remember this device's push token: an FCM token, or `apns:<hex>` from iOS (503 without push configured) |

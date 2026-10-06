@@ -104,7 +104,7 @@ class StreamService : Service() {
     // there is actually something to say.
     private fun titleOf(repo: ChatRepository, sessionId: String): String =
         runCatching {
-            kotlinx.coroutines.runBlocking { repo.sessions() }.firstOrNull { it.id == sessionId }?.title
+            kotlinx.coroutines.runBlocking { repo.sessions() }.items.firstOrNull { it.id == sessionId }?.title
         }.getOrNull()?.ifBlank { null } ?: "jep"
 
     // asks surfaced and not yet settled, id -> conversation

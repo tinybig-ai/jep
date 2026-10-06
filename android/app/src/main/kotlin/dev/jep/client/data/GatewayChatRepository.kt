@@ -42,6 +42,8 @@ import dev.jep.client.domain.model.ImportableSession
 import dev.jep.client.domain.model.McpServer
 import dev.jep.client.domain.repository.ChatRepository
 import dev.jep.client.domain.model.SessionSummary
+import dev.jep.client.domain.model.SessionsList
+import dev.jep.client.domain.model.Degraded
 import dev.jep.client.domain.model.TerminalAccess
 import dev.jep.client.domain.model.SkillSet
 import dev.jep.client.domain.model.Usage
@@ -123,8 +125,16 @@ private val json = Json { ignoreUnknownKeys = true; isLenient = true }
             http.newCall(req).execute().use { it.code to it.body?.string().orEmpty() }
         }
 
-    override suspend fun sessions(): List<SessionSummary> =
-        decode("/sessions", SessionsRes.serializer()).items.map { it.toDomain() }
+    override suspend fun sessions(): SessionsList {
+        val res = decode("/sessions", SessionsRes.serializer())
+        return SessionsList(
+            items = res.items.map { it.toDomain() },
+            degraded = res.degraded.mapNotNull { d ->
+                val harness = d.harness?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                Degraded(harness, d.name, d.error)
+            },
+        )
+    }
 
     override suspend fun workspaces(): List<Workspace> =
         decode("/workspaces", WorkspacesRes.serializer()).items.map { it.toDomain() }

@@ -17,6 +17,7 @@ import dev.jep.client.domain.model.Role
 import dev.jep.client.domain.model.SkillSet
 import dev.jep.client.domain.model.TerminalAccess
 import dev.jep.client.domain.model.SessionSummary
+import dev.jep.client.domain.model.SessionsList
 import dev.jep.client.domain.model.Usage
 import dev.jep.client.domain.model.Workspace
 import dev.jep.client.domain.repository.ChatEvent
@@ -49,7 +50,7 @@ class FakeChatRepository(
     var historyOverride: List<ChatMessage>? = null
 
     override suspend fun pair(baseUrl: String, code: String) = "token"
-    override suspend fun sessions(): List<SessionSummary> = emptyList()
+    override suspend fun sessions(): SessionsList = SessionsList()
     override suspend fun workspaces(): List<Workspace> = emptyList()
     override suspend fun harnesses() = Harnesses(listOf("opencode"), "opencode")
     override suspend fun browse(path: String?): BrowseResult = browseAnswer(path)

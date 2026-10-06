@@ -33,7 +33,20 @@ data class SessionDto(
 )
 
 @Serializable
-data class SessionsRes(val items: List<SessionDto> = emptyList())
+data class SessionsRes(
+    val items: List<SessionDto> = emptyList(),
+    /** harnesses that missed the daemon's listing budget — their conversations
+     * are missing, and the UI should say so instead of showing an empty list */
+    val degraded: List<DegradedDto> = emptyList(),
+)
+
+/** one harness the gateway could not reach in time when listing conversations */
+@Serializable
+data class DegradedDto(
+    val name: String? = null,
+    val harness: String? = null,
+    val error: String? = null,
+)
 
 // the gateway answers a failure with {error:"…"}; the harness adapters phrase
 // their own as {name,message}. Keep both, so the phone shows the real reason

@@ -37,6 +37,29 @@ data class SessionSummary(
     val pod: Boolean = false,
 )
 
+/** a session list plus the harnesses that could not be listed in time — the
+ * conversations from a degraded harness are missing, never just absent */
+data class SessionsList(
+    val items: List<SessionSummary> = emptyList(),
+    val degraded: List<Degraded> = emptyList(),
+)
+
+/** a harness that missed the daemon's listing budget */
+data class Degraded(
+    val harness: String,
+    /** the workspace's friendly name, when there is one */
+    val name: String? = null,
+    /** what the daemon saw, when there is anything to say */
+    val error: String? = null,
+) {
+    /** one line for the banner: the conversations from this harness are missing */
+    fun banner(): String {
+        val where = name?.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: ""
+        val why = error?.takeIf { it.isNotBlank() }?.let { " — $it" } ?: ""
+        return "$harness$where is unresponsive$why — conversations from it may be missing"
+    }
+}
+
 /** a workspace the gateway serves, the harness (opencode/codex/…) behind it,
  * and the directory it reads. `pod` marks a throwaway dir the daemon conjured. */
 data class Workspace(val name: String, val harness: String, val dir: String = "", val pod: Boolean = false)

@@ -64,6 +64,10 @@ export interface GatewayDeps {
    * than the JEP_TURN_IDLE_MS / JEP_TOOL_IDLE_MS defaults (and for tests, which
    * cannot wait out five real minutes) */
   liveness?: Partial<LivenessConfig>
+  /** how long a harness' session listing may take before it is reported as
+   * degraded instead of holding the whole list up (and tests, which cannot wait
+   * six real seconds) */
+  listBudgetMs?: number
 }
 
 export interface GatewayHandle {
@@ -103,6 +107,34 @@ interface AskRecord {
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+
+// A hard ceiling on one promise so a wedged peer (a serve process that stopped
+// answering) costs a short wait, never a hang. The loser is left to wind down
+// on its own; whoever raced it already has their answer.
+function raceTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      reject(new Error(`${what} did not answer in ${ms}ms`))
+    }, ms)
+    p.then(
+      (v) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve(v)
+      },
+      (err) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        reject(err)
+      },
+    )
+  })
+}
 
 // The phone's Git screen, shaped from the core's view of the repository — the
 // same core/git.ts the Telegram /git screen reads, so the two clients cannot
@@ -526,6 +558,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   // Whether this gateway offers a shell at all — an operator decision on the
   // machine, not something a paired phone can turn on for itself.
   const terminalAllowed = process.env.JEP_TERMINAL === "1" || process.env.JEP_TERMINAL === "true"
+  // how long a harness' session listing may take before it is reported as
+  // degraded; 6s is a stall the phone should know about, not a slow day
+  const listBudgetMs = deps.listBudgetMs ?? 6_000
 
   // help-files the phone needs, resolved as events and commands arrive
   const sessionAdapters = new Map<string, HarnessAdapter>()
@@ -1062,9 +1097,25 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         ensurePumps()
         // the archived view is the only place a filed-away conversation shows
         const wantArchived = path === "/archived"
+        // A wedged harness (a serve process that stopped answering, a takeover
+        // that left it stuck) must cost the phone a short wait, not hang the
+        // list forever. Every harness is scanned at once, each under one budget;
+        // whoever misses it lands in `degraded` so a half-empty list is never
+        // mistaken for the whole truth.
+        const degraded: { name: string; harness: string; error: string }[] = []
+        const scans = await Promise.all(
+          deps.adapters().map(async ({ name, adapter }) => {
+            let list: Awaited<ReturnType<HarnessAdapter["listSessions"]>> = []
+            try {
+              list = await raceTimeout(adapter.listSessions(), listBudgetMs, `${adapter.id} (${name})`)
+            } catch (err) {
+              degraded.push({ name, harness: adapter.id, error: String((err as Error)?.message ?? err).slice(0, 200) })
+            }
+            return { name, adapter, list }
+          }),
+        )
         const items = []
-        for (const { name, adapter } of deps.adapters()) {
-          const list = await adapter.listSessions().catch(() => [])
+        for (const { name, adapter, list } of scans) {
           for (const s of list) {
             sessionAdapters.set(s.id, adapter)
             // archived conversations are filed away, not listed
@@ -1081,6 +1132,10 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         // pinned conversations first, then newest — pinning is the user saying
         // this one matters more than whatever moved most recently
         items.sort((x, y) => Number(y.pinned) - Number(x.pinned) || y.updatedAt - x.updatedAt)
+        if (degraded.length > 0) {
+          console.error(`[gw] ${path} degraded: ${degraded.map((d) => `${d.harness} (${d.name})`).join(", ")}`)
+          return json(res, 200, { items, degraded })
+        }
         return json(res, 200, { items })
       }
 
