@@ -134,6 +134,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.material3.TextFieldDefaults
@@ -771,8 +772,9 @@ fun ChatScreen(
     var subsOpen by remember { mutableStateOf(false) }
 
     Box(Modifier.fillMaxSize()) {
-    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+    Column(Modifier.fillMaxSize()) {
         TopAppBar(
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
             title = {
                 Column {
                     Text(vm.title, style = MaterialTheme.typography.titleMedium, maxLines = 1)

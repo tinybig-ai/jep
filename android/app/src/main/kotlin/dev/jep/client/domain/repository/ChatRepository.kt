@@ -111,13 +111,16 @@ interface ChatRepository {
     /** conversations that were archived, so they can be found and restored */
     suspend fun archivedSessions(): List<SessionSummary>
     /** create a conversation in a named workspace and/or at an absolute path,
-     * under a harness — the path is spawned as a workspace if not served yet */
+     * under a harness — the path is spawned as a workspace if not served yet.
+     * `pod` asks the daemon to conjure a throwaway directory instead, so the
+     * caller picks a harness and no folder at all. */
     suspend fun newSession(
         title: String? = null,
         workspace: String? = null,
         path: String? = null,
         harness: String? = null,
         harnessSettings: Map<String, Boolean> = emptyMap(),
+        pod: Boolean = false,
     ): SessionSummary
     /** harness controls for the creation form; every client renders the schema generically */
     suspend fun harnessOptions(harness: String): List<HarnessSetting>

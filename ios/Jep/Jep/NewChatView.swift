@@ -21,6 +21,21 @@ struct NewChatView: View {
                 }
             }
             Section("Workspace") {
+                Button {
+                    store.selectPod()
+                } label: {
+                    HStack {
+                        Image(systemName: "bolt.fill")
+                            .frame(width: 24)
+                        VStack(alignment: .leading) {
+                            Text("Quick conversation").jepFont(15)
+                            Text("a throwaway folder — just pick a harness").jepFont(12).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Spacer()
+                        if st.pod { Image(systemName: "checkmark").foregroundStyle(.tint) }
+                    }
+                }
+                .buttonStyle(.plain)
                 ForEach(st.workspaces, id: \.self) { w in
                     Button {
                         store.selectWorkspace(w.name, harness: w.harness)
@@ -29,10 +44,10 @@ struct NewChatView: View {
                             HarnessAvatar(harness: w.harness)
                             VStack(alignment: .leading) {
                                 Text(w.name).jepFont(15)
-                                Text(w.dir).jepFont(12).foregroundStyle(.secondary).lineLimit(1)
+                                Text(w.pod ? "throwaway" : w.dir).jepFont(12).foregroundStyle(.secondary).lineLimit(1)
                             }
                             Spacer()
-                            if st.path == nil && st.workspace == w.name { Image(systemName: "checkmark").foregroundStyle(.tint) }
+                            if !st.pod && st.path == nil && st.workspace == w.name { Image(systemName: "checkmark").foregroundStyle(.tint) }
                         }
                     }
                     .buttonStyle(.plain)
@@ -43,7 +58,7 @@ struct NewChatView: View {
                     HStack {
                         Label("Browse folders…", systemImage: "folder")
                         Spacer()
-                        if let p = st.path { Text(p).jepFont(12).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head) }
+                        if !st.pod, let p = st.path { Text(p).jepFont(12).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head) }
                     }
                 }
             }

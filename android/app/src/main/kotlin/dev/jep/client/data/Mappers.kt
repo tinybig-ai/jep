@@ -52,9 +52,9 @@ import dev.jep.client.domain.model.Workspace
 
 // the JSON→domain boundary. Unknown part kinds and statuses degrade to
 // inert renderings here, once, instead of leaking harness vocabulary upward.
-fun SessionDto.toDomain() = SessionSummary(id, title, workspace, createdAt, updatedAt, adapter, harness, subagents, active, seenAt, pinned)
+fun SessionDto.toDomain() = SessionSummary(id, title, workspace, createdAt, updatedAt, adapter, harness, subagents, active, seenAt, pinned, pod)
 
-fun WorkspaceDto.toDomain() = Workspace(name, harness, dir)
+fun WorkspaceDto.toDomain() = Workspace(name, harness, dir, pod)
 
 fun DirEntryDto.toDomain() = DirEntry(name, git)
 

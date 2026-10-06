@@ -42,6 +42,14 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="jep" android:host="pair" />
             </intent-filter>
+            <!-- Share anything into jep: it becomes the first message of a
+                 conversation in whichever destination is picked -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
         </activity>
 
         <service

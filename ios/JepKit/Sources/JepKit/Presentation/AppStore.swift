@@ -16,6 +16,8 @@ public struct NewChatState: Equatable, Sendable {
     public var workspace: String?
     /// an absolute directory picked by browsing; wins over `workspace`
     public var path: String?
+    /// a throwaway directory the gateway mints; wins over both
+    public var pod = false
     public var harnesses: [String] = []
     public var defaultHarness: String?
     public var harnessOptions: [HarnessSetting] = []
@@ -28,7 +30,7 @@ public struct NewChatState: Equatable, Sendable {
     public var creating = false
     public var error: String?
     public init(workspaces: [Workspace] = []) { self.workspaces = workspaces }
-    public var target: String? { path ?? workspace }
+    public var target: String? { pod ? "pod" : path ?? workspace }
 }
 
 public struct Prefs: Equatable, Sendable {
@@ -472,6 +474,7 @@ public final class AppStore {
     public func selectWorkspace(_ name: String, harness: String) {
         newChat.workspace = name
         newChat.path = nil
+        newChat.pod = false
         newChat.harness = harness
         newChat.harnessOptions = []
         newChat.harnessSettings = [:]
@@ -482,7 +485,16 @@ public final class AppStore {
     public func selectPath(_ p: String) {
         newChat.path = p
         newChat.workspace = nil
+        newChat.pod = false
         newChat.browsing = false
+        newChat.error = nil
+    }
+
+    /// a pod has no directory of its own to pick: the gateway makes one
+    public func selectPod() {
+        newChat.pod = true
+        newChat.workspace = nil
+        newChat.path = nil
         newChat.error = nil
     }
 
@@ -546,7 +558,7 @@ public final class AppStore {
         return Task {
             do {
                 let title = st.title.trimmingCharacters(in: .whitespaces)
-                let s = try await r.newSession(title: title.isEmpty ? nil : title, workspace: st.workspace, path: st.path, harness: st.harness, harnessSettings: st.harnessSettings)
+                let s = try await r.newSession(title: title.isEmpty ? nil : title, workspace: st.workspace, path: st.path, harness: st.harness, pod: st.pod, harnessSettings: st.harnessSettings)
                 refresh()
                 open(s)
             } catch {

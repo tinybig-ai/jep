@@ -47,6 +47,7 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.foundation.layout.offset
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.input.pointer.pointerInput
@@ -64,7 +65,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.activity.compose.BackHandler
 import dev.jep.client.domain.model.ImportableSession
@@ -84,6 +84,7 @@ import dev.jep.client.R
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.jep.client.domain.model.SessionSummary
+import dev.jep.client.presentation.app.PODS_PROJECT
 
 // The entry list: newest conversation first, one workspace tag per row. The
 // screen reflects the gateway; it never caches beyond what it was handed.
@@ -120,19 +121,21 @@ fun SessionsScreen(
     onImport: (ImportableSession) -> Unit,
     /** group the list into projects (one row per directory) instead of a flat list */
     grouped: Boolean = false,
+    // which project is open (its directory), when grouped. Kept in the
+    // ViewModel, not the screen: a project survives leaving for a chat, so
+    // Back returns inside it rather than to the top of the list.
+    openProject: String? = null,
+    onOpenProject: (String?) -> Unit = {},
 ) {
     var importOpen by remember { mutableStateOf(false) }
     var archivedOpen by remember { mutableStateOf(false) }
     var confirmImport by remember { mutableStateOf<ImportableSession?>(null) }
-    // Which project is open (its directory), when the list is grouped. Kept in
-    // the screen rather than the app's navigation: a project is a glance at one
-    // list, not a place, and back is the only way out of it.
-    var openProject by rememberSaveable { mutableStateOf<String?>(null) }
     // Turning grouping off while a project is open must not leave a flat list
     // filtered to that one project, so the drill-in is dropped with the mode.
-    LaunchedEffect(grouped) { if (!grouped) openProject = null }
-    BackHandler(enabled = grouped && openProject != null) { openProject = null }
+    LaunchedEffect(grouped) { if (!grouped) onOpenProject(null) }
+    BackHandler(enabled = grouped && openProject != null) { onOpenProject(null) }
     Scaffold(
+        containerColor = Color.Transparent,
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = onNew,
@@ -147,6 +150,7 @@ fun SessionsScreen(
         Column(Modifier.fillMaxSize().padding(pad)) {
             if (selection.isNotEmpty()) {
                 TopAppBar(
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
                     navigationIcon = {
                         IconButton(onClick = onClearSelection) { Icon(Icons.Filled.Close, "cancel selection") }
                     },
@@ -175,11 +179,12 @@ fun SessionsScreen(
                     },
                 )
             } else TopAppBar(
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
                 navigationIcon = {
                     // inside a project the only way out is back, so the bar
                     // grows one — the logo is replaced by where you are
                     if (grouped && openProject != null) {
-                        IconButton(onClick = { openProject = null }) {
+                        IconButton(onClick = { onOpenProject(null) }) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, "back to projects")
                         }
                     }
@@ -198,13 +203,13 @@ fun SessionsScreen(
                         }
                     } else Row(
                         // the harness icons in the rows below start at 18dp, and the
-                        // logo's mipmap carries its own transparent margin, so the
-                        // apple sits further right than the marks it lines up with
+                        // mark carries its own transparent margin, so the apple
+                        // sits further right than the marks it lines up with
                         Modifier.offset(x = (-12).dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Image(
-                            painterResource(R.mipmap.ic_launcher),
+                            painterResource(R.drawable.jep_mark),
                             null,
                             Modifier.size(60.dp).clip(RoundedCornerShape(Radius.card)),
                         )
@@ -269,7 +274,7 @@ fun SessionsScreen(
                             unread = list.any { unread.contains(it.id) },
                             active = list.any { it.active },
                             pinned = list.any { it.pinned },
-                            onClick = { openProject = dir },
+                            onClick = { onOpenProject(dir) },
                         )
                     }
                 }
@@ -614,8 +619,10 @@ private fun ago(epoch: Long): String {
     }
 }
 
-/** the directory a conversation belongs to — the project it groups under */
-internal fun projectDir(s: SessionSummary): String = s.workspace.ifBlank { s.adapter ?: "unknown" }
+/** the directory a conversation belongs to — the project it groups under.
+ * Pods all group under one sentinel: a throwaway dir names no project. */
+internal fun projectDir(s: SessionSummary): String =
+    if (s.pod) PODS_PROJECT else s.workspace.ifBlank { s.adapter ?: "unknown" }
 
 /**
  * The projects in the list, each with its conversations.
@@ -635,7 +642,8 @@ internal fun groupedProjects(sessions: List<SessionSummary>): List<Pair<String, 
 
 /** what to call a project: the workspace's friendly name, else its folder name */
 internal fun projectName(dir: String, sessions: List<SessionSummary>): String =
-    sessions.firstNotNullOfOrNull { it.adapter?.takeIf { a -> a.isNotBlank() } }
+    if (dir == PODS_PROJECT) "Pods"
+    else sessions.firstNotNullOfOrNull { it.adapter?.takeIf { a -> a.isNotBlank() } }
         ?: dir.trimEnd('/').substringAfterLast('/').ifBlank { dir }
 
 // One row per project in the grouped view: the folder, how many conversations

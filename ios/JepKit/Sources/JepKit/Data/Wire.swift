@@ -21,8 +21,9 @@ struct SessionDto: Decodable {
     var harness: String?
     var seenAt: Int64
     var pinned: Bool
+    var pod: Bool
 
-    enum K: String, CodingKey { case id, title, subagents, active, workspace, createdAt, updatedAt, adapter, harness, seenAt, pinned }
+    enum K: String, CodingKey { case id, title, subagents, active, workspace, createdAt, updatedAt, adapter, harness, seenAt, pinned, pod }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: K.self)
         id = try c.decode(String.self, forKey: .id)
@@ -36,6 +37,7 @@ struct SessionDto: Decodable {
         harness = c.o(.harness)
         seenAt = c.v(.seenAt, 0)
         pinned = c.v(.pinned, false)
+        pod = c.v(.pod, false)
     }
 }
 
@@ -173,13 +175,14 @@ struct NewSessionRes: Decodable {
 }
 
 struct WorkspaceDto: Decodable {
-    var name: String, harness: String, dir: String
-    enum K: String, CodingKey { case name, harness, dir }
+    var name: String, harness: String, dir: String, pod: Bool
+    enum K: String, CodingKey { case name, harness, dir, pod }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: K.self)
         name = c.v(.name, "")
         harness = c.v(.harness, "")
         dir = c.v(.dir, "")
+        pod = c.v(.pod, false)
     }
 }
 

@@ -32,8 +32,10 @@ public struct SessionSummary: Equatable, Hashable, Identifiable, Sendable {
     public var seenAt: Int64
     /// held at the top of the list; the daemon keeps it
     public var pinned: Bool
+    /// a throwaway conversation whose directory the gateway made and owns
+    public var pod: Bool
 
-    public init(id: String, title: String, workspace: String = "", createdAt: Int64 = 0, updatedAt: Int64 = 0, adapter: String? = nil, harness: String? = nil, subagents: Int = 0, active: Bool = false, seenAt: Int64 = 0, pinned: Bool = false) {
+    public init(id: String, title: String, workspace: String = "", createdAt: Int64 = 0, updatedAt: Int64 = 0, adapter: String? = nil, harness: String? = nil, subagents: Int = 0, active: Bool = false, seenAt: Int64 = 0, pinned: Bool = false, pod: Bool = false) {
         self.id = id
         self.title = title
         self.workspace = workspace
@@ -45,6 +47,7 @@ public struct SessionSummary: Equatable, Hashable, Identifiable, Sendable {
         self.active = active
         self.seenAt = seenAt
         self.pinned = pinned
+        self.pod = pod
     }
 }
 
@@ -53,10 +56,13 @@ public struct Workspace: Equatable, Hashable, Sendable {
     public var name: String
     public var harness: String
     public var dir: String
-    public init(name: String, harness: String, dir: String = "") {
+    /// the `pods` directory itself, exposed so a pod can name its harness
+    public var pod: Bool
+    public init(name: String, harness: String, dir: String = "", pod: Bool = false) {
         self.name = name
         self.harness = harness
         self.dir = dir
+        self.pod = pod
     }
 }
 

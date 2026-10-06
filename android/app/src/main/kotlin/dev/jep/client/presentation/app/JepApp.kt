@@ -1,8 +1,11 @@
 package dev.jep.client.presentation.app
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
@@ -10,6 +13,7 @@ import dev.jep.client.presentation.chat.ChatScreen
 import dev.jep.client.presentation.chat.ChatViewModel
 import dev.jep.client.presentation.newchat.NewChatScreen
 import dev.jep.client.presentation.sessions.SessionsScreen
+import dev.jep.client.presentation.theme.JepBackdrop
 
 @Composable
 fun JepApp(app: AppViewModel) {
@@ -18,6 +22,10 @@ fun JepApp(app: AppViewModel) {
     val busy by app.busy.collectAsState()
     val notice by app.notice.collectAsState()
 
+    // one backdrop for every screen; the screens keep their containers
+    // transparent so the gradient reads through
+    Box(Modifier.fillMaxSize()) {
+        JepBackdrop()
     when {
         !paired -> dev.jep.client.presentation.pair.PairScreen(busy) { address, code, done ->
             app.pair(address, code, done)
@@ -31,6 +39,7 @@ fun JepApp(app: AppViewModel) {
                 onHarness = { app.setNewHarness(it) },
                 onHarnessSetting = { id, enabled -> app.setNewHarnessSetting(id, enabled) },
                 onSelectWorkspace = { name, harness -> app.selectWorkspace(name, harness) },
+                onSelectPod = { app.selectPod() },
                 onSelectPath = { app.selectPath(it) },
                 onOpenBrowse = { app.openBrowse() },
                 onCloseBrowse = { app.closeBrowse() },
@@ -70,6 +79,11 @@ fun JepApp(app: AppViewModel) {
                     initializer { ChatViewModel(app.chat(), c.sessionId, c.title, c.workspace, c.harness, { app.markRead(c.sessionId) }, app.memory, app.attention) }
                 },
             )
+            // a conversation created for shared content sends it the moment
+            // the chat exists
+            androidx.compose.runtime.LaunchedEffect(c.sessionId) {
+                app.consumeShared(c.sessionId)?.let { vm.sendShared(it) }
+            }
             ChatScreen(
                 vm,
                 onBack = { app.back() },
@@ -91,6 +105,8 @@ fun JepApp(app: AppViewModel) {
             onLoadImportable = { app.loadImportable() },
             onImport = { app.importSession(it.id) },
             grouped = app.prefs.collectAsState().value.groupByProject,
+            openProject = app.openProject.collectAsState().value,
+            onOpenProject = { app.openProject(it) },
             onArchive = { app.archive(it) },
             unread = app.unread.collectAsState().value,
             archived = app.archived.collectAsState().value,
@@ -105,5 +121,6 @@ fun JepApp(app: AppViewModel) {
             undo = app.undo.collectAsState().value,
             onUndoArchive = { app.undoArchive() },
         )
+    }
     }
 }

@@ -35,7 +35,7 @@ fun PairScreen(busy: Boolean, onPair: (address: String, code: String, done: (Boo
     var error by remember { mutableStateOf<String?>(null) }
     var waiting by remember { mutableStateOf(false) }
 
-    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+    Surface(Modifier.fillMaxSize(), color = androidx.compose.ui.graphics.Color.Transparent) {
         Column(
             Modifier
                 .fillMaxSize()
