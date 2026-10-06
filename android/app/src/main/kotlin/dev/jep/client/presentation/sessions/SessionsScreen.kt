@@ -33,7 +33,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.CircularProgressIndicator
@@ -43,7 +42,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.LocalMinimumInteractiveComponentEnforcement
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -62,6 +63,7 @@ import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -77,6 +79,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import dev.jep.client.presentation.theme.JepMark
 import dev.jep.client.presentation.theme.JepMono
 import dev.jep.client.presentation.theme.LocalSyntaxColors
 import dev.jep.client.R
@@ -148,11 +151,25 @@ fun SessionsScreen(
         },
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad)) {
+            // the mark floats on its own row, centered — the bar below keeps
+            // the plain wordmark instead of squeezing a logo into the title
+            Box(Modifier.fillMaxWidth().padding(top = 2.dp), contentAlignment = Alignment.Center) {
+                Image(
+                    JepMark,
+                    null,
+                    Modifier.size(24.dp),
+                )
+            }
             if (selection.isNotEmpty()) {
                 TopAppBar(
+                    modifier = Modifier.height(48.dp),
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
                     navigationIcon = {
-                        IconButton(onClick = onClearSelection) { Icon(Icons.Filled.Close, "cancel selection") }
+                        CompositionLocalProvider(LocalMinimumInteractiveComponentEnforcement provides false) {
+                            IconButton(onClick = onClearSelection, Modifier.size(36.dp)) {
+                                Icon(Icons.Filled.Close, "cancel selection", Modifier.size(20.dp))
+                            }
+                        }
                     },
                     title = { Text("${selection.size} selected") },
                     actions = {
@@ -160,32 +177,38 @@ fun SessionsScreen(
                         // reads as the state those rows are in
                         val allPinned = sessions.filter { it.id in selection }.all { it.pinned } &&
                             sessions.any { it.id in selection }
-                        IconButton(onClick = { onPinSelected(!allPinned) }) {
+                        CompositionLocalProvider(LocalMinimumInteractiveComponentEnforcement provides false) {
+                        IconButton(onClick = { onPinSelected(!allPinned) }, Modifier.size(36.dp)) {
                             Icon(
                                 Icons.Filled.PushPin,
                                 if (allPinned) "unpin selected" else "pin selected",
+                                Modifier.size(20.dp),
                                 tint = if (allPinned) MaterialTheme.colorScheme.primary else LocalContentColor.current,
                             )
                         }
-                        IconButton(onClick = onArchiveSelected) {
-                            Icon(Icons.Filled.Archive, "archive selected")
+                        IconButton(onClick = onArchiveSelected, Modifier.size(36.dp)) {
+                            Icon(Icons.Filled.Archive, "archive selected", Modifier.size(20.dp))
                         }
-                        IconButton(onClick = { onMarkSelected(true) }) {
-                            Icon(Icons.Filled.MarkEmailRead, "mark as read")
+                        IconButton(onClick = { onMarkSelected(true) }, Modifier.size(36.dp)) {
+                            Icon(Icons.Filled.MarkEmailRead, "mark as read", Modifier.size(20.dp))
                         }
-                        IconButton(onClick = { onMarkSelected(false) }) {
-                            Icon(Icons.Filled.MarkEmailUnread, "mark as unread")
+                        IconButton(onClick = { onMarkSelected(false) }, Modifier.size(36.dp)) {
+                            Icon(Icons.Filled.MarkEmailUnread, "mark as unread", Modifier.size(20.dp))
+                        }
                         }
                     },
                 )
             } else TopAppBar(
+                modifier = Modifier.height(48.dp),
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
                 navigationIcon = {
                     // inside a project the only way out is back, so the bar
                     // grows one — the logo is replaced by where you are
                     if (grouped && openProject != null) {
-                        IconButton(onClick = { onOpenProject(null) }) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "back to projects")
+                        CompositionLocalProvider(LocalMinimumInteractiveComponentEnforcement provides false) {
+                            IconButton(onClick = { onOpenProject(null) }, Modifier.size(36.dp)) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, "back to projects", Modifier.size(20.dp))
+                            }
                         }
                     }
                 },
@@ -201,20 +224,7 @@ fun SessionsScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                    } else Row(
-                        // the harness icons in the rows below start at 18dp, and the
-                        // mark carries a small transparent margin of its own
-                        Modifier.offset(x = (-4).dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Image(
-                            painterResource(R.drawable.jep_mark),
-                            null,
-                            Modifier.size(32.dp),
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text("Jep")
-                    }
+                    } else Text("Jep")
                 },
                 actions = {
                     if (busy) {
@@ -228,18 +238,19 @@ fun SessionsScreen(
                     if (undo.isNotEmpty()) {
                         TextButton(onClick = onUndoArchive) { Text("Undo") }
                     }
-                    IconButton(onClick = { importOpen = true; onLoadImportable() }) {
-                        Icon(Icons.Filled.Link, "import a session", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    // archive hid conversations with no way back to them
-                    IconButton(onClick = { archivedOpen = true; onLoadArchived() }) {
-                        Icon(Icons.Filled.Inventory2, "archived conversations", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    IconButton(onClick = onSettings) {
-                        Icon(Icons.Filled.Settings, "settings", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    IconButton(onClick = onRefresh) {
-                        Icon(Icons.Filled.Refresh, "refresh", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    // compact bars: the material 48dp target reads huge next to
+                    // 20dp glyphs, so the enforcement goes off for this bar only
+                    CompositionLocalProvider(LocalMinimumInteractiveComponentEnforcement provides false) {
+                        IconButton(onClick = { importOpen = true; onLoadImportable() }, Modifier.size(36.dp)) {
+                            Icon(Icons.Filled.Link, "import a session", Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        // archive hid conversations with no way back to them
+                        IconButton(onClick = { archivedOpen = true; onLoadArchived() }, Modifier.size(36.dp)) {
+                            Icon(Icons.Filled.Inventory2, "archived conversations", Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        IconButton(onClick = onSettings, Modifier.size(36.dp)) {
+                            Icon(Icons.Filled.Settings, "settings", Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                 },
             )
@@ -251,6 +262,11 @@ fun SessionsScreen(
                     fontSize = 14.sp,
                 )
             }
+            PullToRefreshBox(
+                isRefreshing = busy,
+                onRefresh = onRefresh,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+            ) {
             if (sessions.isEmpty() && busy) {
                 Box(
                     Modifier.fillMaxSize().semantics { contentDescription = "loading conversations" },
@@ -301,6 +317,7 @@ fun SessionsScreen(
                         }
                     }
                 }
+            }
             }
         }
     }
