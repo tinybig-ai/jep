@@ -31,10 +31,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.CircularProgressIndicator
@@ -44,9 +42,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.LocalMinimumInteractiveComponentEnforcement
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.foundation.layout.offset
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.input.pointer.pointerInput
@@ -55,16 +56,17 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.activity.compose.BackHandler
 import dev.jep.client.domain.model.ImportableSession
@@ -77,13 +79,14 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import dev.jep.client.presentation.theme.JepMark
 import dev.jep.client.presentation.theme.JepMono
 import dev.jep.client.presentation.theme.LocalSyntaxColors
-import dev.jep.client.presentation.theme.Radius
 import dev.jep.client.R
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.jep.client.domain.model.SessionSummary
+import dev.jep.client.presentation.app.PODS_PROJECT
 
 // The entry list: newest conversation first, one workspace tag per row. The
 // screen reflects the gateway; it never caches beyond what it was handed.
@@ -120,35 +123,53 @@ fun SessionsScreen(
     onImport: (ImportableSession) -> Unit,
     /** group the list into projects (one row per directory) instead of a flat list */
     grouped: Boolean = false,
+    // which project is open (its directory), when grouped. Kept in the
+    // ViewModel, not the screen: a project survives leaving for a chat, so
+    // Back returns inside it rather than to the top of the list.
+    openProject: String? = null,
+    onOpenProject: (String?) -> Unit = {},
 ) {
     var importOpen by remember { mutableStateOf(false) }
     var archivedOpen by remember { mutableStateOf(false) }
     var confirmImport by remember { mutableStateOf<ImportableSession?>(null) }
-    // Which project is open (its directory), when the list is grouped. Kept in
-    // the screen rather than the app's navigation: a project is a glance at one
-    // list, not a place, and back is the only way out of it.
-    var openProject by rememberSaveable { mutableStateOf<String?>(null) }
     // Turning grouping off while a project is open must not leave a flat list
     // filtered to that one project, so the drill-in is dropped with the mode.
-    LaunchedEffect(grouped) { if (!grouped) openProject = null }
-    BackHandler(enabled = grouped && openProject != null) { openProject = null }
+    LaunchedEffect(grouped) { if (!grouped) onOpenProject(null) }
+    BackHandler(enabled = grouped && openProject != null) { onOpenProject(null) }
     Scaffold(
+        containerColor = Color.Transparent,
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = onNew,
+                modifier = Modifier.height(42.dp),
                 containerColor = MaterialTheme.colorScheme.primary,
                 contentColor = MaterialTheme.colorScheme.onPrimary,
             ) {
-                Icon(Icons.Filled.Add, null)
-                Text(" New conversation")
+                Icon(Icons.Filled.Add, null, Modifier.size(18.dp))
+                Text(" New conversation", fontSize = 13.sp)
             }
         },
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad)) {
+            // the mark floats on its own row, centered — the bar below keeps
+            // the plain wordmark instead of squeezing a logo into the title
+            Box(Modifier.fillMaxWidth().padding(top = 2.dp), contentAlignment = Alignment.Center) {
+                Image(
+                    JepMark,
+                    null,
+                    Modifier.size(24.dp),
+                )
+            }
             if (selection.isNotEmpty()) {
                 TopAppBar(
+                    modifier = Modifier.height(48.dp),
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
                     navigationIcon = {
-                        IconButton(onClick = onClearSelection) { Icon(Icons.Filled.Close, "cancel selection") }
+                        CompositionLocalProvider(LocalMinimumInteractiveComponentEnforcement provides false) {
+                            IconButton(onClick = onClearSelection, Modifier.size(36.dp)) {
+                                Icon(Icons.Filled.Close, "cancel selection", Modifier.size(20.dp))
+                            }
+                        }
                     },
                     title = { Text("${selection.size} selected") },
                     actions = {
@@ -156,31 +177,38 @@ fun SessionsScreen(
                         // reads as the state those rows are in
                         val allPinned = sessions.filter { it.id in selection }.all { it.pinned } &&
                             sessions.any { it.id in selection }
-                        IconButton(onClick = { onPinSelected(!allPinned) }) {
+                        CompositionLocalProvider(LocalMinimumInteractiveComponentEnforcement provides false) {
+                        IconButton(onClick = { onPinSelected(!allPinned) }, Modifier.size(36.dp)) {
                             Icon(
                                 Icons.Filled.PushPin,
                                 if (allPinned) "unpin selected" else "pin selected",
+                                Modifier.size(20.dp),
                                 tint = if (allPinned) MaterialTheme.colorScheme.primary else LocalContentColor.current,
                             )
                         }
-                        IconButton(onClick = onArchiveSelected) {
-                            Icon(Icons.Filled.Archive, "archive selected")
+                        IconButton(onClick = onArchiveSelected, Modifier.size(36.dp)) {
+                            Icon(Icons.Filled.Archive, "archive selected", Modifier.size(20.dp))
                         }
-                        IconButton(onClick = { onMarkSelected(true) }) {
-                            Icon(Icons.Filled.MarkEmailRead, "mark as read")
+                        IconButton(onClick = { onMarkSelected(true) }, Modifier.size(36.dp)) {
+                            Icon(Icons.Filled.MarkEmailRead, "mark as read", Modifier.size(20.dp))
                         }
-                        IconButton(onClick = { onMarkSelected(false) }) {
-                            Icon(Icons.Filled.MarkEmailUnread, "mark as unread")
+                        IconButton(onClick = { onMarkSelected(false) }, Modifier.size(36.dp)) {
+                            Icon(Icons.Filled.MarkEmailUnread, "mark as unread", Modifier.size(20.dp))
+                        }
                         }
                     },
                 )
             } else TopAppBar(
+                modifier = Modifier.height(48.dp),
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
                 navigationIcon = {
                     // inside a project the only way out is back, so the bar
                     // grows one — the logo is replaced by where you are
                     if (grouped && openProject != null) {
-                        IconButton(onClick = { openProject = null }) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "back to projects")
+                        CompositionLocalProvider(LocalMinimumInteractiveComponentEnforcement provides false) {
+                            IconButton(onClick = { onOpenProject(null) }, Modifier.size(36.dp)) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, "back to projects", Modifier.size(20.dp))
+                            }
                         }
                     }
                 },
@@ -196,21 +224,7 @@ fun SessionsScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                    } else Row(
-                        // the harness icons in the rows below start at 18dp, and the
-                        // logo's mipmap carries its own transparent margin, so the
-                        // apple sits further right than the marks it lines up with
-                        Modifier.offset(x = (-12).dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Image(
-                            painterResource(R.mipmap.ic_launcher),
-                            null,
-                            Modifier.size(60.dp).clip(RoundedCornerShape(Radius.card)),
-                        )
-                        Spacer(Modifier.width(12.dp))
-                        Text("Jep")
-                    }
+                    } else Text("Jep")
                 },
                 actions = {
                     if (busy) {
@@ -224,18 +238,19 @@ fun SessionsScreen(
                     if (undo.isNotEmpty()) {
                         TextButton(onClick = onUndoArchive) { Text("Undo") }
                     }
-                    IconButton(onClick = { importOpen = true; onLoadImportable() }) {
-                        Icon(Icons.Filled.Link, "import a session", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    // archive hid conversations with no way back to them
-                    IconButton(onClick = { archivedOpen = true; onLoadArchived() }) {
-                        Icon(Icons.Filled.Inventory2, "archived conversations", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    IconButton(onClick = onSettings) {
-                        Icon(Icons.Filled.Settings, "settings", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    IconButton(onClick = onRefresh) {
-                        Icon(Icons.Filled.Refresh, "refresh", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    // compact bars: the material 48dp target reads huge next to
+                    // 20dp glyphs, so the enforcement goes off for this bar only
+                    CompositionLocalProvider(LocalMinimumInteractiveComponentEnforcement provides false) {
+                        IconButton(onClick = { importOpen = true; onLoadImportable() }, Modifier.size(36.dp)) {
+                            Icon(Icons.Filled.Link, "import a session", Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        // archive hid conversations with no way back to them
+                        IconButton(onClick = { archivedOpen = true; onLoadArchived() }, Modifier.size(36.dp)) {
+                            Icon(Icons.Filled.Inventory2, "archived conversations", Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        IconButton(onClick = onSettings, Modifier.size(36.dp)) {
+                            Icon(Icons.Filled.Settings, "settings", Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                 },
             )
@@ -247,6 +262,11 @@ fun SessionsScreen(
                     fontSize = 14.sp,
                 )
             }
+            PullToRefreshBox(
+                isRefreshing = busy,
+                onRefresh = onRefresh,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+            ) {
             if (sessions.isEmpty() && busy) {
                 Box(
                     Modifier.fillMaxSize().semantics { contentDescription = "loading conversations" },
@@ -269,7 +289,7 @@ fun SessionsScreen(
                             unread = list.any { unread.contains(it.id) },
                             active = list.any { it.active },
                             pinned = list.any { it.pinned },
-                            onClick = { openProject = dir },
+                            onClick = { onOpenProject(dir) },
                         )
                     }
                 }
@@ -297,6 +317,7 @@ fun SessionsScreen(
                         }
                     }
                 }
+            }
             }
         }
     }
@@ -614,8 +635,10 @@ private fun ago(epoch: Long): String {
     }
 }
 
-/** the directory a conversation belongs to — the project it groups under */
-internal fun projectDir(s: SessionSummary): String = s.workspace.ifBlank { s.adapter ?: "unknown" }
+/** the directory a conversation belongs to — the project it groups under.
+ * Pods all group under one sentinel: a throwaway dir names no project. */
+internal fun projectDir(s: SessionSummary): String =
+    if (s.pod) PODS_PROJECT else s.workspace.ifBlank { s.adapter ?: "unknown" }
 
 /**
  * The projects in the list, each with its conversations.
@@ -635,7 +658,8 @@ internal fun groupedProjects(sessions: List<SessionSummary>): List<Pair<String, 
 
 /** what to call a project: the workspace's friendly name, else its folder name */
 internal fun projectName(dir: String, sessions: List<SessionSummary>): String =
-    sessions.firstNotNullOfOrNull { it.adapter?.takeIf { a -> a.isNotBlank() } }
+    if (dir == PODS_PROJECT) "Pods"
+    else sessions.firstNotNullOfOrNull { it.adapter?.takeIf { a -> a.isNotBlank() } }
         ?: dir.trimEnd('/').substringAfterLast('/').ifBlank { dir }
 
 // One row per project in the grouped view: the folder, how many conversations

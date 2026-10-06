@@ -37,6 +37,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -44,6 +45,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.contentDescription
@@ -89,8 +91,10 @@ fun SettingsScreen(
     var forgetOpen by remember { mutableStateOf(false) }
 
     Scaffold(
+        containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
                 title = { Text("Settings") },
                 navigationIcon = {
                     IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "back") }
@@ -98,7 +102,7 @@ fun SettingsScreen(
             )
         },
     ) { pad ->
-        LazyColumn(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(pad)) {
+        LazyColumn(Modifier.fillMaxSize().padding(pad)) {
             item { SectionTitle("APPEARANCE") }
             item {
                 ThemeRow("System", Icons.Filled.SettingsBrightness, theme == ThemeMode.SYSTEM) { onTheme(ThemeMode.SYSTEM) }

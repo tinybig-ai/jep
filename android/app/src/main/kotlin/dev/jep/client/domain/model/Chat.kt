@@ -33,11 +33,13 @@ data class SessionSummary(
     val seenAt: Long = 0,
     /** held above the rest of the list, whatever has moved most recently */
     val pinned: Boolean = false,
+    /** its workspace is a throwaway dir the daemon conjured (a "pod") */
+    val pod: Boolean = false,
 )
 
 /** a workspace the gateway serves, the harness (opencode/codex/…) behind it,
- * and the directory it reads */
-data class Workspace(val name: String, val harness: String, val dir: String = "")
+ * and the directory it reads. `pod` marks a throwaway dir the daemon conjured. */
+data class Workspace(val name: String, val harness: String, val dir: String = "", val pod: Boolean = false)
 
 /** the harnesses installed on the machine, and the default */
 data class Harnesses(val ids: List<String>, val default: String?)

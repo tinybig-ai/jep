@@ -144,6 +144,19 @@ function cleanForDisplay(m: Message): Message {
   return { ...m, parts: [...parts, ...files] }
 }
 
+// A pod: a conversation that needs a harness but no folder of its own. The
+// daemon conjures a throwaway directory for it inside dataHome — not tmp,
+// which a reboot would wipe, orphaning the session the pod was made for —
+// and brings it up like any other workspace. The pods root is never served
+// itself: only the individual pod workspaces are, through the usual
+// adapters-are-roots rule.
+const podsRoot = (dataHome: string): string => resolve(dataHome, "pods")
+const isPod = (workspace: string, dataHome: string): boolean => {
+  const real = resolve(workspace)
+  const root = podsRoot(dataHome)
+  return real !== root && real.startsWith(root + sep)
+}
+
 // Content type for a file the phone fetches: enough for images to render
 // inline; anything else is served as octets.
 const IMAGE_MIME: Record<string, string> = {
@@ -1062,7 +1075,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
             // conversation cannot move between harnesses after it exists.
             // `active` = a turn is in flight for it right now (a reply streaming,
             // a tool running) — the phone shows a live mark on the row
-            items.push({ ...s, title: overridden ?? s.title, adapter: name, harness: adapter.id, active: isActive(s.id), seenAt: seen.get(s.id) ?? 0, pinned: pinned.has(s.id) })
+            items.push({ ...s, title: overridden ?? s.title, adapter: name, harness: adapter.id, active: isActive(s.id), seenAt: seen.get(s.id) ?? 0, pinned: pinned.has(s.id), pod: isPod(adapter.workspace, deps.dataHome) })
           }
         }
         // pinned conversations first, then newest — pinning is the user saying
@@ -1074,7 +1087,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       // what the phone may create a conversation in: each served workspace, the
       // harness behind it, and its directory — for creation-time selection
       if (path === "/workspaces") {
-        const items = deps.adapters().map(({ name, adapter }) => ({ name, harness: adapter.id, dir: adapter.workspace }))
+        const items = deps.adapters().map(({ name, adapter }) => ({ name, harness: adapter.id, dir: adapter.workspace, pod: isPod(adapter.workspace, deps.dataHome) }))
         return json(res, 200, { items })
       }
 
@@ -1170,6 +1183,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const wantWorkspace = str("workspace") // a served workspace's name
         const wantPath = str("path") // …or an absolute directory to serve
         const wantHarness = str("harness")
+        const wantPod = b.pod === true // a throwaway directory, conjured here
         const requestedSettings = b.harnessSettings && typeof b.harnessSettings === "object" && !Array.isArray(b.harnessSettings)
           ? Object.fromEntries(Object.entries(b.harnessSettings).filter((row): row is [string, boolean] => typeof row[1] === "boolean"))
           : {}
@@ -1185,6 +1199,18 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
                   (!wantHarness || adapter.id === wantHarness),
               )
             : all[0]
+        // a pod asks for nothing but a harness: make its folder here and
+        // serve it. It wins over a workspace/path when both arrive, because
+        // "no folder of my own" is the whole point of asking for one
+        if (wantPod && deps.addWorkspace) {
+          const dir = join(podsRoot(deps.dataHome), `pod-${randomBytes(4).toString("hex")}`)
+          try {
+            await mkdir(dir, { recursive: true })
+            picked = await deps.addWorkspace(dir, wantHarness || undefined)
+          } catch (err) {
+            return json(res, 400, { error: String((err as Error)?.message ?? err) })
+          }
+        }
         // a directory we don't serve yet: bring it up under the harness, the
         // same spawn the bot's "Add project" performs
         if (!picked && wantPath && deps.addWorkspace) {
@@ -1208,7 +1234,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
             }
           }
         }
-        if (!picked) return json(res, 400, { error: "no such workspace or harness" })
+        if (!picked) return json(res, 400, { error: wantPod ? "this gateway cannot create a pod" : "no such workspace or harness" })
         const settingSpecs = picked.adapter.settings?.() ?? deps.harnessSettings?.(picked.adapter.id) ?? []
         if (Object.keys(requestedSettings).some((key) => !settingSpecs.some((spec) => spec.id === key))) {
           return json(res, 400, { error: "unknown harness setting" })
@@ -1219,7 +1245,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           harnessSettings.set(s.id, valuesForSettings(settingSpecs, requestedSettings))
           await saveHarnessSettings(deps.dataHome, harnessSettings)
         }
-        return json(res, 200, { session: { ...s, adapter: picked.name, harness: picked.adapter.id } })
+        return json(res, 200, { session: { ...s, adapter: picked.name, harness: picked.adapter.id, pod: isPod(picked.adapter.workspace, deps.dataHome) } })
       }
 
       // ── importing a session from the same harness's other store ─────────

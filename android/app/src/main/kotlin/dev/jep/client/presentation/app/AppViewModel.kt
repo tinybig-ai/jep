@@ -37,8 +37,9 @@ sealed interface Screen {
 }
 
 // The New Conversation form's state. A conversation is born with a directory
-// (a served workspace, or any path under the browse root) and a harness — both
-// the user's to choose here, and not changeable afterwards.
+// (a served workspace, or any path under the browse root — or none at all: a
+// "pod" has the daemon conjure a throwaway one) and a harness — both the
+// user's to choose here, and not changeable afterwards.
 data class NewChatState(
     val title: String = "",
     val harness: String? = null,
@@ -46,6 +47,8 @@ data class NewChatState(
     val workspace: String? = null,
     /** selected absolute directory, when browsing — wins over `workspace` */
     val path: String? = null,
+    /** a pod: no folder picked — the daemon conjures a throwaway directory */
+    val pod: Boolean = false,
     val harnesses: List<String> = emptyList(),
     val defaultHarness: String? = null,
     val harnessOptions: List<HarnessSetting> = emptyList(),
@@ -57,10 +60,41 @@ data class NewChatState(
     val loadingBrowse: Boolean = false,
     val creating: Boolean = false,
     val error: String? = null,
+    /** content shared into jep, sent as the new conversation's first message */
+    val shared: SharedContent? = null,
 ) {
     /** what the form would create in, for the summary line */
     val target: String? get() = path ?: workspace
 }
+
+// Something shared into jep from another app: text, a link, files — held
+// until its destination is picked (a recent project, any folder, or a pod),
+// then sent as the new conversation's first message.
+data class SharedContent(
+    val text: String?,
+    val files: List<SharedFile> = emptyList(),
+) {
+    data class SharedFile(val name: String, val bytes: ByteArray, val mime: String? = null) {
+        // ByteArray's default equals is identity — keep this a value class in
+        // practice (state copy comparisons) by spelling out content equality
+        override fun equals(other: Any?) = other is SharedFile && name == other.name && mime == other.mime && bytes.contentEquals(other.bytes)
+        override fun hashCode() = 31 * (31 * name.hashCode() + (mime?.hashCode() ?: 0)) + bytes.contentHashCode()
+    }
+
+    /** one line for the form's banner, so it shows what it's carrying */
+    val summary: String
+        get() = when {
+            files.isEmpty() -> text?.lineSequence()?.firstOrNull()?.take(80) ?: "Shared text"
+            files.size == 1 && text.isNullOrBlank() -> files[0].name
+            files.size == 1 -> "${files[0].name} + text"
+            else -> "${files.size} files" + if (text.isNullOrBlank()) "" else " + text"
+        }
+}
+
+// The group every pod conversation lists under in the grouped view: a pod's
+// throwaway dir names no project, so they share a "Pods" one. Not a real
+// path — the prefix keeps it from ever colliding with a directory.
+internal const val PODS_PROJECT = "jep:pods"
 
 // app-wide preferences, mirrored into a flow so the theme can react
 data class Prefs(
@@ -178,6 +212,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     // workspaces a conversation can be created in, for the creation picker
     private val _workspaces = MutableStateFlow<List<Workspace>>(emptyList())
     val workspaces = _workspaces.asStateFlow()
+
+    // The project opened inside the grouped list, kept here rather than in
+    // the screen: it must survive leaving for a conversation, or Back lands
+    // on the top of the list instead of the folder the chat came from.
+    private val _openProject = MutableStateFlow<String?>(null)
+    val openProject = _openProject.asStateFlow()
+
+    fun openProject(dir: String?) {
+        _openProject.value = dir
+    }
 
     private val _newChat = MutableStateFlow(NewChatState())
     val newChat = _newChat.asStateFlow()
@@ -486,7 +530,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openNewChat() {
         val r = repo ?: connect()
-        _newChat.value = NewChatState(workspaces = _workspaces.value)
+        // Inside a project folder, "New conversation" means here: the folder
+        // it was opened from is already picked. A served workspace is named
+        // (its harness comes with it); an unserved dir goes as a path and the
+        // daemon brings the chosen harness up on it. Inside "Pods" the pick
+        // is a pod itself.
+        val inside = _openProject.value
+        val base = NewChatState(workspaces = _workspaces.value)
+        _newChat.value = when {
+            inside == null -> base
+            inside == PODS_PROJECT -> base.copy(pod = true)
+            else -> _workspaces.value.firstOrNull { it.dir == inside }
+                ?.let { base.copy(workspace = it.name, harness = it.harness) }
+                ?: base.copy(path = inside)
+        }
         _screen.value = Screen.NewChat
         viewModelScope.launch {
             runCatching { r.harnesses() }.onSuccess { h ->
@@ -501,6 +558,44 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
+
+    // Shared in from another app: open the same form with the content held
+    // and only its destination to pick — a recent project (the fastest share
+    // lands in the one you were just in), any folder, or a pod. The send goes
+    // through the chat the form creates, so a share is a first message, not a
+    // side channel.
+    fun offerShared(content: SharedContent) {
+        val r = repo ?: connect()
+        val recent = byRecency(_workspaces.value).firstOrNull { !it.pod }
+        _newChat.value = NewChatState(
+            workspaces = _workspaces.value,
+            shared = content,
+            pod = recent == null,
+            workspace = recent?.name,
+            harness = recent?.harness,
+        )
+        _screen.value = Screen.NewChat
+        viewModelScope.launch {
+            runCatching { r.harnesses() }.onSuccess { h ->
+                val selected = _newChat.value.harness ?: h.default
+                _newChat.update { it.copy(harnesses = h.ids, harness = selected, defaultHarness = h.default) }
+                selected?.let { loadNewHarnessOptions(r, it) }
+            }
+            runCatching { r.workspaces() }.onSuccess { w ->
+                val ordered = byRecency(w)
+                _workspaces.value = ordered
+                _newChat.update { it.copy(workspaces = ordered) }
+            }
+        }
+    }
+
+    // Content created-with, waiting for its conversation to open: the chat
+    // consumes it on first composition and sends it through the normal send
+    // path, so a share is a real first message. Keyed by session so a share
+    // abandoned mid-create can't leak into the next chat opened.
+    private val _pendingShared = MutableStateFlow<Pair<String, SharedContent>?>(null)
+    fun consumeShared(sessionId: String): SharedContent? =
+        _pendingShared.value?.takeIf { it.first == sessionId }?.second?.also { _pendingShared.value = null }
 
     /**
      * The served workspaces, most recently used first.
@@ -562,10 +657,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     // a served workspace already names its harness — picking the row picks both,
     // so the two selectors can never disagree
     fun selectWorkspace(name: String, harness: String) {
-        _newChat.update { it.copy(workspace = name, path = null, harness = harness, harnessOptions = emptyList(), harnessSettings = emptyMap(), error = null) }
+        _newChat.update { it.copy(workspace = name, path = null, pod = false, harness = harness, harnessOptions = emptyList(), harnessSettings = emptyMap(), error = null) }
         (repo ?: return).let { loadNewHarnessOptions(it, harness) }
     }
-    fun selectPath(path: String) = _newChat.update { it.copy(path = path, workspace = null, browsing = false, error = null) }
+    fun selectPath(path: String) = _newChat.update { it.copy(path = path, workspace = null, pod = false, browsing = false, error = null) }
+
+    // a pod: no folder at all — the daemon conjures a throwaway directory,
+    // and the harness chips above are the whole choice
+    fun selectPod() = _newChat.update { it.copy(pod = true, workspace = null, path = null, error = null) }
 
     fun openBrowse() {
         _newChat.update { it.copy(browsing = true, error = null) }
@@ -612,16 +711,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val r = repo ?: connect()
         val st = _newChat.value
         if (st.creating) return
-        if (st.target == null) {
+        if (!st.pod && st.target == null) {
             _newChat.update { it.copy(error = "pick a workspace or a folder first") }
             return
         }
         _newChat.update { it.copy(creating = true, error = null) }
         viewModelScope.launch {
             runCatching {
-                r.newSession(st.title.ifBlank { null }, st.workspace, st.path, st.harness, st.harnessSettings)
+                r.newSession(st.title.ifBlank { null }, st.workspace, st.path, st.harness, st.harnessSettings, st.pod)
             }
                 .onSuccess {
+                    st.shared?.let { c -> _pendingShared.value = it.id to c }
                     refresh()
                     open(it)
                 }

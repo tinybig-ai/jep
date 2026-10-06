@@ -158,12 +158,14 @@ private val json = Json { ignoreUnknownKeys = true; isLenient = true }
         path: String?,
         harness: String?,
         harnessSettings: Map<String, Boolean>,
+        pod: Boolean,
     ): SessionSummary {
         val body = buildJsonObject {
             title?.let { put("title", it) }
             workspace?.let { put("workspace", it) }
             path?.let { put("path", it) }
             harness?.let { put("harness", it) }
+            if (pod) put("pod", true)
             if (harnessSettings.isNotEmpty()) {
                 put("harnessSettings", buildJsonObject { harnessSettings.forEach { (key, enabled) -> put(key, enabled) } })
             }

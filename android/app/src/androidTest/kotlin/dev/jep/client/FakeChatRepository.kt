@@ -65,8 +65,8 @@ class FakeChatRepository(
 
     var archivedAnswer: List<dev.jep.client.domain.model.SessionSummary> = emptyList()
     override suspend fun archivedSessions() = archivedAnswer
-    override suspend fun newSession(title: String?, workspace: String?, path: String?, harness: String?, harnessSettings: Map<String, Boolean>) =
-        SessionSummary("new-session", title ?: "new", workspace ?: "", 0, 0, workspace, harness)
+    override suspend fun newSession(title: String?, workspace: String?, path: String?, harness: String?, harnessSettings: Map<String, Boolean>, pod: Boolean) =
+        SessionSummary("new-session", title ?: "new", workspace ?: "", 0, 0, workspace, harness, pod = pod)
     override suspend fun harnessOptions(harness: String) = this.harness.options
     override suspend fun sessionHarnessSettings(sessionId: String) = this.harness
     override suspend fun setSessionHarnessSetting(sessionId: String, key: String, enabled: Boolean): Boolean {

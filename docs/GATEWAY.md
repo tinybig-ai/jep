@@ -26,11 +26,11 @@ plain clients).
 |---|---|---|
 | `POST /pair` | `{code}` | `{token}` (5 tries / 60 s) |
 | `GET /health` | (none) | `{ok,paired}` |
-| `POST /sessions` | (none) | `{items[]}` all sessions, every adapter merged, client renames applied; each carries `adapter` (workspace name) and `harness` (engine id) for display |
-| `POST /workspaces` | (none) | `{items[]}` of `{name,harness,dir}`: what a conversation may be created in, for creation-time selection |
+| `POST /sessions` | (none) | `{items[]}` all sessions, every adapter merged, client renames applied; each carries `adapter` (workspace name), `harness` (engine id) and `pod` (its workspace is a daemon-conjured throwaway dir) for display |
+| `POST /workspaces` | (none) | `{items[]}` of `{name,harness,dir,pod}`: what a conversation may be created in, for creation-time selection; `pod` marks a daemon-conjured throwaway directory |
 | `POST /harnesses` | (none) | `{harnesses[],default}`: the harnesses installed here |
 | `POST /browse` | `{path?}` | `{cwd,root,parent,dirs[]}`: folders under `cwd` (`{name,git}`), bounded to `JEP_BROWSE_ROOT` (default `$HOME`); `parent` is null at the root |
-| `POST /new` | `{title?,workspace?,path?,harness?,harnessSettings?}` | `{session}`: created in a named workspace, at an absolute `path` (spawning that workspace under `harness` if it isn't served yet), and/or under a harness; with none, the first served workspace. `harnessSettings` (`{key: bool}`) must name settings the harness declares, or 400. The returned session carries `adapter`+`harness` |
+| `POST /new` | `{title?,workspace?,path?,harness?,harnessSettings?,pod?}` | `{session}`: created in a named workspace, at an absolute `path` (spawning that workspace under `harness` if it isn't served yet), and/or under a harness; with none, the first served workspace. `pod: true` asks for a throwaway directory instead — the daemon conjures one under `<DATA_HOME>/pods/` and serves it under `harness`, so a quick conversation needs no folder of its own. `harnessSettings` (`{key: bool}`) must name settings the harness declares, or 400. The returned session carries `adapter`+`harness`+`pod` |
 | `POST /mkdir` | `{path?,name}` | `{ok,path}`: create a folder inside the browse root (409 if it exists), so a conversation can start in a new one |
 | `POST /harness-settings` | `{id}` or `{harness}` | `{options[],values,compact?}`: the boolean settings a harness declares (`{id,label,description,default,danger?}`) and, by session, that conversation's values (by harness, the defaults) plus `compact`, whether its harness can compact (so a client offers the control only where it works) |
 | `POST /set-harness-setting` | `{id,key,enabled}` | `{ok,values}`: flip one declared setting for this conversation; persisted in `<DATA_HOME>/gateway-harness-settings.json` and handed to every prompt |

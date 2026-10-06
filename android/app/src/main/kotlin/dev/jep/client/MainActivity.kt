@@ -3,8 +3,10 @@ package dev.jep.client
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -16,11 +18,16 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.lifecycleScope
 import dev.jep.client.domain.model.ThemeMode
 import dev.jep.client.device.StreamService
 import dev.jep.client.presentation.app.AppViewModel
 import dev.jep.client.presentation.app.JepApp
+import dev.jep.client.presentation.app.SharedContent
 import dev.jep.client.presentation.theme.JepTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 // Composition root of the presentation side: one AppViewModel for the
 // activity, screen VMs built per destination against its repository.
@@ -43,6 +50,7 @@ class MainActivity : ComponentActivity() {
         ensureNotificationPermission()
         fileFrom(intent)
         pairFrom(intent)
+        shareFrom(intent)
 
         // the socket outlives screens; the service is what keeps it alive —
         // unless the person has turned background streaming off, in which case
@@ -90,6 +98,53 @@ class MainActivity : ComponentActivity() {
         intent.getStringExtra(EXTRA_SESSION)?.let { app.openSessionById(it) }
         fileFrom(intent)
         pairFrom(intent)
+        shareFrom(intent)
+    }
+
+    /**
+     * Something shared into jep from another app: text or a link, and/or
+     * files. The file bytes are read here, in the activity that holds the
+     * content grant — the ViewModel only ever sees bytes, so a revoked grant
+     * can't starve a share that already landed.
+     */
+    private fun shareFrom(intent: Intent) {
+        if (intent.action != Intent.ACTION_SEND && intent.action != Intent.ACTION_SEND_MULTIPLE) return
+        if (!app.paired.value) return // nothing to share into without a gateway
+        val text = intent.getStringExtra(Intent.EXTRA_TEXT)
+        lifecycleScope.launch {
+            val files = withContext(Dispatchers.IO) {
+                streamUris(intent).mapNotNull { uri ->
+                    runCatching {
+                        val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return@runCatching null
+                        SharedContent.SharedFile(nameFor(uri), bytes, contentResolver.getType(uri))
+                    }.getOrNull()
+                }
+            }
+            if (text.isNullOrBlank() && files.isEmpty()) return@launch
+            app.offerShared(SharedContent(text, files))
+        }
+    }
+
+    // EXTRA_STREAM is a single uri for SEND, a list for SEND_MULTIPLE
+    @Suppress("DEPRECATION")
+    private fun streamUris(intent: Intent): List<Uri> {
+        val many = if (Build.VERSION.SDK_INT >= 33) intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
+        else intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM)
+        if (many != null) return many
+        val single = if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+        else intent.getParcelableExtra(Intent.EXTRA_STREAM)
+        return listOfNotNull(single)
+    }
+
+    // a sender usually names its file; a bare content uri gets a safe fallback
+    private fun nameFor(uri: Uri): String {
+        runCatching {
+            contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                val i = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (i >= 0 && c.moveToFirst()) c.getString(i)?.let { return it }
+            }
+        }
+        return uri.lastPathSegment?.substringAfterLast('/') ?: "shared-${System.currentTimeMillis()}"
     }
 
     /**

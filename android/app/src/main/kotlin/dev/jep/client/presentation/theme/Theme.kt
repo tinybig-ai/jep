@@ -1,7 +1,9 @@
 package dev.jep.client.presentation.theme
 
 import android.app.Activity
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
@@ -10,94 +12,102 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.Density
 import androidx.core.view.WindowCompat
+import kotlin.math.cos
+import kotlin.math.sin
+import kotlin.math.sqrt
 
-// A neutral field, quiet surfaces and one warm accent — no tint in the greys, so
-// the only colour on screen is what the app means by it. Light and dark are the
-// same hierarchy, inverted.
+// Ink on paper, the tinybig house style: a monochrome field, quiet surfaces
+// and no accent — the only colour on screen is what the app means by it (code
+// syntax, status dots). Light and dark are the same hierarchy, inverted.
 //
 // Every token the app touches is written out. A token left unset falls back to
 // Material's baseline palette, which is a faintly purple grey — the bottom
 // sheets, the branch pill and the snackbars all read lavender against this
 // neutral, so the whole container ramp, the secondary and tertiary families and
 // the inverse pair are given explicit greys here.
-private val terracotta = Color(0xFFD97757)
-
 private val dark = darkColorScheme(
-    primary = terracotta,
-    onPrimary = Color(0xFF1B120E),
-    primaryContainer = Color(0xFF3B2419),
-    onPrimaryContainer = Color(0xFFF4D8CB),
-    secondary = Color(0xFFB4B4B4),
-    onSecondary = Color(0xFF1A1A1A),
-    secondaryContainer = Color(0xFF2A2A2A),
-    onSecondaryContainer = Color(0xFFE6E6E6),
-    tertiary = Color(0xFF9CA3AF),
-    onTertiary = Color(0xFF111827),
-    tertiaryContainer = Color(0xFF27272A),
-    onTertiaryContainer = Color(0xFFE5E7EB),
-    background = Color(0xFF111111),
-    onBackground = Color(0xFFEDEDED),
-    surface = Color(0xFF171717),
-    onSurface = Color(0xFFE8E8E8),
-    surfaceVariant = Color(0xFF232323),
-    onSurfaceVariant = Color(0xFFA1A1AA),
-    surfaceContainerLowest = Color(0xFF0B0B0B),
-    surfaceContainerLow = Color(0xFF191919),
-    surfaceContainer = Color(0xFF1C1C1C),
-    surfaceContainerHigh = Color(0xFF242424),
-    surfaceContainerHighest = Color(0xFF2C2C2C),
+    primary = Color(0xFFF5F5F5),
+    onPrimary = Color(0xFF0A0A0A),
+    primaryContainer = Color(0xFF262626),
+    onPrimaryContainer = Color(0xFFF5F5F5),
+    secondary = Color(0xFFA0A0A0),
+    onSecondary = Color(0xFF0A0A0A),
+    secondaryContainer = Color(0xFF1F1F1F),
+    onSecondaryContainer = Color(0xFFF5F5F5),
+    tertiary = Color(0xFFA0A0A0),
+    onTertiary = Color(0xFF0A0A0A),
+    tertiaryContainer = Color(0xFF1F1F1F),
+    onTertiaryContainer = Color(0xFFF5F5F5),
+    background = Color(0xFF0A0A0A),
+    onBackground = Color(0xFFF5F5F5),
+    surface = Color(0xFF0A0A0A),
+    onSurface = Color(0xFFF5F5F5),
+    surfaceVariant = Color(0xFF1A1A1A),
+    onSurfaceVariant = Color(0xFFA0A0A0),
+    surfaceContainerLowest = Color(0xFF0D0D0D),
+    surfaceContainerLow = Color(0xFF141414),
+    surfaceContainer = Color(0xFF1A1A1A),
+    surfaceContainerHigh = Color(0xFF1F1F1F),
+    surfaceContainerHighest = Color(0xFF262626),
     // tonal surfaces would otherwise be tinted with the accent, which warms
     // every elevated card; the greys here are meant to stay grey
     surfaceTint = Color.Transparent,
-    inverseSurface = Color(0xFFE8E8E8),
-    inverseOnSurface = Color(0xFF1A1A1A),
-    inversePrimary = Color(0xFFE0805F),
-    outline = Color(0xFF2E2E2E),
-    outlineVariant = Color(0xFF232323),
+    inverseSurface = Color(0xFFF5F5F5),
+    inverseOnSurface = Color(0xFF0A0A0A),
+    inversePrimary = Color(0xFF5C5C5C),
+    outline = Color(0xFF2A2A2A),
+    outlineVariant = Color(0xFF2A2A2A),
     scrim = Color(0xFF000000),
-    error = Color(0xFFF85149),
-    errorContainer = Color(0xFF3B1715),
-    onErrorContainer = Color(0xFFFFDAD6),
+    error = Color(0xFFE5737F),
+    errorContainer = Color(0xFF33181B),
+    onError = Color(0xFF0A0A0A),
+    onErrorContainer = Color(0xFFE5737F),
 )
 
 private val light = lightColorScheme(
-    primary = terracotta,
-    onPrimary = Color(0xFFFFFFFF),
-    primaryContainer = Color(0xFFF6E1D8),
-    onPrimaryContainer = Color(0xFF3A1E12),
-    secondary = Color(0xFF5A5A5A),
-    onSecondary = Color(0xFFFFFFFF),
-    secondaryContainer = Color(0xFFE6E6E6),
-    onSecondaryContainer = Color(0xFF1A1A1A),
-    tertiary = Color(0xFF4B5563),
-    onTertiary = Color(0xFFFFFFFF),
-    tertiaryContainer = Color(0xFFE5E7EB),
-    onTertiaryContainer = Color(0xFF111827),
-    background = Color(0xFFF6F6F6),
-    onBackground = Color(0xFF18181B),
-    surface = Color(0xFFFFFFFF),
-    onSurface = Color(0xFF18181B),
-    surfaceVariant = Color(0xFFECECEC),
-    onSurfaceVariant = Color(0xFF71717A),
+    primary = Color(0xFF0A0A0A),
+    onPrimary = Color(0xFFF7F7F7),
+    primaryContainer = Color(0xFFE3E3E3),
+    onPrimaryContainer = Color(0xFF0A0A0A),
+    secondary = Color(0xFF5C5C5C),
+    onSecondary = Color(0xFFF7F7F7),
+    secondaryContainer = Color(0xFFEBEBEB),
+    onSecondaryContainer = Color(0xFF0A0A0A),
+    tertiary = Color(0xFF5C5C5C),
+    onTertiary = Color(0xFFF7F7F7),
+    tertiaryContainer = Color(0xFFEBEBEB),
+    onTertiaryContainer = Color(0xFF0A0A0A),
+    background = Color(0xFFF7F7F7),
+    onBackground = Color(0xFF0A0A0A),
+    surface = Color(0xFFF7F7F7),
+    onSurface = Color(0xFF0A0A0A),
+    surfaceVariant = Color(0xFFEBEBEB),
+    onSurfaceVariant = Color(0xFF5C5C5C),
     surfaceContainerLowest = Color(0xFFFFFFFF),
-    surfaceContainerLow = Color(0xFFF0F0F0),
-    surfaceContainer = Color(0xFFEFEFEF),
-    surfaceContainerHigh = Color(0xFFE6E6E6),
-    surfaceContainerHighest = Color(0xFFE0E0E0),
+    surfaceContainerLow = Color(0xFFFAFAFA),
+    surfaceContainer = Color(0xFFF2F2F2),
+    surfaceContainerHigh = Color(0xFFEBEBEB),
+    surfaceContainerHighest = Color(0xFFE3E3E3),
     surfaceTint = Color.Transparent,
     inverseSurface = Color(0xFF2A2A2A),
     inverseOnSurface = Color(0xFFF0F0F0),
-    inversePrimary = Color(0xFFB25B3C),
-    outline = Color(0xFFE0E0E0),
-    outlineVariant = Color(0xFFEDEDED),
+    inversePrimary = Color(0xFFA0A0A0),
+    outline = Color(0xFFDADADA),
+    outlineVariant = Color(0xFFDADADA),
     scrim = Color(0xFF000000),
-    error = Color(0xFFCF222E),
+    error = Color(0xFFB3261E),
     errorContainer = Color(0xFFFBE0DE),
+    onError = Color(0xFFF7F7F7),
     onErrorContainer = Color(0xFF4A0F0B),
 )
 
@@ -141,6 +151,49 @@ private val darkSyntax = SyntaxColors(
 
 /** the diff, terminal and status colours for the app's current theme */
 val LocalSyntaxColors = staticCompositionLocalOf { lightSyntax }
+
+// The app backdrop, painted once behind every screen (they keep transparent
+// containers so it reads through): a soft vertical gradient with a faint
+// hexagon lattice that fades out towards the bottom of the screen.
+@Composable
+fun JepBackdrop() {
+    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val gradient = if (dark) listOf(Color(0xFF1C1C1C), Color(0xFF0E0E0E), Color(0xFF070707))
+    else listOf(Color(0xFFFFFFFF), Color(0xFFF2F2F2), Color(0xFFE6E6E6))
+    val lattice = if (dark) Color(0x10FFFFFF) else Color(0x12000000)
+    Canvas(Modifier.fillMaxSize()) {
+        drawRect(Brush.verticalGradient(colors = gradient, startY = 0f, endY = size.height))
+        val r = 14f * density // hexagon circumradius
+        val w = sqrt(3f) * r // pointy-top hex width
+        val rowH = 1.5f * r
+        val path = Path()
+        var row = 0
+        while (row * rowH < size.height + r) {
+            val offsetX = if (row % 2 == 1) w / 2f else 0f
+            var x = -w
+            while (x < size.width + w) {
+                val cx = x + offsetX
+                val cy = row * rowH
+                for (i in 0 until 6) {
+                    val a = Math.toRadians((60 * i - 30).toDouble())
+                    val p = Offset(cx + r * cos(a).toFloat(), cy + r * sin(a).toFloat())
+                    if (i == 0) path.moveTo(p.x, p.y) else path.lineTo(p.x, p.y)
+                }
+                path.close()
+                x += w
+            }
+            row++
+        }
+        drawPath(
+            path,
+            Brush.verticalGradient(
+                colors = listOf(lattice, lattice.copy(alpha = 0f)),
+                startY = 0f,
+                endY = size.height * 0.75f,
+            ),
+        )
+    }
+}
 
 @Composable
 fun JepTheme(

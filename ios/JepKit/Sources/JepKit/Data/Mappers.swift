@@ -5,12 +5,12 @@ import Foundation
 
 extension SessionDto {
     func toDomain() -> SessionSummary {
-        SessionSummary(id: id, title: title, workspace: workspace, createdAt: createdAt, updatedAt: updatedAt, adapter: adapter, harness: harness, subagents: subagents, active: active, seenAt: seenAt, pinned: pinned)
+        SessionSummary(id: id, title: title, workspace: workspace, createdAt: createdAt, updatedAt: updatedAt, adapter: adapter, harness: harness, subagents: subagents, active: active, seenAt: seenAt, pinned: pinned, pod: pod)
     }
 }
 
 extension WorkspaceDto {
-    func toDomain() -> Workspace { Workspace(name: name, harness: harness, dir: dir) }
+    func toDomain() -> Workspace { Workspace(name: name, harness: harness, dir: dir, pod: pod) }
 }
 
 extension BrowseRes {

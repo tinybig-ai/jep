@@ -6,6 +6,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -18,11 +20,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Source
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
@@ -39,6 +43,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -48,6 +53,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.graphics.Color
 import dev.jep.client.presentation.theme.JepMono
 import dev.jep.client.presentation.theme.Radius
 import androidx.compose.ui.unit.dp
@@ -67,6 +73,7 @@ fun NewChatScreen(
     onHarness: (String) -> Unit,
     onHarnessSetting: (String, Boolean) -> Unit,
     onSelectWorkspace: (String, String) -> Unit,
+    onSelectPod: () -> Unit,
     onSelectPath: (String) -> Unit,
     onOpenBrowse: () -> Unit,
     onCloseBrowse: () -> Unit,
@@ -81,8 +88,10 @@ fun NewChatScreen(
     BackHandler { if (state.browsing) onCloseBrowse() else onBack() }
 
     Scaffold(
+        containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
                 title = { Text(if (state.browsing) "Choose a folder" else "New conversation") },
                 navigationIcon = {
                     IconButton(onClick = if (state.browsing) onCloseBrowse else onBack) {
@@ -93,12 +102,12 @@ fun NewChatScreen(
         },
     ) { pad ->
         Column(
-            Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(pad),
+            Modifier.fillMaxSize().padding(pad),
         ) {
             if (state.browsing) {
                 Browser(state, onBrowseInto, onBrowseUp, onSelectPath, onNewFolder)
             } else {
-                Form(state, onTitle, onHarness, onHarnessSetting, onSelectWorkspace, onOpenBrowse, onCreate)
+                Form(state, onTitle, onHarness, onHarnessSetting, onSelectWorkspace, onSelectPod, onOpenBrowse, onCreate)
             }
         }
     }
@@ -112,6 +121,7 @@ private fun Form(
     onHarness: (String) -> Unit,
     onHarnessSetting: (String, Boolean) -> Unit,
     onSelectWorkspace: (String, String) -> Unit,
+    onSelectPod: () -> Unit,
     onOpenBrowse: () -> Unit,
     onCreate: () -> Unit,
 ) {
@@ -121,6 +131,28 @@ private fun Form(
     var shown by remember { mutableStateOf(5) }
     val folders = state.workspaces.distinctBy { it.dir.ifBlank { it.name } }
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
+        // a share-in: the destination is the only real question left, so say
+        // what's being carried at the top
+        state.shared?.let { s ->
+            item {
+                Surface(
+                    Modifier.fillMaxWidth().padding(top = 8.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    shape = RoundedCornerShape(Radius.card),
+                ) {
+                    Row(Modifier.padding(horizontal = 14.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Filled.Share, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+                        Text(
+                            s.summary,
+                            Modifier.padding(start = 10.dp).weight(1f),
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 2,
+                        )
+                    }
+                }
+            }
+        }
         item {
             OutlinedTextField(
                 value = state.title,
@@ -159,18 +191,25 @@ private fun Form(
             }
         }
 
-        item { SectionTitle("WORKSPACE") }
+        item { SectionTitle("WHERE") }
         item {
             // A folder is listed once. The same directory is a different
             // workspace per harness — separate stores, separate sessions — so
             // repeating it under every harness is noise: the HARNESS chips
             // above choose which one, and the gateway brings that harness up
             // for the directory if it isn't serving it yet.
+            SelectRow(
+                title = "Quick conversation",
+                subtitle = "a throwaway folder",
+                selected = state.pod,
+                onClick = onSelectPod,
+                icon = { Icon(Icons.Filled.Bolt, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary) },
+            )
             folders.take(shown).forEach { w ->
-                val selected = state.workspace == w.name && state.path == null
+                val selected = state.workspace == w.name && state.path == null && !state.pod
                 SelectRow(
                     title = w.name,
-                    subtitle = w.dir.ifBlank { w.harness },
+                    subtitle = if (w.pod) "throwaway · ${w.harness}" else w.dir.ifBlank { w.harness },
                     selected = selected,
                     onClick = { onSelectWorkspace(w.name, state.harness ?: w.harness) },
                 )
@@ -202,10 +241,11 @@ private fun Form(
         item {
             Button(
                 onClick = onCreate,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp).height(38.dp),
+                contentPadding = PaddingValues(),
                 enabled = !state.creating,
             ) {
-                Text(if (state.creating) "Starting…" else "Create conversation")
+                Text(if (state.creating) "Starting…" else "Create conversation", fontSize = 14.sp)
             }
         }
     }
@@ -354,10 +394,11 @@ private fun Browser(
         }
         Button(
             onClick = { b?.let { onSelectPath(it.cwd) } },
-            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp).height(38.dp),
+            contentPadding = PaddingValues(),
             enabled = b != null && !state.loadingBrowse,
         ) {
-            Text("Use this folder")
+            Text("Use this folder", fontSize = 14.sp)
         }
     }
 }

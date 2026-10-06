@@ -636,6 +636,28 @@ class ChatViewModel(
         viewModelScope.launch { runCatching { repo.queueForce(sessionId, id) } }
     }
 
+    /** content shared into jep: upload its files, then send through the
+     * ordinary path so it lands as a real first message */
+    fun sendShared(shared: dev.jep.client.presentation.app.SharedContent) {
+        val text = shared.text?.trim().orEmpty()
+        if (text.isEmpty() && shared.files.isEmpty()) return
+        viewModelScope.launch {
+            var dropped = 0
+            val files = shared.files.mapNotNull { f ->
+                runCatching { repo.attach(sessionId, f.name, f.bytes) }
+                    .map { Attachment(it, f.name, null, f.mime) }
+                    .onFailure { dropped++ }
+                    .getOrNull()
+            }
+            if (dropped > 0) {
+                _state.update { it.copy(notice = if (dropped == shared.files.size) "couldn't attach the shared files" else "couldn't attach $dropped of the shared files") }
+            }
+            // the files ride with this one send, not in the composer afterwards
+            _state.update { it.copy(attachments = files) }
+            send(text)
+        }
+    }
+
     fun attach(filename: String, bytes: ByteArray, localUri: String? = null, mimeType: String? = null) {
         viewModelScope.launch {
             runCatching { repo.attach(sessionId, filename, bytes) }

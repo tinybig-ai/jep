@@ -28,6 +28,8 @@ data class SessionDto(
     val seenAt: Long = 0,
     // held above the rest of the list, whatever moved most recently
     val pinned: Boolean = false,
+    // its workspace is a throwaway dir the daemon conjured (a "pod")
+    val pod: Boolean = false,
 )
 
 @Serializable
@@ -115,7 +117,7 @@ data class HistoryRes(
 data class NewSessionRes(val session: SessionDto)
 
 @Serializable
-data class WorkspaceDto(val name: String = "", val harness: String = "", val dir: String = "")
+data class WorkspaceDto(val name: String = "", val harness: String = "", val dir: String = "", val pod: Boolean = false)
 
 @Serializable
 data class WorkspacesRes(val items: List<WorkspaceDto> = emptyList())

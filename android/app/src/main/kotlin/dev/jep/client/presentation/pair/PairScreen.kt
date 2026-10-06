@@ -3,7 +3,9 @@ package dev.jep.client.presentation.pair
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -35,7 +37,7 @@ fun PairScreen(busy: Boolean, onPair: (address: String, code: String, done: (Boo
     var error by remember { mutableStateOf<String?>(null) }
     var waiting by remember { mutableStateOf(false) }
 
-    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+    Surface(Modifier.fillMaxSize(), color = androidx.compose.ui.graphics.Color.Transparent) {
         Column(
             Modifier
                 .fillMaxSize()
@@ -80,10 +82,11 @@ fun PairScreen(busy: Boolean, onPair: (address: String, code: String, done: (Boo
                         if (!ok) error = message
                     }
                 },
-                Modifier.fillMaxWidth(),
+                Modifier.fillMaxWidth().height(38.dp),
+                contentPadding = PaddingValues(),
                 enabled = !busy && !waiting,
             ) {
-                Text(if (waiting) "pairing…" else "Connect")
+                Text(if (waiting) "pairing…" else "Connect", fontSize = 14.sp)
             }
             Text(
                 "The pairing code is printed once when the gateway starts on the machine running jep. "

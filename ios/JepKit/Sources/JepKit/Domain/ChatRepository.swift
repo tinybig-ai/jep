@@ -82,7 +82,8 @@ public protocol ChatRepository: AnyObject, Sendable {
     func browse(path: String?) async throws -> BrowseResult
     func newFolder(path: String?, name: String) async throws -> String
     func archivedSessions() async throws -> [SessionSummary]
-    func newSession(title: String?, workspace: String?, path: String?, harness: String?, harnessSettings: [String: Bool]) async throws -> SessionSummary
+    /// `pod` asks the gateway to mint a throwaway directory; workspace/path are then unused
+    func newSession(title: String?, workspace: String?, path: String?, harness: String?, pod: Bool, harnessSettings: [String: Bool]) async throws -> SessionSummary
     func harnessOptions(harness: String) async throws -> [HarnessSetting]
     func sessionHarnessSettings(sessionId: String) async throws -> HarnessSettings
     func setSessionHarnessSetting(sessionId: String, key: String, enabled: Bool) async throws -> Bool
@@ -150,8 +151,8 @@ public extension ChatRepository {
         try await prompt(sessionId: sessionId, text: text, files: files, clientID: nil, mode: .steer, quote: quote)
     }
 
-    func newSession(workspace: String?, path: String? = nil, harness: String? = nil, harnessSettings: [String: Bool] = [:]) async throws -> SessionSummary {
-        try await newSession(title: nil, workspace: workspace, path: path, harness: harness, harnessSettings: harnessSettings)
+    func newSession(workspace: String?, path: String? = nil, harness: String? = nil, pod: Bool = false, harnessSettings: [String: Bool] = [:]) async throws -> SessionSummary {
+        try await newSession(title: nil, workspace: workspace, path: path, harness: harness, pod: pod, harnessSettings: harnessSettings)
     }
 }
 

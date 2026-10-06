@@ -760,8 +760,8 @@ test("workspaces list, /new selects the named one, and a set model flows into th
     const ws = await fetch(`${base}/workspaces`, { method: "POST", headers })
     const { items } = (await ws.json()) as { items: Array<{ name: string; harness: string }> }
     assert.deepEqual(items, [
-      { name: "a-ws", harness: "fake", dir: "/tmp/ws" },
-      { name: "b-ws", harness: "other", dir: "/tmp/ws" },
+      { name: "a-ws", harness: "fake", dir: "/tmp/ws", pod: false },
+      { name: "b-ws", harness: "other", dir: "/tmp/ws", pod: false },
     ])
 
     // creation-time selection: naming the workspace picks its adapter
@@ -894,6 +894,42 @@ test("harnesses, a bounded directory browse, and /new spawning a workspace by pa
       await fetch(`${base}/new`, { method: "POST", headers, body: JSON.stringify({ path: "/tmp/newdir", harness: "other" }) })
     ).json()) as { session: SessionSummary }
     assert.equal(added, "/tmp/newdir:other")
+    assert.equal(nw.session.id, "s1")
+  } finally {
+    await g.close()
+  }
+})
+
+test("/new with pod asks for a conjured directory under dataHome/pods", async () => {
+  const dataHome = mkdtempSync(join(tmpdir(), "gw-pod-"))
+  const a = fakeAdapter()
+  const added: string[] = []
+  const g = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter: a }],
+    addWorkspace: async (dir, harness) => {
+      added.push(`${dir}:${harness}`)
+      return { name: "pod", adapter: { ...a, workspace: dir } }
+    },
+    dataHome,
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+  })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const token = await pair(base, "TESTCODE")
+    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" }
+
+    const nw = (await (
+      await fetch(`${base}/new`, { method: "POST", headers, body: JSON.stringify({ pod: true, harness: "other" }) })
+    ).json()) as { session: SessionSummary & { pod?: boolean } }
+    assert.equal(added.length, 1, "the gateway conjured one directory")
+    const dir = added[0]!.split(":")[0]!
+    assert.ok(dir.startsWith(join(dataHome, "pods") + "/"), `pod dir lives under dataHome/pods (got ${dir})`)
+    assert.match(dir, /pod-[0-9a-f]{8}$/)
+    assert.ok(existsSync(dir), "the pod directory is real before the harness is handed it")
+    assert.equal(added[0]!.split(":")[1], "other", "the chosen harness serves the pod")
+    assert.equal(nw.session.pod, true)
     assert.equal(nw.session.id, "s1")
   } finally {
     await g.close()
