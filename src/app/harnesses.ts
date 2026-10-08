@@ -2,6 +2,7 @@ import { startOpenCodeServer } from "../harnesses/opencode.ts"
 import { startCodexAdapter } from "../harnesses/codex.ts"
 import { CLAUDE_SETTINGS, startClaudeAdapter } from "../harnesses/claude.ts"
 import { startEchoAdapter } from "../harnesses/echo.ts"
+import { startPiAdapter } from "../harnesses/pi.ts"
 import type { HarnessAdapter, HarnessSettingSpec, HarnessSupervisor } from "../core/ports.ts"
 
 /**
@@ -37,7 +38,7 @@ export interface HarnessInfo extends HarnessDef {
 
 export interface HarnessOpts {
   /** jep's data home: opencode's isolated XDG_DATA_HOME (so its sessions never
-   *  mix with the user's CLI), and where the Claude adapter keeps its state */
+   *  mix with the user's CLI), and where the Claude/Pi adapters keep their state */
   dataHome?: string
 }
 
@@ -120,6 +121,23 @@ function defineHarnesses(opts: HarnessOpts): HarnessDef[] {
       async available(): Promise<boolean> {
         try {
           const probe = await startClaudeAdapter(process.cwd())
+          const h = await probe.health()
+          await probe.close()
+          return h.healthy
+        } catch {
+          return false
+        }
+      },
+    },
+    {
+      id: "pi",
+      icon: "🔻",
+      async start(workspace: string): Promise<HarnessAdapter> {
+        return startPiAdapter(workspace, opts.dataHome ? { dataHome: opts.dataHome } : {})
+      },
+      async available(): Promise<boolean> {
+        try {
+          const probe = await startPiAdapter(process.cwd())
           const h = await probe.health()
           await probe.close()
           return h.healthy

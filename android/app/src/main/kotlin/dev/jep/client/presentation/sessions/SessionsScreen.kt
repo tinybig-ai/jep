@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -43,7 +44,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.LocalContentColor
-import androidx.compose.material3.LocalMinimumInteractiveComponentEnforcement
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -65,7 +65,6 @@ import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -162,19 +161,15 @@ fun SessionsScreen(
                 Image(
                     JepMark,
                     null,
-                    Modifier.size(24.dp),
+                    Modifier.size(28.8.dp),
                 )
             }
             if (selection.isNotEmpty()) {
                 TopAppBar(
-                    modifier = Modifier.height(48.dp),
+                    windowInsets = WindowInsets(0.dp),
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
                     navigationIcon = {
-                        CompositionLocalProvider(LocalMinimumInteractiveComponentEnforcement provides false) {
-                            IconButton(onClick = onClearSelection, Modifier.size(40.dp)) {
-                                Icon(Icons.Filled.Close, "cancel selection", Modifier.size(22.dp))
-                            }
-                        }
+                        IconButton(onClick = onClearSelection) { Icon(Icons.Filled.Close, "cancel selection") }
                     },
                     title = { Text("${selection.size} selected") },
                     actions = {
@@ -182,38 +177,27 @@ fun SessionsScreen(
                         // reads as the state those rows are in
                         val allPinned = sessions.filter { it.id in selection }.all { it.pinned } &&
                             sessions.any { it.id in selection }
-                        CompositionLocalProvider(LocalMinimumInteractiveComponentEnforcement provides false) {
-                        IconButton(onClick = { onPinSelected(!allPinned) }, Modifier.size(40.dp)) {
+                        IconButton(onClick = { onPinSelected(!allPinned) }) {
                             Icon(
                                 Icons.Filled.PushPin,
                                 if (allPinned) "unpin selected" else "pin selected",
-                                Modifier.size(22.dp),
                                 tint = if (allPinned) MaterialTheme.colorScheme.primary else LocalContentColor.current,
                             )
                         }
-                        IconButton(onClick = onArchiveSelected, Modifier.size(40.dp)) {
-                            Icon(Icons.Filled.Archive, "archive selected", Modifier.size(22.dp))
-                        }
-                        IconButton(onClick = { onMarkSelected(true) }, Modifier.size(40.dp)) {
-                            Icon(Icons.Filled.MarkEmailRead, "mark as read", Modifier.size(22.dp))
-                        }
-                        IconButton(onClick = { onMarkSelected(false) }, Modifier.size(40.dp)) {
-                            Icon(Icons.Filled.MarkEmailUnread, "mark as unread", Modifier.size(22.dp))
-                        }
-                        }
+                        IconButton(onClick = onArchiveSelected) { Icon(Icons.Filled.Archive, "archive selected") }
+                        IconButton(onClick = { onMarkSelected(true) }) { Icon(Icons.Filled.MarkEmailRead, "mark as read") }
+                        IconButton(onClick = { onMarkSelected(false) }) { Icon(Icons.Filled.MarkEmailUnread, "mark as unread") }
                     },
                 )
             } else TopAppBar(
-                modifier = Modifier.height(48.dp),
+                windowInsets = WindowInsets(0.dp),
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
                 navigationIcon = {
                     // inside a project the only way out is back, so the bar
                     // grows one — the logo is replaced by where you are
                     if (grouped && openProject != null) {
-                        CompositionLocalProvider(LocalMinimumInteractiveComponentEnforcement provides false) {
-                            IconButton(onClick = { onOpenProject(null) }, Modifier.size(40.dp)) {
-                                Icon(Icons.AutoMirrored.Filled.ArrowBack, "back to projects", Modifier.size(22.dp))
-                            }
+                        IconButton(onClick = { onOpenProject(null) }) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "back to projects")
                         }
                     }
                 },
@@ -243,19 +227,16 @@ fun SessionsScreen(
                     if (undo.isNotEmpty()) {
                         TextButton(onClick = onUndoArchive) { Text("Undo") }
                     }
-                    // compact bars: the material 48dp target reads huge next to
-                    // 20dp glyphs, so the enforcement goes off for this bar only
-                    CompositionLocalProvider(LocalMinimumInteractiveComponentEnforcement provides false) {
-                        IconButton(onClick = { importOpen = true; onLoadImportable() }, Modifier.size(40.dp)) {
-                            Icon(Icons.Filled.Link, "import a session", Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        // archive hid conversations with no way back to them
-                        IconButton(onClick = { archivedOpen = true; onLoadArchived() }, Modifier.size(40.dp)) {
-                            Icon(Icons.Filled.Inventory2, "archived conversations", Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        IconButton(onClick = onSettings, Modifier.size(40.dp)) {
-                            Icon(Icons.Filled.Settings, "settings", Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
+                    // full-size taps: the default 48dp target and 24dp glyph
+                    IconButton(onClick = { importOpen = true; onLoadImportable() }) {
+                        Icon(Icons.Filled.Link, "import a session", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    // archive hid conversations with no way back to them
+                    IconButton(onClick = { archivedOpen = true; onLoadArchived() }) {
+                        Icon(Icons.Filled.Inventory2, "archived conversations", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    IconButton(onClick = onSettings) {
+                        Icon(Icons.Filled.Settings, "settings", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 },
             )

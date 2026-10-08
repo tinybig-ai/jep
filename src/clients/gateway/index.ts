@@ -747,12 +747,16 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
             void adapter.abort(evt.sessionID).catch(() => {})
           }
           // steer: a prompt waiting behind this turn is folded in at the next tool
-          // boundary — abort here, and the runner starts the waiting prompt
+          // boundary — end the turn cleanly (so the running prompt gets the
+          // answer from the transcript) and the runner starts the waiting prompt
           if (evt.type === "part.updated" && evt.part?.kind === "other" && evt.part.nativeType === "step-finish") {
             const st = turns.get(evt.sessionID)
             // only a prompt that asked to steer interrupts the running turn; one
             // that asked to wait for the end is left alone
-            if (st?.running && st.waiting[0]?.steer) st.signal?.abort()
+            if (st?.running && st.waiting[0]?.steer) {
+              endTurn(evt.sessionID, st, { kind: "idle" }, "steer-in")
+              st.signal?.abort()
+            }
           }
           broadcast(evt)
           detach("wake a waiting turn", wake(evt))
@@ -1803,8 +1807,11 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const st = turns.get(id) ?? newTurnState()
         turns.set(id, st)
         if (b.force === true) {
-          // force: run this next, and if a turn is in flight, abort it so it can
+          // force: run this next, and if a turn is in flight, end it cleanly
+          // (so the running prompt gets the answer from the transcript) then
+          // abort so the forced prompt runs next
           st.waiting.unshift(pending)
+          if (st.running) endTurn(id, st, { kind: "idle" }, "force")
           st.signal?.abort()
         } else {
           // queue normally: the pump steers it in at the next tool boundary
@@ -1846,9 +1853,12 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           entry.text = more
           return json(res, 200, { ok: true })
         }
-        // force: run it next, aborting the running turn so it can
+        // force: run it next, ending the running turn cleanly so it
+        // gets the answer from the transcript, then abort so the
+        // forced prompt runs next
         st.waiting.splice(idx, 1)
         st.waiting.unshift(entry)
+        if (st.running) endTurn(id, st, { kind: "idle" }, "queue-force")
         st.signal?.abort()
         return json(res, 200, { ok: true })
       }

@@ -206,6 +206,11 @@ import androidx.compose.ui.unit.sp
 import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
+import com.mikepenz.markdown.compose.components.markdownComponents
+import com.mikepenz.markdown.compose.elements.MarkdownTableHeader
+import com.mikepenz.markdown.compose.elements.MarkdownTableRow
+import com.mikepenz.markdown.model.markdownDimens
+import com.mikepenz.markdown.compose.elements.MarkdownTable
 import com.mikepenz.markdown.model.rememberMarkdownState
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.CoroutineScope
@@ -365,7 +370,7 @@ internal fun transcriptRows(
     // the record (which has no "was streaming" message, only its own anchors)
     class Card(val row: Row, val ask: Ask, val at: Long, val after: String?)
     val cards = buildList {
-        past.forEach { add(Card(Row.PastAsk(it), it.ask, it.ask.at ?: 0L, null)) }
+        past.forEach { add(Card(Row.PastAsk(it), it.ask, it.ask.at?.takeIf { it > 0 } ?: Long.MAX_VALUE, null)) }
         if (ask != null) add(Card(Row.Pending(ask), ask, askAt, askAfter))
     }
     if (cards.isEmpty()) return settleCompaction(ordered.map { rowFor(it) })
@@ -401,7 +406,11 @@ internal fun transcriptRows(
         // may claim it first. With no anchor, the first message that is neither
         // live nor newer than the ask is the spot, so the card rides up as the
         // turn says more below it.
-        drop { i -> anchors[i]?.let { it === m } ?: (m.id != liveMessageId && m.time <= cards[i].at) }
+        drop { i ->
+            val anchorMatch = anchors[i]?.let { it === m }
+            val fallback = (cards[i].after != null || cards[i].at >= 0) && m.id != liveMessageId && m.time <= cards[i].at
+            if (anchorMatch != null) anchorMatch else fallback
+        }
         out += rowFor(m, inline[m.id].orEmpty())
     }
     drop { true }
@@ -608,7 +617,7 @@ fun ChatScreen(
 
     // The transcript model is newest first; the LazyColumn below displays it
     // oldest first so message content unfolds in the normal reading direction.
-    val ordered = remember(rendered) { rendered.asReversed() }
+    val ordered = remember(rendered) { rendered }
     val ask = state.ask
     val liveMessageId = state.live?.messageId
     val rows = remember(ordered, ask, state.askAt, liveMessageId, state.askAfter, state.pastAsks, state.sending) {
@@ -1441,6 +1450,76 @@ private fun readerTypography() = markdownTypography(
 )
 
 /**
+ * Tables with adaptive padding, sticky first column, no wrapping.
+ * Columns size to content, horizontal scroll when needed.
+ */
+@Composable
+private fun compactMarkdownDimens() = markdownDimens(
+    tableCellPadding = 6.dp,
+    tableCellWidth = 200.dp,
+)
+
+/**
+ * Custom markdown components: tables get sticky first column + adaptive padding via header/row blocks.
+ */
+@Composable
+private fun nordicMarkdownComponents() = markdownComponents(
+    table = { model ->
+        MarkdownTable(
+            content = model.content,
+            node = model.node,
+            style = model.typography.table,
+            headerBlock = { content, header, tableWidth, style ->
+                NordicTableHeader(content, header, tableWidth, style)
+            },
+            rowBlock = { content, header, tableWidth, style ->
+                NordicTableRow(content, header, tableWidth, style)
+            },
+        )
+    },
+)
+
+/**
+ * Header row with sticky first column (bold, distinct background).
+ */
+@Composable
+private fun NordicTableHeader(
+    content: String,
+    header: org.intellij.markdown.ast.ASTNode,
+    tableWidth: androidx.compose.ui.unit.Dp,
+    style: androidx.compose.ui.text.TextStyle,
+) {
+    MarkdownTableHeader(
+        content = content,
+        header = header,
+        tableWidth = tableWidth,
+        style = style,
+        maxLines = 3,
+        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+    )
+}
+
+/**
+ * Body row with sticky first column (normal weight, same width as header).
+ */
+@Composable
+private fun NordicTableRow(
+    content: String,
+    header: org.intellij.markdown.ast.ASTNode,
+    tableWidth: androidx.compose.ui.unit.Dp,
+    style: androidx.compose.ui.text.TextStyle,
+) {
+    MarkdownTableRow(
+        content = content,
+        header = header,
+        tableWidth = tableWidth,
+        style = style,
+        maxLines = 3,
+        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+    )
+}
+
+/**
  * The transcript's own inset.
  *
  * A message row's chrome — this padding and the long-press menu around it — is
@@ -1563,6 +1642,8 @@ private fun FileSheet(open: ChatViewModel.OpenFile, onClose: () -> Unit) {
                     render && engine == FileEngine.Markdown -> Markdown(
                         markdownState = rendered,
                         typography = readerTypography(),
+                        dimens = compactMarkdownDimens(),
+                        components = nordicMarkdownComponents(),
                         modifier = Modifier.verticalScroll(down),
                     )
                     else -> Text(
@@ -2511,6 +2592,8 @@ private fun TextPart(part: ChatPart.Text, streaming: Boolean) {
                 ),
             ),
         ),
+        dimens = compactMarkdownDimens(),
+        components = nordicMarkdownComponents(),
     )
 }
 
@@ -2529,6 +2612,8 @@ private fun UserText(text: String, ink: Color) {
             table = body, code = mono, inlineCode = mono,
             textLink = TextLinkStyles(style = SpanStyle(color = ink, textDecoration = TextDecoration.Underline)),
         ),
+        dimens = compactMarkdownDimens(),
+        components = nordicMarkdownComponents(),
     )
 }
 

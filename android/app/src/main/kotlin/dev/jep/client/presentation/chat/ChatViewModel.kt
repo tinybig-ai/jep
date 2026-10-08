@@ -417,23 +417,27 @@ class ChatViewModel(
                     // otherwise your own message sits there twice for the whole
                     // turn.
                     val servedUser = batch.messages.filter { it.role == Role.USER }.map { textOf(it) }.toMutableList()
-                    optimistic.removeAll { o ->
-                        val i = servedUser.indexOf(textOf(o))
-                        if (i >= 0) {
-                            servedUser.removeAt(i)
-                            true
-                        } else {
-                            false
-                        }
-                    }
-                    // A send that failed on the phone can still have reached the
-                    // daemon (the connection dropped after it was taken). The
-                    // record having it is the proof; retrying it would say it twice.
-                    if (outbox.keys.retainAll(optimistic.map { it.id }.toSet())) persistOutbox()
-                    val servedNow = batch.messages.filter { it.role == Role.USER }
                     _state.update { st ->
-                        st.copy(
-                            messages = batch.messages + optimistic.toList(),
+                        // drop the local optimistic copy from the state when the
+                        // harness's copy arrives (match by text, since IDs differ)
+                        val reconciled = st.messages.filter { it.role == Role.USER && servedUser.indexOf(textOf(it)) >= 0 }
+                        reconciled.forEach { r -> servedUser.remove(textOf(r)) }
+                        optimistic.removeAll { o -> servedUser.indexOf(textOf(o)) >= 0 }
+                        val stWithoutReconciled = st.copy(messages = st.messages.filterNot { it in reconciled })
+
+                        // A send that failed on the phone can still have reached the
+                        // daemon (the connection dropped after it was taken). The
+                        // record having it is the proof; retrying it would say it twice.
+                        if (outbox.keys.retainAll(optimistic.map { it.id }.toSet())) persistOutbox()
+                        val servedNow = batch.messages.filter { it.role == Role.USER }
+                        val windowIds = batch.messages.map { it.id }.toSet()
+                        val optimisticIds = optimistic.map { it.id }.toSet()
+                        val olderThanWindow = stWithoutReconciled.messages.filter { it.id !in windowIds && it.id !in optimisticIds }
+                        val mergedMessages = (batch.messages + olderThanWindow)
+                            .distinctBy { it.id }
+                            .sortedByDescending { it.time }
+                        stWithoutReconciled.copy(
+                            messages = mergedMessages + optimistic.toList(),
                             // history is the record, not the stream: it must never
                             // wipe a live row it has merely caught up with, even
                             // when this device did not start the turn — unless the
@@ -470,9 +474,11 @@ class ChatViewModel(
                     _state.update { prev ->
                         val priorIds = prev.messages.map { it.id }.toSet()
                         val fresh = batch.messages.filter { it.id !in priorIds }
+                        val merged = (fresh + prev.messages)
+                            .distinctBy { it.id }
+                            .sortedByDescending { it.time }
                         prev.copy(
-                            // the older page goes in front; keep everything we hold
-                            messages = fresh + prev.messages,
+                            messages = merged,
                             hasMore = batch.hasMore,
                             loadingOlder = false,
                         )
@@ -564,10 +570,12 @@ class ChatViewModel(
                     outbox.remove(pending.id)
                     persistOutbox()
                     // polling may already have served this message; replace by
-                    // id rather than append, or the answer lands twice
+                    // id rather than append, or the answer lands twice.
+                    // Also remove the optimistic row (local ID) so it doesn't
+                    // coexist with the server's copy during streaming.
                     _state.update { st ->
                         st.copy(
-                            messages = st.messages.filterNot { it.id == final.id } + final,
+                            messages = st.messages.filterNot { it.id == final.id || it.id == pending.id } + final,
                             sending = false,
                             live = null,
                         )
@@ -891,9 +899,11 @@ class ChatViewModel(
             // running" while nothing ran.
             try {
                 repo.compact(sessionId)
-                // no banner to say so: the divider the record now carries is
-                // where you are already looking, and a top banner went unseen
-                _state.update { it.copy(compacting = false) }
+                // the harness rewrote the transcript; the old messages are gone.
+                // Clearing before refresh keeps the merge from hanging on to
+                // them — otherwise the newest-30 window lands on top of stale
+                // history and the transcript reads scrambled.
+                _state.update { it.copy(compacting = false, messages = emptyList()) }
                 refresh()
             } catch (err: Exception) {
                 _state.update { it.copy(compacting = false, notice = err.message ?: "couldn't compact") }
