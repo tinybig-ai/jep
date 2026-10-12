@@ -79,6 +79,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import dev.jep.client.presentation.theme.JepMark
@@ -216,11 +217,16 @@ fun SessionsScreen(
                     } else Text("Jep")
                 },
                 actions = {
+                    // the screen's one spinner. It sits in a slot the size of the
+                    // icon buttons beside it, centred: padding inside its own
+                    // size squeezed it to 12x18dp and pushed it off-centre
                     if (busy) {
-                        CircularProgressIndicator(
-                            Modifier.size(18.dp).padding(end = 6.dp),
-                            strokeWidth = 2.dp,
-                        )
+                        Box(
+                            Modifier.size(48.dp).semantics { contentDescription = "loading conversations" },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            CircularProgressIndicator(Modifier.size(20.dp).testTag("list-spinner"), strokeWidth = 2.dp)
+                        }
                     }
                     // an archive you can take back, for a moment — a swipe is
                     // easy to trigger by accident
@@ -261,17 +267,16 @@ degraded.forEach { line ->
                 }
             }
             PullToRefreshBox(
-                isRefreshing = busy,
+                // the pull shows while it is dragged; the loading itself is the
+                // top bar's spinner. Bound to `busy`, the list grew a second
+                // spinner on every reload, the automatic ones included
+                isRefreshing = false,
                 onRefresh = onRefresh,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
             ) {
             if (sessions.isEmpty() && busy) {
-                Box(
-                    Modifier.fillMaxSize().semantics { contentDescription = "loading conversations" },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 3.dp)
-                }
+                // a cold load: the top bar's spinner says it, the list stays empty
+                Box(Modifier.fillMaxSize())
             } else if (grouped && openProject == null) {
                 // one row per project: the conversations, by the directory they
                 // were started in, newest project first. Pinning a conversation

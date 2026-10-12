@@ -12,6 +12,8 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.jep.client.domain.model.SessionSummary
 import dev.jep.client.presentation.sessions.SessionsScreen
+import androidx.compose.ui.test.onNodeWithTag
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -120,5 +122,13 @@ class SessionsScreenTest {
         }
         rule.onNodeWithText("Jep").assertExists()
         rule.onNodeWithContentDescription("loading conversations").assertExists()
+        // one spinner, in the top bar: none in the list as well
+        rule.onAllNodes(androidx.compose.ui.test.hasProgressBarRangeInfo(androidx.compose.ui.semantics.ProgressBarRangeInfo.Indeterminate))
+            .assertCountEquals(1)
+        // centred on the icons beside it, and round
+        val spin = rule.onNodeWithTag("list-spinner").fetchSemanticsNode().boundsInRoot
+        val gear = rule.onNodeWithContentDescription("settings").fetchSemanticsNode().boundsInRoot
+        assertEquals("the spinner is not square", spin.width, spin.height, 0.5f)
+        assertEquals("the spinner sits off the icons' line", gear.center.y, spin.center.y, 1f)
     }
 }
