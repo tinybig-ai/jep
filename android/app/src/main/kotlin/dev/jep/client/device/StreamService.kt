@@ -11,7 +11,6 @@ import android.content.pm.ServiceInfo
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import dev.jep.client.MainActivity
-import dev.jep.client.data.GatewayChatRepository
 import dev.jep.client.domain.repository.ChatEvent
 import kotlinx.coroutines.launch
 import dev.jep.client.domain.repository.ChatRepository
@@ -53,13 +52,10 @@ class StreamService : Service() {
         cancelled = false
         thread = Thread {
             val pairing = PairingStore(getSharedPreferences("jep", Context.MODE_PRIVATE))
-            if (!pairing.isPaired) return@Thread
-            val repo: ChatRepository =
-                GatewayChatRepository(pairing.baseUrl ?: return@Thread, { pairing.token }, JepHttp.client())
             runCatching {
                 kotlinx.coroutines.runBlocking {
                     val scope = this
-                    repo.events().collect { evt ->
+                    followFeed(pairing, running = { !cancelled }) { repo, evt ->
                         // an ask settled anywhere takes its "needs you" back:
                         // one left standing sends the person to a card that is
                         // already gone

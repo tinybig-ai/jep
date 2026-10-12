@@ -55,7 +55,9 @@ class LocalGateway(
             val (status, body) = answer[path] ?: (200 to "{}")
             val bytes = body.toByteArray()
             socket.getOutputStream().apply {
-                write("HTTP/1.1 $status X\r\nContent-Type: application/json\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray())
+                // the feed is server-sent events, and the client checks
+                val type = if (path == "/stream") "text/event-stream" else "application/json"
+                write("HTTP/1.1 $status X\r\nContent-Type: $type\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray())
                 write(bytes)
                 flush()
             }
