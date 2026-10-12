@@ -589,7 +589,8 @@ fun ChatScreen(
             // history polling keeps the record pacing alongside, so there is
             // nothing to rewind to.
             val twin = served.firstOrNull { it.id == live.id }
-            if (twin == null) served + live
+            // newest first, so a reply the record does not have yet leads
+            if (twin == null) listOf(live) + served
             else served.map { if (it.id == live.id) live else it }
         }
     }
@@ -600,14 +601,15 @@ fun ChatScreen(
     val busy = state.sending || state.live != null
     val actionIds = remember(rendered, busy) {
         val ids = mutableSetOf<String>()
+        // `rendered` is newest first: what follows a message is the one
+        // before it in the list
         rendered.forEachIndexed { idx, m ->
             if (m.role != Role.ASSISTANT) return@forEachIndexed
-            val last = idx == rendered.lastIndex
             // ends the turn if a user message follows, or nothing does — and a
             // turn still in flight has no end yet
-            if (last) {
+            if (idx == 0) {
                 if (!busy) ids += m.id
-            } else if (rendered[idx + 1].role == Role.USER) {
+            } else if (rendered[idx - 1].role == Role.USER) {
                 ids += m.id
             }
         }

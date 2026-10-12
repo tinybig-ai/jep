@@ -450,7 +450,10 @@ class ChatViewModel(
                             .distinctBy { it.id }
                             .sortedByDescending { it.time }
                         stWithoutReconciled.copy(
-                            messages = mergedMessages + optimistic.toList(),
+                            // newest first: the sends still in flight are the
+                            // newest of all, so they lead (appended, they read
+                            // as the oldest and drew above the conversation)
+                            messages = optimistic.asReversed() + mergedMessages,
                             // history is the record, not the stream: it must never
                             // wipe a live row it has merely caught up with, even
                             // when this device did not start the turn — unless the
@@ -490,7 +493,10 @@ class ChatViewModel(
                     _state.update { prev ->
                         val priorIds = prev.messages.map { it.id }.toSet()
                         val fresh = batch.messages.filter { it.id !in priorIds }
-                        val merged = (fresh + prev.messages)
+                        // a send in flight carries the phone's clock, not the
+                        // harness's, so it stays in front rather than sorted
+                        val local = optimistic.map { it.id }.toSet()
+                        val merged = prev.messages.filter { it.id in local } + (fresh + prev.messages.filterNot { it.id in local })
                             .distinctBy { it.id }
                             .sortedByDescending { it.time }
                         prev.copy(
@@ -571,7 +577,7 @@ class ChatViewModel(
         supersedeAsk()
         _state.update {
             it.copy(
-                messages = it.messages + pending,
+                messages = listOf(pending) + it.messages,
                 sending = true,
                 live = null,
                 failure = null,
@@ -591,7 +597,7 @@ class ChatViewModel(
                     // coexist with the server's copy during streaming.
                     _state.update { st ->
                         st.copy(
-                            messages = st.messages.filterNot { it.id == final.id || it.id == pending.id } + final,
+                            messages = listOf(final) + st.messages.filterNot { it.id == final.id || it.id == pending.id },
                             sending = false,
                             live = null,
                         )
@@ -995,7 +1001,7 @@ class ChatViewModel(
                 )
             }
             optimistic.addAll(rows)
-            _state.update { it.copy(messages = it.messages + rows) }
+            _state.update { it.copy(messages = rows.asReversed() + it.messages) }
         }
         // from here on, every change to the draft is kept
         viewModelScope.launch {
@@ -1045,7 +1051,7 @@ class ChatViewModel(
                     persistOutbox()
                     _state.update { s ->
                         s.copy(
-                            messages = s.messages.filterNot { it.id == id || it.id == final.id } + final,
+                            messages = listOf(final) + s.messages.filterNot { it.id == id || it.id == final.id },
                             sending = false,
                         )
                     }

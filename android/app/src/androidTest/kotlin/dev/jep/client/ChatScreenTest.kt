@@ -313,6 +313,10 @@ class ChatScreenTest {
         rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
         rule.waitUntil(6_000) { rule.onAllNodesWithText("Created f.py", substring = true).fetchSemanticsNodes().isNotEmpty() }
         rule.onAllNodesWithContentDescription("copy response").assertCountEquals(1)
+        // under the answer that ends the turn, not under the tool call before it
+        val copy = rule.onNodeWithContentDescription("copy response").fetchSemanticsNode().boundsInRoot.top
+        val answer = rule.onNodeWithText("Created f.py", substring = true).fetchSemanticsNode().boundsInRoot.top
+        assertTrue("the buttons sit above the answer, on an earlier step", copy > answer)
     }
 
     @Test

@@ -3,12 +3,18 @@ package dev.jep.client
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithText
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import dev.jep.client.domain.model.ChatMessage
+import dev.jep.client.domain.model.ChatPart
+import dev.jep.client.domain.model.Role
 import dev.jep.client.domain.repository.ChatEvent
+import kotlinx.coroutines.CompletableDeferred
 import dev.jep.client.presentation.chat.ChatScreen
 import dev.jep.client.presentation.chat.ChatViewModel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -34,5 +40,40 @@ class ChatSyncTest {
         rule.waitUntil(5_000) { rule.onAllNodesWithText("still here", substring = true).fetchSemanticsNodes().isNotEmpty() }
         assertFalse("the header still says reconnecting", vm.state.value.lost)
         assertEquals(0, rule.onAllNodesWithText("reconnecting", substring = true).fetchSemanticsNodes().size)
+    }
+
+    private val earlier = listOf(
+        ChatMessage("u1", Role.USER, 1, listOf(ChatPart.Text("an older question"))),
+        ChatMessage("a1", Role.ASSISTANT, 2, listOf(ChatPart.Text("an older answer"))),
+    )
+
+    private fun top(text: String) =
+        rule.onNodeWithText(text, substring = true).fetchSemanticsNode().boundsInRoot.top
+
+    private fun shown(text: String) =
+        rule.onAllNodesWithText(text, substring = true).fetchSemanticsNodes().isNotEmpty()
+
+    @Test
+    fun a_message_being_sent_shows_under_the_conversation_not_above_it() {
+        val repo = FakeChatRepository(messages = earlier)
+        repo.promptGate = CompletableDeferred() // the turn stays in flight
+        val vm = ChatViewModel(repo, "s1", "T")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(5_000) { shown("an older answer") }
+        rule.runOnUiThread { vm.send("the newest words") }
+        rule.waitUntil(5_000) { shown("the newest words") }
+        assertTrue("the message being sent sits above the conversation", top("the newest words") > top("an older answer"))
+        assertEquals("u1", vm.state.value.messages.last().id)
+    }
+
+    @Test
+    fun a_reply_streaming_before_the_record_has_it_shows_at_the_end() {
+        val repo = FakeChatRepository(messages = earlier)
+        val vm = ChatViewModel(repo, "s1", "T")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(5_000) { shown("an older answer") && repo.subscribed }
+        rule.runOnUiThread { repo.emitEvent(ChatEvent.TextDelta("s1", "a2", "p1", "text", "a fresh reply")) }
+        rule.waitUntil(5_000) { shown("a fresh reply") }
+        assertTrue("the live reply sits above the conversation", top("a fresh reply") > top("an older answer"))
     }
 }
