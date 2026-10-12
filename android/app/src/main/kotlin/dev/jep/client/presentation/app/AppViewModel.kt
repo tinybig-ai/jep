@@ -246,9 +246,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** the gateway `repo` was built for */
+    private var repoBase: String? = null
+
     private fun connect(): ChatRepository {
         val existing = repo
-        if (existing != null) return existing
+        // a repository is bound to one gateway: pairing with another machine
+        // must not keep talking to the last one
+        if (existing != null && repoBase == pairing.baseUrl) return existing
         val built = GatewayChatRepository(
             base = pairing.baseUrl ?: "",
             token = { pairing.token },
@@ -256,6 +261,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             onNextCode = { pairing.rememberCode(it) },
         )
         repo = built
+        repoBase = pairing.baseUrl
         refresh()
         return built
     }
