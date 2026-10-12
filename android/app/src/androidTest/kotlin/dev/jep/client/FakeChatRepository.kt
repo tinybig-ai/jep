@@ -102,9 +102,24 @@ class FakeChatRepository(
     override suspend fun termInput(sessionId: String, text: String) = true
     override suspend fun termKey(sessionId: String, key: String) = true
     override suspend fun termClose(sessionId: String) = true
-    override suspend fun history(sessionId: String, limit: Int, before: Long, have: Int): HistoryBatch =
-        if (before > 0 && olderMessages.isNotEmpty()) HistoryBatch(olderMessages, false)
-        else HistoryBatch(historyOverride ?: messages, olderMessages.isNotEmpty(), asks)
+    /** how long a history read takes, as a slow link would make it */
+    @Volatile
+    var historyDelayMs = 0L
+    private val historyReading = java.util.concurrent.atomic.AtomicInteger()
+    /** the most history reads that were ever in flight at once */
+    val historyMostAtOnce = java.util.concurrent.atomic.AtomicInteger()
+
+    override suspend fun history(sessionId: String, limit: Int, before: Long, have: Int): HistoryBatch {
+        val now = historyReading.incrementAndGet()
+        historyMostAtOnce.accumulateAndGet(now) { a, b -> maxOf(a, b) }
+        try {
+            if (historyDelayMs > 0) delay(historyDelayMs)
+            return if (before > 0 && olderMessages.isNotEmpty()) HistoryBatch(olderMessages, false)
+            else HistoryBatch(historyOverride ?: messages, olderMessages.isNotEmpty(), asks)
+        } finally {
+            historyReading.decrementAndGet()
+        }
+    }
 
     /** when set, prompt() waits on it, so a test can keep a turn in flight */
     @Volatile

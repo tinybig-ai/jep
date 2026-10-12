@@ -422,81 +422,105 @@ class ChatViewModel(
     // the harness's own record is authoritative once served; optimistic rows
     // survive only until they show up there. History is paged: the newest
     // window only, then older pages on demand via loadOlder().
+    // One read at a time. The turn poll asks every 1.2s whether or not the last
+    // read came back, so on a slow link reads piled up, and one that left early
+    // could land after one that left late, putting older text back on screen.
+    // A refresh asked for during a read is not dropped: one more read follows.
+    private var reading = false
+    private var readAgain = false
+
     fun refresh() {
         // an empty screen while the first page loads looks broken; say we're busy
         if (_state.value.messages.isEmpty()) _state.update { it.copy(loadingHistory = true) }
-        viewModelScope.launch {
-            runCatching { repo.history(sessionId, limit = WINDOW) }
-                .onSuccess { batch ->
-                    // An optimistic row is a placeholder for a send still in
-                    // flight, and it must go the moment the harness's own
-                    // record has that message. The ids can never match (ours is
-                    // local, the harness mints its own), so match by text —
-                    // otherwise your own message sits there twice for the whole
-                    // turn.
-                    //
-                    // Only the placeholders are matched, and only against a
-                    // record entry that was not already there when they were
-                    // sent, one entry per placeholder. Matching every user row
-                    // by text removed an older "yes" from a loaded page whenever
-                    // a newer "yes" was in the window, and used the record's
-                    // copy up before the placeholder could claim it.
-                    val servedUser = batch.messages.filter { it.role == Role.USER }
-                    _state.update { st ->
-                        val local = optimistic.map { it.id }.toSet()
-                        val claimed = mutableSetOf<String>()
-                        optimistic.removeAll { o ->
-                            val seen = seenAtSend[o.id].orEmpty()
-                            val proof = servedUser.firstOrNull { m -> m.id !in seen && m.id !in claimed && textOf(m) == textOf(o) }
-                            if (proof != null) claimed += proof.id
-                            proof != null
-                        }
-                        seenAtSend.keys.retainAll(optimistic.map { it.id }.toSet())
-                        // a placeholder keeps what the screen made of it (an
-                        // undelivered mark), so it is taken from the state
-                        val inFlight = optimistic.map { o -> st.messages.firstOrNull { it.id == o.id } ?: o }
-                        val stWithoutReconciled = st.copy(messages = st.messages.filterNot { it.id in local })
-
-                        // A send that failed on the phone can still have reached the
-                        // daemon (the connection dropped after it was taken). The
-                        // record having it is the proof; retrying it would say it twice.
-                        if (outbox.keys.retainAll(optimistic.map { it.id }.toSet())) persistOutbox()
-                        val servedNow = batch.messages.filter { it.role == Role.USER }
-                        val windowIds = batch.messages.map { it.id }.toSet()
-                        val optimisticIds = optimistic.map { it.id }.toSet()
-                        val olderThanWindow = stWithoutReconciled.messages.filter { it.id !in windowIds && it.id !in optimisticIds }
-                        val mergedMessages = (batch.messages + olderThanWindow)
-                            .distinctBy { it.id }
-                            .sortedByDescending { it.time }
-                        stWithoutReconciled.copy(
-                            // newest first: the sends still in flight are the
-                            // newest of all, so they lead (appended, they read
-                            // as the oldest and drew above the conversation)
-                            messages = inFlight.asReversed() + mergedMessages,
-                            // history is the record, not the stream: it must never
-                            // wipe a live row it has merely caught up with, even
-                            // when this device did not start the turn — unless the
-                            // record shows the turn is actually over, in which case
-                            // keeping it would strand a finished answer
-                            live = if (liveRowIsSettled(st.live?.messageId, batch.messages)) null else st.live,
-                            hasMore = batch.hasMore,
-                            loadingHistory = false,
-                            // the gateway answered: whatever "reconnecting" meant,
-                            // it is reachable again (the feed follows a moment later)
-                            lost = false,
-                        ).withServedAsks(batch.asks).copy(
-                            // a queued message that now shows in the record has been
-                            // picked up: it is no longer waiting, it is the turn. A
-                            // NEW record entry only — an older message with the same
-                            // words must not clear it.
-                            queued = st.queued.filterNot { q -> servedNow.any { m -> m.id !in q.seen && textOf(m) == q.text } },
-                        )
-                    }
-                }
-                .onFailure { _state.update { it.copy(loadingHistory = false) } }
-                // the gateway just answered: a good moment for what never got there
-                .onSuccess { retryOutboxIfDue() }
+        if (reading) {
+            readAgain = true
+            return
         }
+        reading = true
+        viewModelScope.launch {
+            try {
+                readHistory()
+            } finally {
+                reading = false
+                if (readAgain) {
+                    readAgain = false
+                    refresh()
+                }
+            }
+        }
+    }
+
+    private suspend fun readHistory() {
+        runCatching { repo.history(sessionId, limit = WINDOW) }
+            .onSuccess { batch ->
+                // An optimistic row is a placeholder for a send still in
+                // flight, and it must go the moment the harness's own
+                // record has that message. The ids can never match (ours is
+                // local, the harness mints its own), so match by text —
+                // otherwise your own message sits there twice for the whole
+                // turn.
+                //
+                // Only the placeholders are matched, and only against a
+                // record entry that was not already there when they were
+                // sent, one entry per placeholder. Matching every user row
+                // by text removed an older "yes" from a loaded page whenever
+                // a newer "yes" was in the window, and used the record's
+                // copy up before the placeholder could claim it.
+                val servedUser = batch.messages.filter { it.role == Role.USER }
+                _state.update { st ->
+                    val local = optimistic.map { it.id }.toSet()
+                    val claimed = mutableSetOf<String>()
+                    optimistic.removeAll { o ->
+                        val seen = seenAtSend[o.id].orEmpty()
+                        val proof = servedUser.firstOrNull { m -> m.id !in seen && m.id !in claimed && textOf(m) == textOf(o) }
+                        if (proof != null) claimed += proof.id
+                        proof != null
+                    }
+                    seenAtSend.keys.retainAll(optimistic.map { it.id }.toSet())
+                    // a placeholder keeps what the screen made of it (an
+                    // undelivered mark), so it is taken from the state
+                    val inFlight = optimistic.map { o -> st.messages.firstOrNull { it.id == o.id } ?: o }
+                    val stWithoutReconciled = st.copy(messages = st.messages.filterNot { it.id in local })
+
+                    // A send that failed on the phone can still have reached the
+                    // daemon (the connection dropped after it was taken). The
+                    // record having it is the proof; retrying it would say it twice.
+                    if (outbox.keys.retainAll(optimistic.map { it.id }.toSet())) persistOutbox()
+                    val servedNow = batch.messages.filter { it.role == Role.USER }
+                    val windowIds = batch.messages.map { it.id }.toSet()
+                    val optimisticIds = optimistic.map { it.id }.toSet()
+                    val olderThanWindow = stWithoutReconciled.messages.filter { it.id !in windowIds && it.id !in optimisticIds }
+                    val mergedMessages = (batch.messages + olderThanWindow)
+                        .distinctBy { it.id }
+                        .sortedByDescending { it.time }
+                    stWithoutReconciled.copy(
+                        // newest first: the sends still in flight are the
+                        // newest of all, so they lead (appended, they read
+                        // as the oldest and drew above the conversation)
+                        messages = inFlight.asReversed() + mergedMessages,
+                        // history is the record, not the stream: it must never
+                        // wipe a live row it has merely caught up with, even
+                        // when this device did not start the turn — unless the
+                        // record shows the turn is actually over, in which case
+                        // keeping it would strand a finished answer
+                        live = if (liveRowIsSettled(st.live?.messageId, batch.messages)) null else st.live,
+                        hasMore = batch.hasMore,
+                        loadingHistory = false,
+                        // the gateway answered: whatever "reconnecting" meant,
+                        // it is reachable again (the feed follows a moment later)
+                        lost = false,
+                    ).withServedAsks(batch.asks).copy(
+                        // a queued message that now shows in the record has been
+                        // picked up: it is no longer waiting, it is the turn. A
+                        // NEW record entry only — an older message with the same
+                        // words must not clear it.
+                        queued = st.queued.filterNot { q -> servedNow.any { m -> m.id !in q.seen && textOf(m) == q.text } },
+                    )
+                }
+            }
+            .onFailure { _state.update { it.copy(loadingHistory = false) } }
+            // the gateway just answered: a good moment for what never got there
+            .onSuccess { retryOutboxIfDue() }
     }
 
     fun loadOlder() {

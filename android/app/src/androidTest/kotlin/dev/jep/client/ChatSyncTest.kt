@@ -116,4 +116,17 @@ class ChatSyncTest {
         rule.runOnUiThread { vm.refresh() }
         rule.waitUntil(5_000) { vm.state.value.messages.map { it.id } == listOf("u2", "u1") }
     }
+
+    @Test
+    fun history_reads_during_a_turn_never_overlap_on_a_slow_link() {
+        val repo = FakeChatRepository(messages = earlier)
+        repo.promptGate = CompletableDeferred() // a turn in flight: the 1.2s poll runs
+        lateinit var vm: ChatViewModel
+        rule.runOnUiThread { vm = ChatViewModel(repo, "s1", "T") }
+        rule.waitUntil(5_000) { vm.state.value.messages.isNotEmpty() }
+        repo.historyDelayMs = 3_000 // each read outlasts two poll ticks
+        rule.runOnUiThread { vm.send("go") }
+        Thread.sleep(7_000)
+        assertEquals("history reads in flight at once", 1, repo.historyMostAtOnce.get())
+    }
 }
