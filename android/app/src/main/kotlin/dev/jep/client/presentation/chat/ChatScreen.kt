@@ -8,6 +8,10 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.runtime.withFrameMillis
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.foundation.Canvas
 import androidx.compose.ui.viewinterop.AndroidView
 import android.webkit.WebViewClient
 import android.webkit.WebView
@@ -2257,10 +2261,44 @@ private fun UserBubble(message: ChatMessage, onRetry: () -> Unit = {}) {
     }
 }
 
+/** one turn of the "responding" spinner, in ms */
+private const val SPIN_MS = 1_100L
+
+/**
+ * The "responding" spinner, drawn from the frame clock rather than started
+ * per instance. The turn hands its spinner from the "awaiting" row to the
+ * reply's row when the first words arrive, so a new one is composed right
+ * there; Material's indeterminate spinner starts from an almost empty arc,
+ * and the handover read as the spinner blinking out for a frame. This one is
+ * a fixed arc whose angle is the clock's, so a spinner composed mid-turn
+ * shows exactly what the one it replaced would have shown.
+ */
+@Composable
+internal fun Spinner(modifier: Modifier = Modifier, color: Color = MaterialTheme.colorScheme.primary) {
+    var now by remember { mutableLongStateOf(android.os.SystemClock.uptimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) withFrameMillis { now = it }
+    }
+    Canvas(modifier.size(13.dp).testTag("responding-spinner")) {
+        val stroke = 2.dp.toPx()
+        rotate((now % SPIN_MS) / SPIN_MS.toFloat() * 360f) {
+            drawArc(
+                color = color,
+                startAngle = 0f,
+                sweepAngle = 270f,
+                useCenter = false,
+                topLeft = Offset(stroke / 2, stroke / 2),
+                size = androidx.compose.ui.geometry.Size(size.width - stroke, size.height - stroke),
+                style = androidx.compose.ui.graphics.drawscope.Stroke(stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round),
+            )
+        }
+    }
+}
+
 @Composable
 private fun RespondingMark() {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        CircularProgressIndicator(Modifier.size(13.dp), strokeWidth = 2.dp)
+        Spinner()
         Spacer(Modifier.size(8.dp))
         Text("responding…", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }

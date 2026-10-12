@@ -2,7 +2,9 @@ package dev.jep.client
 
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.jep.client.domain.model.ChatMessage
@@ -172,5 +174,44 @@ class ChatSyncTest {
         Thread.sleep(2_500) // the retry has failed by now
         assertTrue("the new turn was marked finished by the old retry", vm.state.value.sending)
         assertTrue("the retried message is not marked unsent again", vm.state.value.messages.first { it.id == unsent }.undelivered)
+    }
+
+    @Test
+    fun the_spinner_never_leaves_the_screen_when_the_first_words_arrive() {
+        // a screenful of history, so the end of the list is pinned to the bottom
+        val history = (1..12).flatMap {
+            listOf(
+                ChatMessage("u$it", Role.USER, it * 2L, listOf(ChatPart.Text("question $it"))),
+                ChatMessage("a$it", Role.ASSISTANT, it * 2L + 1, listOf(ChatPart.Text("answer $it"))),
+            )
+        }
+        val repo = FakeChatRepository(messages = history)
+        repo.promptGate = CompletableDeferred()
+        val vm = ChatViewModel(repo, "s1", "T")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(10_000) { shown("answer 12") && repo.subscribed }
+        rule.runOnUiThread { vm.send("go on") }
+        rule.waitUntil(5_000) { rule.onAllNodesWithTag("awaiting-reply").fetchSemanticsNodes().isNotEmpty() }
+        rule.mainClock.advanceTimeBy(2_000) // the send's own scroll has settled
+        val list = rule.onNodeWithTag("chat-list").fetchSemanticsNode().boundsInRoot
+
+        rule.mainClock.autoAdvance = false
+        // several lines at once: the reply row is much taller than the spinner row
+        rule.runOnUiThread {
+            repo.emitEvent(ChatEvent.TextDelta("s1", "r1", "p1", "text", (1..8).joinToString("\n\n") { "line $it of the reply" }))
+        }
+        val until = System.currentTimeMillis() + 5_000
+        while (vm.state.value.live == null && System.currentTimeMillis() < until) Thread.sleep(10)
+
+        val hidden = mutableListOf<Int>()
+        for (frame in 1..20) {
+            rule.mainClock.advanceTimeByFrame()
+            val inView = rule.onAllNodesWithText("responding…").fetchSemanticsNodes().any {
+                it.boundsInRoot.top >= list.top && it.boundsInRoot.bottom <= list.bottom
+            }
+            if (!inView) hidden += frame
+        }
+        rule.mainClock.autoAdvance = true
+        assertEquals("frames with no spinner in view", emptyList<Int>(), hidden)
     }
 }
