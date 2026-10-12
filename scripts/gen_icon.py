@@ -178,7 +178,7 @@ def render(size, mode):
     S=size*SS
     if mode=='fg':
         im=Image.new('RGBA',(S,S),(0,0,0,0))
-        im.alpha_composite(draw_apple(S,apple_scale=0.62))
+        im.alpha_composite(draw_apple(S,apple_scale=0.50))
     elif mode=='mark':
         im=Image.new('RGBA',(S,S),(0,0,0,0))
         # the mark renders small — a soft shadow reads as dithered noise
@@ -190,7 +190,7 @@ def render(size, mode):
         rr={'square':0.235,'round':None,'ios':None}[mode]
         circle=(mode=='round'); full=(mode=='ios')
         im=tile(S,round_ratio=None if (circle or full) else rr,circle=circle)
-        im.alpha_composite(draw_apple(S,apple_scale=0.44))
+        im.alpha_composite(draw_apple(S,apple_scale=0.36))
     return im.resize((size,size),Image.LANCZOS)
 
 
