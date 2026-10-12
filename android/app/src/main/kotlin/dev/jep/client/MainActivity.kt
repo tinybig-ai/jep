@@ -59,6 +59,8 @@ class MainActivity : ComponentActivity() {
             ContextCompat.startForegroundService(this, Intent(this, StreamService::class.java))
         }
         setContent {
+            // images from the gateway are fetched with its token in a header
+            coil3.compose.setSingletonImageLoaderFactory { ctx -> dev.jep.client.device.jepImageLoader(ctx, app.pairing) }
             val prefs by app.prefs.collectAsState()
             JepTheme(
                 darkTheme = when (prefs.theme) {

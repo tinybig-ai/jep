@@ -402,11 +402,11 @@ private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     }
 
     override fun fileUrl(path: String, sessionId: String?): String {
-        // the pairing token rides in the query because the image loader fetches
-        // this URL on its own, outside the repository's header path
+        // no token in the URL: the image loader signs its requests to the
+        // gateway with a header (device/GatewayAuth.kt)
         val enc = Base64.encodeToString(path.toByteArray(Charsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
         val id = sessionId?.let { "&id=" + URLEncoder.encode(it, "UTF-8") } ?: ""
-        return "$base/file?p=$enc$id&token=${token() ?: ""}"
+        return "$base/file?p=$enc$id"
     }
 
     override suspend fun respond(askId: String, optionId: String): Boolean =
