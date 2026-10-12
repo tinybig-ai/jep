@@ -76,4 +76,44 @@ class ChatSyncTest {
         rule.waitUntil(5_000) { shown("a fresh reply") }
         assertTrue("the live reply sits above the conversation", top("a fresh reply") > top("an older answer"))
     }
+
+    @Test
+    fun the_same_words_on_an_older_page_survive_a_newer_copy_in_the_window() {
+        val repo = FakeChatRepository(
+            messages = listOf(
+                ChatMessage("u2", Role.USER, 10, listOf(ChatPart.Text("yes"))),
+                ChatMessage("a2", Role.ASSISTANT, 11, listOf(ChatPart.Text("done again"))),
+            ),
+            olderMessages = listOf(
+                ChatMessage("u1", Role.USER, 1, listOf(ChatPart.Text("yes"))),
+                ChatMessage("a1", Role.ASSISTANT, 2, listOf(ChatPart.Text("done"))),
+            ),
+        )
+        lateinit var vm: ChatViewModel
+        rule.runOnUiThread { vm = ChatViewModel(repo, "s1", "T") }
+        rule.waitUntil(5_000) { vm.state.value.hasMore }
+        rule.runOnUiThread { vm.loadOlder() }
+        rule.waitUntil(5_000) { vm.state.value.messages.size == 4 }
+        rule.runOnUiThread { vm.refresh() }
+        Thread.sleep(500)
+        assertEquals(listOf("a2", "u2", "a1", "u1"), vm.state.value.messages.map { it.id })
+    }
+
+    @Test
+    fun saying_the_same_words_again_shows_until_the_record_has_the_new_copy() {
+        val old = ChatMessage("u1", Role.USER, 1, listOf(ChatPart.Text("yes")))
+        val repo = FakeChatRepository(messages = listOf(old))
+        repo.promptGate = CompletableDeferred()
+        lateinit var vm: ChatViewModel
+        rule.runOnUiThread { vm = ChatViewModel(repo, "s1", "T") }
+        rule.waitUntil(5_000) { vm.state.value.messages.isNotEmpty() }
+        rule.runOnUiThread { vm.send("yes") }
+        rule.runOnUiThread { vm.refresh() }
+        Thread.sleep(500)
+        // the old "yes" is not the copy of the new one
+        assertEquals(2, vm.state.value.messages.size)
+        repo.historyOverride = listOf(old, ChatMessage("u2", Role.USER, 5, listOf(ChatPart.Text("yes"))))
+        rule.runOnUiThread { vm.refresh() }
+        rule.waitUntil(5_000) { vm.state.value.messages.map { it.id } == listOf("u2", "u1") }
+    }
 }

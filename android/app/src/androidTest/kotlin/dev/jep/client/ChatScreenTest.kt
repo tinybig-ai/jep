@@ -180,15 +180,17 @@ class ChatScreenTest {
         // then serves the same message. Matching them by id can never work
         // (ours is local), so without matching by text your message sat there
         // twice for the whole turn.
-        val repo = FakeChatRepository(
-            messages = listOf(ChatMessage("u1", Role.USER, 1, listOf(ChatPart.Text("what else? be creative")))),
-        )
+        val repo = FakeChatRepository()
+        repo.promptGate = kotlinx.coroutines.CompletableDeferred() // the turn stays in flight
         val vm = ChatViewModel(repo, "s1", "T", "jep", "opencode")
         rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
         rule.waitForIdle()
         rule.runOnUiThread { vm.send("what else? be creative") }
-        // the turn is in flight; once history has served the message, only one copy remains
-        rule.waitUntil(10_000) { vm.state.value.messages.size == 1 }
+        rule.waitUntil(5_000) { vm.state.value.messages.size == 1 }
+        // the harness records it, and the next read serves its copy
+        repo.historyOverride = listOf(ChatMessage("u1", Role.USER, 1, listOf(ChatPart.Text("what else? be creative"))))
+        rule.runOnUiThread { vm.refresh() }
+        rule.waitUntil(10_000) { vm.state.value.messages.map { it.id } == listOf("u1") }
         rule.onAllNodesWithText("what else? be creative").assertCountEquals(1)
     }
 

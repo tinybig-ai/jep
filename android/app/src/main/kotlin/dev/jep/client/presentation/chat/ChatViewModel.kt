@@ -196,6 +196,11 @@ class ChatViewModel(
     // sends land optimistically and are reconciled by the next history read
     private val optimistic = mutableListOf<ChatMessage>()
 
+    /** for each placeholder, the user messages the record already held when it
+     *  was sent: none of them can be its copy. A send restored from the outbox
+     *  has no entry, so any record entry can prove it. */
+    private val seenAtSend = mutableMapOf<String, Set<String>>()
+
     /** Sends the daemon never took, kept with enough to try again. A message
      *  that failed on the way out is the one case where the transcript is ahead
      *  of the truth, so it has to be recoverable rather than decorative. */
@@ -429,14 +434,28 @@ class ChatViewModel(
                     // local, the harness mints its own), so match by text —
                     // otherwise your own message sits there twice for the whole
                     // turn.
-                    val servedUser = batch.messages.filter { it.role == Role.USER }.map { textOf(it) }.toMutableList()
+                    //
+                    // Only the placeholders are matched, and only against a
+                    // record entry that was not already there when they were
+                    // sent, one entry per placeholder. Matching every user row
+                    // by text removed an older "yes" from a loaded page whenever
+                    // a newer "yes" was in the window, and used the record's
+                    // copy up before the placeholder could claim it.
+                    val servedUser = batch.messages.filter { it.role == Role.USER }
                     _state.update { st ->
-                        // drop the local optimistic copy from the state when the
-                        // harness's copy arrives (match by text, since IDs differ)
-                        val reconciled = st.messages.filter { it.role == Role.USER && servedUser.indexOf(textOf(it)) >= 0 }
-                        reconciled.forEach { r -> servedUser.remove(textOf(r)) }
-                        optimistic.removeAll { o -> servedUser.indexOf(textOf(o)) >= 0 }
-                        val stWithoutReconciled = st.copy(messages = st.messages.filterNot { it in reconciled })
+                        val local = optimistic.map { it.id }.toSet()
+                        val claimed = mutableSetOf<String>()
+                        optimistic.removeAll { o ->
+                            val seen = seenAtSend[o.id].orEmpty()
+                            val proof = servedUser.firstOrNull { m -> m.id !in seen && m.id !in claimed && textOf(m) == textOf(o) }
+                            if (proof != null) claimed += proof.id
+                            proof != null
+                        }
+                        seenAtSend.keys.retainAll(optimistic.map { it.id }.toSet())
+                        // a placeholder keeps what the screen made of it (an
+                        // undelivered mark), so it is taken from the state
+                        val inFlight = optimistic.map { o -> st.messages.firstOrNull { it.id == o.id } ?: o }
+                        val stWithoutReconciled = st.copy(messages = st.messages.filterNot { it.id in local })
 
                         // A send that failed on the phone can still have reached the
                         // daemon (the connection dropped after it was taken). The
@@ -453,7 +472,7 @@ class ChatViewModel(
                             // newest first: the sends still in flight are the
                             // newest of all, so they lead (appended, they read
                             // as the oldest and drew above the conversation)
-                            messages = optimistic.asReversed() + mergedMessages,
+                            messages = inFlight.asReversed() + mergedMessages,
                             // history is the record, not the stream: it must never
                             // wipe a live row it has merely caught up with, even
                             // when this device did not start the turn — unless the
@@ -571,6 +590,7 @@ class ChatViewModel(
             parts = outgoingParts(body, files, quote),
         )
         val seq = ++turn
+        seenAtSend[pending.id] = _state.value.messages.filter { it.role == Role.USER && it.id !in optimistic.map { o -> o.id } }.map { it.id }.toSet()
         optimistic.add(pending)
         outbox[pending.id] = Outgoing(body, files, quote)
         persistOutbox()
