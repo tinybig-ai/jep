@@ -1185,4 +1185,16 @@ class ChatScreenTest {
         rule.onNodeWithContentDescription("chat menu").performClick()
         rule.onAllNodesWithText("Compact").assertCountEquals(0)
     }
+
+    @Test
+    fun a_short_message_gets_a_short_bubble() {
+        val vm = ChatViewModel(
+            FakeChatRepository(messages = listOf(ChatMessage("u1", Role.USER, 1, listOf(ChatPart.Text("hey"))))),
+            "s1", "T",
+        )
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(5_000) { rule.onAllNodesWithTag("user-bubble").fetchSemanticsNodes().isNotEmpty() }
+        val width = rule.onNodeWithTag("user-bubble").fetchSemanticsNode().boundsInRoot.width / rule.density.density
+        assertTrue("a bubble for \"hey\" is ${width}dp wide", width < 100f)
+    }
 }

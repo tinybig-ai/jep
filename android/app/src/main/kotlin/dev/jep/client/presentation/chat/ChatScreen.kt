@@ -2248,6 +2248,7 @@ private fun UserBubble(message: ChatMessage, onRetry: () -> Unit = {}) {
             Modifier
                 .align(Alignment.CenterEnd)
                 .widthIn(max = 320.dp)
+                .testTag("user-bubble")
                 .then(if (pending) Modifier.clickable(onClick = onRetry) else Modifier),
             color = if (pending) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.primaryContainer,
             shape = RoundedCornerShape(Radius.bubble),
@@ -2695,6 +2696,10 @@ private fun UserText(text: String, ink: Color) {
     val bold = body.copy(fontWeight = FontWeight.SemiBold)
     Markdown(
         withLocalLinks(text),
+        // not the library's default, which fills the space it is given: a
+        // bubble for "hey" was as wide as one for a paragraph. Plain lines now
+        // take their own width; code, lists and tables still fill the bubble
+        modifier = Modifier,
         colors = markdownColor(text = ink),
         typography = markdownTypography(
             h1 = bold, h2 = bold, h3 = bold, h4 = bold, h5 = bold, h6 = bold,
