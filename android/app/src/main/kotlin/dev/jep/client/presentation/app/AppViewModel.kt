@@ -233,6 +233,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _notice = MutableStateFlow<String?>(null)
     val notice = _notice.asStateFlow()
+    private var noticeTimer: Job? = null
+
+    /** An action's failure, said for long enough to be read. The list screen
+     *  has no dismiss for it, and no reload takes it away early. */
+    private fun say(text: String) {
+        _notice.value = text
+        noticeTimer?.cancel()
+        noticeTimer = viewModelScope.launch {
+            delay(NOTICE_MS)
+            if (_notice.value == text) _notice.value = null
+        }
+    }
 
     private var repo: ChatRepository? = null
 
@@ -287,11 +299,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     _sessions.value = list.items
                     _degraded.value = list.degraded.map { it.banner() }
                     recomputeUnread()
-                    _notice.value = null
+                    // a good read answers its own complaint only. Clearing every
+                    // notice here erased an action's failure ("couldn't archive
+                    // — the list is being reloaded") with the very reload it
+                    // asked for, before anyone could read it
+                    if (_notice.value?.startsWith(UNREACHABLE) == true) _notice.value = null
                     anyActive = list.items.any { it.active }
                 }
                 .onFailure {
-                    _notice.value = "gateway unreachable: ${it.message}"
+                    _notice.value = "$UNREACHABLE: ${it.message}"
                     _degraded.value = emptyList()
                 }
             // the creation picker lists the same served workspaces; keep them
@@ -387,7 +403,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 if (!done) failed = true
             }
             if (failed) {
-                _notice.value = "couldn't change the pin — the list is being reloaded"
+                say("couldn't change the pin — the list is being reloaded")
                 refresh()
             }
         }
@@ -411,10 +427,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             var failed = false
             for (s in sessions) {
-                runCatching { r.archiveSession(s.id) }.onFailure { failed = true }
+                // false is the gateway saying no (an error status), not only
+                // a request that never arrived
+                if (!runCatching { r.archiveSession(s.id) }.getOrDefault(false)) failed = true
             }
             if (failed) {
-                _notice.value = "couldn't archive something — the list is being reloaded"
+                say("couldn't archive something — the list is being reloaded")
                 refresh()
             }
         }
@@ -427,8 +445,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _undo.value = emptyList()
         val r = repo ?: return
         viewModelScope.launch {
-            for (s in sessions) runCatching { r.unarchiveSession(s.id) }
+            var failed = false
+            for (s in sessions) if (!runCatching { r.unarchiveSession(s.id) }.getOrDefault(false)) failed = true
             refresh()
+            if (failed) say("couldn't put something back — it is still archived")
         }
     }
 
@@ -460,7 +480,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             runCatching { r.archivedSessions() }
                 .onSuccess { _archived.value = it }
-                .onFailure { _notice.value = "couldn't list archived conversations: ${it.message}" }
+                .onFailure { say("couldn't list archived conversations: ${it.message}") }
         }
     }
 
@@ -469,8 +489,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _archived.value = _archived.value?.filterNot { it.id == session.id }
         viewModelScope.launch {
             runCatching { r.unarchiveSession(session.id) }
-                .onFailure { _notice.value = "couldn't restore it: ${it.message}"; loadArchived() }
-                .onSuccess { refresh() }
+                .onFailure { say("couldn't restore it: ${it.message}"); loadArchived() }
+                .onSuccess { ok ->
+                    if (ok) refresh()
+                    else {
+                        say("couldn't restore it")
+                        loadArchived()
+                    }
+                }
         }
     }
 
@@ -483,7 +509,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             runCatching { r.importableSessions() }
                 .onSuccess { _importable.value = it }
-                .onFailure { _notice.value = "couldn't list sessions to import: ${it.message}" }
+                .onFailure { say("couldn't list sessions to import: ${it.message}") }
         }
     }
 
@@ -491,7 +517,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val r = repo ?: return
         viewModelScope.launch {
             runCatching { r.importSession(id) }
-                .onSuccess {
+                .onSuccess { ok ->
+                    if (!ok) {
+                        say("import failed")
+                        return@onSuccess
+                    }
                     _importable.value = _importable.value?.filterNot { it.id == id }
                     // The daemon forks the copy and then restarts the workspace
                     // so the running harness can see it; that takes a beat, so
@@ -503,7 +533,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         refresh()
                     }
                 }
-                .onFailure { _notice.value = "import failed: ${it.message}" }
+                .onFailure { say("import failed: ${it.message}") }
         }
     }
 
@@ -771,5 +801,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private companion object {
         /** how long the undo affordance stays up after an archive */
         const val UNDO_MS = 6_000L
+
+        /** how long an action's failure stays on the list screen */
+        const val NOTICE_MS = 8_000L
+
+        /** how a failed list read starts its notice, so a good read can take it back */
+        const val UNREACHABLE = "gateway unreachable"
     }
 }

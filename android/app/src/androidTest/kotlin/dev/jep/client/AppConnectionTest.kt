@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import dev.jep.client.domain.model.SessionSummary
 import dev.jep.client.presentation.app.AppViewModel
 import org.junit.After
 import org.junit.Assert.assertTrue
@@ -77,5 +78,26 @@ class AppConnectionTest {
         pair(vm, second)
         instrumentation.runOnMainSync { vm.refresh() }
         waitFor(what = "the second machine's list") { second.seen.any { it == "/sessions Bearer token-b" } }
+    }
+
+    @Test
+    fun a_refused_archive_restore_or_import_is_said_out_loud() {
+        val gw = gateway("token")
+        gw.answer["/archive"] = 500 to """{"error":"no"}"""
+        gw.answer["/unarchive"] = 500 to """{"error":"no"}"""
+        gw.answer["/import"] = 500 to """{"error":"no"}"""
+        lateinit var vm: AppViewModel
+        instrumentation.runOnMainSync { vm = AppViewModel(app) }
+        pair(vm, gw)
+        val row = SessionSummary("s1", "a chat", "", 0, 0, null, null)
+
+        instrumentation.runOnMainSync { vm.archive(row) }
+        waitFor(what = "the archive refusal") { vm.notice.value?.contains("couldn't archive") == true }
+
+        instrumentation.runOnMainSync { vm.unarchive(row) }
+        waitFor(what = "the restore refusal") { vm.notice.value?.contains("couldn't restore") == true }
+
+        instrumentation.runOnMainSync { vm.importSession("s2") }
+        waitFor(what = "the import refusal") { vm.notice.value?.contains("import failed") == true }
     }
 }
