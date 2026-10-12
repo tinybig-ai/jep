@@ -268,7 +268,7 @@ internal sealed interface Row {
 
     /** several work-only messages (tool calls, thinking) standing in for one
      *  line; `durationMs` is how long they took, when the harness timed them */
-    data class Work(val id: String, val parts: List<ChatPart>, val durationMs: Long? = null) : Row {
+    data class Work(val id: String, val parts: List<ChatPart>, val durationMs: Long? = null, val newest: String = id) : Row {
         override val key: String get() = "work-$id"
     }
 
@@ -282,6 +282,23 @@ internal sealed interface Row {
     data class AutoContinue(val m: ChatMessage) : Row {
         override val key: String get() = m.id
     }
+}
+
+/** where the reader was when they asked for an older page */
+private class OlderAnchor {
+    var row: String? = null
+    var offset = 0
+    var loading = false
+}
+
+/**
+ * A message the row is sure to keep when an older page loads, to find it again
+ * by. Not the row's key: a "Worked for" run is keyed by its oldest message, and
+ * an older page can add older steps to the run at the top of the screen.
+ */
+internal fun Row.anchor(): String = when (this) {
+    is Row.Work -> "work:$newest"
+    else -> key
 }
 
 /** A compaction marker is its own row; everything else renders as a message. */
@@ -316,7 +333,7 @@ internal fun groupWorkRuns(rows: List<Row>, hold: String? = null): List<Row> {
         if (run.size > 1) {
             // rows are newest first; the work reads in the order it happened
             val oldest = run.asReversed()
-            out += Row.Work(oldest[0].m.id, oldest.flatMap { workParts(it.m).orEmpty() }, workSpan(oldest.map { it.m }))
+            out += Row.Work(oldest[0].m.id, oldest.flatMap { workParts(it.m).orEmpty() }, workSpan(oldest.map { it.m }), newest = run[0].m.id)
         } else {
             out += run
         }
@@ -771,7 +788,31 @@ fun ChatScreen(
     // read the first message kept yanking in more. Now you ask, the way a
     // swipe archives a conversation: past the threshold and let go.
     val pullAvailable = landed && state.hasMore && !state.loadingOlder
-    val olderPull = rememberOlderPull(pullAvailable) { vm.loadOlder() }
+    // An older page goes above what you are reading, and you stay where you
+    // were: the row at the top of the screen, at the same offset. The list
+    // kept its place by key only sometimes. At the very top it followed the
+    // new items up, and a "Worked for" run at the top changed key when older
+    // steps joined it, so the reader landed on the new top instead.
+    // (plain holders, not state: writing them must not recompose)
+    val olderAnchor = remember { OlderAnchor() }
+    val olderPull = rememberOlderPull(pullAvailable) {
+        val skip = if (state.loadingOlder) 1 else 0
+        olderAnchor.row = listState.layoutInfo.visibleItemsInfo
+            .firstOrNull { it.key != "loading-older" && it.index - skip in displayRows.indices }
+            ?.let { olderAnchor.offset = it.offset; displayRows[it.index - skip].anchor() }
+        olderAnchor.loading = false
+        vm.loadOlder()
+    }
+    olderAnchor.row?.let { anchor ->
+        // the screen hears of the load a frame after it starts: restore only
+        // once it has been seen to start and then to finish
+        if (state.loadingOlder) olderAnchor.loading = true
+        else if (olderAnchor.loading) {
+            olderAnchor.row = null
+            val at = displayRows.indexOfFirst { it.anchor() == anchor }
+            if (at >= 0) listState.requestScrollToItem(at, -olderAnchor.offset)
+        }
+    }
 
     var renameOpen by remember { mutableStateOf(false) }
     var queuedMenuFor by remember { mutableStateOf<ChatViewModel.Queued?>(null) }

@@ -501,9 +501,15 @@ class ChatScreenTest {
         rule.waitForIdle()
         Thread.sleep(1_500)
         assertEquals("no older page without a pull", 30, vm.state.value.messages.size)
+        val reading = rule.onNodeWithText("message number 1 ", substring = true).fetchSemanticsNode().boundsInRoot.top
         // a pull past the top, let go, is
         repeat(2) { rule.onNodeWithTag("chat-list").performTouchInput { swipeDown() } }
         rule.waitUntil(10_000) { vm.state.value.messages.size == 32 }
+        rule.waitForIdle()
+        // the page goes above, and the reader stays where they were
+        val after = rule.onNodeWithText("message number 1 ", substring = true).fetchSemanticsNode().boundsInRoot.top
+        assertEquals("the reader was moved by the older page", reading, after, 2f)
+        rule.onNodeWithTag("chat-list").performScrollToIndex(0)
         rule.waitUntil(5_000) {
             rule.onAllNodesWithText("older message one", substring = true).fetchSemanticsNodes().isNotEmpty()
         }
