@@ -56,6 +56,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.height
@@ -3448,7 +3452,14 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
     // of the screen: with the keyboard up, the composer rose into the lighter
     // part of the gradient and showed as a dark band.
     Surface(color = Color.Transparent) {
-        Column(Modifier.fillMaxWidth().imePadding().padding(horizontal = 10.dp, vertical = 8.dp)) {
+        // The keyboard's inset, or the navigation bar's when it is down: the
+        // activity is edge to edge and this screen has no Scaffold to pad for
+        // the bar, so with the keyboard closed the buttons sat under it.
+        Column(
+            Modifier.fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+        ) {
             if (state.attachments.isNotEmpty()) {
                 FlowRow(
                     Modifier.fillMaxWidth().padding(bottom = 8.dp),
