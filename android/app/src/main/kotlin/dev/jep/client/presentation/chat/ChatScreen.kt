@@ -882,8 +882,10 @@ fun ChatScreen(
         // the ambient status line: model in use, tokens it held, spend so far —
         // the phone's answer to Telegram's pinned status. Silent when there is
         // nothing yet to say.
+        // transparent, like the top bar above it: an opaque strip here was a
+        // band of near-black across the lightest part of the backdrop
         statusText(visibleStatus).takeIf { it.isNotEmpty() }?.let { s ->
-            Surface(color = MaterialTheme.colorScheme.surface) {
+            Surface(color = Color.Transparent) {
                 Text(
                     s,
                     Modifier.fillMaxWidth().padding(horizontal = Spacing.gutter, vertical = 3.dp),
@@ -930,6 +932,9 @@ fun ChatScreen(
                 Modifier
                     .fillMaxSize()
                     .offset { androidx.compose.ui.unit.IntOffset(0, olderPull.offset.roundToInt()) }
+                    // hidden, not covered, while it finds the end: an opaque
+                    // cover had to guess the backdrop's colour and got it wrong
+                    .alpha(if (landed || rendered.isEmpty()) 1f else 0f)
                     .testTag("chat-list"),
                 state = listState,
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 10.dp),
@@ -1038,7 +1043,7 @@ fun ChatScreen(
             }
             if (!landed && rendered.isNotEmpty()) {
                 Box(
-                    Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).testTag("positioning-overlay"),
+                    Modifier.fillMaxSize().testTag("positioning-overlay"),
                     contentAlignment = Alignment.Center,
                 ) {
                     CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
@@ -3437,7 +3442,12 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
             onClose = { expanded = false },
         )
     }
-    Surface(tonalElevation = 2.dp, color = MaterialTheme.colorScheme.background) {
+    // Transparent, so the backdrop runs on behind the field. The backdrop is
+    // painted at full screen height and does not move with the keyboard, so an
+    // opaque panel in the background colour matched it only at the very bottom
+    // of the screen: with the keyboard up, the composer rose into the lighter
+    // part of the gradient and showed as a dark band.
+    Surface(color = Color.Transparent) {
         Column(Modifier.fillMaxWidth().imePadding().padding(horizontal = 10.dp, vertical = 8.dp)) {
             if (state.attachments.isNotEmpty()) {
                 FlowRow(
