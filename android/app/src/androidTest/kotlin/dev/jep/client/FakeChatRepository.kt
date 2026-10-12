@@ -125,6 +125,10 @@ class FakeChatRepository(
     @Volatile
     var promptGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 
+    /** runs inside each prompt with its text: to fail or stall one message */
+    @Volatile
+    var promptHook: (suspend (String) -> Unit)? = null
+
     /** every prompt the screen sent, in order */
     val prompts = java.util.Collections.synchronizedList(mutableListOf<String>())
 
@@ -142,6 +146,7 @@ class FakeChatRepository(
         modes += mode
         clientIDs += clientID
         prompts += text
+        promptHook?.invoke(text)
         promptGate?.await()
         return ChatMessage("reply", Role.ASSISTANT, 1, listOf(ChatPart.Text("ok")))
     }

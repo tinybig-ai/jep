@@ -146,4 +146,31 @@ class ChatSyncTest {
         assertEquals(dev.jep.client.domain.model.SendMode.AFTER_REPLY, repo.modes.last())
         assertTrue("the running reply was wiped", vm.state.value.live != null)
     }
+
+    @Test
+    fun a_retry_that_fails_late_leaves_a_newer_turn_running() {
+        val repo = FakeChatRepository(messages = earlier)
+        repo.promptHook = { text -> if (text == "first") throw java.io.IOException("no route") }
+        lateinit var vm: ChatViewModel
+        rule.runOnUiThread { vm = ChatViewModel(repo, "s1", "T") }
+        rule.waitUntil(5_000) { vm.state.value.messages.isNotEmpty() }
+        rule.runOnUiThread { vm.send("first") }
+        rule.waitUntil(5_000) { vm.state.value.messages.any { it.undelivered } }
+        val unsent = vm.state.value.messages.first { it.undelivered }.id
+        // the retry is slow to fail; meanwhile the person stops and says something new
+        repo.promptHook = { text ->
+            if (text == "first") {
+                kotlinx.coroutines.delay(1_500)
+                throw java.io.IOException("no route")
+            }
+        }
+        repo.promptGate = CompletableDeferred()
+        rule.runOnUiThread { vm.retrySend(unsent) }
+        rule.runOnUiThread { vm.stop() }
+        rule.runOnUiThread { vm.send("second") }
+        rule.waitUntil(5_000) { repo.prompts.contains("second") }
+        Thread.sleep(2_500) // the retry has failed by now
+        assertTrue("the new turn was marked finished by the old retry", vm.state.value.sending)
+        assertTrue("the retried message is not marked unsent again", vm.state.value.messages.first { it.id == unsent }.undelivered)
+    }
 }

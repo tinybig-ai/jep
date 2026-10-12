@@ -1107,8 +1107,12 @@ class ChatViewModel(
                 }
                 .onFailure { err ->
                     _state.update { s ->
-                        s.copy(
-                            messages = s.messages.map { if (it.id == id) it.copy(undelivered = true) else it },
+                        val marked = s.messages.map { if (it.id == id) it.copy(undelivered = true) else it }
+                        // a newer turn (a stop, a new send) owns `sending` and
+                        // the banner now: this late failure only marks its row
+                        if (seq != turn) s.copy(messages = marked)
+                        else s.copy(
+                            messages = marked,
                             sending = false,
                             failure = err.message ?: "still no connection",
                         )
