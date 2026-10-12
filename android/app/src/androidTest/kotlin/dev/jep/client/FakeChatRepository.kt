@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.transformWhile
 
 // Hand-rolled in-memory port: the UI tests drive the real screens and the real
 // ViewModels, and only the transport is faked. No emulator network, no gateway.
@@ -157,7 +158,16 @@ class FakeChatRepository(
     override suspend fun attach(sessionId: String, filename: String, bytes: ByteArray) = "attachment"
     // tests drive a turn by hand: whatever the harness would emit goes here
     private val _events = MutableSharedFlow<ChatEvent>(extraBufferCapacity = 64)
-    override fun events(): Flow<ChatEvent> = _events.asSharedFlow()
+    /** how many times the screen has opened the feed */
+    @Volatile
+    var subscriptions = 0
+
+    // like the gateway's feed, a subscription ends with Lost: the connection
+    // dropped, and only a new subscription hears anything after that
+    override fun events(): Flow<ChatEvent> = flow {
+        subscriptions++
+        _events.transformWhile { emit(it); it !is ChatEvent.Lost }.collect { emit(it) }
+    }
     fun emitEvent(evt: ChatEvent) { _events.tryEmit(evt) }
     /** tryEmit drops an event nobody is collecting yet; wait on this before emitting */
     val subscribed: Boolean get() = _events.subscriptionCount.value > 0

@@ -240,8 +240,21 @@ class ChatViewModel(
             // transcript one piece per frame instead of all at once.
             val incoming = Channel<ChatEvent>(Channel.UNLIMITED)
             launch {
-                repo.events().collect { evt ->
-                    if (evt.sessionId == sessionId || evt is ChatEvent.Lost) incoming.send(evt)
+                // A feed ends when its connection does (it says Lost first).
+                // Subscribing once meant the first daemon restart or network
+                // change silenced this screen until it was closed and opened
+                // again. The wait grows while the gateway stays away, and
+                // starts over once a feed delivers anything.
+                var wait = 1_000L
+                while (true) {
+                    runCatching {
+                        repo.events().collect { evt ->
+                            if (evt !is ChatEvent.Lost) wait = 1_000L
+                            if (evt.sessionId == sessionId || evt is ChatEvent.Lost) incoming.send(evt)
+                        }
+                    }
+                    delay(wait)
+                    wait = (wait * 2).coerceAtMost(15_000L)
                 }
             }
             while (true) {
@@ -446,6 +459,9 @@ class ChatViewModel(
                             live = if (liveRowIsSettled(st.live?.messageId, batch.messages)) null else st.live,
                             hasMore = batch.hasMore,
                             loadingHistory = false,
+                            // the gateway answered: whatever "reconnecting" meant,
+                            // it is reachable again (the feed follows a moment later)
+                            lost = false,
                         ).withServedAsks(batch.asks).copy(
                             // a queued message that now shows in the record has been
                             // picked up: it is no longer waiting, it is the turn. A
