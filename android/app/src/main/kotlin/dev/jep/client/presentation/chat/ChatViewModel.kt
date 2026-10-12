@@ -571,7 +571,11 @@ class ChatViewModel(
         val body = trimmed.ifEmpty { "see the attached file" }
         // it is on its way; the composer starts empty again
         _state.update { it.copy(draft = "") }
-        if (_state.value.sending) {
+        // a turn is running if this screen started one or one is streaming
+        // here from elsewhere (Telegram, another phone). Sent directly into
+        // the latter, the message lost the mode it was given and wiped the
+        // reply on screen
+        if (_state.value.sending || _state.value.live != null) {
             enqueue(body, files, mode, quote)
             return
         }
@@ -700,7 +704,7 @@ class ChatViewModel(
     /** run a queued message next, aborting the running turn so it can */
     fun forceSendQueued(id: String) {
         val item = _state.value.queued.firstOrNull { it.id == id } ?: return
-        if (!_state.value.sending) {
+        if (!_state.value.sending && _state.value.live == null) {
             // nothing is running: it can go now
             _state.update { it.copy(queued = it.queued.filterNot { q -> q.id == id }) }
             sendNow(item.text, item.attachments, item.quote)

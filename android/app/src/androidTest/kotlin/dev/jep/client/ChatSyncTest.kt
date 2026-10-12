@@ -129,4 +129,21 @@ class ChatSyncTest {
         Thread.sleep(7_000)
         assertEquals("history reads in flight at once", 1, repo.historyMostAtOnce.get())
     }
+
+    @Test
+    fun a_message_sent_during_a_turn_started_elsewhere_joins_its_queue() {
+        val repo = FakeChatRepository(messages = earlier)
+        repo.promptGate = CompletableDeferred()
+        val vm = ChatViewModel(repo, "s1", "T")
+        rule.setContent { ChatScreen(vm, onBack = {}, onNew = {}, onForgetPairing = {}) }
+        rule.waitUntil(5_000) { shown("an older answer") && repo.subscribed }
+        // a turn begun on Telegram: this screen only sees it stream
+        rule.runOnUiThread { repo.emitEvent(ChatEvent.TextDelta("s1", "a2", "p1", "text", "working on it")) }
+        rule.waitUntil(5_000) { shown("working on it") }
+        rule.runOnUiThread { vm.send("one more thing", dev.jep.client.domain.model.SendMode.AFTER_REPLY) }
+        rule.waitUntil(5_000) { repo.prompts.contains("one more thing") }
+        assertTrue("it went in as a direct send, not through the queue", repo.clientIDs.last() != null)
+        assertEquals(dev.jep.client.domain.model.SendMode.AFTER_REPLY, repo.modes.last())
+        assertTrue("the running reply was wiped", vm.state.value.live != null)
+    }
 }

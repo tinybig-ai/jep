@@ -131,12 +131,16 @@ class FakeChatRepository(
     /** the quote each of those prompts carried, if any */
     val quotes = java.util.Collections.synchronizedList(mutableListOf<String?>())
 
+    /** the queue id each of those prompts carried; null for a direct send */
+    val clientIDs = java.util.Collections.synchronizedList(mutableListOf<String?>())
+
     /** how each of those prompts asked to join the turn */
     val modes = java.util.Collections.synchronizedList(mutableListOf<SendMode>())
 
     override suspend fun prompt(sessionId: String, text: String, files: List<String>, clientID: String?, mode: SendMode, quote: String?): ChatMessage {
         quotes += quote
         modes += mode
+        clientIDs += clientID
         prompts += text
         promptGate?.await()
         return ChatMessage("reply", Role.ASSISTANT, 1, listOf(ChatPart.Text("ok")))
