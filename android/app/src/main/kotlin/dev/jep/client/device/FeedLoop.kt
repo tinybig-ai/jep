@@ -22,7 +22,7 @@ internal suspend fun followFeed(
     running: () -> Boolean,
     firstWaitMs: Long = 1_000L,
     maxWaitMs: Long = 30_000L,
-    connect: (base: String) -> ChatRepository = { base -> GatewayChatRepository(base, { pairing.token }, JepHttp.client()) },
+    connect: (base: String) -> ChatRepository = { base -> GatewayChatRepository(base, { pairing.token }, JepHttp.rpc(), long = JepHttp.client()) },
     onEvent: suspend (ChatRepository, ChatEvent) -> Unit,
 ) {
     var wait = firstWaitMs

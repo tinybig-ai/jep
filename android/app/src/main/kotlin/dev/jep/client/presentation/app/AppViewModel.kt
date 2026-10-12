@@ -257,8 +257,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val built = GatewayChatRepository(
             base = pairing.baseUrl ?: "",
             token = { pairing.token },
-            http = JepHttp.client(),
+            http = JepHttp.rpc(),
             onNextCode = { pairing.rememberCode(it) },
+            long = JepHttp.client(),
         )
         repo = built
         repoBase = pairing.baseUrl
@@ -316,7 +317,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             onDone(false, "an address and the code are both needed")
             return
         }
-        val attempt = GatewayChatRepository(base, { null }, JepHttp.client(), { pairing.rememberCode(it) })
+        val attempt = GatewayChatRepository(base, { null }, JepHttp.rpc(), { pairing.rememberCode(it) })
         viewModelScope.launch {
             runCatching { attempt.pair(base, code) }
                 .onSuccess { token ->

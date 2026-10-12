@@ -69,10 +69,14 @@ import java.net.URLEncoder
 class GatewayChatRepository(
     private val base: String,
     private val token: () -> String?,
+    /** command calls: bounded, see JepHttp.rpc */
     private val http: OkHttpClient,
     /** the daemon rotates its pairing code per use; every response that carries
      * the next one hands it here, so the person never has to go and read it */
     private val onNextCode: (String?) -> Unit = {},
+    /** the calls that are answered only when the work is done (a prompt, a
+     *  compact) and the push feed: no read timeout */
+    private val long: OkHttpClient = http,
 ) : ChatRepository {
 
     @Serializable
@@ -86,20 +90,21 @@ private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     private fun payload(vararg fields: Pair<String, String>): String =
         buildJsonObject { fields.forEach { (k, v) -> put(k, v) } }.toString()
 
-    private suspend fun post(path: String, body: String = "{}"): Pair<Int, String> =
+    private suspend fun post(path: String, body: String = "{}", client: OkHttpClient = http): Pair<Int, String> =
         withContext(Dispatchers.IO) {
             val builder = Request.Builder().url(base + path)
             token()?.let { builder.header("authorization", "Bearer $it") }
             val req = builder.post(body.toRequestBody(jsonMedia)).build()
-            http.newCall(req).execute().use { res -> res.code to res.body?.string().orEmpty() }
+            client.newCall(req).execute().use { res -> res.code to res.body?.string().orEmpty() }
         }
 
     private suspend fun <T> decode(
         path: String,
         serializer: kotlinx.serialization.KSerializer<T>,
         body: String = "{}",
+        client: OkHttpClient = http,
     ): T {
-        val (code, text) = post(path, body)
+        val (code, text) = post(path, body, client)
         if (code !in 200..299) {
             val err = runCatching { json.decodeFromString(ErrorDto.serializer(), text) }.getOrNull()
             throw ApiFailure(code, err?.message ?: err?.error ?: "gateway said $code")
@@ -333,7 +338,7 @@ private val json = Json { ignoreUnknownKeys = true; isLenient = true }
             }
         }.toString()
         val dto = try {
-            decode("/prompt", MessageRes.serializer(), body)
+            decode("/prompt", MessageRes.serializer(), body, long)
         } catch (e: ApiFailure) {
             // 409 is "a turn is already running": say so in words, not the
             // gateway's bare "busy"
@@ -384,7 +389,7 @@ private val json = Json { ignoreUnknownKeys = true; isLenient = true }
         post("/stop", payload("id" to sessionId)).first in 200..299
 
     override suspend fun compact(sessionId: String): Boolean {
-        val (code, body) = post("/compact", payload("id" to sessionId))
+        val (code, body) = post("/compact", payload("id" to sessionId), long)
         if (code in 200..299) return true
         // the gateway's error body is the truthful reason (unknown route, a
         // harness without the control, a turn mid-flight). A silent `false`
@@ -419,5 +424,5 @@ private val json = Json { ignoreUnknownKeys = true; isLenient = true }
         json.decodeFromString(ReadRes.serializer(), res.second).text
     }
 
-    override fun events(): Flow<ChatEvent> = GatewayEventStream(base, token).open(http)
+    override fun events(): Flow<ChatEvent> = GatewayEventStream(base, token).open(long)
 }
