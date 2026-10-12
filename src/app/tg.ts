@@ -17,6 +17,7 @@ import { ReminderStore } from "../clients/telegram/reminders.ts"
 import type { PairingAdmin } from "../core/pairing.ts"
 import type { PushNotifier } from "../core/push.ts"
 import { detach } from "../core/detach.ts"
+import { acquireDaemonLock, LOCK_FILE } from "./lock.ts"
 
 const FIXTURE = join(import.meta.dirname, "..", "..", "fixture")
 const DEFAULT_WORKSPACES = ["workspace-alpha", "workspace-beta"].map((n) => join(FIXTURE, n))
@@ -245,6 +246,18 @@ const unreadable = (dir: string): string =>
 
 async function main() {
   mkdirSync(DATA_HOME, { recursive: true })
+  // before anything touches Telegram, the store or a harness: a second daemon
+  // on this data home is the 409 tug-of-war, so it leaves instead. It holds a
+  // minute first so launchd's KeepAlive does not respawn it every 10 seconds.
+  const lock = acquireDaemonLock(DATA_HOME)
+  if (!lock.ok) {
+    console.error(
+      `[boot] another jep daemon (pid ${lock.holder}) owns ${DATA_HOME}; not starting a second one. ` +
+        `Stop that one first, or remove ${join(DATA_HOME, LOCK_FILE)} if pid ${lock.holder} is not jep. See docs/PROCESSES.md`,
+    )
+    await sleep(Number(process.env.JEP_LOCK_HOLD_MS ?? 60_000))
+    process.exit(1)
+  }
   syncOpenCodeAuth()
   const mockMode = process.env.JEP_TG_MOCK === "1"
   // servers a previous daemon lost on a hard restart: without this sweep the

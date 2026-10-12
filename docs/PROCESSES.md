@@ -157,6 +157,13 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jep.tg.plist
 # and let launchd own the one instance.
 ```
 
+The daemon also refuses to be the second one. At boot, it writes its pid to
+`$JEP_DATA_HOME/daemon.pid`. If that file names a live `app/tg.ts` process, the
+new daemon logs `[boot] another jep daemon (pid N) owns …`, waits 60 seconds,
+and exits 1. The wait keeps launchd `KeepAlive` from respawning it every 10
+seconds. If the owner died (`kill -9`, a crash, a reboot), the next daemon takes
+the stale file over. A graceful stop removes the file.
+
 A restart always cuts any in-flight turn, so when an **agent** must deploy
 without eating its own reply, schedule a detached, delayed stop and let
 `KeepAlive` do the restart after the message is delivered:
