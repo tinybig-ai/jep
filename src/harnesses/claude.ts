@@ -1057,8 +1057,12 @@ export class ClaudeAdapter implements HarnessAdapter {
     return AGENTS
   }
 
+  // Claude Code's own aliases, which it resolves to the newest model of each
+  // family. A list of versioned ids went stale the day new models shipped, and
+  // jep cannot ask the CLI what it offers. The model that actually answered is
+  // on every reply, so clients still show the exact one.
   async models(): Promise<ModelRef[]> {
-    return (process.env.JEP_CLAUDE_MODELS ?? "claude-opus-5,claude-sonnet-5,claude-haiku-4-5")
+    return (process.env.JEP_CLAUDE_MODELS ?? "opus,sonnet,haiku")
       .split(",")
       .map((m) => m.trim())
       .filter(Boolean)

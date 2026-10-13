@@ -57,7 +57,7 @@ test("the last call's usage is the context, not the turn's sum", async () => {
 test("a model's context window is learned from the turn that ran on it", async () => {
   const a = new ClaudeAdapter(dir, { dataHome: dir })
   const before = await a.capabilities()
-  assert.equal(before.get("claude/claude-haiku-4-5")?.contextLimit, 200_000, "the 200K default before any turn")
+  assert.equal(before.get("claude/haiku")?.contextLimit, 200_000, "the 200K default before any turn")
   assert.equal(await a.defaultModel(), null)
 
   const s = await a.createSession("t")
@@ -68,6 +68,11 @@ test("a model's context window is learned from the turn that ran on it", async (
   assert.equal(caps.get("claude/haiku")?.contextLimit, 200_000)
   // nothing configured, but the CLI's choice is known now
   assert.equal(await a.defaultModel(), "claude/claude-haiku-4-5")
+})
+
+test("the models offered are the CLI's aliases, which always mean the newest", async () => {
+  const ids = (await new ClaudeAdapter(dir, { dataHome: dir }).models()).map((m) => m.modelID)
+  assert.deepEqual(ids, ["opus", "sonnet", "haiku"])
 })
 
 test("a 1M variant says so in its id", async () => {
