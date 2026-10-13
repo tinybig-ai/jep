@@ -10,12 +10,12 @@
 <style>
   :root {
     --bg: #ffffff; --side: #f6f6f5; --line: #e6e5e3; --text: #1d1d1b; --dim: #85837f;
-    --bubble: #efeeec; --accent: #c8352b; --code: #f3f2f0; --user: #dc143c;
+    --bubble: #efeeec; --accent: #c8352b; --code: #f3f2f0; --user: #a8102c;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #141414; --side: #1b1b1b; --line: #2a2a2a; --text: #e8e6e3; --dim: #8b8984;
-      --bubble: #262626; --accent: #e5534b; --code: #1f1f1f; --user: #b8102f;
+      --bubble: #262626; --accent: #e5534b; --code: #1f1f1f; --user: #8e0d25;
     }
   }
   * { box-sizing: border-box; }
@@ -262,7 +262,10 @@ async function listSessions() {
   const news = degraded.filter((d) => !announced.has(d.name + "/" + d.harness))
   news.forEach((d) => announced.add(d.name + "/" + d.harness))
   if (news.length) fail(new Error(`Could not refresh the conversations in ${news.map((d) => `${d.name} (${d.harness})`).join(", ")} in time. Showing the last ones known.`))
+  remember("jep.sessions", JSON.stringify(sessions))
   renderSessions()
+  // a conversation opened before the list came has its title now
+  if (current && !$("title").textContent) $("title").textContent = sessions.find((s) => s.id === current)?.title || ""
 }
 
 // the harness marks, the same paths the phone draws (android res/drawable/ic_harness_*)
@@ -659,7 +662,11 @@ function show() {
   document.querySelector("aside").hidden = !token
   document.querySelector("main").hidden = !token
   if (!token) return void feed?.close()
-  loadSessions().then(() => open(decodeURIComponent(location.hash.slice(1)) || null)).catch(fail)
+  // the last list known, at once; the gateway's answer replaces it when it comes
+  try { sessions = JSON.parse(localStorage.getItem("jep.sessions") || "[]") } catch { sessions = [] }
+  renderSessions()
+  open(decodeURIComponent(location.hash.slice(1)) || null).catch(fail)
+  loadSessions().catch(fail)
   loadWorkspaces().catch(fail)
   follow()
 }
