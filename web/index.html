@@ -4,15 +4,18 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>jep</title>
+<!-- the jep apple, the same curves scripts/gen_icon.py draws for the apps -->
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%223%203.5%2018%2017%22%3E%3Cdefs%3E%3ClinearGradient%20id%3D%22f%22%20x1%3D%220%22%20y1%3D%224.47%22%20x2%3D%220%22%20y2%3D%2219.53%22%20gradientUnits%3D%22userSpaceOnUse%22%3E%3Cstop%20offset%3D%220%22%20stop-color%3D%22%23F66676%22/%3E%3Cstop%20offset%3D%22.45%22%20stop-color%3D%22%23E43A50%22/%3E%3Cstop%20offset%3D%221%22%20stop-color%3D%22%23C42438%22/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath%20fill%3D%22url%28%23f%29%22%20d%3D%22M%2012.00%2C9.29%20C%2013.85%2C7.39%2018.02%2C7.09%2019.64%2C9.56%20C%2021.14%2C11.93%2020.33%2C15.67%2018.02%2C17.94%20C%2016.51%2C19.42%2014.78%2C19.92%2013.50%2C19.23%20C%2012.58%2C18.83%2011.42%2C18.83%2010.50%2C19.23%20C%209.22%2C19.92%207.49%2C19.42%205.98%2C17.94%20C%203.67%2C15.67%202.86%2C11.93%204.36%2C9.56%20C%205.98%2C7.09%2010.15%2C7.39%2012.00%2C9.29%20Z%22/%3E%3Cpath%20fill%3D%22url%28%23f%29%22%20d%3D%22M%2013.39%2C6.99%20C%2014.20%2C5.02%2016.51%2C4.23%2018.02%2C4.53%20C%2017.32%2C6.20%2015.47%2C7.29%2013.39%2C6.99%20Z%22/%3E%3Cpath%20d%3D%22M%2012.17%2C8.67%20L%2012.52%2C5.40%22%20stroke%3D%22%23E95A6E%22%20stroke-width%3D%221.15%22%20stroke-linecap%3D%22round%22/%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="data:image/png;base64,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">
 <style>
   :root {
     --bg: #ffffff; --side: #f6f6f5; --line: #e6e5e3; --text: #1d1d1b; --dim: #85837f;
-    --bubble: #efeeec; --accent: #c8352b; --code: #f3f2f0;
+    --bubble: #efeeec; --accent: #c8352b; --code: #f3f2f0; --user: #dc143c;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #141414; --side: #1b1b1b; --line: #2a2a2a; --text: #e8e6e3; --dim: #8b8984;
-      --bubble: #262626; --accent: #e5534b; --code: #1f1f1f;
+      --bubble: #262626; --accent: #e5534b; --code: #1f1f1f; --user: #b8102f;
     }
   }
   * { box-sizing: border-box; }
@@ -63,7 +66,9 @@
   .older { display: block; margin: 0 auto 16px; }
   .msg { margin: 0 0 16px; }
   .msg.user { display: flex; justify-content: flex-end; }
-  .msg.user .body { background: var(--bubble); border-radius: 16px; padding: 8px 14px; max-width: 85%; }
+  .msg.user .body { background: var(--user); color: #fff; border-radius: 16px; padding: 8px 14px; max-width: 85%; }
+  .msg.user .text a { color: #fff; }
+  .msg.user details { color: #fffc; }
   .text { white-space: pre-wrap; overflow-wrap: anywhere; }
   .text pre { white-space: pre; overflow-x: auto; background: var(--code); padding: 10px 12px; border-radius: 8px; }
   .text code { font: 13px ui-monospace, Menlo, monospace; background: var(--code); padding: 1px 4px; border-radius: 4px; }
@@ -90,6 +95,12 @@
   @keyframes pulse { 50% { opacity: .2; } }
 
   form.compose { border-top: 1px solid var(--line); padding: 12px 20px; }
+  .brand { display: flex; align-items: center; gap: 8px; padding: 14px 14px 0; font-weight: 700; font-size: 17px; letter-spacing: .3px; }
+  .brand svg { width: 24px; height: 24px; }
+  .modes { max-width: 780px; margin: 0 auto 8px; display: flex; gap: 6px; font-size: 13px; }
+  .modes input { display: none; }
+  .modes span { display: block; border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; color: var(--dim); cursor: pointer; }
+  .modes input:checked + span { border-color: var(--text); color: var(--text); }
   form.compose .box { max-width: 780px; margin: 0 auto; display: flex; gap: 8px; align-items: flex-end; }
   textarea {
     flex: 1; resize: none; max-height: 40vh; min-height: 42px; padding: 10px 12px;
@@ -135,6 +146,7 @@
 </form>
 
 <aside hidden>
+  <div class="brand"><svg xmlns="http://www.w3.org/2000/svg" viewBox="3 3.5 18 17"><defs><linearGradient id="b" x1="0" y1="4.47" x2="0" y2="19.53" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#F66676"/><stop offset=".45" stop-color="#E43A50"/><stop offset="1" stop-color="#C42438"/></linearGradient></defs><path fill="url(#b)" d="M 12.00,9.29 C 13.85,7.39 18.02,7.09 19.64,9.56 C 21.14,11.93 20.33,15.67 18.02,17.94 C 16.51,19.42 14.78,19.92 13.50,19.23 C 12.58,18.83 11.42,18.83 10.50,19.23 C 9.22,19.92 7.49,19.42 5.98,17.94 C 3.67,15.67 2.86,11.93 4.36,9.56 C 5.98,7.09 10.15,7.39 12.00,9.29 Z"/><path fill="url(#b)" d="M 13.39,6.99 C 14.20,5.02 16.51,4.23 18.02,4.53 C 17.32,6.20 15.47,7.29 13.39,6.99 Z"/><path d="M 12.17,8.67 L 12.52,5.40" stroke="#E95A6E" stroke-width="1.15" stroke-linecap="round"/></svg>jep</div>
   <div class="new"><a href="#new">New conversation</a></div>
   <div id="sessions"></div>
 </aside>
@@ -157,6 +169,11 @@
   </form>
   <div id="scroll"><div id="log"></div></div>
   <form class="compose" id="compose">
+    <div class="modes" id="modes" hidden>
+      <label><input type="radio" name="mode" value="steer" checked><span>Steer</span></label>
+      <label><input type="radio" name="mode" value="after"><span>After this turn</span></label>
+      <label><input type="radio" name="mode" value="now"><span>Now</span></label>
+    </div>
     <div class="box">
       <textarea id="input" rows="1" placeholder="Message"></textarea>
       <button>Send</button>
@@ -224,7 +241,15 @@ let pendingText = []      // what we sent and the record does not show yet
 // ── the session list ──────────────────────────────────────────────────────
 const announced = new Set()   // late workspaces already reported this visit
 
-async function loadSessions() {
+let listing = null
+
+// one list request at a time: callers that arrive meanwhile share it
+function loadSessions() {
+  listing ??= listSessions().finally(() => { listing = null })
+  return listing
+}
+
+async function listSessions() {
   const { items, degraded = [] } = await call("/sessions")
   // A workspace that missed the listing time limit is missing from this answer,
   // not empty: keep the rows it had last time rather than drop them.
@@ -420,6 +445,7 @@ function render(follow = true) {
   if (busy() && !asks.length) nodes.push(el("div", "spin", "working"))
   $("log").replaceChildren(...nodes)
   $("stop").hidden = !busy()
+  $("modes").hidden = !busy()
   if (follow && atBottom) scroller.scrollTop = scroller.scrollHeight
 }
 
@@ -481,6 +507,7 @@ $("compose").onsubmit = (e) => {
   $("input").value = ""
   grow()
   const id = current
+  const into = busy()
   // words typed while an ask waits are the answer: stand the ask down so the turn can go on
   for (const a of asks) call("/reject", { id, askID: a.id }).catch(() => {})
   asks = []
@@ -489,7 +516,11 @@ $("compose").onsubmit = (e) => {
   render()
   $("scroll").scrollTop = $("scroll").scrollHeight
   // the answer comes back when the whole turn ends; the feed shows it sooner
-  call("/prompt", { id, text, clientID: crypto.randomUUID() })
+  // into a running turn: steer it in at the next tool step (the default), wait
+  // for the turn to end, or stop the turn and run this now
+  const mode = into ? $("compose").querySelector("input[name=mode]:checked").value : "steer"
+  const how = { steer: {}, after: { steer: false }, now: { force: true } }[mode]
+  call("/prompt", { id, text, clientID: crypto.randomUUID(), ...how })
     .catch((err) => { if (id === current) fail(err) })
     .finally(() => { sending--; if (id === current) readHistory().catch(fail) })
 }
@@ -634,7 +665,10 @@ function show() {
 }
 
 window.onhashchange = () => open(decodeURIComponent(location.hash.slice(1)) || null).catch(fail)
-setInterval(() => { if (token && !document.hidden) loadSessions().catch(() => {}) }, 10_000)
+// the feed already says when a turn ends or a record changes; this only
+// catches what it cannot (a conversation started elsewhere). A list costs the
+// daemon real work, so not often, and never two at once.
+setInterval(() => { if (token && !document.hidden) loadSessions().catch(() => {}) }, 60_000)
 show()
 </script>
 </body>
