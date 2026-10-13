@@ -1781,3 +1781,23 @@ test("the gateway listens on the configured host", async () => {
     await g.close()
   }
 })
+
+test("the web client is served at / without a token, and the data behind it is not", async () => {
+  const g = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter: fakeAdapter() }],
+    dataHome: mkdtempSync(join(tmpdir(), "gw-web-")),
+    port: 0,
+    host: "127.0.0.1",
+    pairCode: "TESTCODE",
+  })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const page = await fetch(`${base}/`)
+    assert.equal(page.status, 200)
+    assert.match(page.headers.get("content-type") ?? "", /^text\/html/)
+    assert.match(await page.text(), /<title>jep<\/title>/)
+    assert.equal((await fetch(`${base}/sessions`, { method: "POST" })).status, 401)
+  } finally {
+    await g.close()
+  }
+})

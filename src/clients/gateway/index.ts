@@ -8,6 +8,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { mkdir, readdir, readFile, realpath, stat, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
+import { fileURLToPath } from "node:url"
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path"
 import type { HarnessAdapter, HarnessSettingSpec, SessionImport, Terminal } from "../../core/ports.ts"
 import type { PairingAdmin } from "../../core/pairing.ts"
@@ -23,6 +24,10 @@ import { usageOf } from "../../core/usage.ts"
 import { attachedPaths, stripInjectedContext, transcriptText } from "../../core/transcript.ts"
 import { newPairCode } from "../telegram/pair.ts"
 import { detach } from "../../core/detach.ts"
+
+// web/index.html at the package root: three levels up from this file, from
+// src/ and from the compiled dist/ alike
+const WEB_PAGE = fileURLToPath(new URL("../../../web/index.html", import.meta.url))
 
 export interface GatewayDeps {
   // called lazily and repeatedly: the Telegram bot can spawn more workspace
@@ -1007,6 +1012,16 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     const ip = req.socket.remoteAddress ?? "?"
     try {
       if (path === "/health" && req.method === "GET") return json(res, 200, { ok: true, paired: tokens.size > 0 })
+
+      // the web client: one page, read from disk on every request so an edit
+      // shows on reload. It holds nothing secret; everything it shows comes
+      // from the token-gated routes below.
+      if (path === "/" && req.method === "GET") {
+        const page = await readFile(WEB_PAGE).catch(() => null)
+        if (!page) return json(res, 404, { error: "no web client" })
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" })
+        return res.end(page)
+      }
 
       if (path === "/pair" && req.method === "POST") {
         if (!pairRateOK(deps.pairLimit ?? 5, ip)) return json(res, 429, { error: "too many attempts, wait a minute" })

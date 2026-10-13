@@ -20,6 +20,14 @@ gateway refuses their tokens from the next request. Every endpoint except `/heal
 `Authorization: Bearer <token>` (also accepted as `?token=` on the stream, for
 plain clients).
 
+## Web client
+
+`GET /` serves `web/index.html`, a single page with no build step and no
+dependencies. Open `http://127.0.0.1:<JEP_GW_PORT>/` on the Mac (or the Mac's
+Tailscale address from elsewhere) and pair with the code once. The page keeps
+its token in the browser's `localStorage` and uses the same routes and stream
+as the phone. The page itself is not token-gated, because it holds no data.
+
 ## Commands (JSON POSTs)
 
 | route | body | returns |

@@ -1,0 +1,468 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jep</title>
+<style>
+  :root {
+    --bg: #ffffff; --side: #f6f6f5; --line: #e6e5e3; --text: #1d1d1b; --dim: #85837f;
+    --bubble: #efeeec; --accent: #c8352b; --code: #f3f2f0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141414; --side: #1b1b1b; --line: #2a2a2a; --text: #e8e6e3; --dim: #8b8984;
+      --bubble: #262626; --accent: #e5534b; --code: #1f1f1f;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    display: flex;
+  }
+  button, select, textarea, input { font: inherit; color: inherit; }
+  button {
+    background: none; border: 1px solid var(--line); border-radius: 8px;
+    padding: 6px 12px; cursor: pointer;
+  }
+  button:hover { background: var(--bubble); }
+  [hidden] { display: none !important; }
+
+  /* the sessions */
+  aside {
+    width: 280px; flex: none; background: var(--side); border-right: 1px solid var(--line);
+    display: flex; flex-direction: column;
+  }
+  .new { display: flex; gap: 6px; padding: 12px; border-bottom: 1px solid var(--line); }
+  .new select {
+    flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--line);
+    border-radius: 8px; padding: 6px;
+  }
+  #sessions { overflow-y: auto; flex: 1; }
+  .session { display: block; padding: 10px 14px; color: inherit; text-decoration: none; border-bottom: 1px solid var(--line); }
+  .session:hover { background: var(--bubble); }
+  .session.open { background: var(--bubble); }
+  .session .title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .session .meta { color: var(--dim); font-size: 12px; }
+  .session .live { color: var(--accent); }
+
+  /* the conversation */
+  main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  header {
+    display: flex; align-items: center; gap: 12px; padding: 10px 20px;
+    border-bottom: 1px solid var(--line); min-height: 52px;
+  }
+  #back { display: none; }
+  header h1 { font-size: 15px; font-weight: 600; margin: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #scroll { flex: 1; overflow-y: auto; }
+  #log { max-width: 780px; margin: 0 auto; padding: 20px; }
+  .older { display: block; margin: 0 auto 16px; }
+  .msg { margin: 0 0 16px; }
+  .msg.user { display: flex; justify-content: flex-end; }
+  .msg.user .body { background: var(--bubble); border-radius: 16px; padding: 8px 14px; max-width: 85%; }
+  .text { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .text pre { white-space: pre; overflow-x: auto; background: var(--code); padding: 10px 12px; border-radius: 8px; }
+  .text code { font: 13px ui-monospace, Menlo, monospace; background: var(--code); padding: 1px 4px; border-radius: 4px; }
+  .text pre code { padding: 0; background: none; }
+  .text a { color: var(--accent); }
+  details { color: var(--dim); font-size: 13px; margin: 4px 0; }
+  details pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow-y: auto; font: 12px ui-monospace, Menlo, monospace; background: var(--code); padding: 8px; border-radius: 6px; }
+  summary { cursor: pointer; }
+  .msg img { max-width: 100%; border-radius: 8px; }
+  .ask { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin: 0 0 16px; }
+  .ask .detail { color: var(--dim); font: 12px ui-monospace, Menlo, monospace; white-space: pre-wrap; margin: 6px 0 10px; }
+  .ask button { margin: 0 6px 6px 0; }
+  .note { color: var(--dim); font-size: 13px; text-align: center; margin: 0 0 16px; }
+  .spin { color: var(--dim); }
+  .spin::after { content: "…"; animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity: .2; } }
+
+  form.compose { border-top: 1px solid var(--line); padding: 12px 20px; }
+  form.compose .box { max-width: 780px; margin: 0 auto; display: flex; gap: 8px; align-items: flex-end; }
+  textarea {
+    flex: 1; resize: none; max-height: 40vh; min-height: 42px; padding: 10px 12px;
+    background: var(--bubble); border: 1px solid var(--line); border-radius: 12px; outline: none;
+  }
+
+  /* pairing */
+  #pair { margin: auto; text-align: center; }
+  #pair input { padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bubble); text-align: center; letter-spacing: 2px; }
+  #pair p { color: var(--dim); }
+
+  @media (max-width: 700px) {
+    aside { width: 100%; }
+    body.chatting aside, body:not(.chatting) main { display: none; }
+    #back { display: block; }
+  }
+</style>
+</head>
+<body>
+
+<form id="pair" hidden>
+  <h2>jep</h2>
+  <p>Enter the pairing code. Run <code>npm run pair</code> on this machine to see it.</p>
+  <input id="code" autocomplete="off" autofocus> <button>Pair</button>
+  <p id="pairError"></p>
+</form>
+
+<aside hidden>
+  <div class="new">
+    <select id="workspaces" title="workspace"></select>
+    <button id="newChat" title="new conversation">New</button>
+  </div>
+  <div id="sessions"></div>
+</aside>
+
+<main hidden>
+  <header>
+    <button id="back" title="conversations">‹</button>
+    <h1 id="title"></h1>
+    <button id="stop" hidden>Stop</button>
+  </header>
+  <div id="scroll"><div id="log"></div></div>
+  <form class="compose" id="compose">
+    <div class="box">
+      <textarea id="input" rows="1" placeholder="Message"></textarea>
+      <button>Send</button>
+    </div>
+  </form>
+</main>
+
+<script>
+"use strict"
+const $ = (id) => document.getElementById(id)
+const PAGE = 60
+
+// ── talking to the gateway ────────────────────────────────────────────────
+let token = localStorage.getItem("jep.token")
+
+async function call(path, body = {}) {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify(body),
+  })
+  if (res.status === 401) { unpair(); throw new Error("pair first") }
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error || `${path} failed (${res.status})`)
+  return data
+}
+
+function unpair() {
+  token = null
+  localStorage.removeItem("jep.token")
+  show()
+}
+
+$("pair").onsubmit = async (e) => {
+  e.preventDefault()
+  const res = await fetch("/pair", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ code: $("code").value.trim() }),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) return void ($("pairError").textContent = data.error || "pairing failed")
+  token = data.token
+  localStorage.setItem("jep.token", token)
+  show()
+}
+
+// ── state ─────────────────────────────────────────────────────────────────
+let sessions = []
+let current = null        // the open session's id
+let messages = []         // its history, oldest first
+let asks = []             // its pending asks
+let etag = null
+let hasMore = false
+let live = new Map()      // partID → { messageID, part } streamed since the last read
+const roles = new Map()   // messageID → role, as the feed announces them
+let sending = 0           // prompts of ours still in flight
+let pendingText = []      // what we sent and the record does not show yet
+
+// ── the session list ──────────────────────────────────────────────────────
+async function loadSessions() {
+  const { items } = await call("/sessions")
+  sessions = items
+  renderSessions()
+}
+
+function renderSessions() {
+  $("sessions").replaceChildren(...sessions.map((s) => {
+    const a = el("a", "session" + (s.id === current ? " open" : ""))
+    a.href = "#" + encodeURIComponent(s.id)
+    const title = el("div", "title", s.title || "untitled")
+    const meta = el("div", "meta", `${s.adapter} · ${s.harness} · ${ago(s.updatedAt)}`)
+    if (s.active) meta.prepend(el("span", "live", "● "))
+    a.append(title, meta)
+    return a
+  }))
+}
+
+async function loadWorkspaces() {
+  const { items } = await call("/workspaces")
+  $("workspaces").replaceChildren(...items.map((w) => {
+    const o = el("option", "", `${w.name} · ${w.harness}`)
+    o.value = JSON.stringify({ workspace: w.name, harness: w.harness })
+    return o
+  }))
+}
+
+$("newChat").onclick = async () => {
+  const pick = $("workspaces").value ? JSON.parse($("workspaces").value) : {}
+  const { session } = await call("/new", pick)
+  await loadSessions()
+  location.hash = encodeURIComponent(session.id)
+}
+
+// ── one conversation ──────────────────────────────────────────────────────
+async function open(id) {
+  current = id
+  messages = []; asks = []; etag = null; hasMore = false; live = new Map(); pendingText = []
+  document.body.classList.toggle("chatting", !!id)
+  renderSessions()
+  $("title").textContent = sessions.find((s) => s.id === id)?.title || ""
+  $("log").replaceChildren()
+  $("compose").hidden = !id
+  if (!id) return
+  await readHistory()
+  $("input").focus()
+}
+
+// the newest page; older messages already loaded are kept in front of it
+async function readHistory() {
+  const id = current
+  if (!id) return
+  const data = await call("/history", { id, limit: PAGE, etag })
+  if (id !== current || data.unchanged) return
+  const first = data.messages[0]?.time ?? Infinity
+  messages = [...messages.filter((m) => m.time < first), ...data.messages]
+  if (!messages.some((m) => m.time < first)) hasMore = data.hasMore
+  asks = data.asks.filter((a) => a.state === "pending")
+  etag = data.etag
+  const said = new Set(messages.filter((m) => m.role === "user").map(textOf))
+  pendingText = pendingText.filter((t) => !said.has(t))
+  const seen = new Set(messages.flatMap((m) => [m.id, ...m.parts.map((p) => p.id)]))
+  for (const [pid, l] of live) if (seen.has(pid) || seen.has(l.messageID)) live.delete(pid)
+  render()
+}
+
+async function loadOlder() {
+  const id = current
+  const before = messages[0]?.time
+  const data = await call("/history", { id, limit: PAGE, before, have: messages.length })
+  if (id !== current) return
+  const scroller = $("scroll")
+  const fromBottom = scroller.scrollHeight - scroller.scrollTop
+  messages = [...data.messages.filter((m) => m.time < before), ...messages]
+  hasMore = data.hasMore
+  render(false)
+  scroller.scrollTop = scroller.scrollHeight - fromBottom
+}
+
+const busy = () => sending > 0 || live.size > 0 || !!sessions.find((s) => s.id === current)?.active
+
+function render(follow = true) {
+  const scroller = $("scroll")
+  const atBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80
+  const nodes = []
+  if (hasMore) {
+    const b = el("button", "older", "Load older")
+    b.onclick = loadOlder
+    nodes.push(b)
+  }
+  for (const m of messages) nodes.push(messageNode(m.role, m.parts))
+  for (const t of pendingText) nodes.push(messageNode("user", [{ kind: "text", text: t }]))
+  if (live.size) nodes.push(messageNode("assistant", [...live.values()].map((l) => l.part)))
+  for (const a of asks) nodes.push(askNode(a))
+  if (busy() && !asks.length) nodes.push(el("div", "spin", "working"))
+  $("log").replaceChildren(...nodes)
+  $("stop").hidden = !busy()
+  if (follow && atBottom) scroller.scrollTop = scroller.scrollHeight
+}
+
+function messageNode(role, parts) {
+  const node = el("div", "msg " + role)
+  const body = el("div", "body")
+  for (const p of parts) {
+    if (p.kind === "text" && p.text.trim()) body.append(textNode(p.text))
+    else if (p.kind === "quote") body.append(fold("↪ " + p.text.slice(0, 80), p.text))
+    else if (p.kind === "reasoning" && p.text.trim()) body.append(fold("thinking", p.text))
+    else if (p.kind === "tool") body.append(fold(toolLine(p), toolDetail(p)))
+    else if (p.kind === "file") body.append(fileNode(p))
+  }
+  node.append(body)
+  return node
+}
+
+function toolLine(p) {
+  const mark = { running: "◌", pending: "◌", error: "✕", completed: "✓" }[p.status] || "·"
+  return `${mark} ${p.name}${p.title ? " · " + p.title : ""}`
+}
+
+function toolDetail(p) {
+  const show = (v) => (v == null || v === "" ? "" : typeof v === "string" ? v : JSON.stringify(v, null, 2))
+  return [show(p.input), show(p.output)].filter(Boolean).join("\n\n────\n\n").slice(0, 20000)
+}
+
+function fileNode(p) {
+  const url = `/file?p=${b64url(p.filePath)}&id=${encodeURIComponent(current)}&token=${token}`
+  if ((p.mimeType || "").startsWith("image/")) {
+    const img = el("img")
+    img.src = url
+    return img
+  }
+  const a = el("a", "", "📎 " + (p.fileName || p.filePath.split("/").pop()))
+  a.href = url; a.target = "_blank"
+  return a
+}
+
+function askNode(a) {
+  const node = el("div", "ask")
+  node.append(el("strong", "", a.title))
+  if (a.detail) node.append(el("div", "detail", a.detail))
+  for (const q of a.questions?.length > 1 ? a.questions : []) node.append(el("div", "detail", q.title))
+  const row = el("div")
+  for (const o of a.options) {
+    const b = el("button", "", o.label)
+    b.onclick = () => call("/respond", { id: current, askID: a.id, optionID: o.id }).then(readHistory).catch(fail)
+    row.append(b)
+  }
+  node.append(row)
+  return node
+}
+
+$("compose").onsubmit = (e) => {
+  e.preventDefault()
+  const text = $("input").value.trim()
+  if (!text || !current) return
+  $("input").value = ""
+  grow()
+  const id = current
+  pendingText.push(text)
+  sending++
+  render()
+  $("scroll").scrollTop = $("scroll").scrollHeight
+  // the answer comes back when the whole turn ends; the feed shows it sooner
+  call("/prompt", { id, text, clientID: crypto.randomUUID() })
+    .catch((err) => { if (id === current) fail(err) })
+    .finally(() => { sending--; if (id === current) readHistory().catch(fail) })
+}
+
+$("input").onkeydown = (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+    e.preventDefault()
+    $("compose").requestSubmit()
+  }
+}
+const grow = () => { const t = $("input"); t.style.height = "auto"; t.style.height = t.scrollHeight + "px" }
+$("input").oninput = grow
+
+$("stop").onclick = () => call("/stop", { id: current }).catch(fail)
+$("back").onclick = () => { location.hash = "" }
+
+// ── the live feed ─────────────────────────────────────────────────────────
+let feed = null
+let reread = null
+
+function follow() {
+  feed?.close()
+  feed = new EventSource(`/stream?token=${token}`)
+  feed.onmessage = (m) => {
+    const evt = JSON.parse(m.data)
+    if (evt.type === "session.idle" || evt.type === "turn.aborted" || evt.type === "session.changed") loadSessions().catch(() => {})
+    if (evt.sessionID !== current) return
+    if (evt.role) roles.set(evt.messageID, evt.role)
+    // our own words are already on screen; only the reply streams
+    if (evt.partID && roles.get(evt.messageID) === "user") return
+    if (evt.type === "part.delta" && (evt.partType ?? "text") === "text") {
+      const l = live.get(evt.partID) ?? { messageID: evt.messageID, part: { kind: "text", text: "", id: evt.partID } }
+      if (l.part.kind === "text") l.part.text += evt.text
+      live.set(evt.partID, l)
+      return void frame()
+    }
+    if (evt.type === "part.updated" && evt.part) {
+      live.set(evt.partID, { messageID: evt.messageID, part: { ...evt.part, id: evt.partID } })
+      frame()
+    }
+    if (evt.type === "session.idle" || evt.type === "turn.aborted") live.clear()
+    if (evt.type === "session.error") fail(new Error(evt.message))
+    // the record itself moved: read it again, but not on every event
+    clearTimeout(reread)
+    reread = setTimeout(() => readHistory().catch(() => {}), 400)
+  }
+  // EventSource reconnects by itself; a reread catches what was missed
+  feed.onopen = () => readHistory().catch(() => {})
+}
+
+let framed = false
+const frame = () => { if (!framed) { framed = true; requestAnimationFrame(() => { framed = false; render() }) } }
+
+// ── small things ──────────────────────────────────────────────────────────
+function el(tag, cls = "", text) {
+  const n = document.createElement(tag)
+  if (cls) n.className = cls
+  if (text != null) n.textContent = text
+  return n
+}
+
+function fold(label, text) {
+  const d = el("details")
+  d.append(el("summary", "", label))
+  if (text) d.append(el("pre", "", text))
+  return d
+}
+
+const textOf = (m) => m.parts.filter((p) => p.kind === "text").map((p) => p.text).join("").trim()
+const b64url = (s) => btoa(String.fromCharCode(...new TextEncoder().encode(s))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
+
+function ago(t) {
+  const s = (Date.now() - t) / 1000
+  if (s < 60) return "now"
+  if (s < 3600) return `${Math.floor(s / 60)}m`
+  if (s < 86400) return `${Math.floor(s / 3600)}h`
+  return `${Math.floor(s / 86400)}d`
+}
+
+function fail(err) {
+  const n = el("div", "note", String(err.message || err))
+  $("log").append(n)
+  setTimeout(() => n.remove(), 8000)
+}
+
+// Markdown, the little of it a chat needs: code blocks, inline code, bold, links.
+// Everything is escaped first, so the text can never become markup.
+function textNode(src) {
+  const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c])
+  const inline = (s) => esc(s)
+    .replace(/`([^`\n]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\[([^\]\n]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
+  // a block sits on its own lines; the line breaks around it are not text
+  const html = src.split(/```[^\n]*\n?/)
+    .map((chunk, i) => (i % 2 ? `<pre><code>${esc(chunk.replace(/\n$/, ""))}</code></pre>` : inline(chunk.replace(/^\n/, "").replace(/\n$/, ""))))
+    .join("")
+  const n = el("div", "text")
+  n.innerHTML = html
+  return n
+}
+
+// ── start ─────────────────────────────────────────────────────────────────
+function show() {
+  $("pair").hidden = !!token
+  document.querySelector("aside").hidden = !token
+  document.querySelector("main").hidden = !token
+  if (!token) return void feed?.close()
+  loadSessions().then(() => open(decodeURIComponent(location.hash.slice(1)) || null)).catch(fail)
+  loadWorkspaces().catch(fail)
+  follow()
+}
+
+window.onhashchange = () => open(decodeURIComponent(location.hash.slice(1)) || null).catch(fail)
+setInterval(() => { if (token && !document.hidden) loadSessions().catch(() => {}) }, 10_000)
+show()
+</script>
+</body>
+</html>

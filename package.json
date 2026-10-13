@@ -37,6 +37,7 @@
     "bin",
     "src",
     "fixture",
+    "web",
     "scripts",
     "tsconfig.json",
     "tsconfig.build.json"
