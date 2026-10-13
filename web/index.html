@@ -35,13 +35,9 @@
     width: 280px; flex: none; background: var(--side); border-right: 1px solid var(--line);
     display: flex; flex-direction: column;
   }
-  .new { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px; border-bottom: 1px solid var(--line); }
-  .new select {
-    min-width: 0; background: var(--bg); border: 1px solid var(--line);
-    border-radius: 8px; padding: 6px;
-  }
-  #folder { flex: 1 1 100%; }
-  #harness { flex: 1; }
+  .new { padding: 12px; border-bottom: 1px solid var(--line); }
+  .new a { display: block; text-align: center; color: inherit; text-decoration: none; border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; }
+  .new a:hover { background: var(--bubble); }
   #degraded { color: var(--accent); font-size: 12px; padding: 8px 14px; border-bottom: 1px solid var(--line); }
   #sessions { overflow-y: auto; flex: 1; }
   .session { display: block; padding: 10px 14px; color: inherit; text-decoration: none; border-bottom: 1px solid var(--line); }
@@ -90,6 +86,17 @@
     background: var(--bubble); border: 1px solid var(--line); border-radius: 12px; outline: none;
   }
 
+  /* starting a conversation */
+  #start { margin: auto; width: min(420px, 100% - 32px); display: flex; flex-direction: column; gap: 16px; }
+  #start h2 { margin: 0; font-size: 18px; }
+  #start .field { display: flex; flex-direction: column; gap: 6px; color: var(--dim); font-size: 13px; }
+  #start select { padding: 8px; background: var(--bubble); border: 1px solid var(--line); border-radius: 8px; color: var(--text); font-size: 15px; }
+  .choices { display: flex; flex-wrap: wrap; gap: 6px; }
+  .choices input { display: none; }
+  .choices span { display: block; border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; color: var(--text); cursor: pointer; }
+  .choices input:checked + span { border-color: var(--text); font-weight: 600; }
+  #start button[type=submit] { background: var(--text); color: var(--bg); border: none; padding: 9px; }
+
   /* pairing */
   #pair { margin: auto; text-align: center; }
   #pair input { padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bubble); text-align: center; letter-spacing: 2px; }
@@ -112,11 +119,7 @@
 </form>
 
 <aside hidden>
-  <div class="new">
-    <select id="folder" title="folder"></select>
-    <select id="harness" title="harness"></select>
-    <button id="newChat" title="new conversation">New</button>
-  </div>
+  <div class="new"><a href="#new">New conversation</a></div>
   <div id="degraded" hidden></div>
   <div id="sessions"></div>
 </aside>
@@ -127,6 +130,12 @@
     <h1 id="title"></h1>
     <button id="stop" hidden>Stop</button>
   </header>
+  <form id="start" hidden>
+    <h2>New conversation</h2>
+    <label class="field">Folder <select id="folder"></select></label>
+    <div class="field">Harness <div class="choices" id="harness"></div></div>
+    <button type="submit" id="newChat">Start</button>
+  </form>
   <div id="scroll"><div id="log"></div></div>
   <div id="notes"></div>
   <form class="compose" id="compose">
@@ -226,19 +235,25 @@ async function loadWorkspaces() {
     o.value = dir; o.title = dir
     return o
   }), pod)
-  $("harness").replaceChildren(...harnesses.map((h) => el("option", "", h)))
-  pick($("folder"), remembered("jep.folder"))
-  pick($("harness"), remembered("jep.harness") ?? fallback)
+  $("harness").replaceChildren(...harnesses.map((h) => {
+    const label = el("label")
+    const radio = el("input")
+    radio.type = "radio"; radio.name = "harness"; radio.value = h
+    label.append(radio, el("span", "", h))
+    return label
+  }))
+  // a remembered choice only while it is still on offer
+  const folder = remembered("jep.folder")
+  if (folder != null && [...$("folder").options].some((o) => o.value === folder)) $("folder").value = folder
+  const want = remembered("jep.harness")
+  const radio = (h) => $("start").querySelector(`input[value="${CSS.escape(h ?? "")}"]`)
+  ;(radio(want) ?? radio(fallback) ?? $("start").querySelector("input[name=harness]"))?.click()
 }
 
-// select a remembered value only while it is still on offer
-function pick(select, value) {
-  if (value != null && [...select.options].some((o) => o.value === value)) select.value = value
-}
-
-$("newChat").onclick = async () => {
+$("start").onsubmit = async (e) => {
+  e.preventDefault()
   const path = $("folder").value
-  const harness = $("harness").value
+  const harness = $("start").querySelector("input[name=harness]:checked")?.value
   remember("jep.folder", path)
   remember("jep.harness", harness)
   $("newChat").disabled = true
@@ -255,14 +270,17 @@ $("newChat").onclick = async () => {
 
 // ── one conversation ──────────────────────────────────────────────────────
 async function open(id) {
-  current = id
+  current = id === "new" ? null : id
+  $("start").hidden = id !== "new"
+  $("scroll").hidden = id === "new"
   messages = []; asks = []; etag = null; hasMore = false; live = new Map(); pendingText = []
   document.body.classList.toggle("chatting", !!id)
   renderSessions()
   $("title").textContent = sessions.find((s) => s.id === id)?.title || ""
   $("log").replaceChildren()
-  $("compose").hidden = !id
-  if (!id) return
+  $("compose").hidden = !current
+  $("stop").hidden = true
+  if (!current) return
   markSeen()
   await readHistory()
   $("input").focus()
