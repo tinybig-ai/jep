@@ -82,7 +82,26 @@
   .msg.user .body { background: var(--user); color: #fff; border-radius: 16px; padding: 8px 14px; max-width: 85%; }
   .msg.user .text a { color: #fff; }
   .msg.user details { color: #fffc; }
-  .text { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .text { overflow-wrap: anywhere; }
+  .text.plain { white-space: pre-wrap; }
+  .text > :first-child { margin-top: 0; }
+  .text > :last-child { margin-bottom: 0; }
+  .text p, .text ul, .text ol, .text blockquote, .text .table, .text pre { margin: 0 0 .7em; }
+  .text ul, .text ol { padding-left: 1.4em; }
+  .text li { margin: .15em 0; }
+  .text li > p { margin: 0; }
+  .text h1, .text h2, .text h3, .text h4 { margin: 1em 0 .4em; line-height: 1.3; }
+  .text h1 { font-size: 1.35em; } .text h2 { font-size: 1.2em; } .text h3 { font-size: 1.05em; } .text h4 { font-size: 1em; }
+  .text blockquote { padding-left: 12px; border-left: 3px solid var(--line); color: var(--dim); }
+  .text hr { border: none; border-top: 1px solid var(--line); margin: 1em 0; }
+  .text .table { overflow-x: auto; }
+  .text table { border-collapse: collapse; font-size: 14px; }
+  .text th, .text td { border: 1px solid var(--line); padding: 5px 10px; text-align: left; vertical-align: top; }
+  .text th { background: var(--code); font-weight: 600; }
+  .text input[type=checkbox] { margin: 0 6px 0 0; vertical-align: middle; }
+  .text li:has(> input[type=checkbox]) { list-style: none; margin-left: -1.2em; }
+  .msg.user .text th, .msg.user .text td { border-color: #fff4; }
+  .msg.user .text th { background: #0002; }
   .text pre { white-space: pre; overflow-x: auto; background: var(--code); padding: 10px 12px; border-radius: 8px; }
   .text code { font: 13px ui-monospace, Menlo, monospace; background: var(--code); padding: 1px 4px; border-radius: 4px; }
   .text pre code { padding: 0; background: none; }
@@ -222,6 +241,8 @@
   pre code.hljs, code.hljs, .hljs { background: none; padding: 0; }
 </style>
 <script src="/highlight.min.js" defer></script>
+<script src="/marked.js" defer></script>
+<script src="/purify.min.js" defer></script>
 </head>
 <body>
 
@@ -1280,12 +1301,45 @@ function remember(key, value) { try { localStorage.setItem(key, value) } catch {
 
 // Markdown, the little of it a chat needs: code blocks, inline code, bold, links.
 // Everything is escaped first, so the text can never become markup.
+// Markdown through marked (GitHub's flavor: tables, lists, headings, task
+// lists), then DOMPurify, so whatever a reply holds can never become script.
+// Until both have loaded, the few marks a chat needs most are drawn by hand.
+const rendered = new Map() // source → html, so a redraw does not parse again
+
 function textNode(src) {
+  const n = el("div", "text")
+  if (!window.marked || !window.DOMPurify) {
+    n.classList.add("plain")
+    n.innerHTML = roughMarkdown(src)
+    return n
+  }
+  let html = rendered.get(src)
+  if (html === undefined) {
+    html = DOMPurify.sanitize(marked.parse(src, { gfm: true, breaks: true }))
+    if (rendered.size > 2000) rendered.clear()
+    rendered.set(src, html)
+  }
+  n.innerHTML = html
+  for (const code of n.querySelectorAll("pre > code")) {
+    const lang = (/language-([\w+#.-]+)/.exec(code.className)?.[1] || "").toLowerCase()
+    code.innerHTML = highlighted(code.textContent.replace(/\n$/, ""), EXT[lang] || lang)
+    code.classList.add("hljs")
+  }
+  for (const a of n.querySelectorAll("a[href]")) { a.target = "_blank"; a.rel = "noreferrer" }
+  // a wide table scrolls on its own instead of widening the page
+  for (const t of n.querySelectorAll("table")) {
+    const wrap = el("div", "table")
+    t.replaceWith(wrap)
+    wrap.append(t)
+  }
+  return n
+}
+
+function roughMarkdown(src) {
   const inline = (s) => esc(s)
     .replace(/`([^`\n]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
     .replace(/\[([^\]\n]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
-  // a block sits on its own lines; the line breaks around it are not text
   // split keeps each fence's language, so the pieces go text, language, code, text…
   const pieces = src.split(/```([\w+#.-]*)[^\n]*\n?/)
   let html = ""
@@ -1296,9 +1350,7 @@ function textNode(src) {
       html += `<pre><code class="hljs">${highlighted(pieces[i + 2].replace(/\n$/, ""), EXT[lang] || lang)}</code></pre>`
     }
   }
-  const n = el("div", "text")
-  n.innerHTML = html
-  return n
+  return html
 }
 
 // ── start ─────────────────────────────────────────────────────────────────
