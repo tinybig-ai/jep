@@ -210,10 +210,18 @@
   </header>
   <form id="start" hidden>
     <h2>New conversation</h2>
-    <label class="field">Folder <select id="folder"></select></label>
-    <div id="browse" hidden>
-      <div class="at"><button type="button" id="up" title="up">↑</button><span id="cwd"></span></div>
-      <div id="dirs"></div>
+    <div class="field">Where
+      <div class="choices" id="where">
+        <label><input type="radio" name="where" value="folder" checked><span>A folder</span></label>
+        <label><input type="radio" name="where" value="pod"><span>A throwaway pod</span></label>
+      </div>
+    </div>
+    <div class="field" id="folderField">
+      <select id="folder" aria-label="folder"></select>
+      <div id="browse" hidden>
+        <div class="at"><button type="button" id="up" title="up">↑</button><span id="cwd"></span></div>
+        <div id="dirs"></div>
+      </div>
     </div>
     <div class="field">Harness <div class="choices" id="harness"></div></div>
     <button type="submit" id="newChat">Start</button>
@@ -403,15 +411,13 @@ async function loadWorkspaces() {
   // a folder picked with Other last time is offered by name from then on
   const last = remembered("jep.folder")
   if (last && last !== OTHER && !dirs.has(last)) dirs.set(last, last.split("/").pop())
-  const pod = el("option", "", "new pod (throwaway folder)")
-  pod.value = ""
   const other = el("option", "", "Other…")
   other.value = OTHER
   $("folder").replaceChildren(...[...dirs].map(([dir, name]) => {
     const o = el("option", "", name)
     o.value = dir; o.title = dir
     return o
-  }), pod, other)
+  }), other)
   $("harness").replaceChildren(...harnesses.map((h) => {
     const label = el("label")
     const radio = el("input")
@@ -419,7 +425,11 @@ async function loadWorkspaces() {
     label.append(radio, el("span", "", h))
     return label
   }))
-  // a remembered choice only while it is still on offer
+  // a remembered choice only while it is still on offer. A pod is its own
+  // choice; the folder last used stays the folder default under it.
+  // (An empty remembered folder is how a pod used to be remembered.)
+  const pod = remembered("jep.where") === "pod" || remembered("jep.folder") === ""
+  $("start").querySelector(`input[name=where][value=${pod ? "pod" : "folder"}]`).click()
   const folder = remembered("jep.folder")
   if (folder != null && [...$("folder").options].some((o) => o.value === folder)) $("folder").value = folder
   const want = remembered("jep.harness")
@@ -447,6 +457,8 @@ async function browse(path) {
   }))
 }
 
+for (const r of document.querySelectorAll("input[name=where]")) r.onchange = () => { $("folderField").hidden = r.value === "pod" && r.checked }
+
 $("folder").onchange = () => {
   $("browse").hidden = $("folder").value !== OTHER
   if (!$("browse").hidden && !browsed) browse().catch(fail)
@@ -454,13 +466,15 @@ $("folder").onchange = () => {
 
 $("start").onsubmit = async (e) => {
   e.preventDefault()
-  const path = $("folder").value === OTHER ? browsed : $("folder").value
-  if (path === null) return
+  const pod = $("start").querySelector("input[name=where]:checked").value === "pod"
+  const path = pod ? null : $("folder").value === OTHER ? browsed : $("folder").value
+  if (!pod && !path) return
   const harness = $("start").querySelector("input[name=harness]:checked")?.value
   $("newChat").disabled = true
   try {
-    const { session } = await call("/new", path ? { path, harness } : { pod: true, harness })
-    remember("jep.folder", path)
+    const { session } = await call("/new", pod ? { pod: true, harness } : { path, harness })
+    remember("jep.where", pod ? "pod" : "folder")
+    if (!pod) remember("jep.folder", path)
     remember("jep.harness", harness)
     await loadSessions()
     location.hash = encodeURIComponent(session.id)
