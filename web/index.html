@@ -178,6 +178,9 @@
   dialog label.toggle small { display: block; color: var(--dim); font-size: 12px; }
   dialog .danger { color: var(--accent); }
   dialog .row { display: flex; flex-wrap: wrap; gap: 8px; }
+  #stop { display: flex; align-items: center; gap: 6px; color: var(--accent); border-color: var(--accent); }
+  #stop[hidden] { display: none; }
+  #stop svg { width: 12px; height: 12px; fill: currentColor; }
   form.compose .box { max-width: 780px; margin: 0 auto; display: flex; gap: 8px; align-items: flex-end; }
   textarea {
     flex: 1; resize: none; max-height: 40vh; min-height: 42px; padding: 10px 12px;
@@ -236,7 +239,6 @@
   <header>
     <button id="back" title="conversations">‹</button>
     <h1 id="title"></h1>
-    <button id="stop" hidden>Stop</button>
   </header>
   <form id="start" hidden>
     <h2>New conversation</h2>
@@ -265,6 +267,7 @@
     </div>
     <div class="box">
       <textarea id="input" rows="1" placeholder="Message"></textarea>
+      <button type="button" id="stop" title="Stop the running turn" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>Stop</button>
       <button>Send</button>
     </div>
     <div class="status">
