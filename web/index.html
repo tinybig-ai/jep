@@ -38,9 +38,6 @@
     width: 280px; flex: none; background: var(--side); border-right: 1px solid var(--line);
     display: flex; flex-direction: column;
   }
-  .new { padding: 12px; border-bottom: 1px solid var(--line); }
-  .new a { display: block; text-align: center; color: inherit; text-decoration: none; border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; }
-  .new a:hover { background: var(--bubble); }
   #sessions { overflow-y: auto; flex: 1; }
   .session { display: block; padding: 10px 14px; color: inherit; text-decoration: none; border-bottom: 1px solid var(--line); }
   .session:hover { background: var(--bubble); }
@@ -112,12 +109,44 @@
   @keyframes pulse { 50% { opacity: .2; } }
 
   form.compose { border-top: 1px solid var(--line); padding: 12px 20px; }
-  .brand { display: flex; align-items: center; gap: 8px; padding: 14px 14px 0; font-weight: 700; font-size: 17px; letter-spacing: .3px; }
+  .brand { display: flex; align-items: center; gap: 8px; padding: 12px 12px 12px 14px; font-weight: 700; font-size: 17px; letter-spacing: .3px; border-bottom: 1px solid var(--line); }
+  .plus {
+    margin-left: auto; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center;
+    background: linear-gradient(160deg, #f66676, #c42438); color: #fff; text-decoration: none;
+    font: 400 24px/1 -apple-system, sans-serif; box-shadow: 0 2px 10px #c4243866;
+    transition: transform .25s cubic-bezier(.3, 1.6, .5, 1), box-shadow .2s;
+  }
+  .plus:hover { transform: rotate(90deg) scale(1.12); box-shadow: 0 4px 18px #c4243899; }
+  .plus:active { transform: rotate(90deg) scale(.95); }
   .brand svg { width: 24px; height: 24px; }
   .modes { max-width: 780px; margin: 0 auto 8px; display: flex; gap: 6px; font-size: 13px; }
   .modes input { display: none; }
   .modes span { display: block; border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; color: var(--dim); cursor: pointer; }
   .modes input:checked + span { border-color: var(--text); color: var(--text); }
+  form.compose { position: relative; }
+  .status { max-width: 780px; margin: 6px auto 0; display: flex; align-items: center; gap: 12px; color: var(--dim); font-size: 12px; min-height: 18px; }
+  .status:empty { display: none; }
+  button.link { border: none; padding: 0; background: none; color: var(--dim); font-size: 12px; text-decoration: underline dotted; text-underline-offset: 3px; }
+  button.link:hover { color: var(--text); background: none; }
+  .meter { display: inline-block; width: 44px; height: 5px; border-radius: 3px; background: var(--line); vertical-align: middle; margin-right: 6px; overflow: hidden; }
+  .meter i { display: block; height: 100%; background: var(--dim); }
+  .meter.high i { background: var(--accent); }
+  .menu { position: absolute; bottom: 100%; left: max(20px, calc(50% - 390px)); width: min(380px, calc(100% - 40px)); max-height: 50vh; overflow-y: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 30px #0003; padding: 4px; z-index: 5; }
+  .menu button { display: flex; width: 100%; gap: 8px; border: none; border-radius: 6px; text-align: left; padding: 7px 10px; font-size: 13px; }
+  .menu button span { margin-left: auto; color: var(--dim); }
+  .menu button.on { font-weight: 600; }
+  button.icon { border: none; font-size: 17px; padding: 4px 8px; color: var(--dim); }
+  dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--bg); color: var(--text); width: min(440px, calc(100vw - 32px)); padding: 20px; }
+  dialog::backdrop { background: #0006; }
+  dialog h2 { margin: 0 0 14px; font-size: 17px; }
+  dialog section { margin: 0 0 16px; }
+  dialog h3 { margin: 0 0 6px; font-size: 12px; font-weight: 500; color: var(--dim); text-transform: uppercase; letter-spacing: .5px; }
+  dialog .line { display: flex; gap: 8px; align-items: center; }
+  dialog input[type=text], dialog select { flex: 1; min-width: 0; padding: 7px 9px; background: var(--bubble); border: 1px solid var(--line); border-radius: 8px; }
+  dialog label.toggle { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0; font-size: 14px; }
+  dialog label.toggle small { display: block; color: var(--dim); font-size: 12px; }
+  dialog .danger { color: var(--accent); }
+  dialog .row { display: flex; flex-wrap: wrap; gap: 8px; }
   form.compose .box { max-width: 780px; margin: 0 auto; display: flex; gap: 8px; align-items: flex-end; }
   textarea {
     flex: 1; resize: none; max-height: 40vh; min-height: 42px; padding: 10px 12px;
@@ -168,8 +197,7 @@
 </form>
 
 <aside hidden>
-  <div class="brand"><svg xmlns="http://www.w3.org/2000/svg" viewBox="3 3.5 18 17"><defs><linearGradient id="b" x1="0" y1="4.47" x2="0" y2="19.53" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#F66676"/><stop offset=".45" stop-color="#E43A50"/><stop offset="1" stop-color="#C42438"/></linearGradient></defs><path fill="url(#b)" d="M 12.00,9.29 C 13.85,7.39 18.02,7.09 19.64,9.56 C 21.14,11.93 20.33,15.67 18.02,17.94 C 16.51,19.42 14.78,19.92 13.50,19.23 C 12.58,18.83 11.42,18.83 10.50,19.23 C 9.22,19.92 7.49,19.42 5.98,17.94 C 3.67,15.67 2.86,11.93 4.36,9.56 C 5.98,7.09 10.15,7.39 12.00,9.29 Z"/><path fill="url(#b)" d="M 13.39,6.99 C 14.20,5.02 16.51,4.23 18.02,4.53 C 17.32,6.20 15.47,7.29 13.39,6.99 Z"/><path d="M 12.17,8.67 L 12.52,5.40" stroke="#E95A6E" stroke-width="1.15" stroke-linecap="round"/></svg>jep</div>
-  <div class="new"><a href="#new">New conversation</a></div>
+  <div class="brand"><svg xmlns="http://www.w3.org/2000/svg" viewBox="3 3.5 18 17"><defs><linearGradient id="b" x1="0" y1="4.47" x2="0" y2="19.53" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#F66676"/><stop offset=".45" stop-color="#E43A50"/><stop offset="1" stop-color="#C42438"/></linearGradient></defs><path fill="url(#b)" d="M 12.00,9.29 C 13.85,7.39 18.02,7.09 19.64,9.56 C 21.14,11.93 20.33,15.67 18.02,17.94 C 16.51,19.42 14.78,19.92 13.50,19.23 C 12.58,18.83 11.42,18.83 10.50,19.23 C 9.22,19.92 7.49,19.42 5.98,17.94 C 3.67,15.67 2.86,11.93 4.36,9.56 C 5.98,7.09 10.15,7.39 12.00,9.29 Z"/><path fill="url(#b)" d="M 13.39,6.99 C 14.20,5.02 16.51,4.23 18.02,4.53 C 17.32,6.20 15.47,7.29 13.39,6.99 Z"/><path d="M 12.17,8.67 L 12.52,5.40" stroke="#E95A6E" stroke-width="1.15" stroke-linecap="round"/></svg>jep<a href="#new" class="plus" title="New conversation" aria-label="New conversation">+</a></div>
   <div id="sessions"></div>
 </aside>
 
@@ -178,6 +206,7 @@
     <button id="back" title="conversations">‹</button>
     <h1 id="title"></h1>
     <button id="stop" hidden>Stop</button>
+    <button id="gear" class="icon" title="Conversation settings" aria-label="Conversation settings" hidden>⚙︎</button>
   </header>
   <form id="start" hidden>
     <h2>New conversation</h2>
@@ -200,8 +229,47 @@
       <textarea id="input" rows="1" placeholder="Message"></textarea>
       <button>Send</button>
     </div>
+    <div class="status">
+      <button type="button" id="model" class="link" title="Change the model"></button>
+      <span id="context"></span>
+      <span id="spend"></span>
+    </div>
+    <div id="models" class="menu" hidden></div>
   </form>
 </main>
+
+<dialog id="settings">
+  <h2>Conversation settings</h2>
+  <section>
+    <h3>Title</h3>
+    <form class="line" id="renameForm"><input type="text" id="rename"><button>Rename</button></form>
+  </section>
+  <section id="agentSection" hidden>
+    <h3>Agent</h3>
+    <div class="line"><select id="agent"></select></div>
+  </section>
+  <section id="toggleSection" hidden>
+    <h3>Harness</h3>
+    <div id="toggles"></div>
+  </section>
+  <section id="usageSection">
+    <h3>Usage</h3>
+    <div id="usage" class="line"></div>
+  </section>
+  <section>
+    <h3>Conversation</h3>
+    <div class="row">
+      <button type="button" id="compact" hidden>Compact context</button>
+      <button type="button" id="archive">Archive</button>
+      <button type="button" id="delete" class="danger">Delete</button>
+    </div>
+  </section>
+  <section>
+    <h3>This browser</h3>
+    <div class="row"><button type="button" id="unpair" class="danger">Unpair</button></div>
+  </section>
+  <div class="row" style="justify-content: flex-end"><button type="button" id="closeSettings">Done</button></div>
+</dialog>
 
 <div id="errors">
   <div id="errorLog" hidden></div>
@@ -415,8 +483,12 @@ async function open(id) {
   $("log").replaceChildren()
   $("compose").hidden = !current
   $("stop").hidden = true
+  $("gear").hidden = !current
+  $("models").hidden = true
+  choices = null; usage = null
   if (!current) return
   markSeen()
+  loadStatus()
   await readHistory()
   $("input").focus()
 }
@@ -474,6 +546,7 @@ function render(follow = true) {
   $("log").replaceChildren(...nodes)
   $("stop").hidden = !busy()
   $("modes").hidden = !busy()
+  renderStatus()
   if (follow && atBottom) scroller.scrollTop = scroller.scrollHeight
 }
 
@@ -760,7 +833,7 @@ function follow() {
       live.set(evt.partID, { messageID: evt.messageID, part: { ...evt.part, id: evt.partID } })
       frame()
     }
-    if (evt.type === "session.idle" || evt.type === "turn.aborted") { live.clear(); markSeen() }
+    if (evt.type === "session.idle" || evt.type === "turn.aborted") { live.clear(); markSeen(); loadStatus() }
     if (evt.type === "session.error") fail(new Error(evt.message))
     // the record itself moved: read it again, but not on every event
     clearTimeout(reread)
@@ -829,6 +902,154 @@ function renderErrors() {
 }
 
 $("errorMark").onclick = () => { $("errorLog").hidden = !$("errorLog").hidden }
+
+// ── the status line and settings ──────────────────────────────────────────
+let choices = null   // /models: what this conversation can run on, and what it runs on
+let usage = null     // /usage: the whole conversation's tokens and spend
+
+function loadStatus() {
+  const id = current
+  if (!id) return
+  call("/models", { id }).then((c) => { if (id === current) { choices = c; renderStatus() } }).catch(() => {})
+  call("/usage", { id }).then((u) => { if (id === current) { usage = u.usage; renderStatus() } }).catch(() => {})
+}
+
+const short = (ref) => (ref || "").split("/").pop()
+const tokens = (n) => (n >= 1e6 ? +(n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n))
+
+// as on the phone: the model of the last reply, the window it filled (input plus
+// cache, the prompt the model saw), and what the whole conversation cost
+function renderStatus() {
+  const last = [...messages].reverse().find((m) => m.role === "assistant" && m.tokens)
+  const running = choices?.current || choices?.default
+  // a model picked here names itself straight away; otherwise the one that answered last
+  const model = short(choices?.current) || short(last?.model) || short(running)
+  $("model").textContent = model ? model + " ▾" : choices ? "default model ▾" : ""
+  $("model").hidden = !choices && !model
+  const used = last ? last.tokens.input + last.tokens.cache.read + last.tokens.cache.write : 0
+  const limit = choices?.models?.find((m) => `${m.providerID}/${m.modelID}` === running)?.contextLimit || choices?.contextLimit || 0
+  $("context").replaceChildren()
+  if (used && limit) {
+    const pct = Math.min(100, Math.round((used / limit) * 100))
+    const meter = el("span", "meter" + (pct >= 80 ? " high" : ""))
+    const fill = el("i")
+    fill.style.width = pct + "%"
+    meter.append(fill)
+    $("context").append(meter, `${tokens(used)} / ${tokens(limit)} (${pct}%)`)
+    $("context").title = "Context window used by the last reply"
+  } else if (used) $("context").append(`${tokens(used)} context`)
+  const spent = usage?.cost || 0
+  $("spend").textContent = spent > 0 ? "$" + (spent < 10 ? spent.toFixed(2) : spent.toFixed(0)) : ""
+  $("spend").title = usage?.unpriced ? `${usage.unpriced} turns had no price from the harness` : "Spent in this conversation"
+}
+
+$("model").onclick = () => {
+  const menu = $("models")
+  if (!menu.hidden) return void (menu.hidden = true)
+  if (!choices) return
+  const pick = (ref) => async () => {
+    menu.hidden = true
+    try {
+      await call("/setmodel", ref ? { id: current, model: ref } : { id: current })
+      loadStatus()
+    } catch (err) { fail(err) }
+  }
+  const item = (label, note, on, ref) => {
+    const b = el("button", on ? "on" : "", (on ? "✓ " : "") + label)
+    b.type = "button"
+    if (note) b.append(el("span", "", note))
+    b.onclick = pick(ref)
+    return b
+  }
+  menu.replaceChildren(
+    item(`Default · ${short(choices.default) || "harness"}`, "", !choices.current, null),
+    ...choices.models.map((m) => {
+      const ref = `${m.providerID}/${m.modelID}`
+      return item(m.modelID, [m.image ? "images" : "", m.contextLimit ? tokens(m.contextLimit) : ""].filter(Boolean).join(" · "), choices.current === ref, ref)
+    }),
+  )
+  menu.hidden = false
+}
+addEventListener("click", (e) => { if (!$("models").hidden && !e.target.closest("#models, #model")) $("models").hidden = true })
+
+$("gear").onclick = async () => {
+  const id = current
+  const s = sessions.find((x) => x.id === id)
+  $("rename").value = s?.title || ""
+  $("settings").showModal()
+  const [agents, harness] = await Promise.all([
+    call("/agents", { id }).catch(() => null),
+    call("/harness-settings", { id }).catch(() => null),
+  ])
+  if (id !== current) return
+  // agents: only when the harness offers a choice
+  $("agentSection").hidden = !agents?.agents?.length
+  if (agents?.agents?.length) {
+    const none = el("option", "", `Default${agents.default ? " · " + agents.default : ""}`)
+    none.value = ""
+    $("agent").replaceChildren(none, ...agents.agents.map((a) => {
+      const o = el("option", "", a.label || a.id)
+      o.value = a.id
+      return o
+    }))
+    $("agent").value = agents.current || ""
+  }
+  // the switches the harness declares, each saved the moment it flips
+  $("toggleSection").hidden = !harness?.options?.length
+  $("toggles").replaceChildren(...(harness?.options || []).map((o) => {
+    const label = el("label", "toggle")
+    const box = el("input")
+    box.type = "checkbox"
+    box.checked = harness.values?.[o.id] ?? o.default
+    box.onchange = () => call("/set-harness-setting", { id, key: o.id, enabled: box.checked }).catch((err) => { box.checked = !box.checked; fail(err) })
+    const text = el("div", o.danger ? "danger" : "", o.label)
+    if (o.description) text.append(el("small", "", o.description))
+    label.append(box, text)
+    return label
+  }))
+  $("compact").hidden = !harness?.compact
+  const u = usage
+  $("usage").textContent = u
+    ? `${tokens(u.total || 0)} tokens over ${u.turns} ${u.turns === 1 ? "turn" : "turns"}${u.cost ? " · $" + u.cost.toFixed(2) : ""}${u.models?.length ? " · " + u.models.map(short).join(", ") : ""}`
+    : "No usage reported yet"
+}
+
+$("agent").onchange = () => call("/setagent", $("agent").value ? { id: current, agent: $("agent").value } : { id: current }).catch(fail)
+$("renameForm").onsubmit = async (e) => {
+  e.preventDefault()
+  const title = $("rename").value.trim()
+  if (!title) return
+  try {
+    await call("/rename", { id: current, title })
+    $("title").textContent = title
+    await loadSessions()
+  } catch (err) { fail(err) }
+}
+$("compact").onclick = async () => {
+  $("compact").disabled = true
+  try { await call("/compact", { id: current }); readHistory().catch(() => {}) } catch (err) { fail(err) } finally { $("compact").disabled = false }
+}
+$("archive").onclick = async () => {
+  try {
+    await call("/archive", { id: current })
+    $("settings").close()
+    sessions = sessions.filter((s) => s.id !== current)
+    location.hash = ""
+    loadSessions().catch(() => {})
+  } catch (err) { fail(err) }
+}
+$("delete").onclick = async () => {
+  if (!confirm("Delete this conversation from the harness? This cannot be undone.")) return
+  try {
+    await call("/delete", { id: current })
+    $("settings").close()
+    sessions = sessions.filter((s) => s.id !== current)
+    location.hash = ""
+    loadSessions().catch(() => {})
+  } catch (err) { fail(err) }
+}
+$("unpair").onclick = () => { if (confirm("Unpair this browser? You will need a pairing code again.")) { $("settings").close(); unpair() } }
+$("closeSettings").onclick = () => $("settings").close()
 
 const markSeen = () => { if (current && !document.hidden) call("/seen", { id: current }).catch(() => {}) }
 
