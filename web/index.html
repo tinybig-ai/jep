@@ -372,17 +372,30 @@ let etag = null
 let hasMore = false
 let live = new Map()      // partID → { messageID, part } streamed since the last read
 const roles = new Map()   // messageID → role, as the feed announces them
-let sending = 0           // prompts of ours still in flight
+const sending = new Map() // session → prompts of ours still in flight
 let pendingText = []      // what we sent and the record does not show yet
 
 // ── the session list ──────────────────────────────────────────────────────
 const announced = new Set()   // late workspaces already reported this visit
 
 let listing = null
+let listAgain = false
 
-// one list request at a time: callers that arrive meanwhile share it
+// One list request at a time. A call that arrives while one is running asks
+// for one more read after it, because the running one may have started before
+// the news (a turn that just ended) and would answer with the old state.
 function loadSessions() {
-  listing ??= listSessions().finally(() => { listing = null })
+  if (listing) {
+    listAgain = true
+    return listing
+  }
+  listing = listSessions().finally(() => {
+    listing = null
+    if (listAgain) {
+      listAgain = false
+      loadSessions().catch(() => {})
+    }
+  })
   return listing
 }
 
@@ -401,6 +414,8 @@ async function listSessions() {
   if (news.length) fail(new Error(`Could not refresh the conversations in ${news.map((d) => `${d.name} (${d.harness})`).join(", ")} in time. Showing the last ones known.`))
   remember("jep.sessions", JSON.stringify(sessions))
   renderSessions()
+  // whether the open conversation is busy can have changed with the list
+  if (current) frame()
   // a conversation opened before the list came has its title now
   if (current && !$("title").textContent) $("title").textContent = sessions.find((s) => s.id === current)?.title || ""
 }
@@ -580,7 +595,18 @@ async function loadOlder() {
   scroller.scrollTop = scroller.scrollHeight - fromBottom
 }
 
-const busy = () => sending > 0 || live.size > 0 || !!sessions.find((s) => s.id === current)?.active
+const busy = () => (sending.get(current) || 0) > 0 || live.size > 0 || !!sessions.find((s) => s.id === current)?.active
+
+// The turn is over: nothing of it is in flight any more, whatever this page
+// still holds. A send request can outlive its turn on the wire (a Mac asleep,
+// a network change) and a list read can be older than the end, so neither is
+// waited on, as the phone does not wait on them either.
+function settle(id) {
+  sending.delete(id)
+  const s = sessions.find((x) => x.id === id)
+  if (s) s.active = false
+  if (id === current) live.clear()
+}
 
 function render(follow = true) {
   const scroller = $("scroll")
@@ -906,7 +932,7 @@ $("compose").onsubmit = (e) => {
   for (const a of asks) call("/reject", { id, askID: a.id }).catch(() => {})
   asks = []
   pendingText.push(text)
-  sending++
+  sending.set(id, (sending.get(id) || 0) + 1)
   render()
   $("scroll").scrollTop = $("scroll").scrollHeight
   // the answer comes back when the whole turn ends; the feed shows it sooner
@@ -916,7 +942,10 @@ $("compose").onsubmit = (e) => {
   const how = { steer: {}, after: { steer: false }, now: { force: true } }[mode]
   call("/prompt", { id, text, clientID: crypto.randomUUID(), ...how })
     .catch((err) => { if (id === current) fail(err) })
-    .finally(() => { sending--; if (id === current) readHistory().catch(fail) })
+    .finally(() => {
+      if (sending.has(id)) sending.get(id) > 1 ? sending.set(id, sending.get(id) - 1) : sending.delete(id)
+      if (id === current) readHistory().catch(fail)
+    })
 }
 
 $("input").onkeydown = (e) => {
@@ -940,6 +969,11 @@ function follow() {
   feed = new EventSource(`/stream?token=${token}`)
   feed.onmessage = (m) => {
     const evt = JSON.parse(m.data)
+    if (evt.type === "session.idle" || evt.type === "turn.aborted") {
+      settle(evt.sessionID)
+      renderSessions()
+      if (evt.sessionID === current) frame()
+    }
     if (evt.type === "session.idle" || evt.type === "turn.aborted" || evt.type === "session.changed") loadSessions().catch(() => {})
     if (evt.sessionID !== current) return
     if (evt.role) roles.set(evt.messageID, evt.role)
@@ -955,7 +989,7 @@ function follow() {
       live.set(evt.partID, { messageID: evt.messageID, part: { ...evt.part, id: evt.partID } })
       frame()
     }
-    if (evt.type === "session.idle" || evt.type === "turn.aborted") { live.clear(); markSeen(); loadStatus() }
+    if (evt.type === "session.idle" || evt.type === "turn.aborted") { markSeen(); loadStatus() }
     if (evt.type === "session.error") fail(new Error(evt.message))
     // the record itself moved: read it again, but not on every event
     clearTimeout(reread)
