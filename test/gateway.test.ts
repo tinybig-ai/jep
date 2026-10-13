@@ -1797,6 +1797,12 @@ test("the web client is served at / without a token, and the data behind it is n
     assert.match(page.headers.get("content-type") ?? "", /^text\/html/)
     assert.match(await page.text(), /<title>jep<\/title>/)
     assert.equal((await fetch(`${base}/sessions`, { method: "POST" })).status, 401)
+    const script = await fetch(`${base}/highlight.min.js`)
+    assert.equal(script.status, 200)
+    assert.match(script.headers.get("content-type") ?? "", /^text\/javascript/)
+    // only plain names in web/: nothing above it, nothing that is not a script or style
+    assert.equal((await fetch(`${base}/..%2Fpackage.json`)).status, 401)
+    assert.equal((await fetch(`${base}/index.html`)).status, 401)
   } finally {
     await g.close()
   }

@@ -74,7 +74,24 @@
   .text code { font: 13px ui-monospace, Menlo, monospace; background: var(--code); padding: 1px 4px; border-radius: 4px; }
   .text pre code { padding: 0; background: none; }
   .text a { color: var(--accent); }
-  details { color: var(--dim); font-size: 13px; margin: 4px 0; }
+  details { color: var(--dim); font-size: 13px; margin: 2px 0; }
+  summary { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .msg.assistant:has(> details) { margin-bottom: 8px; }
+  details.work > summary { font-weight: 500; }
+  details.work.active > summary { color: var(--text); }
+  details.work.failed > summary { color: var(--accent); }
+  .toolhead { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+  summary .toolhead { display: inline-flex; max-width: calc(100% - 16px); vertical-align: bottom; }
+  div.tool { margin: 2px 0 2px 14px; font-size: 13px; color: var(--dim); }
+  .toolhead .verb { flex: none; }
+  .toolhead.running .verb { color: var(--text); }
+  .toolhead.failed .verb { color: var(--accent); }
+  .toolhead .subject { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px ui-monospace, Menlo, monospace; background: none; padding: 0; }
+  .added { color: #2f9e44; } .removed { color: #e03131; }
+  .toolhead .added, .toolhead .removed { font: 12px ui-monospace, Menlo, monospace; flex: none; }
+  pre.diff div { white-space: pre-wrap; }
+  pre.diff .added { background: #2f9e4418; } pre.diff .removed { background: #e0313118; }
+  .workbody { max-height: 280px; overflow-y: auto; padding: 4px 0 4px 14px; border-left: 1px solid var(--line); margin: 4px 0 0 4px; }
   details pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow-y: auto; font: 12px ui-monospace, Menlo, monospace; background: var(--code); padding: 8px; border-radius: 6px; }
   summary { cursor: pointer; }
   .msg img { max-width: 100%; border-radius: 8px; }
@@ -134,7 +151,12 @@
     body.chatting aside, body:not(.chatting) main { display: none; }
     #back { display: block; }
   }
+  /* code colors: highlight.js's GitHub themes (BSD-3-Clause), on our own backgrounds */
+  pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#24292e;background:#fff}.hljs-doctag,.hljs-keyword,.hljs-meta .hljs-keyword,.hljs-template-tag,.hljs-template-variable,.hljs-type,.hljs-variable.language_{color:#d73a49}.hljs-title,.hljs-title.class_,.hljs-title.class_.inherited__,.hljs-title.function_{color:#6f42c1}.hljs-attr,.hljs-attribute,.hljs-literal,.hljs-meta,.hljs-number,.hljs-operator,.hljs-selector-attr,.hljs-selector-class,.hljs-selector-id,.hljs-variable{color:#005cc5}.hljs-meta .hljs-string,.hljs-regexp,.hljs-string{color:#032f62}.hljs-built_in,.hljs-symbol{color:#e36209}.hljs-code,.hljs-comment,.hljs-formula{color:#6a737d}.hljs-name,.hljs-quote,.hljs-selector-pseudo,.hljs-selector-tag{color:#22863a}.hljs-subst{color:#24292e}.hljs-section{color:#005cc5;font-weight:700}.hljs-bullet{color:#735c0f}.hljs-emphasis{color:#24292e;font-style:italic}.hljs-strong{color:#24292e;font-weight:700}.hljs-addition{color:#22863a;background-color:#f0fff4}.hljs-deletion{color:#b31d28;background-color:#ffeef0}
+  @media (prefers-color-scheme: dark) { pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#c9d1d9;background:#0d1117}.hljs-doctag,.hljs-keyword,.hljs-meta .hljs-keyword,.hljs-template-tag,.hljs-template-variable,.hljs-type,.hljs-variable.language_{color:#ff7b72}.hljs-title,.hljs-title.class_,.hljs-title.class_.inherited__,.hljs-title.function_{color:#d2a8ff}.hljs-attr,.hljs-attribute,.hljs-literal,.hljs-meta,.hljs-number,.hljs-operator,.hljs-selector-attr,.hljs-selector-class,.hljs-selector-id,.hljs-variable{color:#79c0ff}.hljs-meta .hljs-string,.hljs-regexp,.hljs-string{color:#a5d6ff}.hljs-built_in,.hljs-symbol{color:#ffa657}.hljs-code,.hljs-comment,.hljs-formula{color:#8b949e}.hljs-name,.hljs-quote,.hljs-selector-pseudo,.hljs-selector-tag{color:#7ee787}.hljs-subst{color:#c9d1d9}.hljs-section{color:#1f6feb;font-weight:700}.hljs-bullet{color:#f2cc60}.hljs-emphasis{color:#c9d1d9;font-style:italic}.hljs-strong{color:#c9d1d9;font-weight:700}.hljs-addition{color:#aff5b4;background-color:#033a16}.hljs-deletion{color:#ffdcd7;background-color:#67060c} }
+  pre code.hljs, code.hljs, .hljs { background: none; padding: 0; }
 </style>
+<script src="/highlight.min.js" defer></script>
 </head>
 <body>
 
@@ -441,9 +463,12 @@ function render(follow = true) {
     b.onclick = loadOlder
     nodes.push(b)
   }
-  for (const m of messages) nodes.push(messageNode(m.role, m.parts))
-  for (const t of pendingText) nodes.push(messageNode("user", [{ kind: "text", text: t }]))
-  if (live.size) nodes.push(messageNode("assistant", [...live.values()].map((l) => l.part)))
+  const all = [
+    ...messages,
+    ...pendingText.map((t) => ({ role: "user", parts: [{ kind: "text", text: t }] })),
+    ...(live.size ? [{ role: "assistant", parts: [...live.values()].map((l) => l.part), live: true }] : []),
+  ]
+  nodes.push(...transcript(all))
   for (const a of asks) nodes.push(askNode(a))
   if (busy() && !asks.length) nodes.push(el("div", "spin", "working"))
   $("log").replaceChildren(...nodes)
@@ -452,28 +477,199 @@ function render(follow = true) {
   if (follow && atBottom) scroller.scrollTop = scroller.scrollHeight
 }
 
+// Work is a turn's tool calls and thinking. A stretch of it with nothing said
+// in between folds into one line titled by what is inside ("Worked for 1m 13s ·
+// ran 4 commands, read 2 files"), as the phone shows it. A lone call or
+// thought stays itself.
+// an edit is not folded away: what changed in the files is the point of a turn
+const isWork = (p) => (p.kind === "tool" && !isEdit(p)) || (p.kind === "reasoning" && p.text.trim())
+const isEdit = (p) => !!editsOf(p.name.toLowerCase(), typeof p.input === "object" && p.input ? p.input : {})
+
+function transcript(all) {
+  const out = []
+  let run = []
+  const flush = (last = false) => {
+    if (run.length === 1) out.push(assistant(workItem(run[0].p)))
+    else if (run.length > 1) out.push(assistant(workFold(run, last && busy())))
+    run = []
+  }
+  for (const m of all) {
+    if (m.role === "user") {
+      flush()
+      out.push(messageNode("user", m.parts))
+      continue
+    }
+    for (const p of m.parts) {
+      if (isWork(p)) run.push({ p, m })
+      else if (p.kind === "tool") {
+        flush()
+        out.push(assistant(toolNode(p)))
+      } else if (shows(p)) {
+        flush()
+        out.push(messageNode("assistant", [p]))
+      }
+    }
+  }
+  flush(true)
+  return out
+}
+
+const shows = (p) => (p.kind === "text" && p.text.trim()) || p.kind === "quote" || p.kind === "file"
+
+function assistant(child) {
+  const node = el("div", "msg assistant")
+  node.append(child)
+  return node
+}
+
+function workFold(run, active) {
+  const parts = run.map((r) => r.p)
+  const timed = [...new Set(run.map((r) => r.m))].filter((m) => m.time)
+  const span = timed.length ? Math.max(...timed.map((m) => m.time + (m.durationMs || 0))) - Math.min(...timed.map((m) => m.time)) : 0
+  const failed = parts.some((p) => p.status === "error")
+  const d = keep(el("details", "work" + (failed ? " failed" : "") + (active ? " active" : "")), "work:" + (parts[0].id || ""))
+  d.append(el("summary", "", workTitle(parts, span, active)))
+  const body = el("div", "workbody")
+  for (const p of parts) body.append(workItem(p))
+  d.append(body)
+  return d
+}
+
+function workItem(p) {
+  if (p.kind === "reasoning") return keep(fold(p.durationMs >= 1000 ? `Thought for ${span(p.durationMs)}` : "Thought", p.text), "r:" + (p.id || p.text.slice(0, 40)))
+  return toolNode(p)
+}
+
+const VERB = { read: "read", edit: "edited", write: "wrote", bash: "ran", grep: "searched", glob: "found", list: "listed", patch: "patched", multiedit: "edited", "multi-edit": "edited" }
+const NOUN = { read: "file", edit: "file", write: "file", patch: "file", multiedit: "file", "multi-edit": "file", bash: "command", grep: "search", glob: "match" }
+
+function workTitle(parts, ms, active) {
+  const tools = parts.filter((p) => p.kind === "tool")
+  if (!tools.length) return active ? "Thinking" : ms >= 1000 ? `Thought for ${span(ms)}` : "Thought"
+  const counts = {}
+  for (const t of tools) { const k = t.name.toLowerCase(); counts[k] = (counts[k] || 0) + 1 }
+  const said = Object.entries(counts).map(([k, n]) => {
+    const noun = NOUN[k] || "call"
+    return `${VERB[k] || k} ${n} ${n === 1 ? noun : noun.endsWith("ch") ? noun + "es" : noun + "s"}`
+  }).join(", ")
+  if (active) return `Working · ${said}`
+  if (ms >= 1000) return `Worked for ${span(ms)} · ${said}`
+  return said[0].toUpperCase() + said.slice(1)
+}
+
+// 42s, 1m 13s, 2h 5m
+function span(ms) {
+  const s = Math.floor(ms / 1000)
+  if (s < 60) return `${s}s`
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`
+  return `${Math.floor(s / 3600)}h ${Math.floor(s / 60) % 60}m`
+}
+
+// every render rebuilds the log; a fold someone opened stays open
+const opened = new Map()
+function keep(d, key, open = false) {
+  d.open = opened.get(key) ?? open
+  d.ontoggle = () => opened.set(key, d.open)
+  return d
+}
+
 function messageNode(role, parts) {
   const node = el("div", "msg " + role)
   const body = el("div", "body")
   for (const p of parts) {
     if (p.kind === "text" && p.text.trim()) body.append(textNode(p.text))
     else if (p.kind === "quote") body.append(fold("↪ " + p.text.slice(0, 80), p.text))
-    else if (p.kind === "reasoning" && p.text.trim()) body.append(fold("thinking", p.text))
-    else if (p.kind === "tool") body.append(fold(toolLine(p), toolDetail(p)))
     else if (p.kind === "file") body.append(fileNode(p))
   }
   node.append(body)
   return node
 }
 
-function toolLine(p) {
-  const mark = { running: "◌", pending: "◌", error: "✕", completed: "✓" }[p.status] || "·"
-  return `${mark} ${p.name}${p.title ? " · " + p.title : ""}`
+// A tool call reads as one line, as on the phone: "Edited claude.ts +12 -3",
+// "Ran" and the command. Opened, an edit is its diff and anything else its
+// output, never the call's raw JSON.
+function toolNode(p) {
+  const name = p.name.toLowerCase()
+  const args = typeof p.input === "object" && p.input ? p.input : {}
+  const arg = (...keys) => keys.map((k) => args[k]).find((v) => typeof v === "string")
+  const file = (arg("file_path", "filePath", "path") || p.title || "").split("/").pop()
+  const edits = editsOf(name, args)
+  const diff = edits && edits.flatMap(([old, now]) => [...lines(old).map((l) => "-" + l), ...lines(now).map((l) => "+" + l)])
+
+  const head = el("span", "toolhead")
+  const verb = edits ? (name === "write" ? "Wrote " : "Edited ") + (file || "a file")
+    : name === "read" ? "Read " + (file || "a file")
+    : name === "bash" || name === "run" ? "Ran"
+    : "Used " + p.name
+  head.append(el("span", "verb", verb))
+  if (diff) {
+    const added = diff.filter((l) => l[0] === "+").length
+    const removed = diff.length - added
+    if (added) head.append(el("span", "added", "+" + added))
+    if (removed) head.append(el("span", "removed", "-" + removed))
+  }
+  const subject = name === "bash" || name === "run" ? arg("command") || p.title
+    : ["grep", "glob", "search"].includes(name) ? arg("pattern") || p.title
+    : !edits && name !== "read" ? p.title : null
+  if (subject) head.append(el("code", "subject", subject.split("\n")[0]))
+  head.classList.toggle("running", p.status === "running" || p.status === "pending")
+  head.classList.toggle("failed", p.status === "error")
+
+  const body = diff ? diffNode(diff, langOf(file)) : outputNode(p, name, arg("command"))
+  if (!body) {
+    const line = el("div", "tool")
+    line.append(head)
+    return line
+  }
+  const d = keep(el("details", "tool"), "t:" + p.id, !!diff)
+  const summary = el("summary")
+  summary.append(head)
+  d.append(summary, body)
+  return d
 }
 
-function toolDetail(p) {
+// the old and new text of each change an edit call carries, in either harness's spelling
+function editsOf(name, a) {
+  const pair = (o) => [o.old_string ?? o.oldString ?? "", o.new_string ?? o.newString ?? ""]
+  if (name === "write") return typeof a.content === "string" ? [["", a.content]] : null
+  if (name === "edit") return "old_string" in a || "oldString" in a ? [pair(a)] : null
+  if (name === "multiedit" || name === "multi-edit") return Array.isArray(a.edits) ? a.edits.map(pair) : null
+  return null
+}
+
+const lines = (t) => (t ? String(t).split("\n") : [])
+
+function diffNode(diff, lang) {
+  const pre = el("pre", "diff")
+  pre.append(...diff.slice(0, 2000).map((l) => {
+    const row = el("div", l[0] === "+" ? "added" : "removed")
+    row.innerHTML = esc(l[0]) + highlighted(l.slice(1), lang)
+    return row
+  }))
+  return pre
+}
+
+// Code colors, when highlight.js has loaded (it is a separate file, so the page
+// never waits on it). A language it does not know is plain text, escaped.
+const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c])
+function highlighted(code, lang) {
+  if (!window.hljs || !lang || !hljs.getLanguage(lang)) return esc(code)
+  try { return hljs.highlight(code, { language: lang, ignoreIllegals: true }).value } catch { return esc(code) }
+}
+const EXT = { ts: "typescript", tsx: "typescript", mts: "typescript", js: "javascript", mjs: "javascript", jsx: "javascript", kt: "kotlin", kts: "kotlin", py: "python", sh: "bash", zsh: "bash", md: "markdown", json: "json", html: "xml", xml: "xml", css: "css", swift: "swift", go: "go", rs: "rust", java: "java", yml: "yaml", yaml: "yaml", toml: "ini", sql: "sql", c: "c", h: "c", cpp: "cpp", rb: "ruby" }
+const langOf = (file) => EXT[(file || "").split(".").pop().toLowerCase()]
+// once it arrives, draw again so what is already on screen gets its colors
+addEventListener("load", () => { if (current) render(false) })
+
+function outputNode(p, name, command) {
   const show = (v) => (v == null || v === "" ? "" : typeof v === "string" ? v : JSON.stringify(v, null, 2))
-  return [show(p.input), show(p.output)].filter(Boolean).join("\n\n────\n\n").slice(0, 20000)
+  // opencode wraps its own note about a call in <shell_metadata>; the note reads as text
+  let text = show(p.output).replace(/<\/?shell_metadata>/g, "").replace(/\n{3,}/g, "\n\n").trim()
+  if (name === "bash" || name === "run") text = ["$ " + (command || ""), text].filter((t) => t.trim()).join("\n\n")
+  else if (!text) text = show(p.input) === "{}" ? "" : show(p.input)
+  if (!text.trim()) return null
+  if (text.length > 4000) text = text.slice(0, 4000) + `\n… (${text.length - 4000} more characters)`
+  return el("pre", "", text)
 }
 
 function fileNode(p) {
@@ -642,15 +838,21 @@ function remember(key, value) { try { localStorage.setItem(key, value) } catch {
 // Markdown, the little of it a chat needs: code blocks, inline code, bold, links.
 // Everything is escaped first, so the text can never become markup.
 function textNode(src) {
-  const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c])
   const inline = (s) => esc(s)
     .replace(/`([^`\n]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
     .replace(/\[([^\]\n]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
   // a block sits on its own lines; the line breaks around it are not text
-  const html = src.split(/```[^\n]*\n?/)
-    .map((chunk, i) => (i % 2 ? `<pre><code>${esc(chunk.replace(/\n$/, ""))}</code></pre>` : inline(chunk.replace(/^\n/, "").replace(/\n$/, ""))))
-    .join("")
+  // split keeps each fence's language, so the pieces go text, language, code, text…
+  const pieces = src.split(/```([\w+#.-]*)[^\n]*\n?/)
+  let html = ""
+  for (let i = 0; i < pieces.length; i += 3) {
+    html += inline(pieces[i].replace(/^\n/, "").replace(/\n$/, ""))
+    if (i + 2 < pieces.length) {
+      const lang = (pieces[i + 1] || "").toLowerCase()
+      html += `<pre><code class="hljs">${highlighted(pieces[i + 2].replace(/\n$/, ""), EXT[lang] || lang)}</code></pre>`
+    }
+  }
   const n = el("div", "text")
   n.innerHTML = html
   return n

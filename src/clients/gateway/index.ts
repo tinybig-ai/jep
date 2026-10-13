@@ -25,9 +25,10 @@ import { attachedPaths, stripInjectedContext, transcriptText } from "../../core/
 import { newPairCode } from "../telegram/pair.ts"
 import { detach } from "../../core/detach.ts"
 
-// web/index.html at the package root: three levels up from this file, from
-// src/ and from the compiled dist/ alike
-const WEB_PAGE = fileURLToPath(new URL("../../../web/index.html", import.meta.url))
+// web/ at the package root: three levels up from this file, from src/ and from
+// the compiled dist/ alike. index.html and the scripts it loads.
+const WEB_DIR = fileURLToPath(new URL("../../../web/", import.meta.url))
+const WEB_TYPES: Record<string, string> = { ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8" }
 
 export interface GatewayDeps {
   // called lazily and repeatedly: the Telegram bot can spawn more workspace
@@ -1017,10 +1018,18 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       // shows on reload. It holds nothing secret; everything it shows comes
       // from the token-gated routes below.
       if (path === "/" && req.method === "GET") {
-        const page = await readFile(WEB_PAGE).catch(() => null)
+        const page = await readFile(join(WEB_DIR, "index.html")).catch(() => null)
         if (!page) return json(res, 404, { error: "no web client" })
         res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" })
         return res.end(page)
+      }
+      // a script or style the page loads: a plain name in web/, nothing deeper
+      const asset = /^\/[a-z0-9][a-z0-9.-]*(\.js|\.css)$/.exec(path)
+      if (asset && req.method === "GET") {
+        const body = await readFile(join(WEB_DIR, path.slice(1))).catch(() => null)
+        if (!body) return json(res, 404, { error: "no such file" })
+        res.writeHead(200, { "content-type": WEB_TYPES[asset[1] ?? ""] ?? "text/plain", "cache-control": "no-cache" })
+        return res.end(body)
       }
 
       if (path === "/pair" && req.method === "POST") {
