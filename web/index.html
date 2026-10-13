@@ -136,6 +136,23 @@
   .menu button span { margin-left: auto; color: var(--dim); }
   .menu button.on { font-weight: 600; }
   button.icon { border: none; font-size: 17px; padding: 4px 8px; color: var(--dim); }
+  .tools { display: flex; gap: 2px; margin-left: -6px; }
+  .tools button.icon { padding: 3px 5px; border-radius: 6px; line-height: 0; }
+  button.icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  button.icon:hover { color: var(--text); }
+  #model { margin-left: auto; }
+  .menu.right { left: auto; right: max(20px, calc(50% - 390px)); }
+  .menu h4 { margin: 6px 10px 4px; font-size: 11px; font-weight: 500; color: var(--dim); text-transform: uppercase; letter-spacing: .5px; }
+  .menu label { display: flex; gap: 8px; align-items: flex-start; padding: 6px 10px; font-size: 13px; border-radius: 6px; cursor: pointer; }
+  .menu label:hover { background: var(--bubble); }
+  .menu label small { display: block; color: var(--dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .menu .empty { padding: 8px 10px; color: var(--dim); font-size: 13px; }
+  .session { position: relative; }
+  /* on hover the age gives its place to a delete button */
+  .session .del { position: absolute; right: 8px; top: 6px; display: none; padding: 4px; line-height: 0; border-radius: 6px; }
+  .session:hover .del { display: block; }
+  .session:hover .age { visibility: hidden; }
+  .session .del:hover { color: var(--accent); }
   dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--bg); color: var(--text); width: min(440px, calc(100vw - 32px)); padding: 20px; }
   dialog::backdrop { background: #0006; }
   dialog h2 { margin: 0 0 14px; font-size: 17px; }
@@ -206,7 +223,6 @@
     <button id="back" title="conversations">‹</button>
     <h1 id="title"></h1>
     <button id="stop" hidden>Stop</button>
-    <button id="gear" class="icon" title="Conversation settings" aria-label="Conversation settings" hidden>⚙︎</button>
   </header>
   <form id="start" hidden>
     <h2>New conversation</h2>
@@ -238,11 +254,17 @@
       <button>Send</button>
     </div>
     <div class="status">
-      <button type="button" id="model" class="link" title="Change the model"></button>
+      <div class="tools">
+        <button type="button" id="gear" class="icon" title="Conversation settings" aria-label="Conversation settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg></button>
+        <button type="button" id="newHere" class="icon" title="New conversation" aria-label="New conversation"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+        <button type="button" id="mcp" class="icon" title="MCP servers" aria-label="MCP servers"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4"/></svg></button>
+        <button type="button" id="skills" class="icon" title="Skills" aria-label="Skills"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3 5 14h6l-1 7 8-11h-6z"/></svg></button>
+      </div>
       <span id="context"></span>
       <span id="spend"></span>
+      <button type="button" id="model" class="link" title="Change the model"></button>
     </div>
-    <div id="models" class="menu" hidden></div>
+    <div id="menu" class="menu" hidden></div>
   </form>
 </main>
 
@@ -397,7 +419,11 @@ function renderSessions() {
     if (s.pinned) meta.append("📌")
     if (s.active) meta.append(el("span", "live", "●"))
     meta.append(harnessMark(s.harness), s.adapter)
-    a.append(row, meta)
+    const del = el("button", "icon del")
+    del.title = "Delete conversation"
+    del.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>'
+    del.onclick = (e) => { e.preventDefault(); e.stopPropagation(); remove(s) }
+    a.append(row, meta, del)
     return a
   }))
 }
@@ -497,8 +523,7 @@ async function open(id) {
   $("log").replaceChildren()
   $("compose").hidden = !current
   $("stop").hidden = true
-  $("gear").hidden = !current
-  $("models").hidden = true
+  $("menu").hidden = true
   choices = null; usage = null
   if (!current) return
   markSeen()
@@ -957,12 +982,80 @@ function renderStatus() {
   $("spend").title = usage?.unpriced ? `${usage.unpriced} turns had no price from the harness` : "Spent in this conversation"
 }
 
+// one small menu above the composer, opened by whichever control asked for it
+let menuFor = null
+function showMenu(owner, nodes, right = false) {
+  const menu = $("menu")
+  menu.replaceChildren(...nodes)
+  menu.classList.toggle("right", right)
+  menu.hidden = false
+  menuFor = owner
+}
+const toggleMenu = (owner) => { if (!$("menu").hidden && menuFor === owner) { $("menu").hidden = true; return true } return false }
+addEventListener("click", (e) => { if (!$("menu").hidden && !e.target.closest("#menu, #model, #mcp, #skills")) $("menu").hidden = true })
+
+function switchRow(label, detail, on, flip) {
+  const row = el("label")
+  const box = el("input")
+  box.type = "checkbox"
+  box.checked = on
+  box.onchange = () => flip(box.checked).catch((err) => { box.checked = !box.checked; fail(err) })
+  const text = el("div", "", label)
+  if (detail) text.append(el("small", "", detail))
+  row.append(box, text)
+  return row
+}
+
+// the MCP servers this conversation's harness starts, from its own config
+$("mcp").onclick = async () => {
+  if (toggleMenu("mcp")) return
+  const id = current
+  showMenu("mcp", [el("h4", "", "MCP servers"), el("div", "empty", "Loading…")])
+  try {
+    const { servers } = await call("/mcp", { id })
+    if (id !== current || menuFor !== "mcp") return
+    showMenu("mcp", [el("h4", "", "MCP servers"), ...(servers.length
+      ? servers.map((m) => switchRow(m.name, [m.kind, m.detail].filter(Boolean).join(" · "), m.enabled, (on) => call("/setmcp", { id, name: m.name, enabled: on })))
+      : [el("div", "empty", "No MCP servers configured for this harness.")])])
+  } catch (err) { $("menu").hidden = true; fail(err) }
+}
+
+// the skills this harness loads; where it can, each can be hidden from the model
+$("skills").onclick = async () => {
+  if (toggleMenu("skills")) return
+  const id = current
+  showMenu("skills", [el("h4", "", "Skills"), el("div", "empty", "Loading…")])
+  try {
+    const { skills, toggleable } = await call("/skills", { id })
+    if (id !== current || menuFor !== "skills") return
+    showMenu("skills", [el("h4", "", "Skills"), ...(skills.length
+      ? skills.map((k) => {
+        const row = switchRow(k.name, k.description, !k.disableModelInvocation, (on) => call("/setskill", { id, path: k.path, disabled: !on }))
+        row.querySelector("input").disabled = !toggleable
+        return row
+      })
+      : [el("div", "empty", "No skills found for this harness.")])])
+  } catch (err) { $("menu").hidden = true; fail(err) }
+}
+
+$("newHere").onclick = () => { location.hash = "new" }
+
+async function remove(s) {
+  if (!confirm(`Delete "${s.title || "untitled"}" from the harness? This cannot be undone.`)) return
+  try {
+    await call("/delete", { id: s.id })
+    sessions = sessions.filter((x) => x.id !== s.id)
+    renderSessions()
+    if (s.id === current) location.hash = ""
+    loadSessions().catch(() => {})
+  } catch (err) { fail(err) }
+}
+
 $("model").onclick = () => {
-  const menu = $("models")
-  if (!menu.hidden) return void (menu.hidden = true)
+  if (toggleMenu("model")) return
   if (!choices) return
   const pick = (ref) => async () => {
-    menu.hidden = true
+    $("menu").hidden = true
     try {
       await call("/setmodel", ref ? { id: current, model: ref } : { id: current })
       loadStatus()
@@ -975,16 +1068,14 @@ $("model").onclick = () => {
     b.onclick = pick(ref)
     return b
   }
-  menu.replaceChildren(
+  showMenu("model", [
     item(`Default · ${short(choices.default) || "harness"}`, "", !choices.current, null),
     ...choices.models.map((m) => {
       const ref = `${m.providerID}/${m.modelID}`
       return item(m.modelID, [m.image ? "images" : "", m.contextLimit ? tokens(m.contextLimit) : ""].filter(Boolean).join(" · "), choices.current === ref, ref)
     }),
-  )
-  menu.hidden = false
+  ], true)
 }
-addEventListener("click", (e) => { if (!$("models").hidden && !e.target.closest("#models, #model")) $("models").hidden = true })
 
 $("gear").onclick = async () => {
   const id = current
@@ -1052,15 +1143,9 @@ $("archive").onclick = async () => {
     loadSessions().catch(() => {})
   } catch (err) { fail(err) }
 }
-$("delete").onclick = async () => {
-  if (!confirm("Delete this conversation from the harness? This cannot be undone.")) return
-  try {
-    await call("/delete", { id: current })
-    $("settings").close()
-    sessions = sessions.filter((s) => s.id !== current)
-    location.hash = ""
-    loadSessions().catch(() => {})
-  } catch (err) { fail(err) }
+$("delete").onclick = () => {
+  $("settings").close()
+  remove(sessions.find((s) => s.id === current) ?? { id: current })
 }
 $("unpair").onclick = () => { if (confirm("Unpair this browser? You will need a pairing code again.")) { $("settings").close(); unpair() } }
 $("closeSettings").onclick = () => $("settings").close()
