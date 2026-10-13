@@ -1,6 +1,6 @@
 import { spawn, execFile, type ChildProcess } from "node:child_process"
 import net from "node:net"
-import { mkdir, readFile, readdir, rm, mkdtemp, writeFile } from "node:fs/promises"
+import { mkdir, readFile, readdir, rm, mkdtemp, stat, writeFile } from "node:fs/promises"
 import { existsSync, readFileSync, watch, type FSWatcher } from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -147,6 +147,58 @@ interface TranscriptMeta {
   file: string
 }
 
+// the head of one transcript: its session, folder, title and times
+async function parseMeta(file: string): Promise<TranscriptMeta | null> {
+  let raw: string
+  try {
+    raw = await readFile(file, "utf8")
+  } catch {
+    return null
+  }
+  let meta: TranscriptMeta | null = null
+  let firstUser = ""
+  let title = ""
+  let first = 0
+  let last = 0
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue
+    let d: any
+    try {
+      d = JSON.parse(line)
+    } catch {
+      continue
+    }
+    // a later custom title wins over the generated one
+    if (d.type === "custom-title" && typeof d.customTitle === "string") title = d.customTitle
+    else if (d.type === "ai-title" && typeof d.aiTitle === "string" && !title) title = d.aiTitle
+    const ts = Date.parse(d.timestamp ?? "") || 0
+    if (ts) {
+      if (!first) first = ts
+      last = ts
+    }
+    if (!meta && d.cwd && d.sessionId) {
+      meta = { id: String(d.sessionId), cwd: String(d.cwd), title: "", createdAt: ts || Date.now(), updatedAt: ts || Date.now(), file }
+    }
+    if (!firstUser && d.type === "user" && !d.isSidechain && !d.isMeta && !isLocalCommandWrapper(d.message?.content)) {
+      firstUser = clip(contentText(d.message?.content))
+    }
+  }
+  if (meta) {
+    meta.title = title || firstUser
+    meta.createdAt = first || meta.createdAt
+    meta.updatedAt = last || meta.updatedAt
+  }
+  return meta
+}
+
+// Parsed transcript heads, keyed by file and shared by every claude adapter in
+// the process. Each adapter serves one workspace, but all of them list from
+// the same ~/.claude/projects, so six workspaces used to read and parse the
+// whole store six times per listing. A file is parsed again only when its size
+// or modification time moved: a transcript changes by being appended to.
+// The entry holds the parse while it runs, so adapters listing at once share it.
+const META_CACHE = new Map<string, { size: number; mtimeMs: number; meta: Promise<TranscriptMeta | null> }>()
+
 export class ClaudeAdapter implements HarnessAdapter {
   readonly id = "claude"
   readonly workspace: string
@@ -161,9 +213,6 @@ export class ClaudeAdapter implements HarnessAdapter {
   // conversation continued elsewhere (the desktop) reaches the phone on its own
   #watcher: FSWatcher | null = null
   #changed = new Map<string, ReturnType<typeof setTimeout>>()
-  // parsed transcript heads, keyed by file — re-reading every session on each
-  // listSessions would make /ls crawl once a project has a few hundred
-  #metaCache = new Map<string, { mtime: number; meta: TranscriptMeta | null }>()
   // the ask channel: one unix socket for the whole adapter, opened the first
   // time a turn runs, plus the turns parked on an unanswered question
   #askSocket: string | null = null
@@ -256,52 +305,20 @@ export class ClaudeAdapter implements HarnessAdapter {
   }
 
   async #meta(file: string): Promise<TranscriptMeta | null> {
-    let raw: string
+    let info
     try {
-      raw = await readFile(file, "utf8")
+      info = await stat(file)
     } catch {
+      META_CACHE.delete(file)
       return null // rotated away between listing and reading
     }
-    const cached = this.#metaCache.get(file)
-    if (cached && cached.mtime === raw.length) return cached.meta
-
-    let meta: TranscriptMeta | null = null
-    let firstUser = ""
-    let title = ""
-    let first = 0
-    let last = 0
-    for (const line of raw.split("\n")) {
-      if (!line.trim()) continue
-      let d: any
-      try {
-        d = JSON.parse(line)
-      } catch {
-        continue
-      }
-      // a later custom title wins over the generated one
-      if (d.type === "custom-title" && typeof d.customTitle === "string") title = d.customTitle
-      else if (d.type === "ai-title" && typeof d.aiTitle === "string" && !title) title = d.aiTitle
-      const ts = Date.parse(d.timestamp ?? "") || 0
-      if (ts) {
-        if (!first) first = ts
-        last = ts
-      }
-      if (!meta && d.cwd && d.sessionId) {
-        meta = { id: String(d.sessionId), cwd: String(d.cwd), title: "", createdAt: ts || Date.now(), updatedAt: ts || Date.now(), file }
-      }
-      if (!firstUser && d.type === "user" && !d.isSidechain && !d.isMeta && !isLocalCommandWrapper(d.message?.content)) {
-        firstUser = clip(contentText(d.message?.content))
-      }
-    }
-    if (meta) {
-      meta.title = title || firstUser
-      meta.createdAt = first || meta.createdAt
-      meta.updatedAt = last || meta.updatedAt
-    }
-    // length stands in for mtime: appended-to transcripts always grow
-    this.#metaCache.set(file, { mtime: raw.length, meta })
+    const cached = META_CACHE.get(file)
+    if (cached && cached.size === info.size && cached.mtimeMs === info.mtimeMs) return cached.meta
+    const meta = parseMeta(file)
+    META_CACHE.set(file, { size: info.size, mtimeMs: info.mtimeMs, meta })
     return meta
   }
+
 
   async listSessions(): Promise<SessionSummary[]> {
     const out: SessionSummary[] = []
@@ -350,7 +367,7 @@ export class ClaudeAdapter implements HarnessAdapter {
     try {
       // there is no `claude delete`; the transcript *is* the session
       await rm(file)
-      this.#metaCache.delete(file)
+      META_CACHE.delete(file)
       return true
     } catch (err) {
       console.error(`[claude] delete failed for ${native}: ${(err as Error)?.message ?? err}`)
@@ -686,7 +703,6 @@ export class ClaudeAdapter implements HarnessAdapter {
       // the turn is over, so any card it raised is unanswerable now — say so
       // rather than leaving it standing on whatever client is showing it
       this.#standDownAsks(realID || native, "the turn ended before this was answered")
-      this.#metaCache.clear() // the transcript just grew
     }
 
     return {
@@ -734,7 +750,6 @@ export class ClaudeAdapter implements HarnessAdapter {
     } finally {
       clearTimeout(timer)
       this.#running.delete(native)
-      this.#metaCache.clear()
       // it rewrote the conversation from here: a desktop window must catch up
       detach("phone-turn stamp", markRemoteTurn(this.#turnsDir, native))
     }
@@ -954,7 +969,6 @@ export class ClaudeAdapter implements HarnessAdapter {
           native,
           setTimeout(() => {
             this.#changed.delete(native)
-            this.#metaCache.clear()
             this.#emit({ type: "session.changed", sessionID: toInternalId(native) })
           }, CHANGE_QUIET_MS),
         )
