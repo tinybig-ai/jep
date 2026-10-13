@@ -61,8 +61,22 @@
   #scroll { flex: 1; overflow-y: auto; }
   #log { max-width: 780px; margin: 0 auto; padding: 20px; }
   .older { display: block; margin: 0 auto 16px; }
-  .msg { margin: 0 0 16px; }
+  .msg { margin: 0 0 16px; position: relative; }
   .msg.user { display: flex; justify-content: flex-end; }
+  /* a message's details, under it while hovered; nothing moves */
+  .msg[data-info]:hover::after {
+    content: attr(data-info); position: absolute; top: calc(100% + 1px); left: 0; right: 0;
+    font-size: 11px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none;
+  }
+  .msg.user[data-info]:hover::after { text-align: right; }
+  /* up and down between your own messages: a fixed spot at the row's left, and
+     a jump puts the next message where this one was, so the pointer stays put */
+  .msg .nav { position: absolute; left: 0; top: 0; display: flex; flex-direction: column; gap: 2px; opacity: 0; transition: opacity .12s; }
+  .msg.user:hover .nav { opacity: 1; }
+  .nav button { padding: 0; width: 26px; height: 20px; line-height: 0; border-radius: 6px; color: var(--dim); }
+  .nav button:hover:not(:disabled) { color: var(--text); }
+  .nav button:disabled { opacity: .3; cursor: default; }
+  .nav svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   .msg.user .body { background: var(--user); color: #fff; border-radius: 16px; padding: 8px 14px; max-width: 85%; }
   .msg.user .text a { color: #fff; }
   .msg.user details { color: #fffc; }
@@ -608,9 +622,13 @@ function transcript(all) {
   for (const m of all) {
     if (m.role === "user") {
       flush()
-      out.push(messageNode("user", m.parts))
+      const node = messageNode("user", m.parts)
+      node.prepend(userNav(node))
+      if (m.time) node.dataset.info = when(m.time)
+      out.push(node)
       continue
     }
+    const before = out.length
     for (const p of m.parts) {
       if (isWork(p)) run.push({ p, m })
       else if (p.kind === "tool") {
@@ -621,9 +639,71 @@ function transcript(all) {
         out.push(messageNode("assistant", [p]))
       }
     }
+    // a reply's details ride on the last thing it said
+    if (out.length > before && !run.length) out[out.length - 1].dataset.info = replyInfo(m)
   }
   flush(true)
   return out
+}
+
+// "14:32 · claude-opus-5-5 · 1m 13s · 171k in, 300 out · $0.42", whatever the harness reported
+function replyInfo(m) {
+  const t = m.tokens
+  return [
+    m.time && when(m.time),
+    m.model && short(m.model),
+    m.durationMs >= 1000 && span(m.durationMs),
+    t && `${tokens(t.input + t.cache.read + t.cache.write)} in, ${tokens(t.output + t.reasoning)} out`,
+    typeof m.cost === "number" && m.cost > 0 && "$" + m.cost.toFixed(m.cost < 0.01 ? 4 : 2),
+  ].filter(Boolean).join(" · ")
+}
+
+// today's messages by the clock alone, older ones with their day
+function when(t) {
+  const d = new Date(t)
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+  return d.toDateString() === new Date().toDateString() ? time : d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + time
+}
+
+const ARROW = (d) => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${d}"/></svg>`
+function userNav(node) {
+  const nav = el("div", "nav")
+  for (const [dir, path, label] of [[-1, "M6 15l6-6 6 6", "Previous message of yours"], [1, "M6 9l6 6 6-6", "Next message of yours"]]) {
+    const b = el("button")
+    b.type = "button"; b.title = label; b.setAttribute("aria-label", label)
+    b.innerHTML = ARROW(path)
+    b.onclick = () => jump(node, dir)
+    nav.append(b)
+  }
+  // the ends of the conversation have nowhere to go
+  requestAnimationFrame(() => {
+    const mine = [...document.querySelectorAll("#log .msg.user")]
+    const i = mine.indexOf(node)
+    nav.children[0].disabled = i <= 0 && !hasMore
+    nav.children[1].disabled = i === mine.length - 1
+  })
+  return nav
+}
+
+// Scroll by exactly the distance between the two messages, so the target lands
+// where this one was and its buttons sit under the pointer. At the top with
+// more history to load, load it first and keep going.
+async function jump(node, dir) {
+  let mine = [...document.querySelectorAll("#log .msg.user")]
+  let i = mine.indexOf(node)
+  if (dir < 0 && i === 0 && hasMore) {
+    const scroller = $("scroll")
+    const keep = node.getBoundingClientRect().top
+    await loadOlder()
+    // loadOlder re-renders; find this message again and put it back under the pointer
+    mine = [...document.querySelectorAll("#log .msg.user")]
+    i = mine.findIndex((n) => n.dataset.info === node.dataset.info && n.textContent === node.textContent)
+    if (i >= 0) scroller.scrollTop += mine[i].getBoundingClientRect().top - keep
+    node = mine[i]
+  }
+  const target = mine[i + dir]
+  if (!node || !target) return
+  $("scroll").scrollTop += target.getBoundingClientRect().top - node.getBoundingClientRect().top
 }
 
 const shows = (p) => (p.kind === "text" && p.text.trim()) || p.kind === "quote" || p.kind === "file"
