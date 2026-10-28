@@ -82,6 +82,13 @@ export class CodexAdapter implements HarnessAdapter {
     return this.#alias.get(native) ?? native
   }
 
+  // the id a placeholder became once its first turn named the thread: the
+  // gateway keeps one turn line per conversation by it, whichever id a
+  // client sends
+  canonicalId(sessionID: string): string {
+    return toInternalId(this.#real(sessionID))
+  }
+
   async health(): Promise<{ healthy: boolean; version: string }> {
     try {
       const out = await new Promise<string>((resolve, reject) => {
