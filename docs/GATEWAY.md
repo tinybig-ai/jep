@@ -63,6 +63,7 @@ the page does not load these two files. Version 2 adds these features:
 | `POST /queue/cancel` | `{id,clientID}` | `{ok}`: drop a prompt still waiting (its `/prompt` resolves `{cancelled:true}`); 404 not queued, 409 already running |
 | `POST /queue/edit` | `{id,clientID,text}` | `{ok}`: change a waiting prompt's words |
 | `POST /queue/force` | `{id,clientID}` | `{ok}`: run a waiting prompt now, aborting the running turn |
+| `POST /queue/move` | `{id,clientID,to}` | `{ok,queue}`: put a waiting prompt at index `to` of the line. The waiting prompts run as one turn, their words in this order. Forced prompts stay first: nothing moves ahead of one (409 for a forced prompt). `queue` is the new order, as `/history` reports it |
 | `POST /respond` | `{askID,optionID}` | `{ok}` or 409 already answered. Keyed by the ask alone (no `id` needed) |
 | `POST /reject` | `{askID,id?}` | `{ok}`: stand an ask down without choosing (the person answered in their own words), so the turn can finish |
 | `POST /stop` | `{id}` | `{stopped}` |

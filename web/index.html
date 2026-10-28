@@ -185,6 +185,20 @@
   form.compose { position: relative; }
   .status { max-width: 780px; margin: 6px auto 0; display: flex; align-items: center; gap: 12px; color: var(--dim); font-size: 12px; min-height: 18px; }
   .status:empty { display: none; }
+  .queue { max-width: 780px; margin: 0 auto 8px; border: 1px solid var(--line); border-radius: 10px; padding: 4px; font-size: 13px; }
+  .queue-head { padding: 2px 8px 4px; color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+  .queued { display: flex; align-items: center; gap: 6px; padding: 3px 4px 3px 2px; border-radius: 6px; border-top: 2px solid transparent; border-bottom: 2px solid transparent; }
+  .queued:hover { background: var(--bubble); }
+  .queued[draggable=true] { cursor: grab; }
+  .queued.dragging { opacity: .4; }
+  .queued.drop-above { border-top-color: var(--accent); }
+  .queued.drop-below { border-bottom-color: var(--accent); }
+  .queued .grip { color: var(--dim); line-height: 0; }
+  .queued .grip svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; }
+  .queued-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .queued small { color: var(--dim); font-size: 11px; flex: none; }
+  .queued button.icon { padding: 2px 4px; line-height: 0; border-radius: 6px; }
+  .queued button.icon:disabled { opacity: .3; cursor: default; }
   button.link { border: none; padding: 0; background: none; color: var(--dim); font-size: 12px; text-decoration: underline dotted; text-underline-offset: 3px; }
   button.link:hover { color: var(--text); background: none; }
   .meter { display: inline-block; width: 44px; height: 5px; border-radius: 3px; background: var(--line); vertical-align: middle; margin-right: 6px; overflow: hidden; }
@@ -329,6 +343,7 @@ if (V2) {
   </form>
   <div id="scroll"><div id="log"></div></div>
   <form class="compose" id="compose">
+    <div class="queue" id="queue" hidden></div>
     <div class="modes" id="modes" hidden>
       <label><input type="radio" name="mode" value="steer" checked><span>Steer</span></label>
       <label><input type="radio" name="mode" value="after"><span>After this turn</span></label>
@@ -501,6 +516,7 @@ let live = new Map()      // partID → { messageID, part } streamed since the l
 const roles = new Map()   // messageID → role, as the feed announces them
 const sending = new Map() // session → prompts of ours still in flight
 let pendingText = []      // sends the record does not show yet
+let queue = []            // the daemon's prompts waiting behind the running turn, in order
 
 // ── the session list ──────────────────────────────────────────────────────
 const announced = new Set()   // late workspaces already reported this visit
@@ -677,10 +693,13 @@ $("start").onsubmit = async (e) => {
 
 // ── one conversation ──────────────────────────────────────────────────────
 async function open(id) {
+  saveDraft()
   current = id === "new" ? null : id
   $("start").hidden = id !== "new"
   $("scroll").hidden = id === "new"
-  messages = []; asks = []; etag = null; hasMore = false; loadingOlder = false; live = new Map(); pendingText = []
+  messages = []; asks = []; etag = null; hasMore = false; loadingOlder = false; live = new Map(); pendingText = []; queue = []
+  $("input").value = (current && remembered(draftKey(current))) || ""
+  grow()
   document.body.classList.toggle("chatting", !!id)
   renderSessions()
   $("title").textContent = sessions.find((s) => s.id === id)?.title || ""
@@ -706,9 +725,13 @@ async function readHistory() {
   messages = [...messages.filter((m) => m.time < first), ...data.messages]
   if (!messages.some((m) => m.time < first)) hasMore = data.hasMore
   asks = data.asks.filter((a) => a.state === "pending")
+  queue = data.queue ?? []
   etag = data.etag
   const said = new Set(messages.filter((m) => m.role === "user").map(textOf))
-  pendingText = pendingText.filter((p) => !said.has(p.text))
+  // prompts that waited together run as one turn, their words joined by blank
+  // lines: a send is in the record once it is one of those pieces, said since
+  const joined = messages.filter((m) => m.role === "user" && m.time).map((m) => ({ time: m.time, pieces: new Set(textOf(m).split("\n\n").map((t) => t.trim())) }))
+  pendingText = pendingText.filter((p) => !said.has(p.text) && !joined.some((m) => m.time >= (p.sentAt || Infinity) - 5000 && m.pieces.has(p.text.trim())))
   const seen = new Set(messages.flatMap((m) => [m.id, ...m.parts.map((p) => p.id)]))
   for (const [pid, l] of live) if (seen.has(pid) || seen.has(l.messageID)) live.delete(pid)
   render()
@@ -767,7 +790,7 @@ function render(follow = true) {
   }
   const all = [
     ...messages,
-    ...pendingText.map((p) => ({ role: "user", parts: [{ kind: "text", text: p.text }], undelivered: p.failed, retry: p.retry })),
+    ...pendingText.filter((p) => !queue.some((q) => q.clientID && q.clientID === p.clientID)).map((p) => ({ role: "user", parts: [{ kind: "text", text: p.text }], undelivered: p.failed, retry: p.retry })),
     ...(live.size ? [{ role: "assistant", parts: [...live.values()].map((l) => l.part), live: true }] : []),
   ]
   nodes.push(...transcript(all))
@@ -776,6 +799,7 @@ function render(follow = true) {
   $("log").replaceChildren(...nodes)
   $("stop").hidden = !busy()
   $("modes").hidden = !busy()
+  renderQueue()
   renderStatus()
   if (follow && atBottom) scroller.scrollTop = scroller.scrollHeight
 }
@@ -970,7 +994,17 @@ function sendPending(id, pending, how, throwOnFailure = false) {
     pending.retry = () => send(true)
     sending.set(id, (sending.get(id) || 0) + 1)
     render()
-    return call("/prompt", { id, text: pending.text, clientID: uuid(), ...how })
+    pending.clientID = uuid()
+    pending.sentAt = Date.now()
+    // the queue shows it once the daemon has it in line
+    if (how.steer === false) setTimeout(() => { if (id === current) readHistory().catch(() => {}) }, 300)
+    return call("/prompt", { id, text: pending.text, clientID: pending.clientID, ...how })
+      .then(() => {
+        // answered: the record holds it now, maybe joined with others queued
+        // beside it into one turn, where its own words never match a message
+        pendingText = pendingText.filter((p) => p !== pending)
+        if (id === current) etag = null
+      })
       .catch((err) => {
         if (id === current) {
           pending.failed = true
@@ -1117,6 +1151,7 @@ $("compose").onsubmit = (e) => {
   if (!text || !current) return
   $("input").value = ""
   grow()
+  saveDraft()
   const id = current
   const into = busy()
   // words typed while an ask waits are the answer: stand the ask down so the turn can go on
@@ -1141,7 +1176,103 @@ $("input").onkeydown = (e) => {
   }
 }
 const grow = () => { const t = $("input"); t.style.height = "auto"; t.style.height = t.scrollHeight + "px" }
-$("input").oninput = grow
+$("input").oninput = () => { grow(); saveDraft() }
+
+// what was typed and not sent stays with its conversation, across reloads
+const draftKey = (id) => "jep.draft." + id
+function saveDraft() {
+  if (!current) return
+  const text = $("input").value
+  try { text.trim() ? localStorage.setItem(draftKey(current), text) : localStorage.removeItem(draftKey(current)) } catch {}
+}
+
+// ── the queue ─────────────────────────────────────────────────────────────
+// Prompts sent "after this turn" wait in the daemon's line, and the next turn
+// runs them together, their words in line order. The line shows over the
+// composer: drag a row, or use its arrows, to change the order; × takes one
+// out. A row from a client that gave no handle (Telegram) cannot be moved.
+let queueShown = ""
+let dragging = null
+
+function renderQueue() {
+  const key = JSON.stringify(queue)
+  if (key === queueShown || dragging) return
+  queueShown = key
+  const box = $("queue")
+  box.hidden = !queue.length
+  if (!queue.length) return box.replaceChildren()
+  const head = el("div", "queue-head", `Queued · ${queue.length}`)
+  box.replaceChildren(head, ...queue.map((q, i) => {
+    const row = el("div", "queued")
+    const handle = !!q.clientID
+    row.draggable = handle && queue.length > 1
+    const grip = el("span", "grip")
+    grip.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01"/></svg>'
+    const text = el("span", "queued-text", q.text.replace(/\s+/g, " "))
+    text.title = q.text
+    row.append(grip, text, el("small", "", q.steer ? "next step" : "after turn"))
+    const button = (label, path, disabled, act) => {
+      const b = el("button", "icon")
+      b.type = "button"; b.title = label; b.setAttribute("aria-label", label); b.disabled = disabled
+      b.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${path}"/></svg>`
+      b.onclick = act
+      return b
+    }
+    row.append(
+      button("Move up", "M6 15l6-6 6 6", !handle || i === 0, () => moveQueued(q.clientID, i - 1)),
+      button("Move down", "M6 9l6 6 6-6", !handle || i === queue.length - 1, () => moveQueued(q.clientID, i + 1)),
+      button("Remove from the queue", "M6 6l12 12M18 6 6 18", !handle, () => cancelQueued(q.clientID)),
+    )
+    row.ondragstart = (e) => { dragging = q.clientID; row.classList.add("dragging"); e.dataTransfer.effectAllowed = "move" }
+    row.ondragend = () => { dragging = null; row.classList.remove("dragging"); queueShown = ""; renderQueue() }
+    row.ondragover = (e) => {
+      if (!dragging) return
+      e.preventDefault()
+      const below = e.offsetY > row.offsetHeight / 2
+      for (const r of box.querySelectorAll(".queued")) r.classList.remove("drop-above", "drop-below")
+      row.classList.add(below ? "drop-below" : "drop-above")
+    }
+    row.ondrop = (e) => {
+      e.preventDefault()
+      const from = queue.findIndex((x) => x.clientID === dragging)
+      let to = i + (row.classList.contains("drop-below") ? 1 : 0)
+      if (from < to) to--
+      const id = dragging
+      dragging = null
+      if (from >= 0 && to !== from) moveQueued(id, to)
+      else { queueShown = ""; renderQueue() }
+    }
+    return row
+  }))
+}
+
+async function moveQueued(clientID, to) {
+  const id = current
+  const from = queue.findIndex((q) => q.clientID === clientID)
+  if (from < 0) return
+  // move it on screen at once; the daemon's answer is the order that counts
+  const next = [...queue]
+  next.splice(to, 0, ...next.splice(from, 1))
+  queue = next
+  renderQueue()
+  try {
+    const res = await call("/queue/move", { id, clientID, to })
+    if (id === current && res.queue) { queue = res.queue; renderQueue() }
+  } catch (err) {
+    fail(err)
+    if (id === current) { etag = null; readHistory().catch(() => {}) }
+  }
+}
+
+async function cancelQueued(clientID) {
+  const id = current
+  queue = queue.filter((q) => q.clientID !== clientID)
+  pendingText = pendingText.filter((p) => p.clientID !== clientID)
+  render()
+  try { await call("/queue/cancel", { id, clientID }) } catch (err) { fail(err) }
+  if (id === current) { etag = null; readHistory().catch(() => {}) }
+}
+
 
 $("stop").onclick = () => call("/stop", { id: current }).catch((err) => fail(err, () => call("/stop", { id: current })))
 $("back").onclick = () => { location.hash = "" }

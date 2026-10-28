@@ -225,6 +225,20 @@ button.send svg { width: 18px; height: 18px; fill: none; stroke: currentColor; s
 .menu button { border-radius: 8px; padding: 8px 10px; }
 .menu button:hover, .menu label:hover { background: var(--hover); }
 
+/* the queue: prompts waiting for the next turn, in the order they will run */
+.queue { max-width: 760px; background: var(--card); border-radius: 16px; padding: 6px; box-shadow: var(--shadow); animation: v2-pop .18s var(--ease); }
+.queue-head { padding: 2px 10px 4px; font-weight: 600; }
+.queued { padding: 4px 4px 4px 4px; border-radius: 10px; gap: 8px; transition: background .12s, opacity .12s; }
+.queued:hover { background: var(--hover); }
+.queued .grip { opacity: .6; }
+.queued:hover .grip { opacity: 1; }
+.queued small { padding: 1px 7px; border-radius: 999px; background: var(--bubble); }
+.queued button.icon { width: 26px; height: 24px; display: grid; place-items: center; padding: 0; }
+@media (max-width: 700px) {
+  .queued .grip { display: none; }
+  .queued button.icon { width: 32px; height: 30px; } /* a finger needs room */
+}
+
 /* back to the newest, when scrolled up; it glows when something new came */
 button.to-bottom {
   position: absolute; bottom: calc(100% + 8px); left: 50%; translate: -50% 0; z-index: 4;

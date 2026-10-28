@@ -2047,7 +2047,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       // act on a queued prompt the client still holds a handle to (a clientID):
       // cancel it, change its words, or force it to run now. Once it is running
       // it is too late, and the client is told so.
-      if (path === "/queue/cancel" || path === "/queue/edit" || path === "/queue/force") {
+      if (path === "/queue/cancel" || path === "/queue/edit" || path === "/queue/force" || path === "/queue/move") {
         const clientID = str("clientID")
         if (!clientID) return json(res, 400, { error: "clientID required" })
         const st = turns.get(id)
@@ -2065,6 +2065,19 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           if (!more.trim()) return json(res, 400, { error: "text required" })
           entry.text = more
           return json(res, 200, { ok: true })
+        }
+        // move: put it at another place in the line. The waiting prompts run
+        // as one turn, their words in this order. A forced prompt runs first
+        // and alone, so nothing moves ahead of one, and one does not move.
+        if (path === "/queue/move") {
+          const to = b.to
+          if (typeof to !== "number" || !Number.isInteger(to)) return json(res, 400, { error: "to required" })
+          if (entry.force) return json(res, 409, { error: "runs next" })
+          st.waiting.splice(idx, 1)
+          const first = st.waiting.findIndex((p) => !p.force)
+          const lo = first < 0 ? st.waiting.length : first
+          st.waiting.splice(Math.min(st.waiting.length, Math.max(lo, to)), 0, entry)
+          return json(res, 200, { ok: true, queue: st.waiting.map((p) => ({ clientID: p.clientID ?? null, text: p.text, steer: p.steer })) })
         }
         // force: run it next, ending the running turn cleanly so it
         // gets the answer from the transcript, then abort so the

@@ -119,23 +119,13 @@
   empty.append(logo, el("h2", "", "jep"), el("p", "", "Pick a conversation, or start a new one."), start, keys)
   scroller.before(empty)
 
-  // ── drafts: what was typed stays with its conversation ──────────────────
-  const draftKey = (id) => "jep.draft." + id
-  function saveDraft() {
-    if (!current) return
-    const text = $("input").value
-    try { text.trim() ? localStorage.setItem(draftKey(current), text) : localStorage.removeItem(draftKey(current)) } catch {}
-  }
-
+  // ── opening a conversation ──────────────────────────────────────────────
   const baseOpen = open
   open = function (id) {
-    saveDraft()
     // the page's open sets current and clears the log before its first wait
     const opening = baseOpen(id)
     empty.hidden = !!current || id === "new"
     if (!current && id !== "new") scroller.hidden = true
-    $("input").value = (current && remembered(draftKey(current))) || ""
-    grow()
     updateSend()
     header.classList.remove("scrolled")
     down.hidden = true
@@ -160,13 +150,12 @@
   send.innerHTML = svg("M12 19V5M5 12l7-7 7 7")
   const updateSend = () => send.classList.toggle("empty", !$("input").value.trim())
   $("input").placeholder = "Message"
-  $("input").addEventListener("input", () => { updateSend(); saveDraft() })
+  $("input").addEventListener("input", updateSend)
   $("stop").title = "Stop the running turn (Esc)"
 
   const baseSubmit = $("compose").onsubmit
   $("compose").onsubmit = (e) => {
     baseSubmit(e)
-    saveDraft()
     updateSend()
   }
 
@@ -291,10 +280,6 @@
   const id = decodeURIComponent(location.hash.slice(1)) || null
   empty.hidden = !!id
   if (!id) scroller.hidden = true
-  if (current) {
-    $("input").value = remembered(draftKey(current)) || ""
-    grow()
-    render(false)
-  }
+  if (current) render(false)
   updateSend()
 })()

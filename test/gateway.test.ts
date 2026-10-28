@@ -309,6 +309,37 @@ test("a queued prompt can be forced to run now", async () => {
   }
 })
 
+test("a queued prompt can move to another place in the line", async () => {
+  const a = stallable()
+  const { base, headers, g } = await startWith(a)
+  try {
+    const post = (text: string, clientID?: string) =>
+      fetch(`${base}/prompt`, { method: "POST", headers, body: JSON.stringify({ id: "s1", text, steer: false, ...(clientID ? { clientID } : {}) }) })
+    const first = post("first")
+    await sleep(50)
+    const second = post("second", "c2")
+    await sleep(20)
+    const third = post("third", "c3")
+    await sleep(50)
+    const move = (body: Record<string, unknown>) => fetch(`${base}/queue/move`, { method: "POST", headers, body: JSON.stringify({ id: "s1", ...body }) })
+    const moved = await move({ clientID: "c3", to: 0 })
+    assert.equal(moved.status, 200)
+    const j = (await moved.json()) as { queue: { clientID: string }[] }
+    assert.deepEqual(j.queue.map((q) => q.clientID), ["c3", "c2"])
+    const history = (await (await fetch(`${base}/history`, { method: "POST", headers, body: JSON.stringify({ id: "s1" }) })).json()) as { queue: { clientID: string }[] }
+    assert.deepEqual(history.queue.map((q) => q.clientID), ["c3", "c2"], "the history reports the new order")
+    assert.equal((await move({ clientID: "c3" })).status, 400, "a move needs a place")
+    assert.equal((await move({ clientID: "nope", to: 0 })).status, 404)
+    a.release("first")
+    await Promise.all([first, second, third])
+    // the waiting prompts ran as one turn, their words in the new order
+    const merged = a.calls[1] ?? ""
+    assert.ok(merged.indexOf("third") < merged.indexOf("second"), merged)
+  } finally {
+    await g.close()
+  }
+})
+
 // ── turn liveness ────────────────────────────────────────────────────────────
 // Every gateway turn runs with no absolute deadline, so these are the only
 // things that end a turn whose harness went quiet. Without them a stalled turn
