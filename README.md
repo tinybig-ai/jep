@@ -6,9 +6,9 @@
 
 **One interface for every coding agent. On whatever device you're on.**
 
-jep is a remote control for **opencode**, **codex** and **claude**, reachable
+jep is a remote control for **opencode**, **codex** and **claude**, **pi** and more. Reachable
 from **Telegram**, the **Android app**, or any client behind the
-[gateway](docs/GATEWAY.md). Your code stays on your machine.
+[gateway](docs/GATEWAY.md). 
 
 [![](https://img.shields.io/badge/version-0.2.0-3d6aa8)](package.json)
 [![](https://img.shields.io/badge/Node-%E2%89%A526-339933)](package.json)
