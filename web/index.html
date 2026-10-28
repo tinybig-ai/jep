@@ -189,6 +189,8 @@
   .queue-head { padding: 2px 8px 4px; color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
   .queued { display: flex; align-items: center; gap: 6px; padding: 3px 4px 3px 2px; border-radius: 6px; border-top: 2px solid transparent; border-bottom: 2px solid transparent; }
   .queued:hover { background: var(--bubble); }
+  .msg.queued-msg .body { opacity: .55; }
+  .msg.queued-msg .body::after { content: "Queued"; display: block; font-size: 11px; opacity: .85; margin-top: 2px; }
   .queued[draggable=true] { cursor: grab; }
   .queued.dragging { opacity: .4; }
   .queued.drop-above { border-top-color: var(--accent); }
@@ -726,12 +728,19 @@ async function readHistory() {
   if (!messages.some((m) => m.time < first)) hasMore = data.hasMore
   asks = data.asks.filter((a) => a.state === "pending")
   queue = data.queue ?? []
+  for (const p of pendingText) {
+    if (!p.expectQueue) continue
+    if (queue.some((q) => q.clientID === p.clientID)) p.seenInQueue = true
+    else if (p.seenInQueue || Date.now() - (p.sentAt || 0) > 2000) p.expectQueue = false
+  }
   etag = data.etag
-  const said = new Set(messages.filter((m) => m.role === "user").map(textOf))
   // prompts that waited together run as one turn, their words joined by blank
   // lines: a send is in the record once it is one of those pieces, said since
   const joined = messages.filter((m) => m.role === "user" && m.time).map((m) => ({ time: m.time, pieces: new Set(textOf(m).split("\n\n").map((t) => t.trim())) }))
-  pendingText = pendingText.filter((p) => !said.has(p.text) && !joined.some((m) => m.time >= (p.sentAt || Infinity) - 5000 && m.pieces.has(p.text.trim())))
+  // (an earlier message with the same words is not this one: "go on" twice)
+  const now = Date.now()
+  pendingText = pendingText.filter((p) => !(p.sentAt && joined.some((m) => m.time >= p.sentAt - 5000 && (m.pieces.has(p.text.trim()) || [...m.pieces].join("\n\n") === p.text.trim())))
+    && !(p.answeredAt && now - p.answeredAt > 15_000))
   const seen = new Set(messages.flatMap((m) => [m.id, ...m.parts.map((p) => p.id)]))
   for (const [pid, l] of live) if (seen.has(pid) || seen.has(l.messageID)) live.delete(pid)
   render()
@@ -788,10 +797,20 @@ function render(follow = true) {
     b.onclick = loadOlder
     nodes.push(b)
   }
+  // queued as soon as it is sent into a running turn, before the daemon's
+  // line confirms it; it leaves once it has left that line
+  const inQueue = (p) => queue.some((q) => q.clientID && q.clientID === p.clientID) || !!p.expectQueue
   const all = [
     ...messages,
-    ...pendingText.filter((p) => !queue.some((q) => q.clientID && q.clientID === p.clientID)).map((p) => ({ role: "user", parts: [{ kind: "text", text: p.text }], undelivered: p.failed, retry: p.retry })),
+    ...pendingText.filter((p) => !inQueue(p)).map((p) => ({ role: "user", parts: [{ kind: "text", text: p.text }], undelivered: p.failed, retry: p.retry })),
     ...(live.size ? [{ role: "assistant", parts: [...live.values()].map((l) => l.part), live: true }] : []),
+    // what waits for the next turn comes after the reply running now
+    ...pendingText.filter(inQueue).map((p) => {
+      const queued = queue.find((q) => q.clientID && q.clientID === p.clientID) ?? { clientID: p.clientID, steer: p.steer }
+      return { role: "user", parts: [{ kind: "text", text: p.text }], queued }
+    }),
+    // waiting in the daemon's line from another device: shown the same way
+    ...queue.filter((q) => !pendingText.some((p) => p.clientID && p.clientID === q.clientID)).map((q) => ({ role: "user", parts: [{ kind: "text", text: q.text }], queued: q })),
   ]
   nodes.push(...transcript(all))
   for (const a of asks) nodes.push(askNode(a))
@@ -823,9 +842,10 @@ function transcript(all) {
   for (const m of all) {
     if (m.role === "user") {
       flush()
-      const node = messageNode("user", m.parts, m.retry || (() => retryMessage(m)))
+      const node = messageNode("user", m.parts, m.queued ? null : m.retry || (() => retryMessage(m)))
       node.prepend(userNav(node))
       if (m.time) node.dataset.info = when(m.time)
+      if (m.queued) queuedMark(node, m.queued)
       out.push(node)
       continue
     }
@@ -997,12 +1017,18 @@ function sendPending(id, pending, how, throwOnFailure = false) {
     pending.clientID = uuid()
     pending.sentAt = Date.now()
     // the queue shows it once the daemon has it in line
-    if (how.steer === false) setTimeout(() => { if (id === current) readHistory().catch(() => {}) }, 300)
+    if (pending.expectQueue) setTimeout(() => { if (id === current) readHistory().catch(() => {}) }, 300)
     return call("/prompt", { id, text: pending.text, clientID: pending.clientID, ...how })
-      .then(() => {
-        // answered: the record holds it now, maybe joined with others queued
-        // beside it into one turn, where its own words never match a message
-        pendingText = pendingText.filter((p) => p !== pending)
+      .then((r) => {
+        // Answered is not yet in the record: the harness writes the message a
+        // little after, and dropping the bubble here left a gap where it was
+        // nowhere. It stays until the record shows it; a stopped-for-good one
+        // goes now, and anything else after 15s at most.
+        if (r?.cancelled) pendingText = pendingText.filter((p) => p !== pending)
+        else {
+          pending.answeredAt = Date.now()
+          setTimeout(() => { if (id === current) { etag = null; readHistory().catch(() => {}) } }, 15_500)
+        }
         if (id === current) etag = null
       })
       .catch((err) => {
@@ -1158,14 +1184,16 @@ $("compose").onsubmit = (e) => {
   for (const a of asks) call("/reject", { id, askID: a.id }).catch(() => {})
   asks = []
   const pending = { text, id: uuid(), failed: false, retry: null }
-  pendingText.push(pending)
-  render()
-  $("scroll").scrollTop = $("scroll").scrollHeight
-  // the answer comes back when the whole turn ends; the feed shows it sooner
   // into a running turn: steer it in at the next tool step (the default), wait
   // for the turn to end, or stop the turn and run this now
   const mode = into ? $("compose").querySelector("input[name=mode]:checked").value : "steer"
   const how = { steer: {}, after: { steer: false }, now: { force: true } }[mode]
+  pending.expectQueue = into && mode !== "now"
+  pending.steer = mode === "steer"
+  pendingText.push(pending)
+  render()
+  $("scroll").scrollTop = $("scroll").scrollHeight
+  // the answer comes back when the whole turn ends; the feed shows it sooner
   sendPending(id, pending, how)
 }
 
@@ -1187,6 +1215,17 @@ function saveDraft() {
 }
 
 // ── the queue ─────────────────────────────────────────────────────────────
+// A message waiting for its turn stays where it was said, dimmed, and says so
+function queuedMark(node, q) {
+  node.classList.add("queued-msg")
+  node.dataset.info = q.steer ? "goes in at the next step" : "runs after this turn"
+  if (!q.clientID) return
+  const b = el("button", "retry-send", "Cancel")
+  b.type = "button"
+  b.onclick = () => { b.disabled = true; cancelQueued(q.clientID) }
+  node.querySelector(".body").append(b)
+}
+
 // Prompts sent "after this turn" wait in the daemon's line, and the next turn
 // runs them together, their words in line order. The line shows over the
 // composer: drag a row, or use its arrows, to change the order; × takes one
@@ -1199,8 +1238,8 @@ function renderQueue() {
   if (key === queueShown || dragging) return
   queueShown = key
   const box = $("queue")
-  box.hidden = !queue.length
-  if (!queue.length) return box.replaceChildren()
+  box.hidden = queue.length < 2
+  if (queue.length < 2) return box.replaceChildren()
   const head = el("div", "queue-head", `Queued · ${queue.length}`)
   box.replaceChildren(head, ...queue.map((q, i) => {
     const row = el("div", "queued")

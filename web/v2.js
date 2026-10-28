@@ -261,14 +261,17 @@
     const spinner = el("span", "spinner")
     spinner.setAttribute("role", "status")
     spinner.setAttribute("aria-label", "Working")
-    const last = log.lastElementChild
+    // the newest thing said, not a message still waiting for the next turn
+    let last = log.lastElementChild
+    while (last?.matches(".queued-msg")) last = last.previousElementSibling
     const host = !last?.matches(".msg.assistant") ? null
       : last.querySelector(":scope > details > summary, :scope > div.tool .toolhead")
         ?? (last.querySelector(":scope > .body > .text.plain") || lastLine(last.querySelector(":scope > .body > .text") ?? last))
     if (host) return void host.append(spinner)
     const row = el("div", "msg assistant spinning")
     row.append(spinner)
-    log.append(row)
+    if (last) last.after(row)
+    else log.prepend(row)
   }
 
   // Each redraw makes new nodes, and a new node starts its animation from the
