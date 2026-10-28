@@ -823,7 +823,17 @@ function render(follow = true) {
   nodes.push(...transcript(all))
   for (const a of asks) nodes.push(askNode(a))
   if (busy() && !asks.length) nodes.push(el("div", "spin", "working"))
+  // A box that scrolls on its own (a turn's work, a tool's output) is a new
+  // box after every redraw, and a new box starts at the top: whoever was
+  // reading deep inside one was thrown back to its beginning every few
+  // seconds. Each is named; the new one takes the old one's place.
+  const scrolled = new Map()
+  for (const n of $("log").querySelectorAll("[data-keep]")) if (n.scrollTop || n.scrollLeft) scrolled.set(n.dataset.keep, [n.scrollTop, n.scrollLeft])
   $("log").replaceChildren(...nodes)
+  for (const n of $("log").querySelectorAll("[data-keep]")) {
+    const at = scrolled.get(n.dataset.keep)
+    if (at) [n.scrollTop, n.scrollLeft] = at
+  }
   $("stop").hidden = !busy()
   $("modes").hidden = !busy()
   renderQueue()
@@ -951,13 +961,20 @@ function workFold(run, active) {
   const d = keep(el("details", "work" + (failed ? " failed" : "") + (active ? " active" : "")), "work:" + (parts[0].id || ""))
   d.append(el("summary", "", workTitle(parts, span, active)))
   const body = el("div", "workbody")
+  body.dataset.keep = "wb:" + (parts[0].id || "")
   for (const p of parts) body.append(workItem(p))
   d.append(body)
   return d
 }
 
 function workItem(p) {
-  if (p.kind === "reasoning") return keep(fold(p.durationMs >= 1000 ? `Thought for ${span(p.durationMs)}` : "Thought", p.text), "r:" + (p.id || p.text.slice(0, 40)))
+  if (p.kind === "reasoning") {
+    const key = "r:" + (p.id || p.text.slice(0, 40))
+    const d = keep(fold(p.durationMs >= 1000 ? `Thought for ${span(p.durationMs)}` : "Thought", p.text), key)
+    const pre = d.querySelector("pre")
+    if (pre) pre.dataset.keep = key
+    return d
+  }
   return toolNode(p)
 }
 
@@ -1095,6 +1112,7 @@ function toolNode(p) {
   head.classList.toggle("failed", p.status === "error")
 
   const body = diff ? diffNode(diff, langOf(file)) : outputNode(p, name, arg("command"))
+  if (body) body.dataset.keep = "t:" + p.id
   if (!body) {
     const line = el("div", "tool")
     line.append(head)

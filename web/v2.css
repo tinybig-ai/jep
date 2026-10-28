@@ -213,9 +213,10 @@ button.send svg { width: 18px; height: 18px; fill: none; stroke: currentColor; s
 }
 #stop:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
 .modes { max-width: 760px; gap: 4px; margin-bottom: 8px; animation: v2-fade .2s var(--ease); }
-.modes span { border: none; background: var(--bubble); padding: 3px 11px; font-size: 12.5px; transition: background .15s, color .15s; }
-.modes span:hover { color: var(--text); }
-.modes input:checked + span { background: var(--text); color: var(--bg); }
+/* outlined, as in v1: a filled pill shone white in dark mode */
+.modes span { border: 1px solid var(--line); background: none; padding: 2px 11px; font-size: 12.5px; transition: border-color .15s, color .15s; }
+.modes span:hover { color: var(--text); border-color: var(--dim); }
+.modes input:checked + span { border-color: var(--text); color: var(--text); }
 .status { max-width: 760px; margin-top: 8px; padding: 0 6px; gap: 14px; }
 .tools button.icon { width: 28px; height: 26px; display: grid; place-items: center; }
 .meter { width: 40px; height: 4px; }
