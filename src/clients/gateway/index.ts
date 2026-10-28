@@ -745,7 +745,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           // every event on a session pushes that session's watchdog deadline
           // out: a turn producing anything at all has not stalled
           const sid = eventSession(evt)
-          const live = sid ? turns.get(sid) : undefined
+          const live = sid ? turnOf(sid) : undefined
           if (live) live.lastActivity = Date.now()
           // what the running turn itself produced, as opposed to the end markers
           // a turn that was just cancelled still has in flight
@@ -816,7 +816,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           // boundary — end the turn cleanly (so the running prompt gets the
           // answer from the transcript) and the runner starts the waiting prompt
           if (evt.type === "part.updated" && evt.part?.kind === "other" && evt.part.nativeType === "step-finish") {
-            const st = turns.get(evt.sessionID)
+            const st = turnOf(evt.sessionID)
             // only a prompt that asked to steer interrupts the running turn; one
             // that asked to wait for the end is left alone
             if (st?.running && st.waiting.some((p) => p.steer)) {
@@ -931,7 +931,22 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   }
   const newTurnState = (): TurnState => ({ running: null, waiting: [], lastActivity: Date.now(), runningTools: new Map() })
   const turns = new Map<string, TurnState>()
-  const isActive = (id: string): boolean => turns.get(id)?.running != null
+  // One conversation, one line. Claude names a new conversation with a
+  // placeholder and learns its real id mid-turn; clients move to the real id
+  // then, and its events carry the real id from then on. Keyed by the raw id,
+  // a turn started under the placeholder and a prompt sent under the real id
+  // were two lines: two harness processes writing one record at once, a
+  // watchdog and a steer that never saw the first, and a stop that reached
+  // only one of them.
+  const turnKey = (id: string): string => {
+    if (turns.has(id)) return id
+    const canon = (x: string): string => sessionAdapters.get(x)?.canonicalId?.(x) ?? x
+    const want = canon(id)
+    for (const key of turns.keys()) if (key === want || canon(key) === want) return key
+    return id
+  }
+  const turnOf = (id: string): TurnState | undefined => turns.get(turnKey(id))
+  const isActive = (id: string): boolean => turnOf(id)?.running != null
 
   // End the running turn for a reason that is not a client stop. The abort is
   // what unblocks prompt(); `ending` is what tells the runner why, so the phone
@@ -1054,7 +1069,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         filePaths: next.filePaths,
         ...(next.model ? { model: next.model } : {}),
         ...(next.agent ? { agent: next.agent } : {}),
-        harnessSettings: settingsOf(adapter, id) ?? {},
+        harnessSettings: settingsOf(adapter, adapter.canonicalId?.(id) ?? id) ?? {},
         ...(next.quote ? { quote: next.quote } : {}),
         signal: ac.signal,
       })
@@ -1080,8 +1095,17 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       // it. Settings left under the placeholder were lost from then on: the
       // second turn ran without "skip permissions" and stopped at every tool.
       const real = adapter.canonicalId?.(id)
-      if (real && real !== id) settingsOf(adapter, real)
-      detach(`turn queue ${id}`, settle(st).then(() => runNext(id)))
+      let key = id
+      if (real && real !== id) {
+        settingsOf(adapter, real)
+        // the line moves with them, so it is found by the id clients use now
+        if (turns.get(id) === st && !turns.has(real)) {
+          turns.delete(id)
+          turns.set(real, st)
+          key = real
+        }
+      }
+      detach(`turn queue ${key}`, settle(st).then(() => runNext(key)))
     }
   }
 
@@ -1627,7 +1651,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         // clock starts running on it once more
         closeAsk(askID)
         if (ok) settleAsk(askID, "answered", optionID)
-        const live = turns.get(sid)
+        const live = turnOf(sid)
         if (live) live.lastActivity = Date.now()
         console.error(`[ask] respond askID=${askID} option=${optionID} -> ${ok ? "ok" : "failed"}`)
         return json(res, ok ? 200 : 409, ok ? { ok: true } : { error: "ask already answered" })
@@ -1647,7 +1671,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const ok = await owner.rejectAsk(sid, askID).catch(() => false)
         closeAsk(askID)
         if (ok) settleAsk(askID, "closed")
-        const live = turns.get(sid)
+        const live = turnOf(sid)
         if (live) live.lastActivity = Date.now()
         console.error(`[ask] reject askID=${askID} -> ${ok ? "ok" : "failed"}`)
         return json(res, ok ? 200 : 409, ok ? { ok: true } : { error: "ask already answered" })
@@ -1980,7 +2004,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         // the daemon's own account of the turn and what waits behind it, so a
         // client never has to guess from its own requests (it may have been
         // restarted, or the prompt may have come from another device)
-        const st = turns.get(id)
+        const st = turnOf(id)
         const busy = st != null && (st.running != null || st.settling === true || st.waiting.length > 0)
         const queue = (st?.waiting ?? []).map((p) => ({ clientID: p.clientID ?? null, text: p.text, steer: p.steer }))
         const tag = createHash("sha1").update(JSON.stringify({ messages, hasMore, asks, busy, queue })).digest("hex").slice(0, 20)
@@ -2015,8 +2039,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           quote: str("quote") ?? undefined,
           resolve: settle,
         }
-        const st = turns.get(id) ?? newTurnState()
-        turns.set(id, st)
+        const key = turnKey(id)
+        const st = turns.get(key) ?? newTurnState()
+        turns.set(key, st)
         if (b.force === true) {
           // force: run this next, and if a turn is in flight, end it cleanly
           // (so the running prompt gets the answer from the transcript) then
@@ -2030,7 +2055,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           // queue normally: the pump steers it in at the next tool boundary
           st.waiting.push(pending)
         }
-        detach(`turn queue ${id}`, runNext(id))
+        detach(`turn queue ${key}`, runNext(key))
         const result = await done
         if (result.message) return json(res, 200, { message: result.message })
         if (result.aborted) return json(res, 200, { aborted: true })
@@ -2040,8 +2065,14 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
 
       if (path === "/stop") {
         console.error(`[stop] origin=client (gateway session ${id}, device ${token.slice(0, 6)}, from ${req.socket.remoteAddress ?? "?"})`)
+        // all: the prompts waiting behind the turn stop too, instead of the
+        // next one starting the moment this one ends. Their words come back,
+        // so the client can hand them to its composer.
+        const st = turnOf(id)
+        const dropped = b.all === true && st ? st.waiting.splice(0) : []
+        for (const p of dropped) p.resolve({ status: 200, cancelled: true })
         const stopped = await adapter.abort(id).catch(() => false)
-        return json(res, 200, { stopped })
+        return json(res, 200, { stopped, dropped: dropped.map((p) => p.text) })
       }
 
       // act on a queued prompt the client still holds a handle to (a clientID):
@@ -2050,7 +2081,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       if (path === "/queue/cancel" || path === "/queue/edit" || path === "/queue/force" || path === "/queue/move") {
         const clientID = str("clientID")
         if (!clientID) return json(res, 400, { error: "clientID required" })
-        const st = turns.get(id)
+        const st = turnOf(id)
         if (st?.running?.clientID === clientID || st?.running?.clientIDs?.includes(clientID)) return json(res, 409, { error: "already running" })
         const idx = st ? st.waiting.findIndex((p) => p.clientID === clientID) : -1
         if (!st || idx < 0) return json(res, 404, { error: "not queued" })

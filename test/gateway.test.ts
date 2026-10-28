@@ -309,6 +309,61 @@ test("a queued prompt can be forced to run now", async () => {
   }
 })
 
+test("a placeholder id and the real id it became share one line", { timeout: 5000 }, async () => {
+  // Claude names a new conversation "pending-…" until its first turn reports
+  // the real id. A turn running under one name and a prompt sent under the
+  // other used to be two lines: two harness processes on one record.
+  const a = stallable()
+  const canonicalId = (id: string) => (id === "pending-1" ? "s1" : id)
+  const adapter = { ...a.adapter, canonicalId, getSession: (id: string) => a.adapter.getSession(canonicalId(id)) }
+  const { base, headers, g } = await startWith({ ...a, adapter })
+  try {
+    const post = (id: string, text: string, extra: Record<string, unknown> = {}) =>
+      fetch(`${base}/prompt`, { method: "POST", headers, body: JSON.stringify({ id, text, ...extra }) })
+    // the placeholder is known to the gateway the way a fresh session is: by asking for it
+    await fetch(`${base}/history`, { method: "POST", headers, body: JSON.stringify({ id: "pending-1" }) })
+    const first = post("pending-1", "first")
+    await sleep(50)
+    const second = post("s1", "second", { steer: false, clientID: "c2" })
+    await sleep(50)
+    assert.deepEqual(a.calls, ["first"], "the prompt under the real id waits behind the running turn")
+    const history = (await (await fetch(`${base}/history`, { method: "POST", headers, body: JSON.stringify({ id: "s1" }) })).json()) as { busy: boolean; queue: unknown[] }
+    assert.equal(history.busy, true, "the real id sees the turn the placeholder started")
+    assert.equal(history.queue.length, 1)
+    a.release("first")
+    await first
+    const j2 = (await (await second).json()) as { message?: Message }
+    assert.equal(textOf(j2), "echo: second")
+    assert.deepEqual(a.calls, ["first", "second"])
+  } finally {
+    await g.close()
+  }
+})
+
+test("stop with all drops what waits, and hands its words back", async () => {
+  const a = stallable()
+  const { base, headers, g } = await startWith(a)
+  try {
+    const post = (text: string, extra: Record<string, unknown> = {}) =>
+      fetch(`${base}/prompt`, { method: "POST", headers, body: JSON.stringify({ id: "s1", text, ...extra }) })
+    const first = post("first")
+    await sleep(50)
+    const second = post("second", { steer: false })
+    await sleep(50)
+    const stop = await fetch(`${base}/stop`, { method: "POST", headers, body: JSON.stringify({ id: "s1", all: true }) })
+    const j = (await stop.json()) as { dropped: string[] }
+    assert.deepEqual(j.dropped, ["second"])
+    const j2 = (await (await second).json()) as { cancelled?: boolean }
+    assert.equal(j2.cancelled, true)
+    a.release("first")
+    await first
+    await sleep(50)
+    assert.deepEqual(a.calls, ["first"], "nothing started after the stop")
+  } finally {
+    await g.close()
+  }
+})
+
 test("a queued prompt can move to another place in the line", async () => {
   const a = stallable()
   const { base, headers, g } = await startWith(a)

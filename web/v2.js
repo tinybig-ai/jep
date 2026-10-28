@@ -242,6 +242,7 @@
     if (follow && !wasAtBottom && length > lastLength && !atBottom()) { down.hidden = false; down.classList.add("news") }
     lastLength = length
     renderHeading()
+    updateSend()
   }
 
   // Each redraw makes new nodes, and a new node starts its animation from the

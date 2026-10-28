@@ -1274,7 +1274,24 @@ async function cancelQueued(clientID) {
 }
 
 
-$("stop").onclick = () => call("/stop", { id: current }).catch((err) => fail(err, () => call("/stop", { id: current })))
+// Stop ends the turn and everything waiting behind it; otherwise the next
+// waiting message starts the moment this one ends, and Stop looks like it did
+// nothing. What was waiting comes back into the composer, so no words are lost.
+function stopAll() {
+  const id = current
+  return call("/stop", { id, all: true }).then(({ dropped = [] }) => {
+    const ours = new Set(dropped)
+    pendingText = pendingText.filter((p) => !ours.has(p.text))
+    queue = []
+    if (id !== current || !dropped.length) return render()
+    const typed = $("input").value.trim()
+    $("input").value = [...dropped, ...(typed ? [typed] : [])].join("\n\n")
+    grow()
+    saveDraft()
+    render()
+  })
+}
+$("stop").onclick = () => stopAll().catch((err) => fail(err, stopAll))
 $("back").onclick = () => { location.hash = "" }
 
 // ── the live feed ─────────────────────────────────────────────────────────

@@ -206,7 +206,21 @@ export class ClaudeAdapter implements HarnessAdapter {
 
   #alias = new Map<string, string>()
   #pendingTitles = new Map<string, { title: string; createdAt: number }>()
-  #running = new Map<string, ChildProcess>()
+  // Every process running for a session, not only the latest. One running
+  // for a session is the rule; when two ever ran at once, the second took the
+  // first one's slot here, and a stop could no longer reach the first: it went
+  // on writing the record while the client showed the turn as stopped.
+  #running = new Map<string, Set<ChildProcess>>()
+  #track(key: string, child: ChildProcess): void {
+    const set = this.#running.get(key) ?? new Set()
+    set.add(child)
+    this.#running.set(key, set)
+  }
+  #untrack(key: string, child: ChildProcess): void {
+    const set = this.#running.get(key)
+    set?.delete(child)
+    if (set && !set.size) this.#running.delete(key)
+  }
   #bus = new Set<(evt: DomainEvent) => void>()
   #closed = false
   // the transcripts directory, watched once something is listening, so a
@@ -525,7 +539,7 @@ export class ClaudeAdapter implements HarnessAdapter {
       const content = [{ type: "text", text: quoteBlock(quote) }, { type: "text", text: body }]
       child.stdin?.end(`${JSON.stringify({ type: "user", message: { role: "user", content } })}\n`)
     }
-    this.#running.set(native, child)
+    this.#track(native, child)
     if (!pending) detach("phone-turn stamp", markRemoteTurn(this.#turnsDir, native))
 
     let realID = pending ? "" : native
@@ -572,7 +586,7 @@ export class ClaudeAdapter implements HarnessAdapter {
               realID = String(d.session_id)
               if (pending) {
                 this.#alias.set(native, realID)
-                this.#running.set(realID, child)
+                this.#track(realID, child)
               }
             }
             const sid = toInternalId(realID || native)
@@ -699,8 +713,8 @@ export class ClaudeAdapter implements HarnessAdapter {
     } finally {
       if (timer) clearTimeout(timer)
       opts?.signal?.removeEventListener("abort", onAbort)
-      this.#running.delete(native)
-      if (realID) this.#running.delete(realID)
+      this.#untrack(native, child)
+      if (realID) this.#untrack(realID, child)
       // stamped again at the end: the desktop window must count everything
       // this turn wrote, not only that it began
       if (realID || !pending) detach("phone-turn stamp", markRemoteTurn(this.#turnsDir, realID || native))
@@ -735,7 +749,7 @@ export class ClaudeAdapter implements HarnessAdapter {
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
     })
-    this.#running.set(native, child)
+    this.#track(native, child)
     let out = ""
     child.stdout?.on("data", (c: Buffer) => (out += c.toString()))
     const timer = setTimeout(() => child.kill("SIGTERM"), COMPACT_TIMEOUT_MS)
@@ -753,16 +767,16 @@ export class ClaudeAdapter implements HarnessAdapter {
       }
     } finally {
       clearTimeout(timer)
-      this.#running.delete(native)
+      this.#untrack(native, child)
       // it rewrote the conversation from here: a desktop window must catch up
       detach("phone-turn stamp", markRemoteTurn(this.#turnsDir, native))
     }
   }
 
   async abort(sessionID: string): Promise<boolean> {
-    const child = this.#running.get(this.#real(sessionID))
-    if (!child) return false
-    child.kill("SIGTERM")
+    const children = this.#running.get(this.#real(sessionID))
+    if (!children?.size) return false
+    for (const child of children) child.kill("SIGTERM")
     return true
   }
 
@@ -1131,7 +1145,7 @@ export class ClaudeAdapter implements HarnessAdapter {
     this.#watcher = null
     for (const t of this.#changed.values()) clearTimeout(t)
     this.#changed.clear()
-    for (const child of this.#running.values()) child.kill("SIGTERM")
+    for (const set of this.#running.values()) for (const child of set) child.kill("SIGTERM")
     this.#running.clear()
     // an unanswered ask outlives nothing: the socket goes, and every parked
     // turn is told no rather than left waiting on a server that has stopped
