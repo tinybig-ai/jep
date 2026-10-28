@@ -115,7 +115,7 @@
   start.type = "button"
   start.onclick = () => { location.hash = "new" }
   const keys = el("div", "keys")
-  keys.innerHTML = `<span><kbd>${MAC ? "⌘" : "Ctrl"}</kbd> <kbd>K</kbd> search</span><span><kbd>${MAC ? "⌥" : "Alt"}</kbd> <kbd>↑</kbd> <kbd>↓</kbd> switch</span><span><kbd>Esc</kbd> stop a turn</span>`
+  keys.innerHTML = `<span><kbd>${MAC ? "⌘" : "Ctrl"}</kbd> <kbd>K</kbd> search</span><span><kbd>${MAC ? "⌥" : "Alt"}</kbd> <kbd>↑</kbd> <kbd>↓</kbd> switch</span><span><kbd>${MAC ? "⌘" : "Ctrl"}</kbd> <kbd>/</kbd> all shortcuts</span>`
   empty.append(logo, el("h2", "", "jep"), el("p", "", "Pick a conversation, or start a new one."), start, keys)
   scroller.before(empty)
 
@@ -194,6 +194,7 @@
       document.execCommand("copy")
       t.remove()
     }
+    if (!button) return
     button.classList.add("done")
     const label = button.querySelector("span")
     button.querySelector("svg").outerHTML = CHECK
@@ -283,27 +284,97 @@
   }
 
   // ── keys ────────────────────────────────────────────────────────────────
+  // One table: the handler, the sheet (⌘/) and the buttons' tooltips all read
+  // it. ⌘⇧ plus a letter, as ChatGPT's web app taught people, and as browsers
+  // leave to the page; Ctrl in place of ⌘ off a Mac. Option only with arrows
+  // and Enter, where it types nothing: Option with a letter types characters
+  // some layouts need (@ is Option+Q on a Turkish Mac).
+  const CMD = MAC ? "⌘" : "Ctrl", SHIFT = MAC ? "⇧" : "Shift", ALT = MAC ? "⌥" : "Alt"
+  const mine = (e) => (MAC ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey) && !e.altKey
+  const typing = () => document.activeElement?.matches("input, textarea, select, [contenteditable]")
+  const toast = (text) => {
+    const n = el("div", "v2-toast", text)
+    document.body.append(n)
+    setTimeout(() => n.remove(), 1400)
+  }
+  const lastReply = () => [...$("log").querySelectorAll(".msg.assistant > .body > .text")].pop()
+  // send with a mode for this one message, then put the chosen one back
+  const sendAs = (mode) => {
+    if (!busy()) return $("compose").requestSubmit()
+    const was = $("compose").querySelector("input[name=mode]:checked")
+    $("compose").querySelector(`input[name=mode][value=${mode}]`).checked = true
+    $("compose").requestSubmit()
+    if (was) was.checked = true
+  }
+  const KEYS = [
+    { keys: [CMD, "K"], label: "Search conversations", match: (e) => mine(e) && !e.shiftKey && e.code === "KeyK",
+      run: () => { if (matchMedia("(max-width: 700px)").matches && current) location.hash = ""; find.focus(); find.select() } },
+    { keys: [CMD, SHIFT, "O"], label: "New conversation", button: () => document.querySelector(".plus"), match: (e) => mine(e) && e.shiftKey && e.code === "KeyO",
+      run: () => { location.hash = "new" } },
+    { keys: [ALT, "↑"], label: "Previous conversation", match: (e) => e.altKey && !e.metaKey && !e.ctrlKey && e.key === "ArrowUp", run: () => step(-1) },
+    { keys: [ALT, "↓"], label: "Next conversation", match: (e) => e.altKey && !e.metaKey && !e.ctrlKey && e.key === "ArrowDown", run: () => step(1) },
+    { keys: [SHIFT, "Esc"], label: "Focus the message box", match: (e) => e.shiftKey && e.key === "Escape", run: () => $("input").focus() },
+    { keys: ["Enter"], label: "Send (into a running turn: the mode picked)" },
+    { keys: [ALT, "Enter"], label: "Send after this turn", match: (e) => e.altKey && !e.metaKey && !e.ctrlKey && e.key === "Enter" && e.target === $("input"), run: () => sendAs("after") },
+    { keys: [CMD, SHIFT, "Enter"], label: "Send now, stopping the running turn", match: (e) => mine(e) && e.shiftKey && e.key === "Enter" && e.target === $("input"), run: () => sendAs("now") },
+    { keys: ["Esc"], label: "Stop the running turn (message box empty)", button: () => $("stop") },
+    { keys: [CMD, SHIFT, "U"], label: "Attach files", button: () => $("attachInput") && $("newHere"), match: (e) => mine(e) && e.shiftKey && e.code === "KeyU",
+      run: () => { if (current && $("attachInput")) $("attachInput").click() } },
+    { keys: [CMD, SHIFT, "E"], label: "Change the model", button: () => $("model"), match: (e) => mine(e) && e.shiftKey && e.code === "KeyE",
+      run: () => { if (current && !$("model").hidden) $("model").click() } },
+    { keys: [CMD, SHIFT, ","], label: "Conversation settings", button: () => $("gear"), match: (e) => mine(e) && e.shiftKey && e.code === "Comma",
+      run: () => { if (current) $("gear").click() } },
+    { keys: [CMD, SHIFT, "C"], label: "Copy the last reply", match: (e) => mine(e) && e.shiftKey && e.code === "KeyC",
+      run: () => { const t = lastReply(); if (t) copy(sources.get(t) ?? t.innerText, null).then(() => toast("Reply copied")) } },
+    { keys: [CMD, SHIFT, ";"], label: "Copy the last code block", match: (e) => mine(e) && e.shiftKey && e.code === "Semicolon",
+      run: () => { const c = [...$("log").querySelectorAll(".text pre")].pop(); if (c) copy(c.textContent, null).then(() => toast("Code copied")) } },
+    { keys: [CMD, "/"], label: "Keyboard shortcuts", match: (e) => (mine(e) && e.code === "Slash") || (e.key === "?" && !typing()), run: () => sheet() },
+  ]
+
+  function step(dir) {
+    const rows = visibleRows()
+    const i = rows.findIndex((r) => r.classList.contains("open"))
+    const next = rows[i < 0 ? 0 : Math.max(0, Math.min(rows.length - 1, i + dir))]
+    if (next && next.getAttribute("href") !== location.hash) location.hash = next.getAttribute("href")
+  }
+
+  // the shortcuts, on ⌘/ or ?
+  const help = el("dialog", "keys-sheet")
+  help.append(el("h2", "", "Keyboard shortcuts"), ...KEYS.map((k) => {
+    const row = el("div", "key-row")
+    const combo = el("span", "combo")
+    combo.innerHTML = k.keys.map((x) => `<kbd>${x}</kbd>`).join("")
+    row.append(el("span", "", k.label), combo)
+    return row
+  }))
+  help.addEventListener("click", (e) => { if (e.target === help) help.close() })
+  document.body.append(help)
+  const sheet = () => (help.open ? help.close() : help.showModal())
+
+  // every button with a shortcut says so in its tooltip
+  for (const k of KEYS) {
+    const b = k.button?.()
+    if (b) b.title = `${(b.title || k.label).replace(/ \(.*\)$/, "")} (${k.keys.join(MAC ? "" : "+")})`
+  }
+
+  // capture: ahead of the message box's own Enter, which would send first
   addEventListener("keydown", (e) => {
-    const mod = MAC ? e.metaKey : e.ctrlKey
-    if (mod && !e.shiftKey && (e.key || "").toLowerCase() === "k") {
+    if (e.isComposing) return
+    const k = KEYS.find((x) => x.match?.(e))
+    if (k && !(help.open && k.run !== sheet)) {
       e.preventDefault()
-      if (matchMedia("(max-width: 700px)").matches && current) location.hash = ""
-      find.focus()
-      find.select()
-    } else if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
-      e.preventDefault()
-      const rows = visibleRows()
-      const i = rows.findIndex((r) => r.classList.contains("open"))
-      const next = rows[i < 0 ? 0 : Math.max(0, Math.min(rows.length - 1, i + (e.key === "ArrowUp" ? -1 : 1)))]
-      if (next && next.getAttribute("href") !== location.hash) location.hash = next.getAttribute("href")
-    } else if (e.key === "Escape" && !e.defaultPrevented && !document.querySelector("dialog[open]")) {
+      e.stopPropagation()
+      k.run()
+      return
+    }
+    if (e.key === "Escape" && !e.shiftKey && !e.defaultPrevented && !document.querySelector("dialog[open]")) {
       if (!$("menu").hidden) { $("menu").hidden = true; return }
       if (document.activeElement === find || $("input").value.trim()) return
       // a running turn stops on Esc, as in the terminal harnesses, but never
       // while there are words in the composer that Esc might mean to dismiss
       if (current && busy() && !$("stop").hidden) $("stop").click()
     }
-  })
+  }, true)
 
   // the page drew before this file loaded; draw again in the new look
   renderSessions()

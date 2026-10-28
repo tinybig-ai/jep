@@ -254,6 +254,18 @@ button.to-bottom svg { width: 18px; height: 18px; fill: none; stroke: currentCol
 button.to-bottom.news { color: #fff; background: var(--accent); border-color: transparent; }
 button.to-bottom.news::after { content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 2px solid var(--accent); animation: v2-breathe 1.6s ease-in-out infinite; }
 
+/* the keyboard shortcuts sheet, and the note a shortcut leaves */
+dialog.keys-sheet { width: min(460px, calc(100vw - 32px)); }
+.keys-sheet .key-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.keys-sheet .key-row:first-of-type { border-top: none; }
+.keys-sheet .combo { display: flex; gap: 4px; flex: none; }
+.keys-sheet kbd { font: 500 12px -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; padding: 1px 7px; min-width: 24px; text-align: center; color: var(--text); }
+dialog:focus-visible { outline: none; } /* opened, it takes focus; the ring framed the whole sheet */
+.v2-toast {
+  position: fixed; left: 50%; bottom: 96px; translate: -50% 0; z-index: 20; padding: 7px 14px; border-radius: 999px;
+  background: var(--text); color: var(--bg); font-size: 13px; box-shadow: var(--shadow-lg); animation: v2-pop .16s var(--ease);
+}
+
 /* ── starting, pairing, settings ──────────────────────────────────────── */
 #start, #pair { background: var(--card); border: 1px solid var(--line); border-radius: 20px; box-shadow: var(--shadow-lg); padding: 28px; animation: v2-pop .25s var(--ease); }
 #start h2, #pair h2 { font-size: 20px; letter-spacing: -.3px; }
