@@ -152,13 +152,16 @@ details.work.active > summary::before { border-color: var(--dim); }
 details pre { font: 12px/1.5 var(--mono); border-radius: 10px; padding: 10px 12px; border: 1px solid var(--line); }
 .toolhead .subject { font-family: var(--mono); }
 
-/* a turn running: a pill with a breathing dot */
-#log > .spin {
-  display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px 5px 10px; border-radius: 999px;
-  background: var(--bubble); color: var(--dim); font-size: 13px;
+/* a turn running: a small spinner at the end of the last line */
+@keyframes v2-spin { to { transform: rotate(360deg); } }
+.spinner {
+  display: inline-block; width: .85em; height: .85em; margin-left: .25em; vertical-align: -.1em;
+  border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%;
+  animation: v2-spin .8s linear infinite;
 }
-#log > .spin::after { display: none; }
-#log > .spin::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: v2-breathe 1.6s ease-in-out infinite; }
+.msg.spinning { margin-top: -6px; }
+.msg.spinning .spinner { margin-left: 0; }
+summary .spinner { width: .8em; height: .8em; }
 
 .ask {
   background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px;

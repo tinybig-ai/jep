@@ -230,8 +230,8 @@
       if (text) body.append(copyButton(() => sources.get(text) ?? text.innerText))
     }
     const spin = log.querySelector(":scope > .spin")
-    if (spin) spin.textContent = "Working"
-    if (current && !log.querySelector(".msg, .ask, .spin")) log.append(el("div", "hello", "Say something to start."))
+    if (spin) placeSpinner(log, spin)
+    if (current && !log.querySelector(".msg, .ask, .spinner")) log.append(el("div", "hello", "Say something to start."))
     sync(log)
     // at the bottom stays at the bottom, even through a redraw that does not
     // follow (code colors arriving make the page taller)
@@ -245,12 +245,38 @@
     updateSend()
   }
 
+  // A turn running: a small spinner where the words end, not a row of its own.
+  // It sits at the end of the last line said, or on the title of the work
+  // running; after a code block, a table, or your own message, on a line by
+  // itself on the reply's side.
+  const INLINE = new Set(["P", "LI", "H1", "H2", "H3", "H4", "H5", "H6"])
+  const DESCEND = new Set(["UL", "OL", "BLOCKQUOTE", "LI"])
+  function lastLine(text) {
+    let n = text.lastElementChild
+    while (n && DESCEND.has(n.tagName) && n.lastElementChild && !(n.tagName === "LI" && !n.lastElementChild.matches("p, ul, ol"))) n = n.lastElementChild
+    return n && INLINE.has(n.tagName) ? n : null
+  }
+  function placeSpinner(log, spin) {
+    spin.remove()
+    const spinner = el("span", "spinner")
+    spinner.setAttribute("role", "status")
+    spinner.setAttribute("aria-label", "Working")
+    const last = log.lastElementChild
+    const host = !last?.matches(".msg.assistant") ? null
+      : last.querySelector(":scope > details > summary, :scope > div.tool .toolhead")
+        ?? (last.querySelector(":scope > .body > .text.plain") || lastLine(last.querySelector(":scope > .body > .text") ?? last))
+    if (host) return void host.append(spinner)
+    const row = el("div", "msg assistant spinning")
+    row.append(spinner)
+    log.append(row)
+  }
+
   // Each redraw makes new nodes, and a new node starts its animation from the
   // beginning; start every loop at the same point of one clock instead, so the
   // dots and the shimmer run on smoothly through a streaming reply.
   function sync(root) {
     const delay = `-${Math.round(performance.now() % 1600)}ms`
-    for (const n of root.querySelectorAll(".spin, details.work.active > summary, .session .live, .skeleton i, #sub .state")) n.style.animationDelay = delay
+    for (const n of root.querySelectorAll(".spinner, details.work.active > summary, .session .live, .skeleton i, #sub .state")) n.style.animationDelay = delay
   }
 
   // ── keys ────────────────────────────────────────────────────────────────
