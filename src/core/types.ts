@@ -255,7 +255,9 @@ export type DomainEvent =
   // The turn ended because somebody stopped it. A harness reports that as an
   // error, but it is not a failure, and every client was reading the error's
   // prose to tell the two apart. It is its own fact instead.
-  | { type: "turn.aborted"; sessionID: string }
+  /** `reason: "handover"` = jep ended the turn so a waiting prompt could run;
+   *  not a stop, and a client should keep the conversation shown as working */
+  | { type: "turn.aborted"; sessionID: string; reason?: "handover" }
   | { type: "other"; eventType: string; sessionID?: string; raw: unknown }
 
 // Raised by an adapter whose turn was stopped on request. The name is the

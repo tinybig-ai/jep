@@ -271,6 +271,10 @@ export class ClaudeAdapter implements HarnessAdapter {
     }
   }
 
+  canonicalId(sessionID: string): string {
+    return toInternalId(this.#real(sessionID))
+  }
+
   settings(): HarnessSettingSpec[] {
     return CLAUDE_SETTINGS
   }

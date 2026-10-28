@@ -18,6 +18,10 @@ export interface LivenessConfig {
   /** after the harness says the session is idle, how long the blocking prompt
    *  call gets to return before the turn is finalized from what streamed */
   idleGraceMs: number
+  /** after a turn ends, how long the next queued prompt waits for the harness
+   *  to report the session idle. An abort's own session.idle (and its log
+   *  lines) otherwise land on the turn that starts right after it */
+  settleMs: number
   /** how often a watchdog looks */
   tickMs: number
 }
@@ -28,8 +32,12 @@ const fromEnv = (name: string, fallback: number): number => Number(process.env[n
 export const LIVENESS: LivenessConfig = {
   turnIdleMs: fromEnv("JEP_TURN_IDLE_MS", 5 * 60_000),
   toolIdleMs: fromEnv("JEP_TOOL_IDLE_MS", 20 * 60_000),
-  wildernessMs: fromEnv("JEP_TOOL_WILDERNESS_MS", 6 * 60_000),
+  // 6 minutes cut off real builds and test suites that print nothing while
+  // they work (four turns on 2026-10-12 alone). opencode's bash caps a command
+  // at 10 minutes, as far as we know, so a tool past 11 is wedged
+  wildernessMs: fromEnv("JEP_TOOL_WILDERNESS_MS", 11 * 60_000),
   idleGraceMs: 5_000,
+  settleMs: 3_000,
   tickMs: 15_000,
 }
 

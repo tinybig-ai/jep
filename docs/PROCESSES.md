@@ -28,6 +28,7 @@ src/
     transcribe.ts         // SPEECH → TEXT: decode (ffmpeg | afconvert) then
                           // whisper; serialized, one model load at a time
     usage.ts              // PURE: tokens + harness-reported cost per session
+    recycle.ts            // PURE: when a grown harness server is restarted
     mcpconfig.ts          // PURE: MCP servers per harness: opencode JSON,
                           // codex TOML (section-line editor), claude .claude.json
     skills.ts             // PURE: SKILL.md discovery (bounded walk) + the
@@ -106,6 +107,9 @@ fixture/
 | `JEP_SEARCH_DEPTH` | transcripts `/find` will read, newest first (default: 40) |
 | `JEP_PENDING_MAX_AGE` | seconds a queued-but-unsent message stays worth sending after a restart (default: 3600) |
 | `JEP_TOOL_IDLE_MS` | watchdog ceiling while a tool part is `running` (known-live quiet work, default: 1200000) |
+| `JEP_OPENCODE_RECYCLE_MB` | restart the daemon gracefully when `opencode serve` grows past this many MB, once all is quiet; `0` turns it off (default: 500). Rule: `core/recycle.ts` |
+| `JEP_OPENCODE_RECYCLE_AGE_H` | a server younger than this is never recycled (default: 6) |
+| `JEP_OPENCODE_RECYCLE_QUIET_MIN` | minutes with no turn in any client before a recycle (default: 20) |
 
 ## 5. Commands
 

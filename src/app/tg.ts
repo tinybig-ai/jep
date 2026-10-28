@@ -5,7 +5,8 @@ import { mkdtempSync } from "node:fs"
 import { tmpdir, homedir } from "node:os"
 import { buildHarnesses, DEFAULT_HARNESS } from "./harnesses.ts"
 import { opencodeSessionImport } from "../importers/opencode.ts"
-import { reapOrphanedServers } from "../harnesses/opencode.ts"
+import { reapOrphanedServers, sharedServerLoad } from "../harnesses/opencode.ts"
+import { RECYCLE, pickRecycle, quietEnough } from "../core/recycle.ts"
 import { tmuxTerminal } from "../terminals/tmux.ts"
 import { assertAdapterImplements } from "../core/compliance.ts"
 import type { HarnessAdapter, HarnessSettingSpec } from "../core/ports.ts"
@@ -363,6 +364,7 @@ async function main() {
   // itself appends to, so lazily-started servers get cleaned up too.
   let stopping = false
   let gwClose: (() => Promise<void>) | null = null
+  let gwActivity: (() => number) | null = null
   const shutdown = async (sig: string) => {
     if (stopping) return
     stopping = true
@@ -515,6 +517,7 @@ async function main() {
     console.error(`gateway: POST /pair {"code":…} on http://<tailscale-or-lan-ip>:${process.env.JEP_GW_PORT}`)
     gwPairingAdmin = gw.pairingAdmin
     gwClose = () => gw.close()
+    gwActivity = () => gw.lastActivity()
   }
 
   // Pairing state is a per-client concern, but reading it back should not be:
@@ -532,6 +535,24 @@ async function main() {
   pairing.onChange = writePairingStatus
   if (gwPairingAdmin) gwPairingAdmin.onChange = writePairingStatus
   writePairingStatus()
+
+  // Recycle a harness server that grew too big, once everything is quiet. The
+  // rule is core/recycle.ts; this only feeds it and takes the graceful exit
+  // (launchd brings the daemon back with a fresh server).
+  let botQuietSince = Date.now()
+  if (!mockMode && RECYCLE.maxMB > 0) {
+    setInterval(() => {
+      if (!bot.idle) botQuietSince = Date.now()
+    }, 15_000).unref()
+    setInterval(() => detach("recycle check", (async () => {
+      const quietSince = () => (bot.idle ? Math.max(botQuietSince, gwActivity?.() ?? 0) : Date.now())
+      if (stopping || !quietEnough(quietSince(), Date.now(), RECYCLE)) return
+      const big = pickRecycle(await sharedServerLoad(), quietSince(), Date.now(), RECYCLE)
+      if (!big) return
+      console.error(`[recycle] opencode serve ${big.pid} at ${big.rssMB} MB after ${Math.round(big.ageMs / 3_600_000)}h, all quiet — restarting for a fresh one`)
+      await shutdown("recycle")
+    })()), RECYCLE.tickMs).unref()
+  }
 
   // One-shot at boot, and boot is exactly when the network is least likely to
   // be up: the machine has often just woken, which is what kills the long poll

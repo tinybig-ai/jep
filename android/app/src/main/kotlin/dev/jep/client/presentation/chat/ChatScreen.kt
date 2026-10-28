@@ -41,6 +41,10 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.runtime.produceState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -190,6 +194,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.SpanStyle
 import dev.jep.client.presentation.theme.JepMono
 import dev.jep.client.presentation.theme.LocalSyntaxColors
+import dev.jep.client.presentation.theme.LocalUserBubbleColors
 import dev.jep.client.presentation.theme.Radius
 import dev.jep.client.presentation.theme.Spacing
 import dev.jep.client.presentation.theme.SyntaxColors
@@ -2243,6 +2248,7 @@ private fun UserBubble(message: ChatMessage, onRetry: () -> Unit = {}) {
     // queued, the send simply failed — so it is drawn as a problem rather than a
     // clock: the bubble takes the error tone, says so, and sends again on a tap.
     val pending = message.undelivered
+    val user = LocalUserBubbleColors.current
     Box(Modifier.fillMaxWidth()) {
         Surface(
             Modifier
@@ -2250,13 +2256,13 @@ private fun UserBubble(message: ChatMessage, onRetry: () -> Unit = {}) {
                 .widthIn(max = 320.dp)
                 .testTag("user-bubble")
                 .then(if (pending) Modifier.clickable(onClick = onRetry) else Modifier),
-            color = if (pending) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.primaryContainer,
+            color = if (pending) MaterialTheme.colorScheme.errorContainer else user.bubble,
             shape = RoundedCornerShape(Radius.bubble),
         ) {
             Column(Modifier.padding(horizontal = 14.dp, vertical = 9.dp)) {
                 // a file must show in the person's own bubble too, or an image
                 // sent from another client (Telegram) is invisible here
-                val ink = if (pending) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onPrimaryContainer
+                val ink = if (pending) MaterialTheme.colorScheme.onErrorContainer else user.ink
                 message.parts.forEach { part ->
                     when (part) {
                         is ChatPart.Quote -> QuoteBlock(part.text, ink, Modifier.padding(bottom = 6.dp))
@@ -2265,11 +2271,11 @@ private fun UserBubble(message: ChatMessage, onRetry: () -> Unit = {}) {
                             ImageThumb(part)
                         } else {
                             Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Filled.AttachFile, null, Modifier.size(16.dp), tint = if (pending) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onPrimaryContainer)
+                                Icon(Icons.Filled.AttachFile, null, Modifier.size(16.dp), tint = ink)
                                 Text(
                                     part.name ?: part.path.substringAfterLast('/'),
                                     Modifier.padding(start = 6.dp),
-                                    color = if (pending) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onPrimaryContainer,
+                                    color = ink,
                                     fontSize = 13.sp,
                                     maxLines = 1,
                                 )
@@ -2669,8 +2675,13 @@ private fun PartView(part: ChatPart, streaming: Boolean, onOpenLink: (String) ->
 
 @Composable
 private fun TextPart(part: ChatPart.Text, streaming: Boolean) {
+    // Retained, like the reader's: the plain-string Markdown reparses on every
+    // streamed delta and draws nothing while it does, so a growing reply
+    // collapsed and redrew itself at each increment. Retaining keeps the last
+    // parse on screen until the next one is ready.
+    val rendered = rememberMarkdownState(withLocalLinks(part.text + if (streaming) " ▍" else ""), retainState = true)
     Markdown(
-        withLocalLinks(part.text + if (streaming) " ▍" else ""),
+        rendered,
         // A link has to look like one before anyone taps it. 0.43 has no
         // colour slot for links anywhere — markdownColor covers text, code,
         // tables and dividers — so the style comes from the typography's
@@ -2695,7 +2706,7 @@ private fun UserText(text: String, ink: Color) {
     val mono = body.copy(fontFamily = JepMono)
     val bold = body.copy(fontWeight = FontWeight.SemiBold)
     Markdown(
-        withLocalLinks(text),
+        rememberMarkdownState(withLocalLinks(text), retainState = true),
         // not the library's default, which fills the space it is given: a
         // bubble for "hey" was as wide as one for a paragraph. Plain lines now
         // take their own width; code, lists and tables still fill the bubble
@@ -2794,6 +2805,59 @@ private fun clampPan(offset: Offset, scale: Float, size: IntSize): Offset {
     val maxY = size.height * (scale - 1f) / 2f
     return Offset(offset.x.coerceIn(-maxX, maxX), offset.y.coerceIn(-maxY, maxY))
 }
+
+// A file in the composer, before it is sent: a picture opens in the image
+// viewer, anything else as text. The phone reads its own copy (the picker's
+// uri), so nothing goes to the daemon to look at it.
+@Composable
+private fun AttachmentPreview(a: ChatViewModel.Attachment, onClose: () -> Unit) {
+    val uri = a.localUri
+    val image = a.mimeType?.lowercase()?.startsWith("image/") == true ||
+        a.name.substringAfterLast('.', "").lowercase() in IMAGE_EXTS
+    if (uri != null && image) {
+        ImageViewer(uri, a.name, onClose)
+        return
+    }
+    val context = LocalContext.current
+    // null while reading; a line of its own when there is no text to show
+    val text by produceState<String?>(null, uri) {
+        value = withContext(Dispatchers.IO) {
+            if (uri == null) return@withContext "(no copy of this file on the phone to show)"
+            runCatching {
+                context.contentResolver.openInputStream(android.net.Uri.parse(uri))?.use { input ->
+                    // readNBytes is API 33; the app reaches back to 29
+                    val buf = java.io.ByteArrayOutputStream()
+                    val chunk = ByteArray(8192)
+                    while (buf.size() <= PREVIEW_BYTES) {
+                        val n = input.read(chunk)
+                        if (n < 0) break
+                        buf.write(chunk, 0, n)
+                    }
+                    val bytes = buf.toByteArray()
+                    if (bytes.take(4096).any { it == 0.toByte() }) "(no preview for this kind of file)"
+                    else bytes.decodeToString(0, minOf(bytes.size, PREVIEW_BYTES)) +
+                        if (bytes.size > PREVIEW_BYTES) "\n\n(the rest of the file is not shown)" else ""
+                }
+            }.getOrNull() ?: "(the file can no longer be read)"
+        }
+    }
+    ManageScreen(a.name, onClose) {
+        val t = text
+        if (t == null) LoadingLine()
+        else SelectionContainer {
+            Text(
+                t,
+                Modifier.fillMaxSize().verticalScroll(rememberScrollState()).horizontalScroll(rememberScrollState()).padding(14.dp),
+                fontSize = 12.sp,
+                fontFamily = JepMono,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+    }
+}
+
+// a preview is for a glance, and a huge file would stall the dialog
+private const val PREVIEW_BYTES = 256 * 1024
 
 // A file the agent produced or touched. An image shows as a tappable thumbnail;
 // anything else is named in a card.
@@ -3289,6 +3353,8 @@ private fun FullComposer(
     onClose: () -> Unit,
 ) {
     val focus = remember { FocusRequester() }
+    var previewing by remember { mutableStateOf<ChatViewModel.Attachment?>(null) }
+    previewing?.let { AttachmentPreview(it) { previewing = null } }
     androidx.compose.ui.window.Dialog(
         onDismissRequest = onClose,
         properties = androidx.compose.ui.window.DialogProperties(
@@ -3325,9 +3391,15 @@ private fun FullComposer(
                         attachments.forEach { a ->
                             InputChip(
                                 selected = false,
-                                onClick = { onRemove(a.id) },
+                                onClick = { previewing = a },
                                 label = { Text(a.name, maxLines = 1) },
-                                trailingIcon = { Icon(Icons.Filled.Close, "remove", Modifier.size(16.dp)) },
+                                trailingIcon = {
+                                    Icon(
+                                        Icons.Filled.Close,
+                                        "remove",
+                                        Modifier.size(16.dp).combinedClickable(onClick = { onRemove(a.id) }, onLongClick = {}),
+                                    )
+                                },
                             )
                         }
                     }
@@ -3502,6 +3574,8 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
 
     val context = LocalContext.current
     var expanded by rememberSaveable { mutableStateOf(false) }
+    var previewing by remember { mutableStateOf<ChatViewModel.Attachment?>(null) }
+    previewing?.let { AttachmentPreview(it) { previewing = null } }
     val send: () -> Unit = {
         // a swipe-armed reply rides along as a quote, beside the words, never
         // spliced into them as markdown
@@ -3553,7 +3627,7 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
                 ) {
                     state.attachments.forEach { a ->
                         AssistChip(
-                            onClick = {},
+                            onClick = { previewing = a },
                             label = { Text(a.name, maxLines = 1) },
                             trailingIcon = {
                                 Icon(

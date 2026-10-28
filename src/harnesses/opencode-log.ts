@@ -42,6 +42,11 @@ export function parseOpencodeLogError(line: string): OpenCodeLogError | null {
   const raw = fields["error.error"] ?? fields["error"]
   if (!isStreamError && !raw) return null
   const { name, message } = splitError(raw ?? fields["message"] ?? "stream error")
+  // opencode logs every stop as `error=Aborted` on the session. That is jep's
+  // own abort (a steer, a force, a stop) echoing back, not a provider failure;
+  // recorded as one, it landed after the next turn began and the watchdog
+  // killed that turn too
+  if (/abort/i.test(name ?? "") || /^aborted\.?$/i.test(message.trim())) return null
   const statusRaw = fields["statusCode"] ?? fields["status"]
   const status = statusRaw && /^\d+$/.test(statusRaw) ? Number(statusRaw) : undefined
   const error: HarnessError = {

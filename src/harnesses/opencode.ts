@@ -8,6 +8,7 @@ import type { AgentRef, HarnessAdapter, ModelRef, ModelCaps } from "../core/port
 import type { AskOption, AskQuestion, DomainEvent, FileDiff, HarnessError, Message, Part, ProjectSummary, SessionSummary, SkillDirs } from "../core/types.ts"
 import { TurnAbortedError } from "../core/types.ts"
 import { resolveAgent } from "../core/agents.ts"
+import type { ServerLoad } from "../core/recycle.ts"
 import { quoteBlock, readQuoteBlock } from "../core/transcript.ts"
 import { parseOpencodeLogError } from "./opencode-log.ts"
 import { detach } from "../core/detach.ts"
@@ -1135,8 +1136,42 @@ interface SharedServer {
   endpoint: string
   providerErrors: Map<string, { error: HarnessError; at: number }>
   refs: number
+  startedAt: number
+  /** the workspaces it serves, each with how many adapters are rooted there */
+  dirs: Map<string, number>
 }
 const sharedServers = new Map<string, Promise<SharedServer>>()
+
+/**
+ * How big each shared server has grown and whether a turn runs on any
+ * directory it serves. Busy is opencode's own word (`/session/status` lists
+ * only non-idle sessions, per directory), so it covers every client, not just
+ * the ones in this process.
+ */
+export async function sharedServerLoad(): Promise<ServerLoad[]> {
+  const out: ServerLoad[] = []
+  for (const pending of sharedServers.values()) {
+    const server = await pending.catch(() => null)
+    const pid = server?.child.pid
+    if (!server || !pid || server.child.exitCode !== null) continue
+    const rss = await new Promise<string>((resolve) => {
+      execFile("ps", ["-o", "rss=", "-p", String(pid)], (err, stdout) => resolve(err ? "" : stdout))
+    })
+    let busy = false
+    for (const dir of server.dirs.keys()) {
+      try {
+        const res = await fetch(`${server.endpoint}/session/status?directory=${encodeURIComponent(dir)}`, { signal: AbortSignal.timeout(5_000) })
+        const status = (await res.json()) as Record<string, unknown>
+        if (!res.ok || Object.keys(status).length) busy = true
+      } catch {
+        busy = true
+      }
+      if (busy) break
+    }
+    out.push({ pid, ageMs: Date.now() - server.startedAt, rssMB: Math.round((Number(rss.trim()) || 0) / 1024), busy })
+  }
+  return out
+}
 
 export async function startOpenCodeServer(workspace: string, opts?: { dataHome?: string }): Promise<OpenCodeAdapter> {
   const key = opts?.dataHome ?? ""
@@ -1149,10 +1184,14 @@ export async function startOpenCodeServer(workspace: string, opts?: { dataHome?:
   }
   const server = await pending
   server.refs++
+  server.dirs.set(workspace, (server.dirs.get(workspace) ?? 0) + 1)
   let released = false
   const release = async (): Promise<void> => {
     if (released) return
     released = true
+    const n = (server.dirs.get(workspace) ?? 1) - 1
+    if (n > 0) server.dirs.set(workspace, n)
+    else server.dirs.delete(workspace)
     if (--server.refs > 0) return
     if (sharedServers.get(key) === pending) sharedServers.delete(key)
     server.child.kill("SIGTERM")
@@ -1265,5 +1304,5 @@ async function spawnOpenCodeServer(key: string, opts?: { dataHome?: string }): P
   child.once("exit", () => {
     if (sharedServers.get(key) === self) sharedServers.delete(key)
   })
-  return { child, endpoint, providerErrors, refs: 0 }
+  return { child, endpoint, providerErrors, refs: 0, startedAt: Date.now(), dirs: new Map() }
 }

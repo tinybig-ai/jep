@@ -127,9 +127,10 @@ private fun Form(
 ) {
     // The picker opens on the folders you were just in, most recent first. Five
     // is a screenful without a scroll; the rest arrive in fives rather than as
-    // one wall of paths.
+    // one wall of paths. Throwaway folders stay out: each is used once, and
+    // "Quick conversation" already makes a fresh one.
     var shown by remember { mutableStateOf(5) }
-    val folders = state.workspaces.distinctBy { it.dir.ifBlank { it.name } }
+    val folders = state.workspaces.filterNot { it.pod }.distinctBy { it.dir.ifBlank { it.name } }
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
         // a share-in: the destination is the only real question left, so say
         // what's being carried at the top
@@ -209,7 +210,7 @@ private fun Form(
                 val selected = state.workspace == w.name && state.path == null && !state.pod
                 SelectRow(
                     title = w.name,
-                    subtitle = if (w.pod) "throwaway · ${w.harness}" else w.dir.ifBlank { w.harness },
+                    subtitle = w.dir.ifBlank { w.harness },
                     selected = selected,
                     onClick = { onSelectWorkspace(w.name, state.harness ?: w.harness) },
                 )

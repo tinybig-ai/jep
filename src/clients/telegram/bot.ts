@@ -1096,6 +1096,11 @@ export class TelegramBot {
   }
 
   /** wait for every queued turn to finish — used by mock mode before exit */
+  /** no turn or tracked background work in flight in any chat */
+  get idle(): boolean {
+    return !this.#turns.size && !this.#background.size
+  }
+
   async drain(): Promise<void> {
     while (this.#turns.size || this.#background.size)
       await Promise.all([...this.#turns.values(), ...this.#background])

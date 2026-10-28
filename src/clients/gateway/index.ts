@@ -21,7 +21,7 @@ import type { AskRequest, DomainEvent, HarnessError, Message, Part } from "../..
 import { eventSession, isAborted } from "../../core/types.ts"
 import { describeError } from "../../core/errors.ts"
 import { usageOf } from "../../core/usage.ts"
-import { attachedPaths, stripInjectedContext, transcriptText } from "../../core/transcript.ts"
+import { attachedPaths, quoteBlock, stripInjectedContext, transcriptText } from "../../core/transcript.ts"
 import { newPairCode } from "../telegram/pair.ts"
 import { detach } from "../../core/detach.ts"
 
@@ -84,9 +84,12 @@ export interface GatewayHandle {
   port: number
   /** this client's pairing surface, for the daemon's aggregate view */
   pairingAdmin: PairingAdmin
+  /** when the last harness event arrived, from any client */
+  lastActivity(): number
 }
 
 const TOKEN_FILE = "gateway-tokens.json"
+const DEVICE_NAMES_FILE = "gateway-device-names.json"
 const TITLES_FILE = "gateway-titles.json"
 const MODELS_FILE = "gateway-models.json"
 const AGENTS_FILE = "gateway-agents.json"
@@ -224,6 +227,22 @@ async function loadTokens(dataHome: string): Promise<Map<string, number>> {
   }
 }
 
+async function loadDeviceNames(dataHome: string): Promise<Map<string, string>> {
+  try {
+    const raw = JSON.parse(await readFile(join(dataHome, DEVICE_NAMES_FILE), "utf8")) as Record<string, unknown>
+    return new Map(Object.entries(raw).filter((entry): entry is [string, string] => typeof entry[1] === "string"))
+  } catch {
+    return new Map()
+  }
+}
+
+const saveDeviceNames = async (dataHome: string, names: Map<string, string>): Promise<void> => {
+  await mkdir(dataHome, { recursive: true })
+  await writeFile(join(dataHome, DEVICE_NAMES_FILE), JSON.stringify(Object.fromEntries(names), null, 1))
+}
+
+const deviceID = (token: string): string => sha256(token).toString("hex").slice(0, 12)
+
 const tokenFileStamp = async (dataHome: string): Promise<number> =>
   (await stat(join(dataHome, TOKEN_FILE)).catch(() => null))?.mtimeMs ?? 0
 
@@ -232,6 +251,7 @@ const tokenFileStamp = async (dataHome: string): Promise<number> =>
 export async function revokeGatewayTokens(dataHome: string): Promise<number> {
   const tokens = await loadTokens(dataHome)
   await saveTokens(dataHome, new Map())
+  await saveDeviceNames(dataHome, new Map())
   await saveTerminalTokens(dataHome, new Set())
   return tokens.size
 }
@@ -527,11 +547,14 @@ async function readRaw(req: IncomingMessage, cap: number): Promise<Buffer | null
 }
 
 export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
+  const startedAt = Date.now()
   // single-use, always: every successful pairing or terminal unlock spends the
   // code and mints a fresh one, so a code seen once is never valid again
   let pairCode = deps.pairCode ?? newPairCode()
   let tokens = await loadTokens(deps.dataHome)
   let tokensStamp = await tokenFileStamp(deps.dataHome)
+  const deviceNames = await loadDeviceNames(deps.dataHome)
+  const deviceActivity = new Map<string, number>()
   // this client's pairing surface, reported through the shared admin port so
   // tooling never reads gateway files directly
   let listening: number | undefined
@@ -559,6 +582,23 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   const models = await loadModels(deps.dataHome)
   const agents = await loadAgents(deps.dataHome)
   const harnessSettings = await loadHarnessSettings(deps.dataHome)
+  // A session's settings, under the id the phone uses now. Claude names a new
+  // conversation with a placeholder and learns its real id once the first turn
+  // starts streaming; the phone moves to the real id right then, mid-turn,
+  // while the settings still sat under the placeholder. Read by the real id,
+  // "skip permissions" showed off, and a toggle there started a fresh record.
+  function settingsOf(adapter: HarnessAdapter, id: string): Record<string, boolean> | undefined {
+    const own = harnessSettings.get(id)
+    if (own || !adapter.canonicalId) return own
+    for (const [key, values] of harnessSettings) {
+      if (key === id || adapter.canonicalId(key) !== id) continue
+      harnessSettings.set(id, values)
+      harnessSettings.delete(key)
+      detach("save harness settings", saveHarnessSettings(deps.dataHome, harnessSettings))
+      return values
+    }
+    return undefined
+  }
   const terminalTokens = await loadTerminalTokens(deps.dataHome)
   const pushTokens = await loadPushTokens(deps.dataHome)
   // Whether this gateway offers a shell at all — an operator decision on the
@@ -707,6 +747,23 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           const sid = eventSession(evt)
           const live = sid ? turns.get(sid) : undefined
           if (live) live.lastActivity = Date.now()
+          // what the running turn itself produced, as opposed to the end markers
+          // a turn that was just cancelled still has in flight
+          const ending = evt.type === "session.idle" || evt.type === "turn.aborted" || evt.type === "session.error" || evt.type === "session.changed"
+          if (live?.running && !ending) {
+            live.sawActivity = true
+            // the harness said idle and then kept working: that idle belonged to
+            // something else (a cancelled turn's tail), not to this one
+            if (live.idleGrace) {
+              clearTimeout(live.idleGrace)
+              live.idleGrace = undefined
+            }
+          }
+          if (evt.type === "session.idle" && live) {
+            if (live.running) live.idleSeen = true
+            // the turn before is fully over: the next one may start
+            live.settled?.()
+          }
           if (evt.type === "ask.requested") {
             askSessions.set(evt.ask.id, evt.ask.sessionID)
             openAsks(evt.ask.sessionID).add(evt.ask.id)
@@ -738,7 +795,10 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           // about now — but that POST can hang even with the answer fully
           // streamed, which pinned the turn (and everything queued behind it)
           // forever. Give it a grace period, then finalize from the transcript.
-          if (evt.type === "session.idle" && live?.running && !live.ending && live.idleGrace === undefined) {
+          // Only for a turn that has produced something: an idle that arrives
+          // before that is the previous turn's, and finalizing on it killed the
+          // steered-in turn five seconds after it started.
+          if (evt.type === "session.idle" && live?.running && live.sawActivity && !live.ending && live.idleGrace === undefined) {
             live.idleGrace = setTimeout(() => {
               live.idleGrace = undefined
               endTurn(evt.sessionID, live, { kind: "idle" }, "idle-grace")
@@ -759,12 +819,21 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
             const st = turns.get(evt.sessionID)
             // only a prompt that asked to steer interrupts the running turn; one
             // that asked to wait for the end is left alone
-            if (st?.running && st.waiting[0]?.steer) {
+            if (st?.running && st.waiting.some((p) => p.steer)) {
+              st.handover = true
               endTurn(evt.sessionID, st, { kind: "idle" }, "steer-in")
               st.signal?.abort()
             }
           }
-          broadcast(evt)
+          // an abort jep made to hand the session to a waiting prompt is not a
+          // stop: say so, so a client keeps the turn on screen as running
+          // instead of announcing "the turn was stopped"
+          let out: DomainEvent = evt
+          if (evt.type === "turn.aborted" && live?.handover) {
+            live.handover = false
+            out = { ...evt, reason: "handover" }
+          }
+          broadcast(out)
           detach("wake a waiting turn", wake(evt))
         }
       } catch {
@@ -815,11 +884,15 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     agent?: string
     /** steer at the next tool boundary (the default) or wait for the turn to end */
     steer: boolean
+    /** asked to run ahead of everything else, aborting the running turn */
+    force?: boolean
     /** the client's own handle, so it can edit / cancel / force this while it waits */
     clientID?: string
     /** the words this answers; the adapter hands it to its harness */
     quote?: string
     resolve: (r: TurnResult) => void
+    /** set on a turn built from several waiting prompts: every handle in it */
+    clientIDs?: string[]
   }
   // How a turn ended when something other than prompt() decided it. The runner
   // reads this after the abort lands, so a stalled or failed turn reports what
@@ -845,6 +918,16 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     ending?: TurnEnd
     /** armed by session.idle, cleared when the turn settles */
     idleGrace?: ReturnType<typeof setTimeout>
+    /** the running turn produced an event of its own (not an end marker) */
+    sawActivity?: boolean
+    /** the harness already said idle for the running turn */
+    idleSeen?: boolean
+    /** between turns: waiting for the last one's session.idle */
+    settling?: boolean
+    /** ends the settle wait early, when that idle arrives */
+    settled?: () => void
+    /** the running turn is being ended to let a waiting prompt in */
+    handover?: boolean
   }
   const newTurnState = (): TurnState => ({ running: null, waiting: [], lastActivity: Date.now(), runningTools: new Map() })
   const turns = new Map<string, TurnState>()
@@ -898,14 +981,58 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   }, liveness.tickMs)
   watchdogTimer.unref()
 
+  // Everything waiting runs as one turn. Three messages typed while the agent
+  // worked are one thought; running them one by one cost three turns, and each
+  // steer-in aborted the one before. The first quote rides as the quote, any
+  // later one goes in as words, ahead of the message it belongs to.
+  const mergeWaiting = (batch: PendingTurn[]): PendingTurn => {
+    if (batch.length === 1) return batch[0]!
+    const head = batch[0]!
+    const quote = batch.find((p) => p.quote?.trim())?.quote
+    const text = batch
+      .map((p) => (p.quote?.trim() && p.quote !== quote ? `${quoteBlock(p.quote)}\n\n${p.text}` : p.text))
+      .join("\n\n")
+    return {
+      ...head,
+      text,
+      filePaths: batch.flatMap((p) => p.filePaths),
+      ...(quote ? { quote } : {}),
+      steer: batch.some((p) => p.steer),
+      clientIDs: batch.flatMap((p) => (p.clientID ? [p.clientID] : [])),
+      resolve: (r) => {
+        for (const p of batch) p.resolve(r)
+      },
+    }
+  }
+
+  // After a turn ends, hold the next one until the harness says the session is
+  // idle (or a short while passes). A cancelled turn's own idle event and its
+  // "Aborted" log line used to land on the turn started right after it.
+  const settle = (st: TurnState): Promise<void> => {
+    if (st.idleSeen) return Promise.resolve()
+    st.settling = true
+    return new Promise<void>((done) => {
+      const finish = (): void => {
+        clearTimeout(timer)
+        st.settling = false
+        st.settled = undefined
+        done()
+      }
+      const timer = setTimeout(finish, liveness.settleMs)
+      st.settled = finish
+    })
+  }
+
   async function runNext(id: string): Promise<void> {
     const st = turns.get(id)
-    if (!st || st.running) return
-    const next = st.waiting.shift()
-    if (!next) {
+    if (!st || st.running || st.settling) return
+    if (st.waiting.length === 0) {
       turns.delete(id)
       return
     }
+    // a forced prompt runs on its own: it was asked for ahead of the rest
+    const take = st.waiting[0]!.force ? 1 : st.waiting.length
+    const next = mergeWaiting(st.waiting.splice(0, take))
     const adapter = await ensureListed(id)
     if (!adapter) {
       next.resolve({ status: 404, error: "no such session" })
@@ -914,6 +1041,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     }
     st.running = next
     st.ending = undefined
+    st.sawActivity = false
+    st.idleSeen = false
+    st.handover = false
     st.runningTools.clear()
     st.lastActivity = Date.now()
     const ac = new AbortController()
@@ -924,7 +1054,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         filePaths: next.filePaths,
         ...(next.model ? { model: next.model } : {}),
         ...(next.agent ? { agent: next.agent } : {}),
-        harnessSettings: harnessSettings.get(id) ?? {},
+        harnessSettings: settingsOf(adapter, id) ?? {},
         ...(next.quote ? { quote: next.quote } : {}),
         signal: ac.signal,
       })
@@ -946,7 +1076,12 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       st.idleGrace = undefined
       // the turn wrote to the record; a snapshot from during it must not outlive it
       msgCache.delete(id)
-      detach(`turn queue ${id}`, runNext(id))
+      // A first turn can give the session its real id, and the phone moves to
+      // it. Settings left under the placeholder were lost from then on: the
+      // second turn ran without "skip permissions" and stopped at every tool.
+      const real = adapter.canonicalId?.(id)
+      if (real && real !== id) settingsOf(adapter, real)
+      detach(`turn queue ${id}`, settle(st).then(() => runNext(id)))
     }
   }
 
@@ -1012,7 +1147,15 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     const path = url.pathname
     const ip = req.socket.remoteAddress ?? "?"
     try {
-      if (path === "/health" && req.method === "GET") return json(res, 200, { ok: true, paired: tokens.size > 0 })
+      if (path === "/health" && req.method === "GET") {
+        return json(res, 200, {
+          ok: true,
+          paired: tokens.size > 0,
+          devices: tokens.size,
+          pushConfigured: !!deps.push,
+          uptimeMs: Date.now() - startedAt,
+        })
+      }
 
       // the web client: one page, read from disk on every request so an edit
       // shows on reload. It holds nothing secret; everything it shows comes
@@ -1055,6 +1198,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         for (const t of [...terminalTokens]) if (!tokens.has(t)) terminalTokens.delete(t)
       }
       if (!token || !tokens.has(token)) return json(res, 401, { error: "pair first" })
+      deviceActivity.set(token, Date.now())
 
       if (path === "/stream" && req.method === "GET") {
         res.writeHead(200, {
@@ -1120,6 +1264,43 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       const str = (k: string): string | null => (typeof b[k] === "string" ? (b[k] as string) : null)
 
       if (req.method !== "POST") return json(res, 404, { error: "no such route" })
+
+      if (path === "/devices") {
+        const devices = [...tokens.entries()].map(([known, pairedAt]) => ({
+          id: deviceID(known),
+          name: deviceNames.get(known) ?? `Device ${deviceID(known).slice(-4)}`,
+          pairedAt,
+          lastSeen: deviceActivity.get(known) ?? pairedAt,
+          current: known === token,
+        }))
+        return json(res, 200, { devices })
+      }
+
+      if (path === "/devices/rename") {
+        const id = str("id")
+        const name = (str("name") ?? "").trim().slice(0, 80)
+        const known = id ? [...tokens.keys()].find((candidate) => deviceID(candidate) === id) : null
+        if (!known) return json(res, 404, { error: "device not found" })
+        if (!name) return json(res, 400, { error: "name required" })
+        deviceNames.set(known, name)
+        await saveDeviceNames(deps.dataHome, deviceNames)
+        return json(res, 200, { ok: true, id, name })
+      }
+
+      if (path === "/devices/revoke") {
+        const id = str("id")
+        const known = id ? [...tokens.keys()].find((candidate) => deviceID(candidate) === id) : null
+        if (!known) return json(res, 404, { error: "device not found" })
+        tokens.delete(known)
+        deviceNames.delete(known)
+        deviceActivity.delete(known)
+        terminalTokens.delete(known)
+        await saveTokens(deps.dataHome, tokens)
+        await saveDeviceNames(deps.dataHome, deviceNames)
+        await saveTerminalTokens(deps.dataHome, terminalTokens)
+        tokensStamp = await tokenFileStamp(deps.dataHome)
+        return json(res, 200, { ok: true, current: known === token })
+      }
 
       if (path === "/sessions" || path === "/archived") {
         ensurePumps()
@@ -1193,7 +1374,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           const options = adapter.settings?.() ?? deps.harnessSettings?.(adapter.id) ?? []
           // `compact`: whether this conversation's harness can compress its
           // context, so a client offers the control only where it works
-          return json(res, 200, { options, values: valuesForSettings(options, harnessSettings.get(sessionID)), compact: typeof adapter.compact === "function" })
+          return json(res, 200, { options, values: valuesForSettings(options, settingsOf(adapter, sessionID)), compact: typeof adapter.compact === "function" })
         }
         const harnessID = str("harness")
         if (!harnessID) return json(res, 400, { error: "harness required" })
@@ -1564,7 +1745,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         if (!key || enabled == null) return json(res, 400, { error: "key and boolean enabled required" })
         const specs = adapter.settings?.() ?? deps.harnessSettings?.(adapter.id) ?? []
         if (!specs.some((setting) => setting.id === key)) return json(res, 400, { error: "unknown harness setting" })
-        const current = valuesForSettings(specs, harnessSettings.get(id))
+        const current = valuesForSettings(specs, settingsOf(adapter, id))
         current[key] = enabled
         harnessSettings.set(id, current)
         await saveHarnessSettings(deps.dataHome, harnessSettings)
@@ -1796,9 +1977,15 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         // and most of those answers are the same as the last. A client that
         // sends the tag of what it holds gets a few bytes back instead of the
         // whole window again, tool output and all.
-        const tag = createHash("sha1").update(JSON.stringify({ messages, hasMore, asks })).digest("hex").slice(0, 20)
+        // the daemon's own account of the turn and what waits behind it, so a
+        // client never has to guess from its own requests (it may have been
+        // restarted, or the prompt may have come from another device)
+        const st = turns.get(id)
+        const busy = st != null && (st.running != null || st.settling === true || st.waiting.length > 0)
+        const queue = (st?.waiting ?? []).map((p) => ({ clientID: p.clientID ?? null, text: p.text, steer: p.steer }))
+        const tag = createHash("sha1").update(JSON.stringify({ messages, hasMore, asks, busy, queue })).digest("hex").slice(0, 20)
         if (str("etag") === tag) return json(res, 200, { unchanged: true, etag: tag })
-        return json(res, 200, { messages, hasMore, asks, etag: tag })
+        return json(res, 200, { messages, hasMore, asks, busy, queue, etag: tag })
       }
 
       if (path === "/prompt") {
@@ -1834,7 +2021,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           // force: run this next, and if a turn is in flight, end it cleanly
           // (so the running prompt gets the answer from the transcript) then
           // abort so the forced prompt runs next
+          pending.force = true
           st.waiting.unshift(pending)
+          if (st.running && !st.ending) st.handover = true
           if (st.running) endTurn(id, st, { kind: "idle" }, "force")
           st.signal?.abort()
         } else {
@@ -1862,7 +2051,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const clientID = str("clientID")
         if (!clientID) return json(res, 400, { error: "clientID required" })
         const st = turns.get(id)
-        if (st?.running?.clientID === clientID) return json(res, 409, { error: "already running" })
+        if (st?.running?.clientID === clientID || st?.running?.clientIDs?.includes(clientID)) return json(res, 409, { error: "already running" })
         const idx = st ? st.waiting.findIndex((p) => p.clientID === clientID) : -1
         if (!st || idx < 0) return json(res, 404, { error: "not queued" })
         const entry = st.waiting[idx]!
@@ -1881,7 +2070,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         // gets the answer from the transcript, then abort so the
         // forced prompt runs next
         st.waiting.splice(idx, 1)
+        entry.force = true
         st.waiting.unshift(entry)
+        if (st.running && !st.ending) st.handover = true
         if (st.running) endTurn(id, st, { kind: "idle" }, "queue-force")
         st.signal?.abort()
         return json(res, 200, { ok: true })
@@ -1906,6 +2097,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     pairCode,
     port: bound,
     pairingAdmin,
+    lastActivity: () => lastActivity,
     close: async () => {
       clearInterval(pumpTimer)
       clearInterval(pingTimer)

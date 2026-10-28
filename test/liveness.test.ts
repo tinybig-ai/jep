@@ -2,7 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { judgeTurn, type LivenessConfig } from "../src/core/liveness.ts"
 
-const cfg: LivenessConfig = { turnIdleMs: 100, toolIdleMs: 1000, wildernessMs: 300, idleGraceMs: 5, tickMs: 10 }
+const cfg: LivenessConfig = { turnIdleMs: 100, toolIdleMs: 1000, wildernessMs: 300, idleGraceMs: 5, settleMs: 10, tickMs: 10 }
 
 test("a quiet turn waiting on tokens stalls at the turn ceiling", () => {
   assert.equal(judgeTurn({ now: 99, lastActivity: 0, waitingOnHuman: false, tools: [], config: cfg }).stalled, false)

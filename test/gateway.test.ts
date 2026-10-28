@@ -89,23 +89,35 @@ async function pair(base: string, code: string): Promise<string> {
 
 // A turn that stays in flight until released or aborted, and an event feed a
 // test can push into — enough to exercise the queue, steering and force.
-function stallable() {
+function stallable(opts: { hold?: (text: string) => boolean } = {}) {
   const releases = new Map<string, () => void>()
   const pendingEvents: DomainEvent[] = []
   let wakeFeed: (() => void) | null = null
   const calls: string[] = []
   const base = fakeAdapter()
+  const feed = (e: DomainEvent) => {
+    pendingEvents.push(e)
+    wakeFeed?.()
+    wakeFeed = null
+  }
+  const hold = opts.hold ?? ((text: string) => text === "first")
   const adapter: HarnessAdapter = {
     ...base,
     async prompt(_id, text, opts) {
       calls.push(text)
       // only the turn that is meant to stay in flight waits; the rest answer at once
-      if (text === "first") {
+      if (hold(text)) {
         await new Promise<void>((resolve, reject) => {
           releases.set(text, resolve)
-          opts?.signal?.addEventListener("abort", () => reject(new TurnAbortedError()), { once: true })
+          opts?.signal?.addEventListener("abort", () => {
+            // like opencode: a stop is announced, then the session goes idle
+            feed({ type: "turn.aborted", sessionID: "s1" })
+            feed({ type: "session.idle", sessionID: "s1" })
+            reject(new TurnAbortedError())
+          }, { once: true })
         })
       }
+      feed({ type: "session.idle", sessionID: "s1" })
       return {
         id: `m-${text}`,
         sessionID: "s1",
@@ -131,18 +143,14 @@ function stallable() {
     adapter,
     calls,
     release: (text: string) => releases.get(text)?.(),
-    feed: (e: DomainEvent) => {
-      pendingEvents.push(e)
-      wakeFeed?.()
-      wakeFeed = null
-    },
+    feed,
   }
 }
 
 async function startWith(
   a: ReturnType<typeof stallable>,
   workspace = a.adapter.workspace,
-  liveness?: { turnIdleMs?: number; toolIdleMs?: number; idleGraceMs?: number; tickMs?: number },
+  liveness?: { turnIdleMs?: number; toolIdleMs?: number; idleGraceMs?: number; settleMs?: number; tickMs?: number },
 ): Promise<{ base: string; headers: Record<string, string>; g: GatewayHandle; dataHome: string }> {
   const dataHome = mkdtempSync(join(tmpdir(), "gw-q-"))
   const g = await startGateway({
@@ -390,12 +398,89 @@ test("session.idle finalizes a turn whose prompt() hangs, from the transcript", 
   try {
     const first = fetch(`${base}/prompt`, { method: "POST", headers, body: JSON.stringify({ id: "s1", text: "first" }) })
     await sleep(50)
-    // the harness says the turn is over while the blocking POST never returns
+    // the turn streams its answer, then the harness says it is over while the
+    // blocking POST never returns
+    a.feed({ type: "part.updated", sessionID: "s1", messageID: "m9", partID: "p9", partType: "text", part: { kind: "text", text: "all done" } } as DomainEvent)
     a.feed({ type: "session.idle", sessionID: "s1" } as DomainEvent)
     const j = (await (await first).json()) as { message?: Message; aborted?: boolean; error?: string }
     assert.equal(textOf(j), "all done", "a finished turn reads as success, not as a stop")
     assert.ok(!j.aborted && !j.error)
   } finally {
+    await g.close()
+  }
+})
+
+test("a session.idle that arrives before the turn produced anything does not end it", async () => {
+  const a = stallable()
+  const { base, headers, g } = await startWith(a, a.adapter.workspace, { ...FAST, turnIdleMs: 60_000 })
+  try {
+    const first = fetch(`${base}/prompt`, { method: "POST", headers, body: JSON.stringify({ id: "s1", text: "first" }) })
+    let settled = false
+    void first.then(() => { settled = true })
+    await sleep(50)
+    // the tail of the turn before: an idle with nothing from this turn yet
+    a.feed({ type: "session.idle", sessionID: "s1" } as DomainEvent)
+    await sleep(200)
+    assert.equal(settled, false, "well past the idle grace, the turn still runs")
+    a.release("first")
+    const j = (await (await first).json()) as { message?: Message }
+    assert.equal(textOf(j), "echo: first")
+  } finally {
+    await g.close()
+  }
+})
+
+test("prompts waiting behind a turn run together as one turn", async () => {
+  const a = stallable()
+  const { base, headers, g } = await startWith(a, a.adapter.workspace, { ...FAST, turnIdleMs: 60_000, settleMs: 50 })
+  try {
+    const post = (text: string) =>
+      fetch(`${base}/prompt`, { method: "POST", headers, body: JSON.stringify({ id: "s1", text, steer: false }) })
+    const first = post("first")
+    await sleep(50)
+    const second = post("second")
+    const third = post("third")
+    await sleep(50)
+    a.release("first")
+    assert.equal(textOf((await (await first).json()) as { message?: Message }), "echo: first")
+    const j2 = (await (await second).json()) as { message?: Message }
+    const j3 = (await (await third).json()) as { message?: Message }
+    assert.equal(textOf(j2), "echo: second\n\nthird")
+    assert.equal(textOf(j3), "echo: second\n\nthird", "every waiting request gets the merged turn's answer")
+    assert.deepEqual(a.calls, ["first", "second\n\nthird"])
+  } finally {
+    await g.close()
+  }
+})
+
+test("a turn ended for a steer-in is announced as a handover, not a stop", async () => {
+  const a = stallable()
+  const { base, headers, g } = await startWith(a, a.adapter.workspace, { ...FAST, turnIdleMs: 60_000, settleMs: 50 })
+  const token = headers.authorization!.slice("Bearer ".length)
+  const stream = await fetch(`${base}/stream?token=${token}`)
+  const reader = stream.body!.getReader()
+  try {
+    const post = (text: string) =>
+      fetch(`${base}/prompt`, { method: "POST", headers, body: JSON.stringify({ id: "s1", text }) })
+    const first = post("first")
+    await sleep(50)
+    const second = post("second")
+    await sleep(50)
+    a.feed({ type: "part.updated", sessionID: "s1", messageID: "m1", partID: "p1", partType: "step-finish", part: { kind: "other", nativeType: "step-finish" } } as DomainEvent)
+    assert.equal(((await (await first).json()) as { aborted?: boolean }).aborted, true)
+    let seen = ""
+    const deadline = Date.now() + 3000
+    while (!seen.includes('"turn.aborted"') && Date.now() < deadline) {
+      const { value, done } = await reader.read()
+      if (done) break
+      seen += new TextDecoder().decode(value)
+    }
+    const aborted = seen.split("\n").find((l) => l.includes('"turn.aborted"')) ?? ""
+    assert.match(aborted, /"reason":"handover"/, `got: ${aborted}`)
+    a.release("second")
+    assert.equal(textOf((await (await second).json()) as { message?: Message }), "echo: second")
+  } finally {
+    await reader.cancel()
     await g.close()
   }
 })
@@ -465,6 +550,41 @@ test("pair gates: wrong code rejected, right code yields a working token", async
     assert.equal(unauthed.status, 401)
     const authed = await fetch(`${base}/sessions`, { method: "POST", headers: { authorization: `Bearer ${token}` } })
     assert.equal(authed.status, 200)
+  } finally {
+    await g.close()
+  }
+})
+
+test("paired devices can be renamed and revoked individually", async () => {
+  const { gw } = spawnGateway()
+  const g = await gw
+  try {
+    const base = "http://127.0.0.1:" + g.port
+    const first = await pair(base, "TESTCODE")
+    const second = await pair(base, g.pairingAdmin.status().code!)
+    const headers = { authorization: "Bearer " + first, "content-type": "application/json" }
+    const listed = (await (await fetch(base + "/devices", { method: "POST", headers, body: "{}" })).json()) as {
+      devices: Array<{ id: string; name: string; current: boolean }>
+    }
+    assert.equal(listed.devices.length, 2)
+    const other = listed.devices.find((d) => !d.current)!
+    const renamed = await fetch(base + "/devices/rename", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ id: other.id, name: "Phone" }),
+    })
+    assert.equal(renamed.status, 200)
+    assert.equal(((await renamed.json()) as { name: string }).name, "Phone")
+
+    const revoked = await fetch(base + "/devices/revoke", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ id: other.id }),
+    })
+    assert.equal(revoked.status, 200)
+    assert.equal(((await revoked.json()) as { current: boolean }).current, false)
+    const dead = await fetch(base + "/devices", { method: "POST", headers: { authorization: "Bearer " + second, "content-type": "application/json" }, body: "{}" })
+    assert.equal(dead.status, 401)
   } finally {
     await g.close()
   }
@@ -1803,6 +1923,89 @@ test("the web client is served at / without a token, and the data behind it is n
     // only plain names in web/: nothing above it, nothing that is not a script or style
     assert.equal((await fetch(`${base}/..%2Fpackage.json`)).status, 401)
     assert.equal((await fetch(`${base}/index.html`)).status, 401)
+  } finally {
+    await g.close()
+  }
+})
+
+test("settings follow a session to the real id its first turn gives it", async () => {
+  // claude's shape: a placeholder id until the first turn, then the real one,
+  // which is the id the phone uses from then on
+  let learned = false
+  const seen: Array<Record<string, boolean> | undefined> = []
+  const base = fakeAdapter()
+  const adapter: HarnessAdapter = {
+    ...base,
+    settings: () => [{ id: "skip", label: "Skip", description: "", default: false }],
+    async createSession() {
+      return { id: "pending-1", title: "", workspace: "/tmp/ws", createdAt: 1, updatedAt: 1 }
+    },
+    async getSession(id: string) {
+      return { id, title: "", workspace: "/tmp/ws", createdAt: 1, updatedAt: 1 }
+    },
+    async prompt(sessionID, text, opts) {
+      seen.push(opts?.harnessSettings)
+      learned = true
+      return base.prompt(sessionID, text, opts)
+    },
+    canonicalId: (id: string) => (id === "pending-1" && learned ? "real-1" : id),
+  }
+  const g = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter }],
+    dataHome: mkdtempSync(join(tmpdir(), "gw-test-")),
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+  })
+  try {
+    const url = `http://127.0.0.1:${g.port}`
+    const token = await pair(url, "TESTCODE")
+    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" }
+    const made = await fetch(`${url}/new`, { method: "POST", headers, body: JSON.stringify({ harnessSettings: { skip: true } }) })
+    assert.equal(made.status, 200)
+    for (const id of ["pending-1", "real-1"]) {
+      const res = await fetch(`${url}/prompt`, { method: "POST", headers, body: JSON.stringify({ id, text: "hi" }) })
+      assert.equal(res.status, 200)
+    }
+    assert.deepEqual(seen, [{ skip: true }, { skip: true }])
+  } finally {
+    await g.close()
+  }
+})
+
+test("settings read by the real id show what the chat was created with, mid-first-turn", async () => {
+  // the phone moves to the real id as soon as the first turn streams it, long
+  // before that turn ends; its Settings screen must not show the defaults
+  let learned = false
+  const base = fakeAdapter()
+  const adapter: HarnessAdapter = {
+    ...base,
+    settings: () => [{ id: "skip", label: "Skip", description: "", default: false }],
+    async createSession() {
+      return { id: "pending-1", title: "", workspace: "/tmp/ws", createdAt: 1, updatedAt: 1 }
+    },
+    async getSession(id: string) {
+      return { id, title: "", workspace: "/tmp/ws", createdAt: 1, updatedAt: 1 }
+    },
+    canonicalId: (id: string) => (id === "pending-1" && learned ? "real-1" : id),
+  }
+  const g = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter }],
+    dataHome: mkdtempSync(join(tmpdir(), "gw-test-")),
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+  })
+  try {
+    const url = `http://127.0.0.1:${g.port}`
+    const token = await pair(url, "TESTCODE")
+    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" }
+    const made = await fetch(`${url}/new`, { method: "POST", headers, body: JSON.stringify({ harnessSettings: { skip: true } }) })
+    assert.equal(made.status, 200)
+    learned = true
+    const res = await fetch(`${url}/harness-settings`, { method: "POST", headers, body: JSON.stringify({ id: "real-1" }) })
+    assert.equal(res.status, 200)
+    assert.deepEqual(((await res.json()) as { values: unknown }).values, { skip: true })
   } finally {
     await g.close()
   }

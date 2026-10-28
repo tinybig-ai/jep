@@ -33,7 +33,10 @@ as the phone. The page itself is not token-gated, because it holds no data.
 | route | body | returns |
 |---|---|---|
 | `POST /pair` | `{code}` | `{token}` (5 tries / 60 s) |
-| `GET /health` | (none) | `{ok,paired}` |
+| `GET /health` | (none) | `{ok,paired,devices,pushConfigured,uptimeMs}` |
+| `POST /devices` | (none) | `{devices[]}`: paired device fingerprints, names, pairing/last-seen times, and whether each is the calling device |
+| `POST /devices/rename` | `{id,name}` | `{ok,id,name}`: rename one paired device |
+| `POST /devices/revoke` | `{id}` | `{ok,current}`: revoke one device token; `current` says whether the caller revoked itself |
 | `POST /sessions` | (none) | `{items[]}` all sessions, every adapter merged, client renames applied; each carries `adapter` (workspace name), `harness` (engine id) and `pod` (its workspace is a daemon-conjured throwaway dir) for display. A harness that misses the daemon's listing budget (~6s) is reported in `degraded[]` (`{name,harness,error}`, the conversations from it are missing) instead of holding the whole list up; clients show it as a banner |
 | `POST /workspaces` | (none) | `{items[]}` of `{name,harness,dir,pod}`: what a conversation may be created in, for creation-time selection; `pod` marks a daemon-conjured throwaway directory |
 | `POST /harnesses` | (none) | `{harnesses[],default}`: the harnesses installed here |
@@ -107,7 +110,7 @@ four things can end a turn the harness stopped talking about:
 The ceilings: `JEP_TURN_IDLE_MS` (default 5m) for a turn awaiting tokens, and
 `JEP_TOOL_IDLE_MS` (default 20m) while the harness reports a running tool,
 because a build or a test run is legitimately silent for minutes. A tool that
-has run for `JEP_TOOL_WILDERNESS_MS` (default 6m) with no event at all is
+has run for `JEP_TOOL_WILDERNESS_MS` (default 11m) with no event at all is
 wedged, and the turn is given up on then, naming it. The rule lives in
 `core/liveness.ts`, which the Telegram client uses too, so the two give up at
 the same moment. A turn parked on an unanswered permission ask is *not* stalled — it is

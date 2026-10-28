@@ -152,6 +152,17 @@ private val darkSyntax = SyntaxColors(
 /** the diff, terminal and status colours for the app's current theme */
 val LocalSyntaxColors = staticCompositionLocalOf { lightSyntax }
 
+// The person's own messages are red, the one colour the monochrome scheme has no
+// token for. The values are the web client's --user, so the two read alike.
+@Immutable
+data class UserBubbleColors(val bubble: Color, val ink: Color)
+
+private val lightUserBubble = UserBubbleColors(bubble = Color(0xFFA8102C), ink = Color.White)
+private val darkUserBubble = UserBubbleColors(bubble = Color(0xFF8E0D25), ink = Color.White)
+
+/** the fill and text colour of the person's message bubbles */
+val LocalUserBubbleColors = staticCompositionLocalOf { lightUserBubble }
+
 // The app backdrop, painted once behind every screen (they keep transparent
 // containers so it reads through): a soft vertical gradient with a faint
 // hexagon lattice that fades out towards the bottom of the screen.
@@ -225,6 +236,7 @@ fun JepTheme(
     CompositionLocalProvider(
         LocalDensity provides Density(density.density, density.fontScale * textScale),
         LocalSyntaxColors provides if (darkTheme) darkSyntax else lightSyntax,
+        LocalUserBubbleColors provides if (darkTheme) darkUserBubble else lightUserBubble,
     ) {
         MaterialTheme(
             colorScheme = if (darkTheme) dark else light,

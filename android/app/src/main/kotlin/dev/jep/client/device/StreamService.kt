@@ -24,19 +24,36 @@ class StreamService : Service() {
     private var thread: Thread? = null
     private var cancelled = false
 
+    // false when Android refused to make this a foreground service
+    private var held = false
+
     override fun onCreate() {
         super.onCreate()
         channel(this)
-        startForeground(
-            FOREGROUND_ID,
-            holdNotification("holding the line"),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
-        )
+        // Android 15 gives a dataSync service six hours a day. Past that it
+        // calls onTimeout, and a service still running a few seconds later
+        // crashes the app; every later startForeground throws until the day
+        // resets, so each launch crashed again. Relaying messages from a
+        // remote agent is what remoteMessaging is for, and it has no cap.
+        // A refusal (the cap, or a sticky restart from the background) now
+        // stops the service instead of the app.
+        held = runCatching {
+            startForeground(FOREGROUND_ID, holdNotification("Connected to gateway"), serviceType())
+        }.isSuccess
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (!held) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
         startObserving()
         return START_STICKY
+    }
+
+    // the time limit ran out: stop in time, or Android crashes the app
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        stopSelf()
     }
 
     override fun onDestroy() {
@@ -128,7 +145,7 @@ class StreamService : Service() {
             .setAutoCancel(true)
             // A group of its own, per conversation. Left ungrouped, Android
             // bundles the app's notifications (this one and the standing
-            // "holding the line") under a summary it makes itself, and tapping
+            // "Connected to gateway") under a summary it makes itself, and tapping
             // that summary opens the app's launcher, which is the list: the tap
             // landed on the list or in the chat depending on where the finger
             // hit. Android only bundles notifications that have no group.
@@ -157,6 +174,10 @@ class StreamService : Service() {
         private const val HOLD_CHANNEL_ID = "jep.hold"
         private const val FOREGROUND_ID = 42
         private const val ASK_GRACE_MS = 1_500L
+
+        private fun serviceType(): Int =
+            if (android.os.Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING
+            else ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
 
         fun channel(context: Context) {
             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager

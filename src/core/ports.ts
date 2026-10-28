@@ -116,6 +116,11 @@ export interface HarnessAdapter {
   /** extra per-harness controls; clients render these without knowing the
    * harness that owns them. */
   settings?(): HarnessSettingSpec[]
+  /** The id a session settled on. A harness that only learns a session's real
+   * id from its first turn (claude) hands out a placeholder before then;
+   * clients move to the real id afterwards, so whatever the gateway keeps per
+   * session must move with them. Undefined when the id never changes. */
+  canonicalId?(sessionID: string): string
   /** `provider/model` -> input capabilities (image/attachment), if known */
   capabilities?(): Promise<Map<string, ModelCaps>>
   /** every project this harness knows of, regardless of which directory this
