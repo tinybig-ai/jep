@@ -307,29 +307,38 @@
     if (was) was.checked = true
   }
   const KEYS = [
-    { keys: [CMD, "K"], label: "Search conversations", match: (e) => mine(e) && !e.shiftKey && e.code === "KeyK",
+    { keys: [CMD, "K"], label: "Search conversations", at: () => findBox, match: (e) => mine(e) && !e.shiftKey && e.code === "KeyK",
       run: () => { if (matchMedia("(max-width: 700px)").matches && current) location.hash = ""; find.focus(); find.select() } },
-    { keys: [CMD, SHIFT, "O"], label: "New conversation", button: () => document.querySelector(".plus"), match: (e) => mine(e) && e.shiftKey && e.code === "KeyO",
+    { keys: [CMD, SHIFT, "O"], label: "New conversation", button: () => document.querySelector(".plus"), at: () => document.querySelector(".plus"), match: (e) => mine(e) && e.shiftKey && e.code === "KeyO",
       run: () => { location.hash = "new" } },
-    { keys: [ALT, "↑"], label: "Previous conversation", match: (e) => e.altKey && !e.metaKey && !e.ctrlKey && e.key === "ArrowUp", run: () => step(-1) },
-    { keys: [ALT, "↓"], label: "Next conversation", match: (e) => e.altKey && !e.metaKey && !e.ctrlKey && e.key === "ArrowDown", run: () => step(1) },
+    { keys: [ALT, "↑"], label: "Previous conversation", at: () => neighbour(-1), match: (e) => e.altKey && !e.metaKey && !e.ctrlKey && e.key === "ArrowUp", run: () => step(-1) },
+    { keys: [ALT, "↓"], label: "Next conversation", at: () => neighbour(1), match: (e) => e.altKey && !e.metaKey && !e.ctrlKey && e.key === "ArrowDown", run: () => step(1) },
     { keys: [SHIFT, "Esc"], label: "Focus the message box", match: (e) => e.shiftKey && e.key === "Escape", run: () => $("input").focus() },
     { keys: ["Enter"], label: "Send (into a running turn: the mode picked)" },
-    { keys: [ALT, "Enter"], label: "Send after this turn", match: (e) => e.altKey && !e.metaKey && !e.ctrlKey && e.key === "Enter" && e.target === $("input"), run: () => sendAs("after") },
-    { keys: [CMD, SHIFT, "Enter"], label: "Send now, stopping the running turn", match: (e) => mine(e) && e.shiftKey && e.key === "Enter" && e.target === $("input"), run: () => sendAs("now") },
+    { keys: [ALT, "Enter"], label: "Send after this turn", at: () => current && busy() && send, match: (e) => e.altKey && !e.metaKey && !e.ctrlKey && e.key === "Enter" && e.target === $("input"), run: () => sendAs("after") },
+    { keys: [CMD, SHIFT, "Enter"], label: "Send now, stopping the running turn", at: () => current && busy() && send, match: (e) => mine(e) && e.shiftKey && e.key === "Enter" && e.target === $("input"), run: () => sendAs("now") },
     { keys: ["Esc"], label: "Stop the running turn (message box empty)", button: () => $("stop") },
-    { keys: [CMD, SHIFT, "U"], label: "Attach files", button: () => $("attachInput") && $("newHere"), match: (e) => mine(e) && e.shiftKey && e.code === "KeyU",
+    { keys: [CMD, SHIFT, "U"], label: "Attach files", button: () => $("attachInput") && $("newHere"), at: () => current && $("attachInput") && $("newHere"), match: (e) => mine(e) && e.shiftKey && e.code === "KeyU",
       run: () => { if (current && $("attachInput")) $("attachInput").click() } },
-    { keys: [CMD, SHIFT, "E"], label: "Change the model", button: () => $("model"), match: (e) => mine(e) && e.shiftKey && e.code === "KeyE",
+    { keys: [CMD, SHIFT, "E"], label: "Change the model", button: () => $("model"), at: () => current && $("model"), match: (e) => mine(e) && e.shiftKey && e.code === "KeyE",
       run: () => { if (current && !$("model").hidden) $("model").click() } },
-    { keys: [CMD, SHIFT, ","], label: "Conversation settings", button: () => $("gear"), match: (e) => mine(e) && e.shiftKey && e.code === "Comma",
+    { keys: [CMD, SHIFT, ","], label: "Conversation settings", button: () => $("gear"), at: () => current && $("gear"), match: (e) => mine(e) && e.shiftKey && e.code === "Comma",
       run: () => { if (current) $("gear").click() } },
-    { keys: [CMD, SHIFT, "C"], label: "Copy the last reply", match: (e) => mine(e) && e.shiftKey && e.code === "KeyC",
+    { keys: [CMD, SHIFT, "C"], label: "Copy the last reply", at: () => lastReply(), corner: "bottom", match: (e) => mine(e) && e.shiftKey && e.code === "KeyC",
       run: () => { const t = lastReply(); if (t) copy(sources.get(t) ?? t.innerText, null).then(() => toast("Reply copied")) } },
-    { keys: [CMD, SHIFT, ";"], label: "Copy the last code block", match: (e) => mine(e) && e.shiftKey && e.code === "Semicolon",
+    { keys: [CMD, SHIFT, ";"], label: "Copy the last code block", at: () => [...$("log").querySelectorAll(".text .code")].pop(), match: (e) => mine(e) && e.shiftKey && e.code === "Semicolon",
       run: () => { const c = [...$("log").querySelectorAll(".text pre")].pop(); if (c) copy(c.textContent, null).then(() => toast("Code copied")) } },
+    { keys: ["↑"], label: "Edit the last queued message (message box empty)" },
     { keys: [CMD, "/"], label: "Keyboard shortcuts", match: (e) => (mine(e) && e.code === "Slash") || (e.key === "?" && !typing()), run: () => sheet() },
   ]
+
+  // the row Option with an arrow would open
+  function neighbour(dir) {
+    const rows = visibleRows()
+    const i = rows.findIndex((r) => r.classList.contains("open"))
+    const n = rows[i < 0 ? 0 : i + dir]
+    return n && !n.classList.contains("open") ? n : null
+  }
 
   function step(dir) {
     const rows = visibleRows()
@@ -356,6 +365,66 @@
     const b = k.button?.()
     if (b) b.title = `${(b.title || k.label).replace(/ \(.*\)$/, "")} (${k.keys.join(MAC ? "" : "+")})`
   }
+
+  // Hold ⌘ (Ctrl) or ⌥ for a moment and every shortcut shows, on its own
+  // button, the keys still to press: ⇧O on the + while ⌘ is down, O once ⇧
+  // joins it. Shift alone shows nothing (it is held all the time while
+  // typing), and any real key press hides them at once, so ⌘C never flashes.
+  const hintLayer = el("div", "hint-layer")
+  document.body.append(hintLayer)
+  let hintTimer = null
+  const MODS = new Set([CMD, SHIFT, ALT])
+  const held = (e) => new Set([
+    ...((MAC ? e.metaKey : e.ctrlKey) ? [CMD] : []),
+    ...(e.shiftKey ? [SHIFT] : []),
+    ...(e.altKey ? [ALT] : []),
+  ])
+  function hideHints() {
+    clearTimeout(hintTimer)
+    hintTimer = null
+    hintLayer.replaceChildren()
+  }
+  function showHints(down) {
+    if (help.open || document.querySelector("dialog[open]")) return
+    const badges = []
+    for (const k of KEYS) {
+      const mods = k.keys.filter((x) => MODS.has(x))
+      if (![...down].every((m) => mods.includes(m))) continue
+      const target = k.at?.()
+      const r = target?.getBoundingClientRect?.()
+      if (!r || !r.width || r.bottom < 0 || r.top > innerHeight) continue
+      const badge = el("kbd", "hint", k.keys.filter((x) => !down.has(x)).join(MAC ? "" : "+"))
+      // a small button wears it on its middle; a large target in a corner,
+      // the bottom one for a reply, where its own copy button sits
+      if (r.width < 60) {
+        badge.style.left = `${r.left + r.width / 2}px`
+        badge.style.top = `${r.top + r.height / 2}px`
+      } else {
+        badge.classList.add("corner")
+        badge.style.left = `${Math.min(innerWidth - 8, r.right - 6)}px`
+        badge.style.top = `${k.corner === "bottom" ? Math.min(innerHeight - 8, r.bottom) : Math.max(28, r.top + 6)}px`
+        if (k.corner === "bottom") badge.classList.add("bottom")
+      }
+      badges.push(badge)
+    }
+    hintLayer.replaceChildren(...badges)
+  }
+  addEventListener("keydown", (e) => {
+    const down = held(e)
+    const onlyMods = ["Meta", "Control", "Shift", "Alt"].includes(e.key)
+    if (!onlyMods || !(down.has(CMD) || down.has(ALT))) return hideHints()
+    if (hintLayer.childElementCount) return showHints(down) // ⇧ joined: what is left changes
+    clearTimeout(hintTimer)
+    hintTimer = setTimeout(() => showHints(down), 350)
+  }, true)
+  addEventListener("keyup", (e) => {
+    const down = held(e)
+    if (!(down.has(CMD) || down.has(ALT))) return hideHints()
+    if (hintLayer.childElementCount) showHints(down)
+  }, true)
+  addEventListener("blur", hideHints)
+  addEventListener("mousedown", hideHints, true)
+  document.addEventListener("visibilitychange", hideHints)
 
   // capture: ahead of the message box's own Enter, which would send first
   addEventListener("keydown", (e) => {

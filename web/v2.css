@@ -266,6 +266,19 @@ dialog:focus-visible { outline: none; } /* opened, it takes focus; the ring fram
   background: var(--text); color: var(--bg); font-size: 13px; box-shadow: var(--shadow-lg); animation: v2-pop .16s var(--ease);
 }
 
+/* holding a modifier: what is left to press, on each button */
+.hint-layer { position: fixed; inset: 0; pointer-events: none; z-index: 30; }
+.hint {
+  position: absolute; translate: -50% -50%; padding: 1px 6px; min-width: 20px; text-align: center; border: none; border-radius: 6px;
+  font: 600 11.5px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; letter-spacing: .5px;
+  background: var(--text); color: var(--bg); box-shadow: 0 2px 8px #0004; animation: v2-pop .12s var(--ease);
+}
+.hint.corner { translate: -100% 0; }
+.hint.corner.bottom { translate: -100% -100%; }
+/* editing a queued message in the box */
+.editing-bar { max-width: 760px; padding: 0 8px; }
+form.compose:has(.editing-bar:not([hidden])) .box { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+
 /* ── starting, pairing, settings ──────────────────────────────────────── */
 #start, #pair { background: var(--card); border: 1px solid var(--line); border-radius: 20px; box-shadow: var(--shadow-lg); padding: 28px; animation: v2-pop .25s var(--ease); }
 #start h2, #pair h2 { font-size: 20px; letter-spacing: -.3px; }

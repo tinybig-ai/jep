@@ -190,6 +190,13 @@
   .queued { display: flex; align-items: center; gap: 6px; padding: 3px 4px 3px 2px; border-radius: 6px; border-top: 2px solid transparent; border-bottom: 2px solid transparent; }
   .queued:hover { background: var(--bubble); }
   .msg.queued-msg .body { opacity: .55; }
+  .msg.queued-msg.editing .body { opacity: .3; outline: 2px dashed currentColor; outline-offset: 2px; }
+  .queued-actions { display: none; position: absolute; right: 0; top: calc(100% + 1px); gap: 10px; }
+  .msg.user:hover .queued-actions, .queued-actions:focus-within { display: flex; }
+  .queued-actions button { border: none; padding: 0 2px; background: none; color: var(--dim); font-size: 11px; line-height: 1.55; text-decoration: underline dotted; text-underline-offset: 3px; }
+  .queued-actions button:hover { color: var(--text); background: none; }
+  .msg.queued-msg[data-info]:hover::after { right: 90px; }
+  .editing-bar { max-width: 780px; margin: 0 auto 6px; display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--dim); }
   .msg.queued-msg .body::after { content: "Queued"; display: block; font-size: 11px; opacity: .85; margin-top: 2px; }
   .queued[draggable=true] { cursor: grab; }
   .queued.dragging { opacity: .4; }
@@ -695,6 +702,7 @@ $("start").onsubmit = async (e) => {
 
 // ── one conversation ──────────────────────────────────────────────────────
 async function open(id) {
+  endEdit()
   saveDraft()
   current = id === "new" ? null : id
   $("start").hidden = id !== "new"
@@ -1173,6 +1181,7 @@ function askNode(a) {
 
 $("compose").onsubmit = (e) => {
   e.preventDefault()
+  if (editing) return void saveEdit()
   const text = $("input").value.trim()
   if (!text || !current) return
   $("input").value = ""
@@ -1201,6 +1210,14 @@ $("input").onkeydown = (e) => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
     e.preventDefault()
     $("compose").requestSubmit()
+  } else if (e.key === "Escape" && editing) {
+    e.preventDefault()
+    endEdit()
+  } else if (e.key === "ArrowUp" && !e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && !editing && !$("input").value) {
+    // as in Slack: up in an empty box edits the last message still waiting
+    const mine = pendingText.filter((p) => p.clientID && (p.expectQueue || queue.some((q) => q.clientID === p.clientID)))
+    const last = mine[mine.length - 1] ?? [...queue].reverse().find((q) => q.clientID)
+    if (last) { e.preventDefault(); startEdit({ clientID: last.clientID, text: last.text }) }
   }
 }
 const grow = () => { const t = $("input"); t.style.height = "auto"; t.style.height = t.scrollHeight + "px" }
@@ -1209,7 +1226,7 @@ $("input").oninput = () => { grow(); saveDraft() }
 // what was typed and not sent stays with its conversation, across reloads
 const draftKey = (id) => "jep.draft." + id
 function saveDraft() {
-  if (!current) return
+  if (!current || editing) return
   const text = $("input").value
   try { text.trim() ? localStorage.setItem(draftKey(current), text) : localStorage.removeItem(draftKey(current)) } catch {}
 }
@@ -1220,10 +1237,76 @@ function queuedMark(node, q) {
   node.classList.add("queued-msg")
   node.dataset.info = q.steer ? "goes in at the next step" : "runs after this turn"
   if (!q.clientID) return
-  const b = el("button", "retry-send", "Cancel")
-  b.type = "button"
-  b.onclick = () => { b.disabled = true; cancelQueued(q.clientID) }
-  node.querySelector(".body").append(b)
+  if (editing?.clientID === q.clientID) node.classList.add("editing")
+  const actions = el("div", "queued-actions")
+  const edit = el("button", "", "Edit")
+  edit.type = "button"
+  edit.onclick = () => startEdit(q)
+  const cancel = el("button", "", "Cancel")
+  cancel.type = "button"
+  cancel.onclick = () => { cancel.disabled = true; cancelQueued(q.clientID) }
+  actions.append(edit, cancel)
+  node.querySelector(".body").append(actions)
+}
+
+// Editing a queued message happens in the message box, which no redraw
+// touches: its words go there, Enter saves them back into the line, Esc
+// puts back whatever was being typed before.
+let editing = null // { clientID, session, before }
+const editBar = el("div", "editing-bar")
+editBar.hidden = true
+function startEdit(q) {
+  if (!q?.clientID || !current) return
+  if (editing) endEdit()
+  editing = { clientID: q.clientID, session: current, before: $("input").value }
+  const close = el("button", "link", "Cancel")
+  close.type = "button"
+  close.onclick = () => endEdit()
+  editBar.replaceChildren(el("span", "", "Editing a queued message · Enter saves · Esc cancels"), close)
+  editBar.hidden = false
+  $("compose").insertBefore(editBar, $("compose").querySelector(".box"))
+  $("input").value = q.text
+  grow()
+  $("input").focus()
+  $("input").setSelectionRange(q.text.length, q.text.length)
+  render()
+}
+function endEdit(keep = false) {
+  if (!editing) return
+  const before = editing.before
+  editing = null
+  editBar.hidden = true
+  if (!keep) $("input").value = before
+  grow()
+  render()
+}
+async function saveEdit() {
+  const { clientID, session } = editing
+  const text = $("input").value.trim()
+  const p = pendingText.find((x) => x.clientID === clientID)
+  const q = queue.find((x) => x.clientID === clientID)
+  const old = p?.text ?? q?.text
+  if (!text || text === old) return endEdit()
+  // the new words show at once; the daemon's line is the one that counts
+  if (p) p.text = text
+  if (q) q.text = text
+  endEdit()
+  try {
+    await call("/queue/edit", { id: session, clientID, text })
+  } catch (err) {
+    // too late: it already started with the old words. Nothing typed is lost:
+    // the new words wait in the box, to send as a message of their own.
+    if (p) p.text = old
+    if (q) q.text = old
+    if (session === current) {
+      const typed = $("input").value.trim()
+      $("input").value = [text, ...(typed ? [typed] : [])].join("\n\n")
+      grow()
+      saveDraft()
+    }
+    fail(new Error(/running|not queued/.test(err.message) ? "That message already started. Your edit is in the message box, to send on its own." : err.message))
+  }
+  if (session === current) { etag = null; readHistory().catch(() => {}) }
 }
 
 // Prompts sent "after this turn" wait in the daemon's line, and the next turn
