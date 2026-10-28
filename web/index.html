@@ -273,6 +273,18 @@
   @media (prefers-color-scheme: dark) { pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#c9d1d9;background:#0d1117}.hljs-doctag,.hljs-keyword,.hljs-meta .hljs-keyword,.hljs-template-tag,.hljs-template-variable,.hljs-type,.hljs-variable.language_{color:#ff7b72}.hljs-title,.hljs-title.class_,.hljs-title.class_.inherited__,.hljs-title.function_{color:#d2a8ff}.hljs-attr,.hljs-attribute,.hljs-literal,.hljs-meta,.hljs-number,.hljs-operator,.hljs-selector-attr,.hljs-selector-class,.hljs-selector-id,.hljs-variable{color:#79c0ff}.hljs-meta .hljs-string,.hljs-regexp,.hljs-string{color:#a5d6ff}.hljs-built_in,.hljs-symbol{color:#ffa657}.hljs-code,.hljs-comment,.hljs-formula{color:#8b949e}.hljs-name,.hljs-quote,.hljs-selector-pseudo,.hljs-selector-tag{color:#7ee787}.hljs-subst{color:#c9d1d9}.hljs-section{color:#1f6feb;font-weight:700}.hljs-bullet{color:#f2cc60}.hljs-emphasis{color:#c9d1d9;font-style:italic}.hljs-strong{color:#c9d1d9;font-weight:700}.hljs-addition{color:#aff5b4;background-color:#033a16}.hljs-deletion{color:#ffdcd7;background-color:#67060c} }
   pre code.hljs, code.hljs, .hljs { background: none; padding: 0; }
 </style>
+<script>
+// ?v=2 opens the next look: v2.css here and v2.js after the page's own script.
+// Without it the page is exactly as it was.
+const V2 = /[?&]v=2(&|$)/i.test(location.search)
+if (V2) {
+  document.documentElement.classList.add("v2")
+  document.querySelector("meta[name=viewport]").content += ", viewport-fit=cover, interactive-widget=resizes-content"
+  document.write('<link rel="stylesheet" href="/v2.css">'
+    + '<meta name="theme-color" content="#fcfbfa" media="(prefers-color-scheme: light)">'
+    + '<meta name="theme-color" content="#111113" media="(prefers-color-scheme: dark)">')
+}
+</script>
 <script src="/highlight.min.js" defer></script>
 <script src="/marked.js" defer></script>
 <script src="/purify.min.js" defer></script>
@@ -1723,5 +1735,6 @@ window.onhashchange = () => {
 setInterval(() => { if (token && !document.hidden) loadSessions().catch(() => {}) }, 60_000)
 show()
 </script>
+<script>if (V2) document.write('<script src="/v2.js"><\/script>')</script>
 </body>
 </html>
