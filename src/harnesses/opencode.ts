@@ -4,7 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { Agent, fetch, type RequestInit } from "undici"
-import type { AgentRef, HarnessAdapter, ModelRef, ModelCaps } from "../core/ports.ts"
+import type { AgentRef, HarnessAdapter, HarnessSettingSpec, ModelRef, ModelCaps } from "../core/ports.ts"
 import type { AskOption, AskQuestion, DomainEvent, FileDiff, HarnessError, Message, Part, ProjectSummary, SessionSummary, SkillDirs } from "../core/types.ts"
 import { TurnAbortedError } from "../core/types.ts"
 import { resolveAgent } from "../core/agents.ts"
@@ -311,6 +311,20 @@ function mapError(e: any): HarnessError {
   }
 }
 
+// opencode asks before a tool touches what its config does not allow, and jep
+// shows the ask as a card. Skipping is jep answering "Allow once" itself, for
+// the turns a chat runs with this on: opencode's own rules stay as they were,
+// and a question (the question tool asking you something) still comes to you.
+export const OPENCODE_SETTINGS: HarnessSettingSpec[] = [
+  {
+    id: "dangerouslySkipPermissions",
+    label: "Skip permission prompts",
+    description: "Answer opencode's permission requests with Allow once, so tool use does not stop for approval. Questions it asks you still come to you.",
+    default: false,
+    danger: true,
+  },
+]
+
 export class OpenCodeAdapter implements HarnessAdapter {
   readonly id = "opencode"
   readonly workspace: string
@@ -328,6 +342,8 @@ export class OpenCodeAdapter implements HarnessAdapter {
   // permission request ids already surfaced, so an ask opencode re-emits (or
   // sends under both event names) is shown once, not three times
   #askedPermissions = new Set<string>()
+  // sessions running a turn with permission prompts skipped (native ids)
+  #autoAllow = new Set<string>()
   // A question ask is answered by LABEL, not by jep's option id, and the ids
   // carry a truncated label (and a question index) that opencode would not
   // recognise. So the real label of each option is remembered here, keyed by
@@ -608,9 +624,11 @@ export class OpenCodeAdapter implements HarnessAdapter {
   async prompt(
     sessionID: string,
     text: string,
-    opts?: { timeoutMs?: number; signal?: AbortSignal; model?: ModelRef; filePaths?: string[]; agent?: string; quote?: string },
+    opts?: { timeoutMs?: number; signal?: AbortSignal; model?: ModelRef; filePaths?: string[]; agent?: string; quote?: string; harnessSettings?: Record<string, boolean> },
   ): Promise<Message> {
     const timeout = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS
+    const skip = opts?.harnessSettings?.dangerouslySkipPermissions === true
+    if (skip) this.#autoAllow.add(toNativeId(sessionID))
     // a fresh turn invalidates the last turn's provider failure: whatever we
     // recorded before is no longer this prompt's story
     this.#providerErrors.delete(toNativeId(sessionID))
@@ -677,7 +695,12 @@ export class OpenCodeAdapter implements HarnessAdapter {
     } finally {
       if (timer) clearTimeout(timer)
       opts?.signal?.removeEventListener("abort", onAbort)
+      if (skip) this.#autoAllow.delete(toNativeId(sessionID))
     }
+  }
+
+  settings(): HarnessSettingSpec[] {
+    return OPENCODE_SETTINGS
   }
 
   async messages(sessionID: string, opts?: { limit?: number }): Promise<Message[]> {
@@ -1026,6 +1049,14 @@ export class OpenCodeAdapter implements HarnessAdapter {
           if (this.#askedPermissions.has(permID)) return null
           if (this.#askedPermissions.size > 2_000) this.#askedPermissions.clear()
           this.#askedPermissions.add(permID)
+        }
+        // permission prompts skipped for this turn: answered here, never shown.
+        // Once per ask, since a re-emitted one stopped at the check above.
+        if (permID && rawSession && this.#autoAllow.has(rawSession)) {
+          detach(`allow ${permID}`, this.respondAsk(sessionID ?? "", permID, "once").then((ok) => {
+            if (!ok) console.error(`[ask] auto-allow ${permID} -> failed`)
+          }))
+          return null
         }
         // The runtime sends this as "permission.asked"; "permission.updated"
         // is the same ask surfaced through the older event name. The id alone

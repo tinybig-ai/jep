@@ -96,6 +96,11 @@
   .msg.user[data-info]:hover::after { right: 42px; }
   .msg.user .text a { color: #fff; }
   .msg.user details { color: #fffc; }
+  /* the harness folded the conversation: a divider across the log, not a
+     bubble. The marker is an empty user message otherwise. */
+  .divider { display: flex; align-items: center; gap: 12px; margin: 14px 0; color: var(--dim); font-size: 12px; }
+  .divider .line { flex: 1; height: 1px; background: var(--line); }
+  .divider.quiet { font-size: 11px; opacity: .75; }
   .text { overflow-wrap: anywhere; }
   .text.plain { white-space: pre-wrap; }
   .text > :first-child { margin-top: 0; }
@@ -209,6 +214,13 @@
   .queued small { color: var(--dim); font-size: 11px; flex: none; }
   .queued button.icon { padding: 2px 4px; line-height: 0; border-radius: 6px; }
   .queued button.icon:disabled { opacity: .3; cursor: default; }
+  .attachments { max-width: 780px; margin: 0 auto 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .attachment { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 7px 4px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--bubble); font-size: 12px; }
+  .attachment span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .attachment small { color: var(--dim); flex: none; }
+  .attachment button { border: none; padding: 0 2px; color: var(--dim); line-height: 1; }
+  .attachment button:hover { background: none; color: var(--text); }
+  .attachment.error { color: var(--accent); border-color: var(--accent); }
   button.link { border: none; padding: 0; background: none; color: var(--dim); font-size: 12px; text-decoration: underline dotted; text-underline-offset: 3px; }
   button.link:hover { color: var(--text); background: none; }
   .meter { display: inline-block; width: 44px; height: 5px; border-radius: 3px; background: var(--line); vertical-align: middle; margin-right: 6px; overflow: hidden; }
@@ -362,12 +374,14 @@ if (V2) {
     <div class="box">
       <textarea id="input" rows="1" placeholder="Message"></textarea>
       <button type="button" id="stop" title="Stop the running turn" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>Stop</button>
-      <button>Send</button>
+      <button type="submit" id="send">Send</button>
     </div>
+    <div id="attachments" class="attachments" hidden aria-live="polite"></div>
     <div class="status">
       <div class="tools">
         <button type="button" id="gear" class="icon" title="Conversation settings" aria-label="Conversation settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg></button>
-        <button type="button" id="newHere" class="icon" title="New conversation" aria-label="New conversation"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+        <button type="button" id="newHere" class="icon" title="Attach files" aria-label="Attach files"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m20.5 11.5-7.9 7.9a5 5 0 0 1-7.1-7.1l8.5-8.5a3.5 3.5 0 0 1 5 5l-8.6 8.6a2 2 0 0 1-2.8-2.8l7.8-7.8"/></svg></button>
+        <input id="attachInput" type="file" multiple hidden>
         <button type="button" id="mcp" class="icon" title="MCP servers" aria-label="MCP servers"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4"/></svg></button>
         <button type="button" id="skills" class="icon" title="Skills" aria-label="Skills"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3 5 14h6l-1 7 8-11h-6z"/></svg></button>
       </div>
@@ -527,6 +541,9 @@ const roles = new Map()   // messageID → role, as the feed announces them
 const sending = new Map() // session → prompts of ours still in flight
 let pendingText = []      // sends the record does not show yet
 let queue = []            // the daemon's prompts waiting behind the running turn, in order
+let attachments = []      // files uploaded for the next prompt
+const attachmentsOf = new Map() // conversation → its attachments while another is open
+const ATTACH_MAX = 1 * 1024 * 1024 * 1024
 
 // ── the session list ──────────────────────────────────────────────────────
 const announced = new Set()   // late workspaces already reported this visit
@@ -705,12 +722,16 @@ $("start").onsubmit = async (e) => {
 async function open(id) {
   endEdit()
   saveDraft()
+  if (current) attachmentsOf.set(current, attachments)
   current = id === "new" ? null : id
   $("start").hidden = id !== "new"
   $("scroll").hidden = id === "new"
   messages = []; asks = []; etag = null; hasMore = false; loadingOlder = false; live = new Map(); pendingText = []; queue = []
   $("input").value = (current && remembered(draftKey(current))) || ""
   grow()
+  // like the draft, a conversation's attachments wait for it
+  attachments = (current && attachmentsOf.get(current)) || []
+  renderAttachments()
   document.body.classList.toggle("chatting", !!id)
   renderSessions()
   $("title").textContent = sessions.find((s) => s.id === id)?.title || ""
@@ -850,6 +871,41 @@ function render(follow = true) {
 const isWork = (p) => (p.kind === "tool" && !isEdit(p)) || (p.kind === "reasoning" && p.text.trim())
 const isEdit = (p) => !!editsOf(p.name.toLowerCase(), typeof p.input === "object" && p.input ? p.input : {})
 
+// opencode folds the history and writes a synthetic user message whose only
+// part is the compaction marker; the summarize reply that answers it arrives as
+// the assistant message right after. The marker is the boundary between the
+// folded history and what follows, so it settles below that reply and right
+// before the next user turn. Drawn where it arrives, it is an empty user bubble
+// above the very words the compaction produced.
+const isCompactionPart = (p) => p.kind === "other" && p.nativeType === "compaction"
+const isAutoContinuePart = (p) => p.kind === "other" && p.nativeType === "compaction-continue"
+const isCompactionOnly = (m) => m.parts.length === 1 && isCompactionPart(m.parts[0])
+const isAutoContinueOnly = (m) => m.parts.length === 1 && isAutoContinuePart(m.parts[0])
+const saysNothing = (m) => m.role === "user" && !m.parts.some((p) => (p.kind === "text" && p.text.trim()) || p.kind === "quote" || p.kind === "file")
+
+// The auto-continue prompt is the next turn the divider settles against, so it
+// releases a held marker even though it is scaffolding, not words a person typed.
+function settleCompaction(all) {
+  if (!all.some(isCompactionOnly)) return all
+  const out = []
+  let held = null
+  for (const m of all) {
+    if (isCompactionOnly(m)) { held = m; continue }
+    if (held && m.role === "user") { out.push(held); held = null }
+    out.push(m)
+  }
+  if (held) out.push(held)
+  return out
+}
+
+function dividerNode(label, quiet = false) {
+  const node = el("div", "divider" + (quiet ? " quiet" : ""))
+  node.append(el("span", "line"), el("span", "label", label), el("span", "line"))
+  return node
+}
+const compactionNode = () => dividerNode("compaction complete")
+const autoContinueNode = () => dividerNode("· auto-continued ·", true)
+
 function transcript(all) {
   const out = []
   let run = []
@@ -858,9 +914,12 @@ function transcript(all) {
     else if (run.length > 1) out.push(assistant(workFold(run, last && busy())))
     run = []
   }
-  for (const m of all) {
+  for (const m of settleCompaction(all)) {
     if (m.role === "user") {
       flush()
+      if (isCompactionOnly(m)) { out.push(compactionNode()); continue }
+      if (isAutoContinueOnly(m)) { out.push(autoContinueNode()); continue }
+      if (saysNothing(m)) continue
       const node = messageNode("user", m.parts, m.queued ? null : m.retry || (() => retryMessage(m)))
       node.prepend(userNav(node))
       if (m.time) node.dataset.info = when(m.time)
@@ -1034,17 +1093,81 @@ function messageNode(role, parts, retry) {
   return node
 }
 
+function bytes(n) {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`
+  if (n >= 1024 * 1024 * 1024) return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function renderAttachments() {
+  const box = $("attachments")
+  if (!box) return
+  box.hidden = !attachments.length
+  box.replaceChildren(...attachments.map((file, i) => {
+    const chip = el("div", "attachment" + (file.error ? " error" : ""))
+    chip.title = file.error || file.name
+    chip.append(el("span", "", file.name))
+    if (file.uploading) chip.append(el("small", "", "Uploading…"))
+    else if (file.error) chip.append(el("small", "", file.error))
+    else chip.append(el("small", "", bytes(file.size)))
+    const remove = el("button", "", "×")
+    remove.type = "button"
+    remove.title = "Remove attachment"
+    remove.onclick = () => { attachments.splice(i, 1); renderAttachments() }
+    chip.append(remove)
+    return chip
+  }))
+  $("send").disabled = attachments.some((file) => file.uploading)
+}
+
+async function uploadAttachments(files) {
+  const id = current
+  // this conversation's list, which keeps filling while another one is open
+  const list = attachments
+  for (const file of files) {
+    const item = { name: file.name, size: file.size, id: null, uploading: false, error: "" }
+    if (file.size > ATTACH_MAX) {
+      item.error = "Too large"
+      list.push(item)
+      renderAttachments()
+      continue
+    }
+    item.uploading = true
+    list.push(item)
+    renderAttachments()
+    try {
+      const res = await fetch(`/attach?id=${encodeURIComponent(id)}&name=${encodeURIComponent(file.name)}`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": file.type || "application/octet-stream" },
+        body: file,
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || `Attachment failed (${res.status})`)
+      item.id = data.id
+      item.name = data.name || item.name
+    } catch (err) {
+      item.error = String(err.message || err)
+      if (id === current) fail(err)
+    } finally {
+      item.uploading = false
+      if (id === current) renderAttachments()
+    }
+  }
+}
+
 function sendPending(id, pending, how, throwOnFailure = false) {
   const send = (retry = false) => {
     pending.failed = false
     pending.retry = () => send(true)
     sending.set(id, (sending.get(id) || 0) + 1)
     render()
+    const files = pending.files?.length ? { files: pending.files } : {}
     pending.clientID = uuid()
     pending.sentAt = Date.now()
     // the queue shows it once the daemon has it in line
     if (pending.expectQueue) setTimeout(() => { if (id === current) readHistory().catch(() => {}) }, 300)
-    return call("/prompt", { id, text: pending.text, clientID: pending.clientID, ...how })
+    return call("/prompt", { id, text: pending.text, clientID: pending.clientID, ...how, ...files })
       .then((r) => {
         // Answered is not yet in the record: the harness writes the message a
         // little after, and dropping the bubble here left a gap where it was
@@ -1202,7 +1325,8 @@ $("compose").onsubmit = (e) => {
   e.preventDefault()
   if (editing) return void saveEdit()
   const text = $("input").value.trim()
-  if (!text || !current) return
+  const files = attachments.filter((file) => file.id).map((file) => file.id)
+  if ((!text && !files.length) || !current || attachments.some((file) => file.uploading)) return
   $("input").value = ""
   grow()
   saveDraft()
@@ -1211,7 +1335,7 @@ $("compose").onsubmit = (e) => {
   // words typed while an ask waits are the answer: stand the ask down so the turn can go on
   for (const a of asks) call("/reject", { id, askID: a.id }).catch(() => {})
   asks = []
-  const pending = { text, id: uuid(), failed: false, retry: null }
+  const pending = { text: text || "see the attached file", files, id: uuid(), failed: false, retry: null }
   // into a running turn: steer it in at the next tool step (the default), wait
   // for the turn to end, or stop the turn and run this now
   const mode = into ? $("compose").querySelector("input[name=mode]:checked").value : "steer"
@@ -1219,6 +1343,8 @@ $("compose").onsubmit = (e) => {
   pending.expectQueue = into && mode !== "now"
   pending.steer = mode === "steer"
   pendingText.push(pending)
+  attachments = []
+  renderAttachments()
   render()
   $("scroll").scrollTop = $("scroll").scrollHeight
   // the answer comes back when the whole turn ends; the feed shows it sooner
@@ -1413,7 +1539,6 @@ async function cancelQueued(clientID) {
   try { await call("/queue/cancel", { id, clientID }) } catch (err) { fail(err) }
   if (id === current) { etag = null; readHistory().catch(() => {}) }
 }
-
 
 // Stop ends the turn and everything waiting behind it; otherwise the next
 // waiting message starts the moment this one ends, and Stop looks like it did
@@ -1801,7 +1926,12 @@ $("skills").onclick = async () => {
   } catch (err) { $("menu").hidden = true; fail(err) }
 }
 
-$("newHere").onclick = () => { location.hash = "new" }
+$("newHere").onclick = () => $("attachInput").click()
+$("attachInput").onchange = () => {
+  const files = [...$("attachInput").files]
+  $("attachInput").value = ""
+  if (files.length) uploadAttachments(files).catch((err) => fail(err))
+}
 
 async function remove(s) {
   if (!confirm(`Delete "${s.title || "untitled"}" from the harness? This cannot be undone.`)) return
@@ -1962,6 +2092,13 @@ function remember(key, value) { try { localStorage.setItem(key, value) } catch {
 // lists), then DOMPurify, so whatever a reply holds can never become script.
 // Until both have loaded, the few marks a chat needs most are drawn by hand.
 const rendered = new Map() // source → html, so a redraw does not parse again
+const completeLink = (value) => {
+  if (!value || value !== value.trim() || /\s/.test(value)) return null
+  try {
+    const url = new URL(value)
+    return url.protocol === "http:" || url.protocol === "https:" ? value : null
+  } catch { return null }
+}
 
 function textNode(src) {
   const n = el("div", "text")
@@ -1982,6 +2119,16 @@ function textNode(src) {
     code.innerHTML = highlighted(code.textContent.replace(/\n$/, ""), EXT[lang] || lang)
     code.classList.add("hljs")
   }
+  for (const code of n.querySelectorAll("code")) {
+    if (code.parentElement?.tagName === "PRE") continue
+    const url = completeLink(code.textContent)
+    if (!url) continue
+    const a = el("a", "", code.textContent)
+    a.href = url
+    a.target = "_blank"
+    a.rel = "noreferrer"
+    code.replaceWith(a)
+  }
   for (const a of n.querySelectorAll("a[href]")) { a.target = "_blank"; a.rel = "noreferrer" }
   // a wide table scrolls on its own instead of widening the page
   for (const t of n.querySelectorAll("table")) {
@@ -1994,7 +2141,11 @@ function textNode(src) {
 
 function roughMarkdown(src) {
   const inline = (s) => esc(s)
-    .replace(/`([^`\n]+)`/g, "<code>$1</code>")
+    .replace(/`([^`\n]+)`/g, (_, code) => {
+      const raw = code.replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+      const url = completeLink(raw)
+      return url ? `<a href="${esc(url)}" target="_blank" rel="noreferrer">${code}</a>` : `<code>${code}</code>`
+    })
     .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
     .replace(/\[([^\]\n]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
   // split keeps each fence's language, so the pieces go text, language, code, text…

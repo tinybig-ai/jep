@@ -4,7 +4,7 @@ import { readFile, readdir } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import type { HarnessAdapter, ModelRef, ModelCaps } from "../core/ports.ts"
+import type { HarnessAdapter, HarnessSettingSpec, ModelRef, ModelCaps } from "../core/ports.ts"
 import type { DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionSummary, SkillDirs } from "../core/types.ts"
 import { splitQuoteText, withQuoteText } from "../core/transcript.ts"
 
@@ -23,6 +23,19 @@ import { splitQuoteText, withQuoteText } from "../core/transcript.ts"
 const CODEX_BIN = process.env.CODEX_BIN ?? "codex"
 const CODEX_HOME = process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex")
 const DEFAULT_SANDBOX = process.env.JEP_CODEX_SANDBOX ?? "workspace-write"
+
+// Codex in exec mode never asks: it runs inside a sandbox instead. So its
+// "skip permissions" is the sandbox gone, under the same id as Claude's, so a
+// client draws one switch for both.
+export const CODEX_SETTINGS: HarnessSettingSpec[] = [
+  {
+    id: "dangerouslySkipPermissions",
+    label: "No sandbox",
+    description: "Run Codex with --dangerously-bypass-approvals-and-sandbox: commands reach the whole machine and the network, not only this folder. Codex never stops to ask either way.",
+    default: false,
+    danger: true,
+  },
+]
 
 const HARNESS_NS = "codex"
 const toInternalId = (native: string) => `${HARNESS_NS}://${native}`
@@ -85,6 +98,10 @@ export class CodexAdapter implements HarnessAdapter {
   // the id a placeholder became once its first turn named the thread: the
   // gateway keeps one turn line per conversation by it, whichever id a
   // client sends
+  settings(): HarnessSettingSpec[] {
+    return CODEX_SETTINGS
+  }
+
   canonicalId(sessionID: string): string {
     return toInternalId(this.#real(sessionID))
   }
@@ -448,12 +465,14 @@ export class CodexAdapter implements HarnessAdapter {
       filePaths?: string[]
       agent?: string
       quote?: string
+      harnessSettings?: Record<string, boolean>
     },
   ): Promise<Message> {
     const native = this.#real(sessionID)
     const pending = isPending(native)
 
-    const args = ["exec", "--json", "--skip-git-repo-check", "-C", this.workspace, "-s", DEFAULT_SANDBOX]
+    const sandbox = opts?.harnessSettings?.dangerouslySkipPermissions ? ["--dangerously-bypass-approvals-and-sandbox"] : ["-s", DEFAULT_SANDBOX]
+    const args = ["exec", "--json", "--skip-git-repo-check", "-C", this.workspace, ...sandbox]
     if (opts?.model?.modelID) args.push("-m", opts.model.modelID)
     for (const f of opts?.filePaths ?? []) args.push("-i", f)
     // resume keeps the thread; a pending session starts a fresh one

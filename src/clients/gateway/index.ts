@@ -6,7 +6,7 @@
 // which stays in step with this file.
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
-import { mkdir, readdir, readFile, realpath, stat, writeFile } from "node:fs/promises"
+import { mkdir, open, readdir, readFile, realpath, stat, unlink, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path"
@@ -216,7 +216,7 @@ function mimeForPath(p: string): string {
   const ext = dot >= 0 ? p.slice(dot + 1).toLowerCase() : ""
   return IMAGE_MIME[ext] ?? "application/octet-stream"
 }
-const FILE_MAX = 25 * 1024 * 1024
+const FILE_MAX = 1 << 30
 
 async function loadTokens(dataHome: string): Promise<Map<string, number>> {
   try {
@@ -533,17 +533,23 @@ export function positiveInt(raw: string | null, fallback: number, lo: number, hi
   return () => clearInterval(tick)
 }
 
-// attachments are handed over as raw octets, not JSON
-const ATTACH_MAX = 32 << 20
-async function readRaw(req: IncomingMessage, cap: number): Promise<Buffer | null> {
-  const chunks: Buffer[] = []
+// attachments are handed over as raw octets, not JSON. Stream them to disk so
+// the 1 GB limit does not become a 1 GB in-memory allocation.
+const ATTACH_MAX = 1 << 30
+async function writeRaw(req: IncomingMessage, path: string, cap: number): Promise<boolean> {
+  const file = await open(path, "w")
   let size = 0
-  for await (const chunk of req) {
-    size += (chunk as Buffer).length
-    if (size > cap) return null
-    chunks.push(chunk as Buffer)
+  try {
+    for await (const chunk of req) {
+      const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array)
+      size += data.length
+      if (size > cap) return false
+      await file.write(data)
+    }
+    return true
+  } finally {
+    await file.close()
   }
-  return Buffer.concat(chunks)
 }
 
 export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
@@ -1271,13 +1277,14 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       if (path === "/attach" && req.method === "POST") {
         const attachSession = url.searchParams.get("id")
         const attachName = leafName(url.searchParams.get("name") ?? "file")
-        const raw = await readRaw(req, ATTACH_MAX)
-        if (raw == null) return json(res, 413, { error: "attachment too large" })
         if (!attachSession) return json(res, 400, { error: "id required" })
         const attachID = `att-${randomBytes(8).toString("hex")}`
         await mkdir(attachmentRoot, { recursive: true })
         const stored = join(attachmentRoot, `${attachID}-${attachName}`)
-        await writeFile(stored, raw)
+        if (!await writeRaw(req, stored, ATTACH_MAX)) {
+          await unlink(stored).catch(() => {})
+          return json(res, 413, { error: "attachment too large" })
+        }
         attachments.set(attachID, { path: stored, name: attachName, sessionID: attachSession })
         return json(res, 200, { id: attachID, name: attachName })
       }
