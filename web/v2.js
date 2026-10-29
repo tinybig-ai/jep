@@ -1,9 +1,8 @@
 "use strict"
-// jep v2: the next look, on top of index.html, loaded only with ?v=2. It runs
-// after the page's own script and reuses its state and helpers ($, el,
-// sessions, current, busy…). Where it changes behavior it wraps one of the
-// page's functions, so every caller inside the page gets the new one, and the
-// page without this file is unchanged.
+// jep's web client behavior. It runs after index.html's own script and reuses
+// that script's state and helpers ($, el, sessions, current, busy…). Where it
+// changes behavior it wraps one of the page's functions, so every caller inside
+// the page gets the new one.
 ;(() => {
   const MAC = /Mac|iPhone|iPad/.test(navigator.platform)
   const scroller = $("scroll")

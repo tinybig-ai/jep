@@ -310,16 +310,13 @@
   pre code.hljs, code.hljs, .hljs { background: none; padding: 0; }
 </style>
 <script>
-// ?v=2 opens the next look: v2.css here and v2.js after the page's own script.
-// Without it the page is exactly as it was.
-const V2 = /[?&]v=2(&|$)/i.test(location.search)
-if (V2) {
-  document.documentElement.classList.add("v2")
-  document.querySelector("meta[name=viewport]").content += ", viewport-fit=cover, interactive-widget=resizes-content"
-  document.write('<link rel="stylesheet" href="/v2.css">'
-    + '<meta name="theme-color" content="#fcfbfa" media="(prefers-color-scheme: light)">'
-    + '<meta name="theme-color" content="#111113" media="(prefers-color-scheme: dark)">')
-}
+// the page's own styles come first; v2.css adds to them here, and v2.js runs
+// after the page's own script. There is one client, not a version to choose.
+document.documentElement.classList.add("v2")
+document.querySelector("meta[name=viewport]").content += ", viewport-fit=cover, interactive-widget=resizes-content"
+document.write('<link rel="stylesheet" href="/v2.css">'
+  + '<meta name="theme-color" content="#fcfbfa" media="(prefers-color-scheme: light)">'
+  + '<meta name="theme-color" content="#111113" media="(prefers-color-scheme: dark)">')
 </script>
 <script src="/highlight.min.js" defer></script>
 <script src="/marked.js" defer></script>
@@ -2189,6 +2186,6 @@ window.onhashchange = () => {
 setInterval(() => { if (token && !document.hidden) loadSessions().catch(() => {}) }, 60_000)
 show()
 </script>
-<script>if (V2) document.write('<script src="/v2.js"><\/script>')</script>
+<script>document.write('<script src="/v2.js"><\/script>')</script>
 </body>
 </html>

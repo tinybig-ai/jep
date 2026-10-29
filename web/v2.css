@@ -1,6 +1,5 @@
-/* jep v2: the next look, loaded on top of index.html's own styles when the page
-   is opened with ?v=2. It comes after them, so a rule here wins at the same
-   specificity. */
+/* jep's web client styles, loaded after index.html's own. A rule here wins at
+   the same specificity. */
 
 :root {
   --bg: #fcfbfa; --side: #f5f3f0; --line: #e8e5e0; --text: #1c1b19; --dim: #8b877f;
@@ -213,7 +212,7 @@ button.send svg { width: 18px; height: 18px; fill: none; stroke: currentColor; s
 }
 #stop:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
 .modes { max-width: 760px; gap: 4px; margin-bottom: 8px; animation: v2-fade .2s var(--ease); }
-/* outlined, as in v1: a filled pill shone white in dark mode */
+/* outlined: a filled pill shone white in dark mode */
 .modes span { border: 1px solid var(--line); background: none; padding: 2px 11px; font-size: 12.5px; transition: border-color .15s, color .15s; }
 .modes span:hover { color: var(--text); border-color: var(--dim); }
 .modes input:checked + span { border-color: var(--text); color: var(--text); }

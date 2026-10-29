@@ -22,17 +22,14 @@ plain clients).
 
 ## Web client
 
-`GET /` serves `web/index.html`, a single page with no build step and no
-dependencies. Open `http://127.0.0.1:<JEP_GW_PORT>/` on the Mac (or the Mac's
-Tailscale address from elsewhere) and pair with the code once. The page keeps
-its token in the browser's `localStorage` and uses the same routes and stream
-as the phone. The page itself is not token-gated, because it holds no data.
+`GET /` serves `web/index.html` and the stylesheet and script it loads from
+`web/`: a single page with no build step and no dependencies. Open
+`http://127.0.0.1:<JEP_GW_PORT>/` on the Mac (or the Mac's Tailscale address
+from elsewhere) and pair with the code once. The page keeps its token in the
+browser's `localStorage` and uses the same routes and stream as the phone. The
+page itself is not token-gated, because it holds no data.
 
-Add `?v=2` to the address (for example `http://127.0.0.1:<JEP_GW_PORT>/?v=2`)
-to use the second version of the page. It loads `web/v2.css` and `web/v2.js`
-on top of `web/index.html`. The v2 script reuses the page's state and wraps some
-of its functions, so both versions run the same logic. Without the parameter,
-the page does not load these two files. Version 2 adds these features:
+The client adds these features:
 
 - A search box over the conversations (Cmd+K), and day groups in the list.
 - A draft for each conversation, kept across reloads.
