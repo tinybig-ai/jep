@@ -160,7 +160,8 @@
   .notice-copy { min-width: 0; flex: 1; }
   .notice-title { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .notice-body { color: var(--dim); line-height: 1.35; margin-top: 2px; overflow-wrap: anywhere; }
-  .notice .open { padding: 3px 8px; flex: none; }
+  .notice { cursor: pointer; }
+  .notice:hover { border-color: var(--dim); }
   .notice .dismiss { border: none; padding: 0 2px; color: var(--dim); line-height: 1; }
   .notice .dismiss:hover { background: none; color: var(--text); }
   .spin { color: var(--dim); }
@@ -1548,14 +1549,18 @@ function noticeNode(title, body, id, timeout) {
   const n = el("div", "notice")
   const copy = el("div", "notice-copy")
   copy.append(el("div", "notice-title", title), el("div", "notice-body", preview(body)))
-  const open = el("button", "open", "Open")
-  open.type = "button"
-  open.onclick = () => { n.remove(); location.hash = encodeURIComponent(id) }
+  // the whole card opens the chat; only × does not
+  n.setAttribute("role", "button")
+  n.tabIndex = 0
+  n.title = "Open"
+  const go = () => { n.remove(); location.hash = encodeURIComponent(id) }
+  n.onclick = go
+  n.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go() } }
   const dismiss = el("button", "dismiss", "×")
   dismiss.type = "button"
   dismiss.title = "Dismiss"
-  dismiss.onclick = () => n.remove()
-  n.append(copy, open, dismiss)
+  dismiss.onclick = (e) => { e.stopPropagation(); n.remove() }
+  n.append(copy, dismiss)
   $("notices").append(n)
   let timer = setTimeout(() => n.remove(), timeout)
   n.addEventListener("mouseenter", () => clearTimeout(timer))
@@ -1935,6 +1940,16 @@ $("delete").onclick = () => {
 }
 $("unpair").onclick = () => { if (confirm("Unpair this browser? You will need a pairing code again.")) { $("settings").close(); unpair() } }
 $("closeSettings").onclick = () => $("settings").close()
+// A click outside the settings is Done. Outside is the dialog itself (its
+// backdrop belongs to it), and only when the press began there too: a drag
+// that starts selecting in the title box and ends past the edge is not one.
+let pressedOutside = false
+$("settings").addEventListener("mousedown", (e) => { pressedOutside = e.target === $("settings") && outsideBox(e) })
+$("settings").addEventListener("click", (e) => { if (pressedOutside && e.target === $("settings") && outsideBox(e)) $("settings").close() })
+function outsideBox(e) {
+  const r = $("settings").getBoundingClientRect()
+  return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom
+}
 
 const markSeen = () => { if (current && !document.hidden) call("/seen", { id: current }).catch(() => {}) }
 

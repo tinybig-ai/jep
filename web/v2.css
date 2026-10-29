@@ -310,7 +310,8 @@ dialog .danger { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)
 
 .toast, #errorLog { border-radius: 12px; padding: 10px 14px; box-shadow: var(--shadow-lg); }
 .notice { background: var(--card); border-radius: 14px; box-shadow: var(--shadow-lg); padding: 12px 12px 12px 14px; }
-.notice .open { border-radius: 999px; }
+.notice { transition: border-color .15s, transform .1s var(--ease); }
+.notice:active { transform: scale(.98); }
 
 /* ── small screens ────────────────────────────────────────────────────── */
 @media (max-width: 700px) {
