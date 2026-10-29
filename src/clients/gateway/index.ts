@@ -21,7 +21,16 @@ import type { AskRequest, DomainEvent, HarnessError, Message, Part } from "../..
 import { eventSession, isAborted } from "../../core/types.ts"
 import { describeError } from "../../core/errors.ts"
 import { usageOf } from "../../core/usage.ts"
-import { attachedPaths, quoteBlock, stripInjectedContext, transcriptText } from "../../core/transcript.ts"
+import { attachedPaths, quoteBlock, readLoopMarker, stripInjectedContext, transcriptText } from "../../core/transcript.ts"
+import {
+  continuationText,
+  evaluateLoop,
+  runVerifier,
+  LOOP_DEFAULT_TURNS,
+  LOOP_MAX_TURNS,
+  type LoopState,
+  type LoopVerify,
+} from "../../core/loops.ts"
 import { newPairCode } from "../telegram/pair.ts"
 import { detach } from "../../core/detach.ts"
 
@@ -99,6 +108,7 @@ const PINNED_FILE = "gateway-pinned.json"
 const SEEN_FILE = "gateway-seen.json"
 const PUSH_FILE = "gateway-push.json"
 const HARNESS_SETTINGS_FILE = "gateway-harness-settings.json"
+const LOOPS_FILE = "gateway-loops.json"
 // asks remembered per conversation for /history; pending ones are never dropped
 const ASK_LEDGER_MAX = 50
 const BODY_MAX = 1 << 20
@@ -179,10 +189,25 @@ function cleanForDisplay(m: Message): Message {
       ? attachedPaths(stripInjectedContext(p.text)).map((fp) => ({ kind: "file" as const, filePath: fp, fileName: basename(fp), mimeType: mimeForPath(fp) }))
       : [],
   )
-  const parts = m.parts
-    .map((p) => (p.kind === "text" ? { ...p, text: transcriptText(p.text) } : p))
-    .filter((p) => p.kind !== "text" || p.text.trim().length > 0)
-  return { ...m, parts: [...parts, ...files] }
+  // A loop continuation is addressed to the model. Its marker becomes a
+  // boundary the client draws, and the instruction itself is dropped — shown
+  // back, it reads as if the person typed jep's scaffolding.
+  let loop: Message["loop"]
+  const parts: Part[] = []
+  for (const p of m.parts) {
+    if (p.kind !== "text") {
+      parts.push(p)
+      continue
+    }
+    const marker = readLoopMarker(stripInjectedContext(p.text))
+    if (marker) {
+      loop = marker
+      continue
+    }
+    const text = transcriptText(p.text)
+    if (text.trim()) parts.push({ ...p, text })
+  }
+  return { ...m, parts: [...parts, ...files], ...(loop ? { loop } : {}) }
 }
 
 // A pod: a conversation that needs a harness but no folder of its own. The
@@ -331,6 +356,34 @@ async function loadHarnessSettings(dataHome: string): Promise<Map<string, Sessio
 const saveHarnessSettings = async (dataHome: string, settings: Map<string, SessionHarnessSettings>): Promise<void> => {
   await mkdir(dataHome, { recursive: true })
   await writeFile(join(dataHome, HARNESS_SETTINGS_FILE), JSON.stringify(Object.fromEntries(settings), null, 1))
+}
+
+// The loops this daemon is driving, keyed by canonical session id. A loop does
+// not resume itself after a restart: the turn queue did not survive either, and
+// a daemon that picked up mid-loop would spend tokens with nobody watching. The
+// record stays so the client can say what happened.
+async function loadLoops(dataHome: string): Promise<Map<string, LoopState>> {
+  try {
+    const raw = JSON.parse(await readFile(join(dataHome, LOOPS_FILE), "utf8")) as Record<string, LoopState>
+    const loops = new Map<string, LoopState>()
+    for (const [sessionID, value] of Object.entries(raw)) {
+      if (!value || typeof value !== "object" || !value.spec) continue
+      if (value.status === "running") {
+        value.status = "stopped"
+        value.error = "the daemon restarted"
+        value.updatedAt = Date.now()
+      }
+      loops.set(sessionID, value)
+    }
+    return loops
+  } catch {
+    return new Map()
+  }
+}
+
+const saveLoops = async (dataHome: string, loops: Map<string, LoopState>): Promise<void> => {
+  await mkdir(dataHome, { recursive: true })
+  await writeFile(join(dataHome, LOOPS_FILE), JSON.stringify(Object.fromEntries(loops), null, 1))
 }
 
 function valuesForSettings(specs: HarnessSettingSpec[], values: SessionHarnessSettings = {}): SessionHarnessSettings {
@@ -588,6 +641,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   const models = await loadModels(deps.dataHome)
   const agents = await loadAgents(deps.dataHome)
   const harnessSettings = await loadHarnessSettings(deps.dataHome)
+  const loops = await loadLoops(deps.dataHome)
   // A session's settings, under the id the phone uses now. Claude names a new
   // conversation with a placeholder and learns its real id once the first turn
   // starts streaming; the phone moves to the real id right then, mid-turn,
@@ -896,6 +950,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     clientID?: string
     /** the words this answers; the adapter hands it to its harness */
     quote?: string
+    /** queued by a loop, so this turn advances it and never merges with a
+     * person's waiting words */
+    loop?: boolean
     resolve: (r: TurnResult) => void
     /** set on a turn built from several waiting prompts: every handle in it */
     clientIDs?: string[]
@@ -936,6 +993,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     handover?: boolean
   }
   const newTurnState = (): TurnState => ({ running: null, waiting: [], lastActivity: Date.now(), runningTools: new Map() })
+  // read through a function: the assignment above narrows the property to
+  // undefined for the rest of runNext, and the abort path sets it behind our back
+  const endingOf = (state: TurnState): TurnEnd | undefined => state.ending
   const turns = new Map<string, TurnState>()
   // One conversation, one line. Claude names a new conversation with a
   // placeholder and learns its real id mid-turn; clients move to the real id
@@ -953,6 +1013,84 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   }
   const turnOf = (id: string): TurnState | undefined => turns.get(turnKey(id))
   const isActive = (id: string): boolean => turnOf(id)?.running != null
+
+  // ─── loops ──────────────────────────────────────────────────────────────
+  // A loop is one chat that keeps going: a goal, a stop condition that runs
+  // outside the model, and a cap. The gateway owns the queue, so it owns the
+  // next turn; the decisions live in core/loops.ts so the bot can drive the
+  // same loop without copying them.
+  const loopKey = (id: string): string => sessionAdapters.get(id)?.canonicalId?.(id) ?? id
+  const loopOf = (id: string): LoopState | null => loops.get(loopKey(id)) ?? null
+  const putLoop = (loop: LoopState): void => {
+    loops.set(loop.sessionID, loop)
+    detach("save loops", saveLoops(deps.dataHome, loops))
+    // the iteration and the ending are state a client cannot infer from the
+    // record; one nudge makes every open tab read history again
+    broadcast({ type: "session.changed", sessionID: loop.sessionID })
+  }
+  function adapterFor(id: string): HarnessAdapter | undefined {
+    return sessionAdapters.get(id) ?? sessionAdapters.get(loopKey(id))
+  }
+  // Stop the loop and take back everything it queued, so a Stop is not
+  // immediately followed by the next continuation.
+  const stopLoop = (key: string, status: LoopState["status"], error?: string): LoopState | null => {
+    const loop = loops.get(key)
+    if (!loop) return null
+    loop.status = status
+    loop.updatedAt = Date.now()
+    if (error) loop.error = error
+    const st = turns.get(key)
+    if (st) {
+      for (let i = st.waiting.length - 1; i >= 0; i--) {
+        const waiting = st.waiting[i]!
+        if (!waiting.loop) continue
+        st.waiting.splice(i, 1)
+        waiting.resolve({ status: 200, cancelled: true })
+      }
+    }
+    putLoop(loop)
+    return loop
+  }
+  const textOf = (m: Message | undefined): string =>
+    (m?.parts ?? []).map((p) => (p.kind === "text" ? p.text : "")).join("\n")
+
+  // The turn that just ended is the loop's; say whether it goes on, and if it
+  // does, put the next instruction in line. The verifier runs here, outside
+  // the model: an agent never grades its own work.
+  async function advanceLoop(key: string, loop: LoopState, answer: Message | undefined): Promise<void> {
+    if (loops.get(key) !== loop || loop.status !== "running") return
+    loop.iteration += 1
+    loop.updatedAt = Date.now()
+    let verify: LoopVerify | undefined
+    if (loop.spec.verify) {
+      const adapter = adapterFor(key)
+      if (!adapter) {
+        stopLoop(key, "failed", "the harness went away")
+        return
+      }
+      verify = await runVerifier(loop.spec.verify, loop.workspace)
+      loop.lastVerify = verify
+    }
+    const verdict = evaluateLoop({ iteration: loop.iteration, spec: loop.spec, lastText: textOf(answer), ...(verify ? { verify } : {}) })
+    if (verdict.done) {
+      loop.status = verdict.reason === "verified" || verdict.reason === "marker" ? "done" : "exhausted"
+      putLoop(loop)
+      return
+    }
+    // between the verifier and this push the person may have stopped it
+    if (loops.get(key) !== loop || loop.status !== "running") return
+    const st = turns.get(key) ?? newTurnState()
+    turns.set(key, st)
+    st.waiting.push({
+      text: continuationText(loop, verify),
+      filePaths: [],
+      steer: false,
+      loop: true,
+      clientID: `loop-${loop.iteration}-${Date.now().toString(36)}`,
+      resolve: () => {},
+    })
+    putLoop(loop)
+  }
 
   // End the running turn for a reason that is not a client stop. The abort is
   // what unblocks prompt(); `ending` is what tells the runner why, so the phone
@@ -1051,8 +1189,12 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       turns.delete(id)
       return
     }
-    // a forced prompt runs on its own: it was asked for ahead of the rest
-    const take = st.waiting[0]!.force ? 1 : st.waiting.length
+    // a forced prompt runs on its own: it was asked for ahead of the rest.
+    // A loop turn does too, and a person's prompts ahead of one never merge
+    // across it: the continuation is jep's instruction, not a thought of theirs.
+    const head = st.waiting[0]!
+    const firstLoop = st.waiting.findIndex((p) => p.loop === true)
+    const take = head.force || head.loop ? 1 : firstLoop > 0 ? firstLoop : st.waiting.length
     const next = mergeWaiting(st.waiting.splice(0, take))
     const adapter = await ensureListed(id)
     if (!adapter) {
@@ -1069,6 +1211,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     st.lastActivity = Date.now()
     const ac = new AbortController()
     st.signal = ac
+    let answer: Message | undefined
     try {
       const message = await adapter.prompt(id, next.text, {
         timeoutMs: 0,
@@ -1079,15 +1222,28 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         ...(next.quote ? { quote: next.quote } : {}),
         signal: ac.signal,
       })
+      answer = message
       next.resolve({ status: 200, message })
     } catch (err) {
       // An abort with a reason behind it is not a client stop: the watchdog or
       // the event stream ended this turn, and the reason is the whole point.
-      const end = st.ending
-      if (end && isAborted(err)) next.resolve(await settleEnded(adapter, id, end))
+      const end = endingOf(st)
+      if (end && isAborted(err)) {
+        const result = await settleEnded(adapter, id, end)
+        answer = result.message
+        // an idle is a finish; every other ending is the loop's stop condition
+        if (next.loop && end.kind !== "idle") stopLoop(turnKey(id), "failed", result.error)
+        next.resolve(result)
+      }
       // a stop is not a failure: it is the turn ending because somebody asked
-      else if (isAborted(err)) next.resolve({ status: 200, aborted: true })
-      else next.resolve({ status: 502, error: String((err as Error)?.message ?? err) })
+      else if (isAborted(err)) {
+        if (next.loop) stopLoop(turnKey(id), "stopped")
+        next.resolve({ status: 200, aborted: true })
+      } else {
+        const message = String((err as Error)?.message ?? err)
+        if (next.loop) stopLoop(turnKey(id), "failed", message)
+        next.resolve({ status: 502, error: message })
+      }
     } finally {
       st.running = null
       st.signal = undefined
@@ -1109,6 +1265,19 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           turns.delete(id)
           turns.set(real, st)
           key = real
+        }
+      }
+      // The loop sees the turn's own record before the queue settles, so the
+      // continuation it queues is next in line, not a race with it.
+      if (next.loop) {
+        const running = loops.get(key)
+        if (running?.status === "running") {
+          try {
+            await advanceLoop(key, running, answer)
+          } catch (err) {
+            console.error(`[loop] advance failed (gateway session ${key}): ${(err as Error)?.message ?? err}`)
+            stopLoop(key, "failed", String((err as Error)?.message ?? err))
+          }
         }
       }
       detach(`turn queue ${key}`, settle(st).then(() => runNext(key)))
@@ -2000,7 +2169,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const hasMore = limit > 0 && window.length > limit
         const messages = (limit > 0 ? window.slice(-limit) : window)
           .map(cleanForDisplay)
-          .filter((m) => m.role !== "user" || m.parts.length > 0)
+          // a loop turn has no words left after its marker: keep it so the
+          // client can still draw the boundary
+          .filter((m) => m.role !== "user" || m.parts.length > 0 || m.loop)
         // the asks ride along whole (they are few): each is placed by its own
         // anchor, and the pending one is what holds the composer
         const asks = (askLedger.get(id) ?? []).map((r) => ({ ...r.ask, state: r.state, ...(r.answer ? { answer: r.answer } : {}) }))
@@ -2014,9 +2185,12 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const st = turnOf(id)
         const busy = st != null && (st.running != null || st.settling === true || st.waiting.length > 0)
         const queue = (st?.waiting ?? []).map((p) => ({ clientID: p.clientID ?? null, text: p.text, steer: p.steer }))
-        const tag = createHash("sha1").update(JSON.stringify({ messages, hasMore, asks, busy, queue })).digest("hex").slice(0, 20)
+        // the same answer carries the loop, so a client that already asks for
+        // history every few seconds does not need a second poll to draw it
+        const loop = loopOf(id)
+        const tag = createHash("sha1").update(JSON.stringify({ messages, hasMore, asks, busy, queue, loop })).digest("hex").slice(0, 20)
         if (str("etag") === tag) return json(res, 200, { unchanged: true, etag: tag })
-        return json(res, 200, { messages, hasMore, asks, busy, queue, etag: tag })
+        return json(res, 200, { messages, hasMore, asks, busy, queue, loop, etag: tag })
       }
 
       if (path === "/prompt") {
@@ -2070,12 +2244,82 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         return json(res, result.status, { error: result.error ?? "prompt failed" })
       }
 
+      if (path === "/loop") {
+        const goal = (str("goal") ?? "").trim()
+        if (!goal) return json(res, 400, { error: "goal required" })
+        const asked = typeof b.max === "number" && Number.isFinite(b.max) ? Math.floor(b.max) : LOOP_DEFAULT_TURNS
+        const max = Math.max(1, Math.min(LOOP_MAX_TURNS, asked))
+        const verify = (str("verify") ?? "").trim()
+        const until = (str("until") ?? "").trim()
+        if (!verify && !until && max < 2) return json(res, 400, { error: "a loop without a stop condition needs more than one turn" })
+        const adapter = await ensureListed(id)
+        if (!adapter) return json(res, 404, { error: "no such session" })
+        const key = turnKey(id)
+        const existing = loops.get(key)
+        if (existing?.status === "running") return json(res, 409, { error: "a loop is already running" })
+        const ref = models.get(id)
+        const [providerID = "", modelID = ""] = ref ? ref.split("/") : []
+        const loop: LoopState = {
+          sessionID: key,
+          workspace: adapter.workspace,
+          spec: { goal, max, ...(verify ? { verify } : {}), ...(until ? { until } : {}) },
+          iteration: 0,
+          status: "running",
+          startedAt: Date.now(),
+          updatedAt: Date.now(),
+        }
+        putLoop(loop)
+        // the goal is a normal turn: the loop opens with words the person can
+        // read, and only what jep says after it is scaffolding
+        const st = turns.get(key) ?? newTurnState()
+        turns.set(key, st)
+        st.waiting.push({
+          text: goal,
+          filePaths: [],
+          ...(providerID && modelID ? { model: { providerID, modelID } } : {}),
+          ...(agents.get(id) ? { agent: agents.get(id) } : {}),
+          steer: false,
+          loop: true,
+          clientID: `loop-0-${Date.now().toString(36)}`,
+          resolve: () => {},
+        })
+        detach(`turn queue ${key}`, runNext(key))
+        return json(res, 200, { loop })
+      }
+
+      if (path === "/loop/stop") {
+        const key = turnKey(id)
+        const loop = loops.get(key)
+        if (!loop) return json(res, 404, { error: "no loop" })
+        if (loop.status === "running") {
+          const running = turns.get(key)?.running
+          stopLoop(key, "stopped")
+          // only the loop's own turn: a person's turn is theirs to finish
+          if (running?.loop) turns.get(key)?.signal?.abort()
+        }
+        return json(res, 200, { loop: loops.get(key) ?? null })
+      }
+
+      if (path === "/loop/clear") {
+        const key = turnKey(id)
+        if (!loops.has(key)) return json(res, 200, { ok: true })
+        if (loops.get(key)?.status === "running") stopLoop(key, "stopped")
+        loops.delete(key)
+        await saveLoops(deps.dataHome, loops)
+        broadcast({ type: "session.changed", sessionID: key })
+        return json(res, 200, { ok: true })
+      }
+
       if (path === "/stop") {
         console.error(`[stop] origin=client (gateway session ${id}, device ${token.slice(0, 6)}, from ${req.socket.remoteAddress ?? "?"})`)
         // all: the prompts waiting behind the turn stop too, instead of the
         // next one starting the moment this one ends. Their words come back,
         // so the client can hand them to its composer.
         const st = turnOf(id)
+        // Stop means the loop stops too: otherwise the next continuation is
+        // already in line and the stop did nothing visible. All of it, or the
+        // loop's own running turn; a turn a person started is theirs to finish.
+        if (b.all === true || st?.running?.loop) stopLoop(turnKey(id), "stopped")
         const dropped = b.all === true && st ? st.waiting.splice(0) : []
         for (const p of dropped) p.resolve({ status: 200, cancelled: true })
         const stopped = await adapter.abort(id).catch(() => false)
@@ -2096,9 +2340,14 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         if (path === "/queue/cancel") {
           st.waiting.splice(idx, 1)
           entry.resolve({ status: 200, cancelled: true })
+          // dropping the continuation is dropping the loop's next step
+          if (entry.loop) stopLoop(turnKey(id), "stopped")
           return json(res, 200, { ok: true })
         }
         if (path === "/queue/edit") {
+          // a continuation's text is jep's instruction, marker and all;
+          // rewriting it would break the boundary the clients draw
+          if (entry.loop) return json(res, 409, { error: "a loop turn cannot be edited" })
           const more = str("text") ?? ""
           if (!more.trim()) return json(res, 400, { error: "text required" })
           entry.text = more

@@ -221,6 +221,13 @@
   .attachment button { border: none; padding: 0 2px; color: var(--dim); line-height: 1; }
   .attachment button:hover { background: none; color: var(--text); }
   .attachment.error { color: var(--accent); border-color: var(--accent); }
+  /* a loop, while it runs: one line over the composer, not another bubble */
+  .loopbar { max-width: 780px; margin: 0 auto 8px; display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--bubble); font-size: 12px; color: var(--dim); }
+  .loopbar strong { color: var(--text); font-weight: 600; flex: none; }
+  .loopbar .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .loopbar button { padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); color: var(--text); font-size: 12px; }
+  #loopState { min-height: 16px; margin-bottom: 8px; font-size: 12px; color: var(--dim); }
+  #loopForm .line { margin-bottom: 8px; }
   button.link { border: none; padding: 0; background: none; color: var(--dim); font-size: 12px; text-decoration: underline dotted; text-underline-offset: 3px; }
   button.link:hover { color: var(--text); background: none; }
   .meter { display: inline-block; width: 44px; height: 5px; border-radius: 3px; background: var(--line); vertical-align: middle; margin-right: 6px; overflow: hidden; }
@@ -254,7 +261,8 @@
   dialog section { margin: 0 0 16px; }
   dialog h3 { margin: 0 0 6px; font-size: 12px; font-weight: 500; color: var(--dim); text-transform: uppercase; letter-spacing: .5px; }
   dialog .line { display: flex; gap: 8px; align-items: center; }
-  dialog input[type=text], dialog select { flex: 1; min-width: 0; padding: 7px 9px; background: var(--bubble); border: 1px solid var(--line); border-radius: 8px; }
+  dialog input[type=text], dialog input[type=number], dialog select { flex: 1; min-width: 0; padding: 7px 9px; background: var(--bubble); border: 1px solid var(--line); border-radius: 8px; }
+  dialog input[type=number] { flex: none; width: 64px; }
   dialog label.toggle { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0; font-size: 14px; }
   dialog label.toggle small { display: block; color: var(--dim); font-size: 12px; }
   dialog .danger { color: var(--accent); }
@@ -373,6 +381,7 @@ document.write('<link rel="stylesheet" href="/v2.css">'
       <button type="button" id="stop" title="Stop the running turn" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>Stop</button>
       <button type="submit" id="send">Send</button>
     </div>
+    <div id="loopBar" class="loopbar" hidden></div>
     <div id="attachments" class="attachments" hidden aria-live="polite"></div>
     <div class="status">
       <div class="tools">
@@ -407,6 +416,18 @@ document.write('<link rel="stylesheet" href="/v2.css">'
   <section id="usageSection">
     <h3>Usage</h3>
     <div id="usage" class="line"></div>
+  </section>
+  <section id="loopSection">
+    <h3>Loop</h3>
+    <div id="loopState"></div>
+    <form id="loopForm">
+      <div class="line"><input type="text" id="loopGoal" placeholder="Goal — what done looks like" autocomplete="off"></div>
+      <div class="line">
+        <input type="text" id="loopVerify" placeholder="Verify command, e.g. npm test (optional)" autocomplete="off">
+        <input type="number" id="loopMax" min="1" max="50" value="8" title="Turns" aria-label="Turns">
+      </div>
+      <div class="row"><button type="submit" id="loopStart">Start loop</button></div>
+    </form>
   </section>
   <section>
     <h3>Notifications</h3>
@@ -538,6 +559,7 @@ const roles = new Map()   // messageID → role, as the feed announces them
 const sending = new Map() // session → prompts of ours still in flight
 let pendingText = []      // sends the record does not show yet
 let queue = []            // the daemon's prompts waiting behind the running turn, in order
+let loop = null           // the loop this conversation is running, if any
 let attachments = []      // files uploaded for the next prompt
 const attachmentsOf = new Map() // conversation → its attachments while another is open
 const ATTACH_MAX = 1 * 1024 * 1024 * 1024
@@ -724,6 +746,7 @@ async function open(id) {
   $("start").hidden = id !== "new"
   $("scroll").hidden = id === "new"
   messages = []; asks = []; etag = null; hasMore = false; loadingOlder = false; live = new Map(); pendingText = []; queue = []
+  loop = null; renderLoop()
   $("input").value = (current && remembered(draftKey(current))) || ""
   grow()
   // like the draft, a conversation's attachments wait for it
@@ -755,12 +778,14 @@ async function readHistory() {
   if (!messages.some((m) => m.time < first)) hasMore = data.hasMore
   asks = data.asks.filter((a) => a.state === "pending")
   queue = data.queue ?? []
+  loop = data.loop ?? null
   for (const p of pendingText) {
     if (!p.expectQueue) continue
     if (queue.some((q) => q.clientID === p.clientID)) p.seenInQueue = true
     else if (p.seenInQueue || Date.now() - (p.sentAt || 0) > 2000) p.expectQueue = false
   }
   etag = data.etag
+  renderLoop()
   // prompts that waited together run as one turn, their words joined by blank
   // lines: a send is in the record once it is one of those pieces, said since
   const joined = messages.filter((m) => m.role === "user" && m.time).map((m) => ({ time: m.time, pieces: new Set(textOf(m).split("\n\n").map((t) => t.trim())) }))
@@ -902,6 +927,7 @@ function dividerNode(label, quiet = false) {
 }
 const compactionNode = () => dividerNode("compaction complete")
 const autoContinueNode = () => dividerNode("· auto-continued ·", true)
+const loopNode = (l) => dividerNode(`loop ${l.iteration}/${l.max}`, true)
 
 function transcript(all) {
   const out = []
@@ -916,6 +942,7 @@ function transcript(all) {
       flush()
       if (isCompactionOnly(m)) { out.push(compactionNode()); continue }
       if (isAutoContinueOnly(m)) { out.push(autoContinueNode()); continue }
+      if (m.loop) { out.push(loopNode(m.loop)); continue }
       if (saysNothing(m)) continue
       const node = messageNode("user", m.parts, m.queued ? null : m.retry || (() => retryMessage(m)))
       node.prepend(userNav(node))
@@ -1095,6 +1122,43 @@ function bytes(n) {
   if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`
   if (n >= 1024 * 1024 * 1024) return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`
   return `${(n / (1024 * 1024)).toFixed(1)} MB`
+}
+
+// A loop is visible over the composer while it runs, and once it is over it
+// stays until dismissed, so a stop or an exhausted cap is not a silent thing.
+function renderLoop() {
+  const bar = $("loopBar")
+  const running = loop?.status === "running"
+  const turn = loop ? Math.min(loop.spec.max, loop.iteration + (running ? 1 : 0)) : 0
+  const state = $("loopState")
+  if (state) {
+    const bits = loop ? [loop.status, `${turn}/${loop.spec.max}`, loop.spec.goal] : ["No loop."]
+    if (loop?.lastVerify && loop.lastVerify.code !== null && loop.lastVerify.code !== 0) bits.push(`verify exit ${loop.lastVerify.code}`)
+    if (loop?.error) bits.push(loop.error)
+    state.textContent = bits.join(" · ")
+    $("loopStart").disabled = running
+    $("loopGoal").disabled = running
+    $("loopVerify").disabled = running
+    $("loopMax").disabled = running
+  }
+  if (!bar) return
+  bar.hidden = !loop
+  if (!loop) return
+  const label = running ? `Loop ${turn}/${loop.spec.max}` : `Loop ${loop.status} · ${loop.iteration}/${loop.spec.max}`
+  const detail = running ? (loop.iteration ? "working" : "starting") : (loop.error || loop.spec.goal)
+  const text = el("span", "grow", detail)
+  text.title = detail
+  const action = el("button", "", running ? "Stop" : "Dismiss")
+  action.type = "button"
+  action.onclick = async () => {
+    action.disabled = true
+    try {
+      await call(running ? "/loop/stop" : "/loop/clear", { id: current })
+      etag = null
+      await readHistory()
+    } catch (err) { fail(err) } finally { action.disabled = false }
+  }
+  bar.replaceChildren(el("strong", "", label), text, action)
 }
 
 function renderAttachments() {
@@ -1975,6 +2039,7 @@ $("gear").onclick = async () => {
   $("notifyAsks").checked = notificationsEnabled("asks")
   $("notifyFailures").checked = notificationsEnabled("failures")
   notificationButton()
+  renderLoop()
   $("settings").showModal()
   loadDevices().catch((err) => fail(err))
   const [agents, harness] = await Promise.all([
@@ -2051,6 +2116,25 @@ $("renameForm").onsubmit = async (e) => {
 $("compact").onclick = async () => {
   $("compact").disabled = true
   try { await call("/compact", { id: current }); readHistory().catch(() => {}) } catch (err) { fail(err) } finally { $("compact").disabled = false }
+}
+$("loopForm").onsubmit = async (e) => {
+  e.preventDefault()
+  if (!current) return
+  const goal = $("loopGoal").value.trim()
+  if (!goal) return
+  const max = Math.max(1, Math.min(50, Number($("loopMax").value) || 8))
+  const verify = $("loopVerify").value.trim()
+  $("loopStart").disabled = true
+  try {
+    const result = await call("/loop", { id: current, goal, max, ...(verify ? { verify } : {}) })
+    loop = result.loop
+    $("loopGoal").value = ""
+    $("loopVerify").value = ""
+    $("settings").close()
+    etag = null
+    renderLoop()
+    readHistory().catch(() => {})
+  } catch (err) { fail(err) } finally { $("loopStart").disabled = false }
 }
 $("archive").onclick = async () => {
   try {

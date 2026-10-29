@@ -38,6 +38,27 @@ The client adds these features:
 - Alt+Up and Alt+Down to move between conversations.
 - Esc to stop a running turn. If the composer has text, Esc does not stop it.
 
+## Loops
+
+A loop keeps a conversation going by itself. `POST /loop` states a goal, and
+after every turn the gateway decides whether to continue: a verifier command
+runs in the workspace, or the reply must contain a stop marker, and a hard turn
+cap ends it either way. Every continuation is a normal turn whose text opens
+with a marker (`<!-- jep:loop 2/8 -->`); clients draw that as a boundary, not a
+bubble, and `/history` hides the instruction itself.
+
+- `verify` is the preferred stop: `npm test`, `cargo check`, a script. Exit 0
+  ends the loop; anything else continues, and the tail of its output is quoted
+  in the next turn.
+- Without `verify`, `until` is a substring the final reply must contain. The
+  continuation tells the model to produce it.
+- Without either, the loop runs `max` turns (default 8, at most 50).
+- The verifier runs in the conversation's workspace, outside the model: an
+  agent never grades its own work.
+- It stops on a failed turn, on `/stop`, on `/loop/stop`, or when the daemon
+  restarts. It never resumes by itself; the record stays so a client can say
+  what happened. `/loop/clear` forgets a finished loop.
+
 ## Commands (JSON POSTs)
 
 | route | body | returns |
@@ -55,7 +76,7 @@ The client adds these features:
 | `POST /mkdir` | `{path?,name}` | `{ok,path}`: create a folder inside the browse root (409 if it exists), so a conversation can start in a new one |
 | `POST /harness-settings` | `{id}` or `{harness}` | `{options[],values,compact?}`: the boolean settings a harness declares (`{id,label,description,default,danger?}`) and, by session, that conversation's values (by harness, the defaults) plus `compact`, whether its harness can compact (so a client offers the control only where it works) |
 | `POST /set-harness-setting` | `{id,key,enabled}` | `{ok,values}`: flip one declared setting for this conversation; persisted in `<DATA_HOME>/gateway-harness-settings.json` and handed to every prompt |
-| `POST /history` | `{id,limit?,before?,etag?}` | `{messages[],hasMore,asks[]}`: the newest `limit` messages (or, when `before` is a time, the newest `limit` older than it); `hasMore` says older pages exist; `asks` is every ask the conversation raised (the `ask.requested` shape plus `state`: `pending`/`answered`/`closed`, and `answer`, the option picked). Every answer carries an `etag`; send it back as `etag` and an unchanged window answers `{unchanged:true,etag}` instead |
+| `POST /history` | `{id,limit?,before?,etag?}` | `{messages[],hasMore,asks[],loop}`: the newest `limit` messages (or, when `before` is a time, the newest `limit` older than it); `hasMore` says older pages exist; `asks` is every ask the conversation raised (the `ask.requested` shape plus `state`: `pending`/`answered`/`closed`, and `answer`, the option picked); `loop` is this conversation's loop or null. Every answer carries an `etag`; send it back as `etag` and an unchanged window answers `{unchanged:true,etag}` instead |
 | `POST /prompt` | `{id,text,files?,clientID?,steer?,force?}` | resolves when *this* prompt's turn ends: `{message}`, `{aborted:true}`, `{cancelled:true}`, or an error. `files` are `attach` ids sent to the harness as `filePaths`; runs on the session's model and agent if set. A prompt into a busy session is queued, never refused: by default it steers in at the next tool boundary (`steer:false` waits for the turn to end), and `force:true` aborts the running turn and runs it next. `clientID` is the handle `/queue/*` acts on. A turn has no absolute deadline — see [Turn liveness](#turn-liveness) |
 | `POST /queue/cancel` | `{id,clientID}` | `{ok}`: drop a prompt still waiting (its `/prompt` resolves `{cancelled:true}`); 404 not queued, 409 already running |
 | `POST /queue/edit` | `{id,clientID,text}` | `{ok}`: change a waiting prompt's words |
@@ -73,6 +94,9 @@ The client adds these features:
 | `POST /diff` | `{id}` | `{files[]}`: files this conversation changed (`{file,additions,deletions,status?}`) |
 | `POST /git` | `{id}` | `{isRepository,branch,head,changedFiles,commits[]}`: the conversation's workspace repo, read through `core/git.ts` like Telegram's /git: branch, changed files (untracked included), last 30 commits (`{hash,shortHash,subject,author,time}`, hash is the short one, time in seconds). The client supplies no command and no path |
 | `POST /compact` | `{id}` | `{ok}`: compress the conversation's context (opencode's summarize, Claude Code's `/compact`). 501 when the harness has no such control, 409 when it refused (a turn in flight), 504 when the summarize ran out of time |
+| `POST /loop` | `{id,goal,max?,verify?,until?}` | `{loop}`: start a loop and queue the goal as its first turn. `max` is 1–50 (default 8); `verify` is a shell command whose exit 0 ends it; `until` is a substring the reply must contain. 409 when one is already running, 404 for an unknown session |
+| `POST /loop/stop` | `{id}` | `{loop}`: end future turns, drop what it queued, and abort its own running turn. A turn a person started is left to finish |
+| `POST /loop/clear` | `{id}` | `{ok}`: forget a finished loop |
 | `POST /subagents` | `{id}` | `{items[]}`: the subagent sessions this conversation spawned |
 | `POST /read` | `{id,path}` | `{path,text}`: a file the transcript linked to, as text; relative paths resolve in the conversation's workspace; only under served roots (403), at most `READ_MAX` (413) |
 | `GET /file` | `?p=<base64url path>` | the file's bytes, for inline images; only uploaded files (`attachments/`, `uploads/`) or a served workspace, symlinks resolved (403) |

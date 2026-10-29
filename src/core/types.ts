@@ -129,6 +129,9 @@ export interface Message {
   // The harness reports these on the message rather than as a failed request,
   // so without this a failed turn is indistinguishable from an empty one.
   error?: HarnessError
+  /** this turn was queued by a loop, not typed: clients draw a boundary, not a
+   * bubble whose words they hide */
+  loop?: { iteration: number; max: number }
 }
 
 // one file's accumulated change within a session, as reported by the harness

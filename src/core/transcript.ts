@@ -46,6 +46,19 @@ export const readQuoteBlock = (block: string): string | null => {
   return lines.map((l) => l.replace(/^> ?/, "")).join("\n").trim() || null
 }
 
+// A loop continuation is jep talking to the harness: the marker names the
+// iteration, and the body is the next instruction. It is a boundary in the
+// conversation, not something a person said, so clients draw a divider and
+// never the words.
+const LOOP_MARKER = /^<!-- jep:loop (\d{1,3})\/(\d{1,3}) -->\n?/
+
+export const loopMarker = (iteration: number, max: number): string => `<!-- jep:loop ${iteration}/${max} -->`
+
+export const readLoopMarker = (text: string): { iteration: number; max: number } | null => {
+  const m = text.match(LOOP_MARKER)
+  return m ? { iteration: Number(m[1]), max: Number(m[2]) } : null
+}
+
 /** for a harness that takes only text: the block, a blank line, the message */
 export const withQuoteText = (text: string, quote?: string): string =>
   quote?.trim() ? `${quoteBlock(quote)}\n\n${text}` : text
@@ -113,6 +126,7 @@ export const dropBlocks = (text: string): string => {
 // surrounding bookkeeping does not.
 export const transcriptText = (raw: string): string => {
   const text = stripAttachments(stripInjectedContext(raw))
+  if (readLoopMarker(text)) return ""
   const cmd = text.match(/<command-name>([^<]*)<\/command-name>/)
   if (cmd) {
     const args = text.match(/<command-args>([^<]*)<\/command-args>/)
