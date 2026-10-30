@@ -361,6 +361,9 @@ private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     override suspend fun queueForce(sessionId: String, clientID: String): Boolean =
         post("/queue/force", payload("id" to sessionId, "clientID" to clientID)).first in 200..299
 
+    override suspend fun queueMove(sessionId: String, clientID: String, to: Int): Boolean =
+        post("/queue/move", buildJsonObject { put("id", sessionId); put("clientID", clientID); put("to", to) }.toString()).first in 200..299
+
     override suspend fun seen(sessionId: String, at: Long): Boolean =
         post("/seen", buildJsonObject { put("id", sessionId); put("at", at) }.toString()).first in 200..299
 

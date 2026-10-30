@@ -855,7 +855,7 @@ function render(follow = true) {
   const all = [
     ...messages,
     ...pendingText.filter((p) => !inQueue(p)).map((p) => ({ role: "user", parts: [{ kind: "text", text: p.text }], undelivered: p.failed, retry: p.retry })),
-    ...(live.size ? [{ role: "assistant", parts: [...live.values()].map((l) => l.part), live: true }] : []),
+    ...(live.size ? [{ role: "assistant", id: [...live.values()][0].messageID, parts: [...live.values()].map((l) => l.part), live: true }] : []),
     // what waits for the next turn comes after the reply running now
     ...pendingText.filter(inQueue).map((p) => {
       const queued = queue.find((q) => q.clientID && q.clientID === p.clientID) ?? { clientID: p.clientID, steer: p.steer }
@@ -944,7 +944,7 @@ function transcript(all) {
       if (isAutoContinueOnly(m)) { out.push(autoContinueNode()); continue }
       if (m.loop) { out.push(loopNode(m.loop)); continue }
       if (saysNothing(m)) continue
-      const node = messageNode("user", m.parts, m.queued ? null : m.retry || (() => retryMessage(m)))
+      const node = messageNode("user", m.parts, m.queued ? null : m.retry || (() => retryMessage(m)), m.id)
       node.prepend(userNav(node))
       if (m.time) node.dataset.info = when(m.time)
       if (m.queued) queuedMark(node, m.queued)
@@ -959,7 +959,7 @@ function transcript(all) {
         out.push(assistant(toolNode(p)))
       } else if (shows(p)) {
         flush()
-        out.push(messageNode("assistant", [p]))
+        out.push(messageNode("assistant", [p], null, m.id))
       }
     }
     // a reply's details ride on the last thing it said
@@ -1095,11 +1095,11 @@ function keep(d, key, open = false) {
   return d
 }
 
-function messageNode(role, parts, retry) {
+function messageNode(role, parts, retry, messageID) {
   const node = el("div", "msg " + role)
   const body = el("div", "body")
   for (const p of parts) {
-    if (p.kind === "text" && p.text.trim()) body.append(textNode(p.text))
+    if (p.kind === "text" && p.text.trim()) body.append(textNode(p.text, messageID, role === "assistant"))
     else if (p.kind === "quote") body.append(fold("↪ " + p.text.slice(0, 80), p.text))
     else if (p.kind === "file") body.append(fileNode(p))
   }
@@ -2168,11 +2168,14 @@ function remembered(key) { try { return localStorage.getItem(key) } catch { retu
 function remember(key, value) { try { localStorage.setItem(key, value) } catch {} }
 
 // Markdown, the little of it a chat needs: code blocks, inline code, bold, links.
-// Everything is escaped first, so the text can never become markup.
-// Markdown through marked (GitHub's flavor: tables, lists, headings, task
-// lists), then DOMPurify, so whatever a reply holds can never become script.
-// Until both have loaded, the few marks a chat needs most are drawn by hand.
-const rendered = new Map() // source → html, so a redraw does not parse again
+  // Everything is escaped first, so the text can never become markup.
+  // Markdown through marked (GitHub's flavor: tables, lists, headings, task
+  // lists), then DOMPurify, so whatever a reply holds can never become script.
+  // Until both have loaded, the few marks a chat needs most are drawn by hand.
+  const rendered = new Map() // source → html, so a redraw does not parse again
+  // Last good parse per messageID (for streaming): keeps a valid table on screen
+  // while the next delta arrives incomplete. Like Android's retainState = true.
+  const lastGood = new Map() // messageID → html
 const completeLink = (value) => {
   if (!value || value !== value.trim() || /\s/.test(value)) return null
   try {
@@ -2181,7 +2184,7 @@ const completeLink = (value) => {
   } catch { return null }
 }
 
-function textNode(src) {
+function textNode(src, messageID, hold) {
   const n = el("div", "text")
   if (!window.marked || !window.DOMPurify) {
     n.classList.add("plain")
@@ -2193,6 +2196,16 @@ function textNode(src) {
     html = DOMPurify.sanitize(marked.parse(src, { gfm: true, breaks: true }))
     if (rendered.size > 2000) rendered.clear()
     rendered.set(src, html)
+  }
+  // An assistant message keeps the last render that had a table. Streaming hands
+  // the same message between the live row and the record, and a poll can report
+  // the turn idle for a frame mid-stream — keying the hold by message id and
+  // never releasing it on a transient state keeps the table from collapsing to
+  // text. A finalized message parses to the same table, so the entry is just a
+  // re-render of the truth by then.
+  if (messageID && hold) {
+    if (/<table\b/i.test(html)) { lastGood.set(messageID, html); if (lastGood.size > 2000) lastGood.clear() }
+    else if (lastGood.has(messageID)) html = lastGood.get(messageID)
   }
   n.innerHTML = html
   for (const code of n.querySelectorAll("pre > code")) {

@@ -178,6 +178,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalFocusManager
@@ -1058,14 +1063,19 @@ fun ChatScreen(
                 }
                 // Keep the visible queue in send order, after the newest message.
                 items(queuedDisplay.size, key = { "queued-${queuedDisplay[it].id}" }) { i ->
-                    QueuedBubble(queuedDisplay[i]) {
-                        // Let go of the composer first. A dialog hands focus back
-                        // to whatever held it when it closes, so "Send now" raised
-                        // the keyboard over a composer nobody was typing in.
-                        focus.clearFocus(force = true)
-                        keyboard?.hide()
-                        queuedMenuFor = queuedDisplay[i]
-                    }
+                    val q = queuedDisplay[i]
+                    QueuedBubble(
+                        q = q,
+                        onClick = {
+                            focus.clearFocus(force = true)
+                            keyboard?.hide()
+                            queuedMenuFor = q
+                        },
+                        onMoveUp = { vm.moveQueued(q.id, i - 1) },
+                        onMoveDown = { vm.moveQueued(q.id, i + 1) },
+                        canMoveUp = i > 0,
+                        canMoveDown = i < queuedDisplay.size - 1,
+                    )
                 }
                 // The last item gives end-of-conversation a stable scroll target.
                 item(key = "end-sentinel") { Spacer(Modifier.height(1.dp)) }
@@ -1136,7 +1146,12 @@ fun ChatScreen(
                 }
             }
         }
-        Composer(vm, replyTo) { replyTo = null }
+        Composer(
+            vm,
+            replyTo,
+            queuedEditFor = queuedEditFor,
+            onClearEdit = { queuedEditFor = null },
+        ) { replyTo = null }
     }
     state.openFile?.let { open ->
         if (open.url != null) ImageViewer(open.url, open.path) { vm.closeFile() }
@@ -1158,20 +1173,16 @@ fun ChatScreen(
             },
             dismissButton = {
                 Row {
-                    TextButton(onClick = { queuedMenuFor = null; queuedEditFor = q }) { Text("Edit") }
+                    TextButton(onClick = {
+                        queuedMenuFor = null
+                        // inline edit: the words go into the composer, the bar
+                        // above it says what Enter does
+                        vm.setDraft(q.text)
+                        queuedEditFor = q
+                    }) { Text("Edit") }
                     TextButton(onClick = { queuedMenuFor = null; queuedCancelFor = q }) { Text("Cancel") }
                 }
             },
-        )
-    }
-    queuedEditFor?.let { q ->
-        var text by remember(q.id) { mutableStateOf(q.text) }
-        AlertDialog(
-            onDismissRequest = { queuedEditFor = null },
-            title = { Text("Edit queued message") },
-            text = { OutlinedTextField(value = text, onValueChange = { text = it }, Modifier.fillMaxWidth()) },
-            confirmButton = { TextButton(onClick = { vm.editQueued(q.id, text); queuedEditFor = null }) { Text("Save") } },
-            dismissButton = { TextButton(onClick = { queuedEditFor = null }) { Text("Back") } },
         )
     }
     queuedCancelFor?.let { q ->
@@ -3465,7 +3476,14 @@ private fun WaitingForYou(question: Boolean, onJump: () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-private fun QueuedBubble(q: ChatViewModel.Queued, onClick: () -> Unit) {
+private fun QueuedBubble(
+    q: ChatViewModel.Queued,
+    onClick: () -> Unit,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
+) {
     // a steer, a message held for after the reply, and one stopping the reply
     // all wait, but for different things: the mark and the line under the
     // bubble say which, so a held message is never mistaken for a steer
@@ -3477,6 +3495,31 @@ private fun QueuedBubble(q: ChatViewModel.Queued, onClick: () -> Unit) {
         horizontalAlignment = Alignment.End,
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
+            // Reorder: the web client offers arrows beside drag handles; on a
+            // phone arrows are the reliable half of that, and they never fight
+            // the transcript's own scroll gestures.
+            if (canMoveUp || canMoveDown) {
+                Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                    Icon(
+                        Icons.Filled.ArrowUpward,
+                        "move up",
+                        Modifier
+                            .size(20.dp)
+                            .clickable(enabled = canMoveUp, onClick = onMoveUp)
+                            .alpha(if (canMoveUp) 0.7f else 0.2f),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Icon(
+                        Icons.Filled.ArrowDownward,
+                        "move down",
+                        Modifier
+                            .size(20.dp)
+                            .clickable(enabled = canMoveDown, onClick = onMoveDown)
+                            .alpha(if (canMoveDown) 0.7f else 0.2f),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             // a queued message looks like a real one — same side, same bubble —
             // only dimmed, with its mark beside it: it is waiting, not broken
             Icon(
@@ -3555,14 +3598,19 @@ private fun queuedExplainer(mode: SendMode) = when (mode) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: () -> Unit) {
+private fun Composer(
+    vm: ChatViewModel,
+    replyTo: ChatMessage?,
+    queuedEditFor: ChatViewModel.Queued? = null,
+    onClearEdit: () -> Unit = {},
+    onCancelReply: () -> Unit,
+) {
     val state by vm.state.collectAsState()
     // The draft lives in the ViewModel, not in a `remember` here: this composable
     // leaves composition the moment you tap back, and with it went everything you
     // had typed — while the attachment, held in the same state, survived. The
     // asymmetry read as the app eating the message.
     val draft = state.draft
-    var sendMenu by remember { mutableStateOf(false) }
     // Stop shows whenever a turn is active for this conversation — this client's,
     // or one started elsewhere (Telegram, a steer). Safe now that a tap on Send
     // while busy queues instead of stopping.
@@ -3576,12 +3624,24 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
     var expanded by rememberSaveable { mutableStateOf(false) }
     var previewing by remember { mutableStateOf<ChatViewModel.Attachment?>(null) }
     previewing?.let { AttachmentPreview(it) { previewing = null } }
+    // the mode a message typed now joins the turn with. Steer is the default
+    // both when the agent is idle (it is a plain send then) and when it is busy.
+    var sendMode by rememberSaveable { mutableStateOf(SendMode.STEER) }
     val send: () -> Unit = {
-        // a swipe-armed reply rides along as a quote, beside the words, never
-        // spliced into them as markdown
-        vm.send(draft, quote = replyTo?.let { quoteOf(it) })
-        onCancelReply()
-        expanded = false
+        val editing = queuedEditFor
+        if (editing != null) {
+            // Editing a queued message: save the edit instead of sending
+            vm.editQueued(editing.id, draft)
+            vm.setDraft("")
+            onClearEdit()
+        } else {
+            // a swipe-armed reply rides along as a quote, beside the words, never
+            // spliced into them as markdown
+            vm.send(draft, sendMode, replyTo?.let { quoteOf(it) })
+            onCancelReply()
+            expanded = false
+            sendMode = SendMode.STEER
+        }
     }
     // several at once: picking one file, then reopening the picker for the
     // next, was the only way to send a handful of screenshots
@@ -3620,6 +3680,67 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
                 .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
                 .padding(horizontal = 10.dp, vertical = 8.dp),
         ) {
+            // Inline edit bar for queued messages — like web's .editing-bar
+            queuedEditFor?.let { q ->
+                Surface(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    shape = RoundedCornerShape(Radius.card),
+                ) {
+                    Row(
+                        Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "Editing queued message · Enter saves · Esc cancels",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        TextButton(onClick = { onClearEdit() }) {
+                            Text("Cancel")
+                        }
+                    }
+                }
+            }
+            // Send mode toggle: inline pills above the composer, like the web client.
+            // Only visible when a turn is running — otherwise there is no choice.
+            if (busy) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    SendMode.entries.forEach { mode ->
+                        val look = sendModeLook(mode)
+                        val selected = sendMode == mode
+                        Surface(
+                            Modifier
+                                .clickable { sendMode = mode }
+                                .weight(1f),
+                            color = Color.Transparent,
+                            shape = pill,
+                            border = if (selected)
+                                BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface)
+                            else
+                                BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                        ) {
+                            Text(
+                                look.title,
+                                Modifier.padding(vertical = 6.dp, horizontal = 12.dp),
+                                fontSize = 13.sp,
+                                color = if (selected) MaterialTheme.colorScheme.onSurface
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                }
+            }
             if (state.attachments.isNotEmpty()) {
                 FlowRow(
                     Modifier.fillMaxWidth().padding(bottom = 8.dp),
@@ -3676,7 +3797,16 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
             OutlinedTextField(
                 value = draft,
                 onValueChange = { vm.setDraft(it) },
-                Modifier.fillMaxWidth().onSizeChanged { fieldPx = it.width }.testTag("composer"),
+                Modifier
+                    .fillMaxWidth()
+                    .onSizeChanged { fieldPx = it.width }
+                    .testTag("composer")
+                    .onKeyEvent { event ->
+                        if (queuedEditFor != null && event.type == KeyEventType.KeyDown && event.key == Key.Enter) {
+                            send()
+                            true
+                        } else false
+                    },
                 placeholder = { Text("Message the agent", color = MaterialTheme.colorScheme.onSurfaceVariant) },
                 shape = RoundedCornerShape(Radius.field),
                 minLines = 1,
@@ -3727,51 +3857,9 @@ private fun Composer(vm: ChatViewModel, replyTo: ChatMessage?, onCancelReply: ()
                     enabled = sendable,
                     tint = if (sendable) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     onClick = send,
-                    // hold to choose how it joins a running turn. With nothing
-                    // running there is no choice: a hold sends.
-                    onLongClick = {
-                        if (draft.isNotBlank() || state.attachments.isNotEmpty()) {
-                            if (busy) sendMenu = true else send()
-                        }
-                    },
                     modifier = Modifier.testTag("send-button"),
                 )
             }
-                if (sendMenu) {
-                    val quote = replyTo?.let { quoteOf(it) }
-                    AlertDialog(
-                        onDismissRequest = { sendMenu = false },
-                        title = { Text("Send how?") },
-                        text = {
-                            // every way in, in one place; a tap on Send is the first
-                            Column {
-                                SendMode.entries.forEach { mode ->
-                                    val look = sendModeLook(mode)
-                                    Row(
-                                        Modifier
-                                            .fillMaxWidth()
-                                            .clickable {
-                                                vm.send(draft, mode, quote)
-                                                sendMenu = false
-                                                onCancelReply()
-                                                expanded = false
-                                            }
-                                            .padding(vertical = 10.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Icon(look.icon, null, Modifier.size(22.dp), tint = MaterialTheme.colorScheme.primary)
-                                        Column(Modifier.padding(start = 14.dp)) {
-                                            Text(look.title, fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurface)
-                                            Text(look.caption, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                        confirmButton = {},
-                        dismissButton = { TextButton(onClick = { sendMenu = false }) { Text("Back") } },
-                    )
-                }
         }
     }
 }

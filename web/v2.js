@@ -174,9 +174,9 @@
   // ── every redraw of the log ─────────────────────────────────────────────
   const sources = new WeakMap() // a reply's text node → its Markdown
   const baseTextNode = textNode
-  textNode = function (src) {
-    const n = baseTextNode(src)
-    sources.set(n, src)
+  textNode = function (...args) {
+    const n = baseTextNode(...args)
+    sources.set(n, args[0])
     return n
   }
 

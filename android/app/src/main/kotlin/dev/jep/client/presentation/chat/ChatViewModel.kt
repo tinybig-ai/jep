@@ -696,6 +696,17 @@ class ChatViewModel(
         viewModelScope.launch { runCatching { repo.queueEdit(sessionId, id, body) } }
     }
 
+    /** move a queued message to position `to` (0 = next to run) */
+    fun moveQueued(id: String, to: Int) {
+        val list = _state.value.queued
+        val from = list.indexOfFirst { it.id == id }
+        if (from < 0 || to < 0 || to >= list.size || from == to) return
+        // show the new order at once; the daemon's line is the order that counts
+        val next = list.toMutableList().apply { add(to, removeAt(from)) }
+        _state.update { it.copy(queued = next) }
+        viewModelScope.launch { runCatching { repo.queueMove(sessionId, id, to) } }
+    }
+
     fun cancelQueued(id: String) {
         _state.update { st -> st.copy(queued = st.queued.filterNot { it.id == id }) }
         viewModelScope.launch { runCatching { repo.queueCancel(sessionId, id) } }

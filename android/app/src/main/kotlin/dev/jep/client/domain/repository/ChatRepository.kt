@@ -192,6 +192,8 @@ interface ChatRepository {
     suspend fun queueCancel(sessionId: String, clientID: String): Boolean
     suspend fun queueEdit(sessionId: String, clientID: String, text: String): Boolean
     suspend fun queueForce(sessionId: String, clientID: String): Boolean
+    /** move a queued prompt to position `to` in the daemon's line */
+    suspend fun queueMove(sessionId: String, clientID: String, to: Int): Boolean
     suspend fun stop(sessionId: String): Boolean
     /** compress the conversation's context; false when the harness refused */
     suspend fun compact(sessionId: String): Boolean
