@@ -169,7 +169,11 @@ forwarded as-is:
   again
 - `ask.requested`: an ask; options ride along, answer via `/respond`. It may
   carry `messageID`/`callID` (the tool call it holds up, for placing the card)
-  and `at` (when it was raised, on the harness's clock)
+  and `at` (when it was raised, on the harness's clock). `display` is the
+  gateway's rendering: `{title, body, actions[], allow, reject}` — a sentence
+  such as `Access a folder outside the project?`, the path or command as
+  `body`, and the option ids that mean yes and no, so no client has to read
+  `external_directory` or a harness's option names
 - `ask.resolved`: that ask is over — answered on any client, stood down, or
   outlived by its turn; take the card down
 - `session.error`: the harness said something failed
@@ -178,6 +182,16 @@ The client owns rendering: it opens `/stream` at startup, keeps it for the
 process lifetime (foreground service), and renders whatever arrives for the
 session it has open. Notifications are made on-device from the same feed; the
 server pushes nothing down on its own.
+
+## Push
+
+A registered device is woken for `turn.finished` and `ask.requested`. FCM gets
+**data only** (`kind`, `sessionID`, `title`, `body`, `askID`, `actions` as
+JSON), so Android decides whether to draw it. APNs must carry an alert; it
+uses the app's localization keys and adds `category: "JEP_ASK"` so the app's
+registered Allow/Deny actions appear. Both carry the ask's `askID` and
+`actions` (`{id,label,role}`), so an action answers through the same
+`/respond` or `/reject` the card uses.
 
 ## What the server does NOT do
 

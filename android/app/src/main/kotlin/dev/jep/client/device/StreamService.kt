@@ -11,6 +11,7 @@ import android.content.pm.ServiceInfo
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import dev.jep.client.MainActivity
+import dev.jep.client.domain.model.Ask
 import dev.jep.client.domain.repository.ChatEvent
 import kotlinx.coroutines.launch
 import dev.jep.client.domain.repository.ChatRepository
@@ -100,7 +101,13 @@ class StreamService : Service() {
                                 scope.launch {
                                     kotlinx.coroutines.delay(ASK_GRACE_MS)
                                     if (pendingAsks.containsKey(asked.ask.id)) {
-                                        notify(titleOf(repo, asked.sessionId), "needs you", asked.sessionId, Notifications.ASKED)
+                                        notify(
+                                            titleOf(repo, asked.sessionId),
+                                            "needs you",
+                                            asked.sessionId,
+                                            Notifications.ASKED,
+                                            asked.ask,
+                                        )
                                     }
                                 }
                             }
@@ -123,7 +130,7 @@ class StreamService : Service() {
     // asks surfaced and not yet settled, id -> conversation
     private val pendingAsks = java.util.concurrent.ConcurrentHashMap<String, String>()
 
-    private fun notify(title: String, text: String, sessionId: String, kind: Int) {
+    private fun notify(title: String, text: String, sessionId: String, kind: Int, ask: Ask? = null) {
         if (cancelled) return
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         // Tapping it should land in the conversation it is about, not on the
@@ -137,10 +144,8 @@ class StreamService : Service() {
                 .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        val n: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_chat)
-            .setContentTitle(title)
-            .setContentText(text)
             .setContentIntent(open)
             .setAutoCancel(true)
             // A group of its own, per conversation. Left ungrouped, Android
@@ -150,11 +155,40 @@ class StreamService : Service() {
             // landed on the list or in the chat depending on where the finger
             // hit. Android only bundles notifications that have no group.
             .setGroup("jep:$sessionId")
-            .build()
+        val shown = ask?.display
+        if (shown != null) {
+            // the harness's own sentence, with the conversation as context —
+            // and the two buttons somebody would tap next
+            builder.setContentTitle(shown.title)
+            builder.setSubText(title)
+            builder.setContentText(shown.body.ifBlank { text })
+            val allow = shown.allow?.let { id -> ask.options.firstOrNull { it.id == id } }
+            val reject = shown.reject?.let { id -> ask.options.firstOrNull { it.id == id } }
+            allow?.let { builder.addAction(0, it.label, askAction(ask.id, it.id, false)) }
+            reject?.let { builder.addAction(0, it.label.ifBlank { "Deny" }, askAction(ask.id, it.id, true)) }
+        } else {
+            builder.setContentTitle(title)
+            builder.setContentText(text)
+        }
+        val n: Notification = builder.build()
         // one per conversation and kind, so a newer one replaces an older one
         // and opening the chat can take them back (Notifications.clear)
         manager.notify(sessionId, kind, n)
     }
+
+    // Answering from the notification is one HTTP call, so it needs no screen:
+    // the receiver takes the ask and the option and posts them to the gateway.
+    private fun askAction(askId: String, optionId: String, reject: Boolean): PendingIntent =
+        PendingIntent.getBroadcast(
+            this,
+            "$askId:$optionId".hashCode(),
+            Intent(this, AskActionReceiver::class.java)
+                .setAction(AskActionReceiver.ACTION)
+                .putExtra(AskActionReceiver.EXTRA_ASK, askId)
+                .putExtra(AskActionReceiver.EXTRA_OPTION, optionId)
+                .putExtra(AskActionReceiver.EXTRA_REJECT, reject),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
 
     // the standing notification a foreground service must show: on a quiet
     // channel of its own, and in its own group, so it is never bundled with the

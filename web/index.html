@@ -1368,7 +1368,7 @@ function fileNode(p) {
 
 function askNode(a) {
   const node = el("div", "ask")
-  node.append(el("strong", "", a.title))
+  node.append(el("strong", "", a.display?.title || a.title))
   if (a.detail) node.append(el("div", "detail", a.detail))
   for (const q of a.questions?.length > 1 ? a.questions : []) node.append(el("div", "detail", q.title))
   const row = el("div")
@@ -1771,7 +1771,10 @@ async function notifyAnswer(id) {
 function notifyAsk(ask) {
   if (!ask?.sessionID || ask.sessionID === current) return
   const title = sessionLabel(ask.sessionID)
-  const body = ask.title || "This chat needs your input."
+  const shown = ask.display
+  const body = shown
+    ? [shown.title, shown.body].filter(Boolean).join(" — ")
+    : ask.title || "This chat needs your input."
   noticeNode(title, body, ask.sessionID, 10000)
   browserNotice(`jep needs your input · ${title}`, body, ask.sessionID, "asks")
 }

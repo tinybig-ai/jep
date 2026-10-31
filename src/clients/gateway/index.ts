@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url"
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path"
 import type { HarnessAdapter, HarnessSettingSpec, SessionImport, Terminal } from "../../core/ports.ts"
 import type { PairingAdmin } from "../../core/pairing.ts"
+import { describeAsk } from "../../core/asks.ts"
 import { pushFor, UnregisteredToken, type PushNotifier } from "../../core/push.ts"
 import { judgeTurn, LIVENESS, type LivenessConfig } from "../../core/liveness.ts"
 import { isRepo, repoStatus } from "../../core/git.ts"
@@ -2183,7 +2184,12 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           .filter((m) => m.role !== "user" || m.parts.length > 0 || m.loop)
         // the asks ride along whole (they are few): each is placed by its own
         // anchor, and the pending one is what holds the composer
-        const asks = (askLedger.get(id) ?? []).map((r) => ({ ...r.ask, state: r.state, ...(r.answer ? { answer: r.answer } : {}) }))
+        const asks = (askLedger.get(id) ?? []).map((r) => ({
+          ...r.ask,
+          display: describeAsk(r.ask),
+          state: r.state,
+          ...(r.answer ? { answer: r.answer } : {}),
+        }))
         // Hash-guarded: while a turn runs the phone asks for this every 1.2s,
         // and most of those answers are the same as the last. A client that
         // sends the tag of what it holds gets a few bytes back instead of the

@@ -360,6 +360,36 @@ public struct AskQuestion: Equatable, Hashable, Sendable {
     }
 }
 
+/// one option as a notification needs it: what it does, not just its label
+public struct AskAction: Equatable, Hashable, Sendable, Identifiable {
+    public var id: String
+    public var label: String
+    /// allow, always, reject or answer
+    public var role: String
+    public init(id: String, label: String, role: String) {
+        self.id = id
+        self.label = label
+        self.role = role
+    }
+}
+
+/// the gateway's reading of an ask: a sentence for a person, and which options
+/// are the yes and the no
+public struct AskDisplay: Equatable, Hashable, Sendable {
+    public var title: String
+    public var body: String
+    public var actions: [AskAction]
+    public var allow: String?
+    public var reject: String?
+    public init(title: String, body: String = "", actions: [AskAction] = [], allow: String? = nil, reject: String? = nil) {
+        self.title = title
+        self.body = body
+        self.actions = actions
+        self.allow = allow
+        self.reject = reject
+    }
+}
+
 public struct Ask: Equatable, Hashable, Sendable, Identifiable {
     public var id: String
     public var title: String
@@ -372,7 +402,9 @@ public struct Ask: Equatable, Hashable, Sendable, Identifiable {
     public var callId: String?
     /// when it was raised, on the harness's clock
     public var at: Int64?
-    public init(id: String, title: String, detail: String? = nil, options: [AskOption] = [], questions: [AskQuestion] = [], kind: String? = nil, messageId: String? = nil, callId: String? = nil, at: Int64? = nil) {
+    /// how the gateway says it should read; absent from a harness that predates it
+    public var display: AskDisplay?
+    public init(id: String, title: String, detail: String? = nil, options: [AskOption] = [], questions: [AskQuestion] = [], kind: String? = nil, messageId: String? = nil, callId: String? = nil, at: Int64? = nil, display: AskDisplay? = nil) {
         self.id = id
         self.title = title
         self.detail = detail
@@ -382,6 +414,7 @@ public struct Ask: Equatable, Hashable, Sendable, Identifiable {
         self.messageId = messageId
         self.callId = callId
         self.at = at
+        self.display = display
     }
 }
 

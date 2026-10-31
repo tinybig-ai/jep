@@ -73,8 +73,16 @@ export class FcmNotifier implements PushNotifier {
       body: JSON.stringify({
         message: {
           token: deviceToken,
-          // data only, deliberately: see core/push.ts
-          data: { kind: message.kind, sessionID: message.sessionID, ...(message.title ? { title: message.title } : {}) },
+          // data only, deliberately: see core/push.ts. Data values are strings,
+          // so the options ride as JSON and Android decides what to draw.
+          data: {
+            kind: message.kind,
+            sessionID: message.sessionID,
+            ...(message.title ? { title: message.title } : {}),
+            ...(message.body ? { body: message.body } : {}),
+            ...(message.askID ? { askID: message.askID } : {}),
+            ...(message.actions?.length ? { actions: JSON.stringify(message.actions) } : {}),
+          },
           android: { priority: "high" },
         },
       }),

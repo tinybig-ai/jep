@@ -98,7 +98,16 @@ extension AskDto {
             kind: kind,
             messageId: messageID,
             callId: callID,
-            at: at
+            at: at,
+            display: display.map { d in
+                AskDisplay(
+                    title: d.title,
+                    body: d.body,
+                    actions: d.actions.map { AskAction(id: $0.id, label: $0.label, role: $0.role ?? "answer") },
+                    allow: d.allow,
+                    reject: d.reject
+                )
+            }
         )
     }
 

@@ -1,4 +1,5 @@
-import type { DomainEvent } from "./types.ts"
+import { describeAsk } from "./asks.ts"
+import type { AskAction, DomainEvent } from "./types.ts"
 
 // Waking a sleeping phone.
 //
@@ -15,7 +16,14 @@ export interface PushMessage {
   sessionID: string
   /** the fact's own name, not a sentence */
   kind: "turn.finished" | "ask.requested"
+  /** what the lock screen shows: a person's sentence, not `external_directory` */
   title?: string
+  /** the command, the path, the question — shown under the title */
+  body?: string
+  /** the ask a reply belongs to, when this is one */
+  askID?: string
+  /** its options, so a notification can offer the yes and the no */
+  actions?: AskAction[]
 }
 
 /**
@@ -30,8 +38,17 @@ export const pushFor = (event: DomainEvent): PushMessage | null => {
   switch (event.type) {
     case "session.idle":
       return { sessionID: event.sessionID, kind: "turn.finished" }
-    case "ask.requested":
-      return { sessionID: event.ask.sessionID, kind: "ask.requested", title: event.ask.title }
+    case "ask.requested": {
+      const shown = describeAsk(event.ask)
+      return {
+        sessionID: event.ask.sessionID,
+        kind: "ask.requested",
+        title: shown.title,
+        body: shown.body,
+        askID: event.ask.id,
+        actions: shown.actions,
+      }
+    }
     default:
       return null
   }

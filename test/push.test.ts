@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { createVerify, generateKeyPairSync } from "node:crypto"
-import { UnregisteredToken, type PushMessage, type PushNotifier } from "../src/core/push.ts"
+import { pushFor, UnregisteredToken, type PushMessage, type PushNotifier } from "../src/core/push.ts"
 import { ApnsNotifier, apnsPayload, type ApnsPost } from "../src/push/apns.ts"
 import { routedNotifier } from "../src/push/routed.ts"
 
@@ -74,4 +74,47 @@ test("each token goes to the service that issued it", async () => {
   const fcmOnly = routedNotifier({ fcm: sender("fcm") })
   assert.equal(await fcmOnly.send("apns:zzz", finished), false)
   assert.deepEqual(got, ["apns:abc", "fcm:fcm-token"])
+})
+
+test("an ask's push says what it wants, and carries the two answers", () => {
+  const asked = pushFor({
+    type: "ask.requested",
+    sessionID: "s1",
+    ask: {
+      id: "per_1",
+      sessionID: "s1",
+      title: "external_directory",
+      detail: "/Users/me/other",
+      kind: "permission",
+      options: [
+        { id: "once", label: "Allow once", style: "success" },
+        { id: "always", label: "Always allow" },
+        { id: "reject", label: "Deny", style: "danger" },
+      ],
+    },
+  })
+  assert.equal(asked?.title, "Access a folder outside the project?")
+  assert.equal(asked?.body, "/Users/me/other")
+  assert.equal(asked?.askID, "per_1")
+  assert.equal(asked?.actions?.find((a) => a.id === "once")?.role, "allow")
+  assert.equal(asked?.actions?.find((a) => a.id === "reject")?.role, "reject")
+})
+
+test("an APNs ask asks the app for its Allow/Deny actions", () => {
+  const body = apnsPayload({
+    sessionID: "s1",
+    kind: "ask.requested",
+    title: "Access a folder outside the project?",
+    body: "/Users/me/other",
+    askID: "per_1",
+    actions: [{ id: "once", label: "Allow once", role: "allow" }],
+  })
+  const aps = body.aps as Record<string, unknown>
+  assert.deepEqual(aps.alert, {
+    "loc-key": "JEP_ASK_REQUESTED",
+    "loc-args": ["Access a folder outside the project? — /Users/me/other"],
+  })
+  assert.equal(aps.category, "JEP_ASK")
+  assert.equal(body.askID, "per_1")
+  assert.deepEqual(body.actions, [{ id: "once", label: "Allow once", role: "allow" }])
 })

@@ -6,6 +6,7 @@ import { homedir } from "node:os"
 import { basename, dirname, join, resolve } from "node:path"
 import type { HarnessAdapter, ModelCaps, ModelRef } from "../../core/ports.ts"
 import type { AskOption, AskRequest, FilePart, HarnessError, Part, ProjectSummary, SessionSummary, TextPart, ReasoningPart, ToolCallPart } from "../../core/types.ts"
+import { describeAsk } from "../../core/asks.ts"
 import { describeError } from "../../core/errors.ts"
 import { isAborted } from "../../core/types.ts"
 import { mdToHtml } from "./html.ts"
@@ -3306,7 +3307,9 @@ export class TelegramBot {
       return
     }
     const detail = ask.detail ? `\n\n\`\`\`\n${clipDetail(ask.detail)}\`\`\`` : ""
-    const text = `🔐 **${ask.title}**${detail}`
+    // the notification preview is this first line: `external_directory` there
+    // was the one thing about the request that told nobody anything
+    const text = `🔐 **${describeAsk(ask).title}**${detail}`
     const markup = kin(
       ask.options.map((o) => {
         const b: InlineButton = btn(o.label.slice(0, 40), `ask:${ask.id}#${o.id}`)

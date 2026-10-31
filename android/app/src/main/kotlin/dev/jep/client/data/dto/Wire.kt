@@ -294,6 +294,20 @@ data class AttachRes(val id: String, val name: String = "")
 @Serializable
 data class AskOptionDto(val id: String, val label: String, val style: String? = null)
 
+@Serializable
+data class AskActionDto(val id: String, val label: String, val role: String = "answer")
+
+/** core/asks.ts's reading of an ask: a sentence, its context, and two ids a
+ *  notification can answer with */
+@Serializable
+data class AskDisplayDto(
+    val title: String = "",
+    val body: String = "",
+    val actions: List<AskActionDto> = emptyList(),
+    val allow: String? = null,
+    val reject: String? = null,
+)
+
 /** one question inside a `question` ask, each with its own choices */
 @Serializable
 data class AskQuestionDto(
@@ -317,6 +331,7 @@ data class AskDto(
     val messageID: String? = null,
     val callID: String? = null,
     val at: Long? = null,
+    val display: AskDisplayDto? = null,
     /** in /history's ask record: pending, answered or closed */
     val state: String? = null,
     /** the option a client picked, when state is answered */

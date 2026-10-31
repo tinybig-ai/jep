@@ -27,19 +27,28 @@ export type ApnsPost = (url: string, headers: Record<string, string>, body: stri
 
 const b64url = (input: Buffer | string): string => Buffer.from(input).toString("base64url")
 
-export const apnsPayload = (message: PushMessage): Record<string, unknown> => ({
-  aps: {
-    alert:
-      message.kind === "ask.requested"
-        ? { "loc-key": "JEP_ASK_REQUESTED", "loc-args": [message.title ?? ""] }
-        : { "loc-key": "JEP_TURN_FINISHED" },
-    sound: "default",
-    "thread-id": message.sessionID,
-  },
-  kind: message.kind,
-  sessionID: message.sessionID,
-  ...(message.title ? { title: message.title } : {}),
-})
+export const apnsPayload = (message: PushMessage): Record<string, unknown> => {
+  const ask = message.kind === "ask.requested"
+  // one line for the lock screen: what the agent wants, then the path or
+  // command — the same words the card shows, just flattened
+  const line = [message.title, message.body].filter(Boolean).join(" — ")
+  return {
+    aps: {
+      alert: ask ? { "loc-key": "JEP_ASK_REQUESTED", "loc-args": [line] } : { "loc-key": "JEP_TURN_FINISHED" },
+      sound: "default",
+      "thread-id": message.sessionID,
+      // the app registers this category with an Allow and a Deny action; the
+      // reply itself is an option id the payload carries
+      ...(ask && message.askID ? { category: "JEP_ASK" } : {}),
+    },
+    kind: message.kind,
+    sessionID: message.sessionID,
+    ...(message.title ? { title: message.title } : {}),
+    ...(message.body ? { body: message.body } : {}),
+    ...(message.askID ? { askID: message.askID } : {}),
+    ...(message.actions?.length ? { actions: message.actions } : {}),
+  }
+}
 
 const http2Post: ApnsPost = (url, headers, body) =>
   new Promise((resolve, reject) => {

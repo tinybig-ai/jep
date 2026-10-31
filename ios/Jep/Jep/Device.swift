@@ -32,19 +32,27 @@ enum Notifier {
     }
 
     /// one notification per conversation and kind, so a newer one replaces it
-    static func post(_ notice: NotificationPolicy.Notice, sessionId: String, title: String?) {
+    static func post(_ notice: NotificationPolicy.Notice, sessionId: String, title: String?, ask: Ask? = nil) {
         let content = UNMutableNotificationContent()
         switch notice {
         case .finished:
             content.title = title ?? String(localized: "JEP_TURN_FINISHED")
             content.body = String(localized: "JEP_TURN_FINISHED")
         case .asked:
-            content.title = title ?? String(localized: "JEP_ASK_TITLE")
-            content.body = String(localized: "JEP_ASK_BODY")
+            // the gateway's sentence, not the harness's `external_directory`
+            content.title = ask?.display?.title ?? title ?? String(localized: "JEP_ASK_TITLE")
+            content.body = (ask?.display?.body).flatMap { $0.isEmpty ? nil : $0 } ?? String(localized: "JEP_ASK_BODY")
+            // the long-press actions: the same ids the card's buttons send
+            content.categoryIdentifier = "JEP_ASK"
         }
         content.sound = .default
         content.threadIdentifier = sessionId
-        content.userInfo = ["sessionID": sessionId, "kind": notice.rawValue]
+        var info: [String: Any] = ["sessionID": sessionId, "kind": notice.rawValue]
+        if let ask {
+            info["askID"] = ask.id
+            info["actions"] = (ask.display?.actions ?? []).map { ["id": $0.id, "label": $0.label, "role": $0.role] }
+        }
+        content.userInfo = info
         let request = UNNotificationRequest(identifier: "\(sessionId).\(notice.rawValue)", content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request)
     }
@@ -86,7 +94,11 @@ final class BackgroundWatch {
                 // with push on, Apple delivers these; posting too would say it twice
                 if Push.registered { continue }
                 let title = store.sessions.first { $0.id == s }?.title
-                if case .asked(_, let ask) = event { Notifier.post(notice, sessionId: s, title: ask.title) } else { Notifier.post(notice, sessionId: s, title: title) }
+                if case .asked(_, let ask) = event {
+                    Notifier.post(notice, sessionId: s, title: ask.title, ask: ask)
+                } else {
+                    Notifier.post(notice, sessionId: s, title: title)
+                }
             }
         }
     }
@@ -131,7 +143,15 @@ enum Push {
 
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
-        UNUserNotificationCenter.current().delegate = self
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+        // the two buttons a long-pressed ask offers; the option ids they send
+        // come with the notification, so the app needs no harness vocabulary
+        let allow = UNNotificationAction(identifier: "JEP_ALLOW", title: "Allow", options: [.authenticationRequired])
+        let deny = UNNotificationAction(identifier: "JEP_DENY", title: "Deny", options: [.destructive, .authenticationRequired])
+        center.setNotificationCategories([
+            UNNotificationCategory(identifier: "JEP_ASK", actions: [allow, deny], intentIdentifiers: [], options: []),
+        ])
         return true
     }
 
@@ -149,7 +169,27 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-        guard let id = response.notification.request.content.userInfo["sessionID"] as? String else { return }
+        let info = response.notification.request.content.userInfo
+        // answering from the notification is the same POST the card makes
+        if response.actionIdentifier == "JEP_ALLOW" || response.actionIdentifier == "JEP_DENY" {
+            guard let askID = info["askID"] as? String else { return }
+            let deny = response.actionIdentifier == "JEP_DENY"
+            let actions = info["actions"] as? [[String: Any]] ?? []
+            let allow = actions.first(where: { ($0["role"] as? String) == "allow" })
+            let option = (allow ?? actions.first(where: { ($0["role"] as? String) == "always" }))?["id"] as? String
+            await MainActor.run {
+                let repo = Composition.app.chat()
+                Task {
+                    if deny {
+                        _ = try? await repo.reject(askId: askID)
+                    } else if let option {
+                        _ = try? await repo.respond(askId: askID, optionId: option)
+                    }
+                }
+            }
+            return
+        }
+        guard let id = info["sessionID"] as? String else { return }
         await MainActor.run { Composition.app.openSessionById(id) }
     }
 }

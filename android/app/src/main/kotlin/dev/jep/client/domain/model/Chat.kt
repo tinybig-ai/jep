@@ -224,6 +224,24 @@ data class AskQuestion(
     val options: List<AskOption> = emptyList(),
 )
 
+/** one option as a notification needs to know it: what it does, not just its label */
+data class AskAction(
+    val id: String,
+    val label: String,
+    /** allow, always, reject or answer */
+    val role: String,
+)
+
+/** the gateway's reading of an ask: a sentence for a person, and which options
+ *  are the yes and the no */
+data class AskDisplay(
+    val title: String,
+    val body: String,
+    val actions: List<AskAction> = emptyList(),
+    val allow: String? = null,
+    val reject: String? = null,
+)
+
 data class Ask(
     val id: String,
     val title: String,
@@ -241,6 +259,8 @@ data class Ask(
     val callId: String? = null,
     /** when it was raised, on the harness's clock (the one message times use) */
     val at: Long? = null,
+    /** how the gateway says it should read; absent from a harness that predates it */
+    val display: AskDisplay? = null,
 )
 
 /**

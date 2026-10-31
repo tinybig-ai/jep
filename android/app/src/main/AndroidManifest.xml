@@ -57,5 +57,10 @@
             android:name=".device.StreamService"
             android:exported="false"
             android:foregroundServiceType="dataSync|remoteMessaging" />
+
+        <!-- the Allow / Deny buttons on an ask notification -->
+        <receiver
+            android:name=".device.AskActionReceiver"
+            android:exported="false" />
     </application>
 </manifest>

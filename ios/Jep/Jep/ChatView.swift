@@ -416,8 +416,10 @@ struct AskCard: View {
             Label(ask.kind == "question" ? "Waiting for your answer" : "Waiting for your approval", systemImage: "questionmark.bubble")
                 .jepFont(11)
                 .foregroundStyle(.secondary)
-            Text(ask.title).jepFont(15, .semibold)
-            if !multi, let d = ask.detail { Text(d).jepFont(13, design: .monospaced).foregroundStyle(.secondary) }
+            Text(ask.display?.title ?? ask.title).jepFont(15, .semibold)
+            if !multi, let d = (ask.display?.body).flatMap({ $0.isEmpty ? nil : $0 }) ?? ask.detail {
+                Text(d).jepFont(13, design: .monospaced).foregroundStyle(.secondary)
+            }
             if multi {
                 ForEach(Array(ask.questions.enumerated()), id: \.offset) { qi, q in
                     VStack(alignment: .leading, spacing: 6) {

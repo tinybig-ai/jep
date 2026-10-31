@@ -438,6 +438,23 @@ struct AskOptionDto: Decodable {
     var id: String, label: String, style: String?
 }
 
+struct AskActionDto: Decodable {
+    var id: String, label: String, role: String?
+}
+
+struct AskDisplayDto: Decodable {
+    var title: String, body: String, actions: [AskActionDto], allow: String?, reject: String?
+    enum K: String, CodingKey { case title, body, actions, allow, reject }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: K.self)
+        title = c.v(.title, "")
+        body = c.v(.body, "")
+        actions = c.v(.actions, [])
+        allow = c.o(.allow)
+        reject = c.o(.reject)
+    }
+}
+
 struct AskQuestionDto: Decodable {
     var title: String, detail: String?, multiple: Bool, options: [AskOptionDto]
     enum K: String, CodingKey { case title, detail, multiple, options }
@@ -461,12 +478,13 @@ struct AskDto: Decodable {
     var messageID: String?
     var callID: String?
     var at: Int64?
+    var display: AskDisplayDto?
     /// in /history's ask record: pending, answered or closed
     var state: String?
     /// the option a client picked, when state is answered
     var answer: String?
 
-    enum K: String, CodingKey { case id, sessionID, title, detail, options, kind, questions, messageID, callID, at, state, answer }
+    enum K: String, CodingKey { case id, sessionID, title, detail, options, kind, questions, messageID, callID, at, display, state, answer }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: K.self)
         id = try c.decode(String.self, forKey: .id)
@@ -479,6 +497,7 @@ struct AskDto: Decodable {
         messageID = c.o(.messageID)
         callID = c.o(.callID)
         at = c.o(.at)
+        display = c.o(.display)
         state = c.o(.state)
         answer = c.o(.answer)
     }

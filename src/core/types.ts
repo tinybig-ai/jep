@@ -179,6 +179,29 @@ export interface AskQuestion {
   options: AskOption[]
 }
 
+/** how an ask's options divide for a two-button notification: what lets the
+ *  worker go on, and what stops it. `answer` is a choice only the card can
+ *  offer (a free-form or multi-question answer). */
+export interface AskAction {
+  id: string
+  label: string
+  role: "allow" | "always" | "reject" | "answer"
+  style?: "success" | "danger"
+}
+
+/** an ask as a person should read it; core/asks.ts fills it in for clients and
+ *  notifications, so no screen has to know a harness's permission names */
+export interface AskDisplay {
+  /** one line: what the agent wants to do */
+  title: string
+  /** the command, the path, the question's context */
+  body: string
+  actions: AskAction[]
+  /** the option ids a yes/no notification answers with, when it can */
+  allow?: string
+  reject?: string
+}
+
 export interface AskRequest {
   id: string
   sessionID: string
@@ -198,6 +221,8 @@ export interface AskRequest {
   questions?: AskQuestion[]
   /** permission asks answer once/always/reject; questions carry their own choices */
   kind?: "permission" | "question"
+  /** how it reads to a person; added by the gateway, not the harness */
+  display?: AskDisplay
   /** Where in the transcript it was raised: the message, and the tool call that
    *  is waiting on the answer. A client puts the card right under that call.
    *  Placing it by time instead compared the harness's clock with the phone's,

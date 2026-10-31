@@ -3230,11 +3230,15 @@ private fun AskBar(ask: Ask, vm: ChatViewModel, spent: Boolean, choiceId: String
         shape = RoundedCornerShape(Radius.card),
     ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(ask.title, fontSize = 15.sp, color = MaterialTheme.colorScheme.onBackground)
+            Text(
+                ask.display?.title ?: ask.title,
+                fontSize = 15.sp,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
             // No line cap on the question itself. It used to clip at four lines
             // with no ellipsis, so a second question's text simply stopped
             // mid-sentence and read as though that were all of it.
-            ask.detail?.takeIf { !multi }?.let {
+            (ask.display?.body?.ifBlank { null } ?: ask.detail)?.takeIf { !multi }?.let {
                 Text(
                     it,
                     fontSize = 13.sp,

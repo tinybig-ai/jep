@@ -26,6 +26,8 @@ import dev.jep.client.data.dto.TokensDto
 import dev.jep.client.data.dto.UsageDto
 import dev.jep.client.data.dto.WorkspaceDto
 import dev.jep.client.domain.model.Ask
+import dev.jep.client.domain.model.AskAction
+import dev.jep.client.domain.model.AskDisplay
 import dev.jep.client.domain.model.AgentInfo
 import dev.jep.client.domain.model.AskOption
 import dev.jep.client.domain.model.AskQuestion
@@ -127,6 +129,15 @@ fun AskDto.toDomain() = Ask(
     messageId = messageID,
     callId = callID,
     at = at,
+    display = display?.let { d ->
+        AskDisplay(
+            title = d.title,
+            body = d.body,
+            actions = d.actions.map { AskAction(it.id, it.label, it.role) },
+            allow = d.allow,
+            reject = d.reject,
+        )
+    },
 )
 
 // What an edit changed, counted from the call's own arguments. opencode hands
