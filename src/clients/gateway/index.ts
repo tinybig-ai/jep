@@ -16,7 +16,7 @@ import { describeAsk } from "../../core/asks.ts"
 import { pushFor, UnregisteredToken, type PushNotifier } from "../../core/push.ts"
 import { LIVENESS, type LivenessConfig } from "../../core/liveness.ts"
 import { isRepo, repoStatus } from "../../core/git.ts"
-import { listSkills, skillDirsFor, writeSkillModelInvocation } from "../../core/skills.ts"
+import { listSkills, defaultSkillDirs, writeSkillModelInvocation } from "../../core/skills.ts"
 import type { AskRequest, DomainEvent, Message, Part } from "../../core/types.ts"
 import { usageOf } from "../../core/usage.ts"
 import { attachedPaths, readLoopMarker, stripInjectedContext, transcriptText } from "../../core/transcript.ts"
@@ -1703,7 +1703,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
 
       // the skills this conversation's harness loads, from the SKILL.md dirs
       if (path === "/skills") {
-        const dirs = adapter.skillDirs?.() ?? skillDirsFor(adapter.id, adapter.workspace)
+        const dirs = adapter.skillDirs?.() ?? defaultSkillDirs(adapter.workspace)
         let skills: unknown[] = []
         try {
           skills = await listSkills(dirs.userDirs, dirs.projectDirs)

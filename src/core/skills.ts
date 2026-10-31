@@ -32,31 +32,12 @@ export async function listSkills(userDirs: string[], projectDirs: string[]): Pro
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name))
 }
 
-// Where each harness looks, and whether flipping `disable-model-invocation`
-// means anything to it. This is the fallback convention table for adapters
-// that don't declare `skillDirs()` on the port; the shape itself lives in
-// core/types.ts. claude scans ~/.claude/skills and ~/.agents/skills plus
-// <ws>/.claude/skills; opencode auto-loads those same user dirs plus
-// <ws>/.opencode/skill(s); codex reads $CODEX_HOME/skills (default
-// ~/.codex/skills) and its SKILL.md has no disable flag — show, don't toggle.
-export function skillDirsFor(harness: string, workspaceDir: string): SkillDirs {
+// The roots for a harness that does not declare `skillDirs()` on the port: the widest
+// net, the cross-agent ~/.agents/skills convention plus the Claude originals. Each
+// adapter owns its real roots (and whether flipping `disable-model-invocation`
+// means anything to it); core names no harness.
+export function defaultSkillDirs(workspaceDir: string): SkillDirs {
   const home = homedir()
-  if (harness === "codex") {
-    return {
-      userDirs: [join(process.env.CODEX_HOME ?? join(home, ".codex"), "skills")],
-      projectDirs: [],
-      toggleable: false,
-    }
-  }
-  if (harness === "opencode") {
-    return {
-      userDirs: [join(home, ".claude", "skills"), join(home, ".agents", "skills")],
-      projectDirs: [join(workspaceDir, ".opencode", "skills"), join(workspaceDir, ".opencode", "skill")],
-      toggleable: true,
-    }
-  }
-  // claude, and any harness we don't know yet gets the widest net: the
-  // cross-agent ~/.agents/skills convention plus the Claude originals
   return {
     userDirs: [join(home, ".claude", "skills"), join(home, ".agents", "skills")],
     projectDirs: [join(workspaceDir, ".claude", "skills")],

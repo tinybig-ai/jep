@@ -21,7 +21,7 @@ import { addUsage, emptyUsage, fmtMoney, usageChip, usageOf } from "../../core/u
 import { JEP_CONTEXT, JEP_CONTEXT_FOOTER, transcriptText } from "../../core/transcript.ts"
 import type { Usage } from "../../core/usage.ts"
 import type { McpServer } from "../../core/types.ts"
-import { listSkills, skillDirsFor, writeSkillModelInvocation } from "../../core/skills.ts"
+import { listSkills, defaultSkillDirs, writeSkillModelInvocation } from "../../core/skills.ts"
 import type { Skill } from "../../core/skills.ts"
 import { matches, rankHits, snippet } from "./search.ts"
 import type { Hit } from "./search.ts"
@@ -3746,8 +3746,8 @@ export class TelegramBot {
   async #settingsSkills(chatID: number, messageID: number | null, page = 0): Promise<void> {
     const c = this.#chat(chatID)
     const ws = this.#activeWs(chatID)
-    // the adapter owns its roots; the core table covers harnesses that don't
-    const dirs = ws.adapter.skillDirs?.() ?? skillDirsFor(ws.adapter.id, ws.dir)
+    // the adapter owns its roots; the core default covers harnesses that don't
+    const dirs = ws.adapter.skillDirs?.() ?? defaultSkillDirs(ws.dir)
     let skills: Skill[] = []
     let note = ""
     try {
