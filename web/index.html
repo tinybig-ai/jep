@@ -199,13 +199,15 @@
   .queued:hover { background: var(--bubble); }
   .msg.queued-msg .body { opacity: .55; }
   .msg.queued-msg.editing .body { opacity: .3; outline: 2px dashed currentColor; outline-offset: 2px; }
-  .queued-actions { display: none; position: absolute; right: 0; top: calc(100% + 1px); gap: 10px; }
-  .msg.user:hover .queued-actions, .queued-actions:focus-within { display: flex; }
-  .queued-actions button { border: none; padding: 0 2px; background: none; color: var(--dim); font-size: 11px; line-height: 1.55; text-decoration: underline dotted; text-underline-offset: 3px; }
-  .queued-actions button:hover { color: var(--text); background: none; }
-  .msg.queued-msg[data-info]:hover::after { right: 90px; }
+  .queued-actions, .msg-actions { display: none; position: absolute; right: 0; top: calc(100% + 1px); gap: 10px; }
+  .msg.user:hover .queued-actions, .msg.user:hover .msg-actions, .queued-actions:focus-within, .msg-actions:focus-within { display: flex; }
+  .queued-actions button, .msg-actions button { border: none; padding: 0 2px; background: none; color: var(--dim); font-size: 11px; line-height: 1.55; text-decoration: underline dotted; text-underline-offset: 3px; }
+  .queued-actions button:hover, .msg-actions button:hover { color: var(--text); background: none; }
+  .msg.queued-msg[data-info]:hover::after, .msg.has-actions[data-info]:hover::after { right: 90px; }
   .editing-bar { max-width: 780px; margin: 0 auto 6px; display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--dim); }
-  .msg.queued-msg .body::after { content: "Queued"; display: block; font-size: 11px; opacity: .85; margin-top: 2px; }
+  /* a message the agent has not taken in yet is see-through, with its state in words */
+  .msg.sending .body { opacity: .7; }
+  .msg.queued-msg .body::after, .msg.sending .body::after { content: attr(data-state); display: block; font-size: 11px; opacity: .85; margin-top: 2px; }
   .queued[draggable=true] { cursor: grab; }
   .queued.dragging { opacity: .4; }
   .queued.drop-above { border-top-color: var(--accent); }
@@ -855,9 +857,12 @@ function render(follow = true) {
   const inQueue = (p) => queue.some((q) => q.clientID && q.clientID === p.clientID) || !!p.expectQueue
   const all = [
     ...messages,
-    ...pendingText.filter((p) => !inQueue(p)).map((p) => ({ role: "user", parts: [{ kind: "text", text: p.text }], undelivered: p.failed, retry: p.retry })),
+    ...pendingText.filter((p) => !inQueue(p)).map((p) => ({ role: "user", parts: [{ kind: "text", text: p.text }], undelivered: p.failed, retry: p.retry, sending: !p.failed })),
     ...(live.size ? [{ role: "assistant", id: [...live.values()][0].messageID, parts: [...live.values()].map((l) => l.part), live: true }] : []),
-    // what waits for the next turn comes after the reply running now
+  ]
+  // what waits for the next turn is not in the agent's reading yet: it comes
+  // after the reply running now and after "working", see-through
+  const waiting = [
     ...pendingText.filter(inQueue).map((p) => {
       const queued = queue.find((q) => q.clientID && q.clientID === p.clientID) ?? { clientID: p.clientID, steer: p.steer }
       return { role: "user", parts: [{ kind: "text", text: p.text }], queued }
@@ -868,6 +873,7 @@ function render(follow = true) {
   nodes.push(...transcript(all))
   for (const a of asks) nodes.push(askNode(a))
   if (busy() && !asks.length) nodes.push(el("div", "spin", "working"))
+  nodes.push(...transcript(waiting))
   // A box that scrolls on its own (a turn's work, a tool's output) is a new
   // box after every redraw, and a new box starts at the top: whoever was
   // reading deep inside one was thrown back to its beginning every few
@@ -947,10 +953,16 @@ function transcript(all) {
       if (isAutoContinueOnly(m)) { out.push(autoContinueNode()); continue }
       if (m.loop) { out.push(loopNode(m.loop)); continue }
       if (saysNothing(m)) continue
-      const node = messageNode("user", m.parts, m.queued ? null : m.retry || (() => retryMessage(m)), m.id)
+      // a send that failed carries its own Retry; a sent one gets Edit and Retry
+      const failed = !m.queued && !!m.undelivered
+      const node = messageNode("user", m.parts, failed ? m.retry || (() => retryMessage(m)) : null, m.id)
       node.prepend(userNav(node))
       if (m.time) node.dataset.info = when(m.time)
       if (m.queued) queuedMark(node, m.queued)
+      else if (m.sending) {
+        node.classList.add("sending")
+        node.querySelector(".body").dataset.state = "Sending…"
+      } else if (!failed) sentActions(node, m)
       out.push(node)
       continue
     }
@@ -1261,6 +1273,36 @@ function sendPending(id, pending, how, throwOnFailure = false) {
   return send()
 }
 
+// What a person can do with a message already sent: take its words back into
+// the message box to change them (a new message; nothing already said is
+// rewritten), or say it again as it was.
+function sentActions(node, m) {
+  const text = textOf(m)
+  if (!text) return
+  const actions = el("div", "msg-actions")
+  const edit = el("button", "", "Edit")
+  edit.type = "button"
+  edit.onclick = () => editSent(text)
+  const retry = el("button", "", "Retry")
+  retry.type = "button"
+  retry.onclick = () => {
+    retry.disabled = true
+    retryMessage(m).catch(fail).finally(() => { retry.disabled = false })
+  }
+  actions.append(edit, retry)
+  node.classList.add("has-actions")
+  node.querySelector(".body").append(actions)
+}
+
+// into the box, below a draft if there is one, so nothing typed is lost
+function editSent(text) {
+  const box = $("input")
+  box.value = box.value.trim() ? box.value.trimEnd() + "\n\n" + text : text
+  grow()
+  box.focus()
+  box.setSelectionRange(box.value.length, box.value.length)
+}
+
 function retryMessage(m) {
   const text = textOf(m)
   if (!current || !text) return Promise.resolve()
@@ -1485,6 +1527,7 @@ function saveDraft() {
 function queuedMark(node, q) {
   node.classList.add("queued-msg")
   node.dataset.info = q.steer ? "goes in at the next step" : "runs after this turn"
+  node.querySelector(".body").dataset.state = q.steer ? "Queued · goes in at the next step" : "Queued · runs after this turn"
   if (!q.clientID) return
   if (editing?.clientID === q.clientID) node.classList.add("editing")
   const actions = el("div", "queued-actions")
