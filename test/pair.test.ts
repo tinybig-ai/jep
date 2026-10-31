@@ -3,7 +3,8 @@ import assert from "node:assert/strict"
 import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { Pairing, newPairCode } from "../src/clients/telegram/pair.ts"
+import { newPairCode } from "../src/core/pairing.ts"
+import { Pairing } from "../src/clients/telegram/pair.ts"
 
 function home(): string {
   return mkdtempSync(join(tmpdir(), "jep-pair-"))

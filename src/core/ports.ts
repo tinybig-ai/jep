@@ -83,7 +83,7 @@ export interface HarnessMark {
 }
 
 export interface HarnessAdapter {
-  readonly id: "opencode" | string
+  readonly id: string
   readonly workspace: string
   readonly endpoint: string
 

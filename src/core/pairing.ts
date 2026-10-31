@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto"
 // Pairing is a per-client concern: Telegram locks the bot to a chat-id owner,
 // the gateway hands out device tokens. But "show me the current codes" is
 // shared, so each client reports its state through this one small admin port
@@ -18,4 +19,14 @@ export interface PairingAdmin {
   status(): PairingStatus
   /** set by the composition root; called when the code or device set changes */
   onChange?: () => void
+}
+
+// a pairing code a person types into a client: unambiguous letters and digits
+const ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+export function newPairCode(): string {
+  const b = randomBytes(9)
+  let out = ""
+  for (let i = 0; i < 9; i++) out += ALPHABET[b[i]! % ALPHABET.length]!
+  return out
 }

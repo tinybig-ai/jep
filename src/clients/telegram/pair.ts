@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto"
 import { readFileSync, writeFileSync } from "node:fs"
-import type { PairingAdmin, PairingStatus } from "../../core/pairing.ts"
+import { newPairCode, type PairingAdmin, type PairingStatus } from "../../core/pairing.ts"
 
 export interface PairState {
   owner: number | null
@@ -11,14 +11,6 @@ export interface PairState {
   code?: string
 }
 
-const ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-
-export function newPairCode(): string {
-  const b = randomBytes(9)
-  let out = ""
-  for (let i = 0; i < 9; i++) out += ALPHABET[b[i]! % ALPHABET.length]!
-  return out
-}
 
 export interface PairOptions {
   // sliding window: at most `max` code attempts per `windowMs`
