@@ -898,10 +898,9 @@ function render(follow = true) {
 // thought stays itself.
 // an edit is not folded away: what changed in the files is the point of a turn
 // nor is a picture the agent showed: folded under "Worked for", it was there but unseen
-// what a tool call shows: a `jep-show` command line, or the jep_show tool's own paths
-const shownBy = (name, args) => /jep_show$/i.test(name) ? (Array.isArray(args.paths) ? args.paths.filter((x) => typeof x === "string" && x) : [])
-  : /^(bash|run)$/i.test(name) ? shownImages(args.command) : []
-const showsImage = (p) => p.kind === "tool" && !!p.input && typeof p.input === "object" && shownBy(p.name, p.input).length > 0
+// what a tool call showed: the daemon says so in `shown`, whatever the harness calls the tool
+const shownBy = (p) => (Array.isArray(p.shown) ? p.shown : []).filter(isImage)
+const showsImage = (p) => p.kind === "tool" && shownBy(p).length > 0
 const isWork = (p) => (p.kind === "tool" && !isEdit(p) && !showsImage(p)) || (p.kind === "reasoning" && p.text.trim())
 const isEdit = (p) => !!editsOf(p.name.toLowerCase(), typeof p.input === "object" && p.input ? p.input : {})
 
@@ -1346,7 +1345,7 @@ function toolNode(p) {
   head.classList.toggle("failed", p.status === "error")
 
   // `jep-show` is the agent showing a picture: the command line names the files
-  const shown = shownBy(p.name, args)
+  const shown = shownBy(p)
   const picture = name === "read" && p.status !== "error" && isImage(selected) ? imageNode(selected)
     : shown.length && p.status !== "error" ? shownNode(shown)
     : null
@@ -1420,17 +1419,6 @@ function imageNode(filePath) {
   img.loading = "lazy"
   a.append(img)
   return a
-}
-
-// the same parse as core/show.ts, which the gateway uses to allow the fetch
-function shownImages(command) {
-  const out = []
-  for (const segment of (command || "").split(/&&|\|\||[;|\n]/)) {
-    const words = [...segment.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3] ?? "")
-    const at = words.findIndex((w) => /(^|\/)jep-show(\.mjs)?$/.test(w))
-    if (at >= 0) out.push(...words.slice(at + 1).filter((w) => w && !w.startsWith("-") && isImage(w)))
-  }
-  return out
 }
 
 function shownNode(paths) {

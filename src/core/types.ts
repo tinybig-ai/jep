@@ -49,6 +49,9 @@ export interface ToolCallPart {
    * a live elapsed time in the draft, so a long tool reads as "waiting" and
    * not as a frozen spinner */
   startedAt?: number
+  /** the image files this call showed the person (jep-show, or the jep_show tool), as the call named
+   *  them; the gateway fills it in, so no client has to read a command line or a harness's tool name */
+  shown?: string[]
 }
 
 export interface ReasoningPart {

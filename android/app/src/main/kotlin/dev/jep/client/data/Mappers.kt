@@ -210,6 +210,7 @@ fun PartDto.toDomain(): ChatPart? = when (kind) {
             change?.first,
             change?.second,
             input?.toolDiff(name.orEmpty()),
+            shown.orEmpty(),
         )
     }
     "file" -> filePath?.takeIf { it.isNotBlank() }?.let { ChatPart.File(it, fileName, mimeType) }

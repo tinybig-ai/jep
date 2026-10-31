@@ -162,6 +162,8 @@ sealed interface ChatPart {
          * The harness gives no diff for a write and its edit args are the literal
          * old/new strings, so this is built from the call's own arguments. */
         val diff: String? = null,
+        /** the image files this call showed the person, as the gateway names them */
+        val shown: List<String> = emptyList(),
     ) : ChatPart
 
     data class Reasoning(val text: String, val durationMs: Long? = null) : ChatPart

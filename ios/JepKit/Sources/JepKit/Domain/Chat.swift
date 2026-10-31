@@ -258,7 +258,9 @@ public struct ToolCall: Equatable, Hashable, Sendable {
     public var removed: Int?
     /// the change as a unified hunk ("-old" then "+new"), for the diff view
     public var diff: String?
-    public init(id: String?, name: String, status: ToolStatus?, title: String?, input: String? = nil, output: String? = nil, added: Int? = nil, removed: Int? = nil, diff: String? = nil) {
+    /// the image files this call showed the person, as the gateway names them
+    public var shown: [String]
+    public init(id: String?, name: String, status: ToolStatus?, title: String?, input: String? = nil, output: String? = nil, added: Int? = nil, removed: Int? = nil, diff: String? = nil, shown: [String] = []) {
         self.id = id
         self.name = name
         self.status = status
@@ -268,6 +270,7 @@ public struct ToolCall: Equatable, Hashable, Sendable {
         self.added = added
         self.removed = removed
         self.diff = diff
+        self.shown = shown
     }
 }
 

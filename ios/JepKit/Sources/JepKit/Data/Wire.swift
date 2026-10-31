@@ -84,8 +84,9 @@ struct PartDto: Decodable {
     var output: JSONValue?
     var durationMs: Int64?
     var nativeType: String?
+    var shown: [String]?
 
-    enum K: String, CodingKey { case kind, id, text, name, status, title, filePath, fileName, mimeType, input, output, durationMs, nativeType }
+    enum K: String, CodingKey { case kind, id, text, name, status, title, filePath, fileName, mimeType, input, output, durationMs, nativeType, shown }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: K.self)
         kind = c.v(.kind, "other")
@@ -101,6 +102,7 @@ struct PartDto: Decodable {
         output = c.o(.output)
         durationMs = c.o(.durationMs)
         nativeType = c.o(.nativeType)
+        shown = try? c.decode([String].self, forKey: .shown)
     }
 }
 

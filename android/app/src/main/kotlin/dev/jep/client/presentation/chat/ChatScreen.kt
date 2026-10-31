@@ -217,7 +217,6 @@ import coil3.compose.AsyncImage
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -2980,27 +2979,9 @@ private val ToolSubjectKeys = listOf("command", "filePath", "file_path", "path",
 // a person cares about rather than printing JSON at them.
 private fun toolImagePaths(part: ChatPart.Tool): List<String> {
     if (part.status == ToolStatus.ERROR) return emptyList()
-    val name = part.name.lowercase()
-    val raw = part.input?.trim().orEmpty()
-    val obj = if (raw.startsWith("{")) runCatching { Json.parseToJsonElement(raw) as? JsonObject }.getOrNull() else null
-    val paths = when (name) {
-        // a Read is not a showing: the agent looked at the file, it did not hand it over
-        // `jep-show IMAGE...` is the agent showing a picture; the command names the files
-        "bash", "run" -> shownPaths((obj?.get("command") as? JsonPrimitive)?.contentOrNull ?: toolTitle(part).orEmpty())
-        // the jep_show tool of jep's MCP server names them in `paths`, however the harness prefixes it
-        else -> if (name.endsWith("jep_show")) (obj?.get("paths") as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull } ?: emptyList() else emptyList()
-    }
-    return paths.filter { it.substringAfterLast('.', "").lowercase() in IMAGE_EXTS }
-}
-
-// the same parse as core/show.ts, which the gateway uses to allow the fetch
-private val ShowWords = Regex("\"([^\"]*)\"|'([^']*)'|(\\S+)")
-private val ShowCommand = Regex("(^|/)jep-show(\\.mjs)?$")
-
-private fun shownPaths(command: String): List<String> = command.split(Regex("&&|\\|\\||[;|\\n]")).flatMap { segment ->
-    val words = ShowWords.findAll(segment).map { it.groupValues[1].ifEmpty { it.groupValues[2].ifEmpty { it.groupValues[3] } } }.toList()
-    val at = words.indexOfFirst { ShowCommand.containsMatchIn(it) }
-    if (at < 0) emptyList() else words.drop(at + 1).filter { it.isNotEmpty() && !it.startsWith("-") }
+    // a Read is not a showing: the agent looked at the file, it did not hand it over. What a
+    // call showed is the gateway's to say (`shown`), whatever the harness calls the tool.
+    return part.shown.filter { it.substringAfterLast('.', "").lowercase() in IMAGE_EXTS }
 }
 
 private fun toolTitle(part: ChatPart.Tool): String? {

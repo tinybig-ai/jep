@@ -201,7 +201,8 @@ extension PartDto {
                 output: output.flatMap(display),
                 added: change?.added,
                 removed: change?.removed,
-                diff: input.flatMap { toolDiff(tool: tool, input: $0) }
+                diff: input.flatMap { toolDiff(tool: tool, input: $0) },
+                shown: shown ?? []
             ))
         case "file":
             guard let p = filePath, !p.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }

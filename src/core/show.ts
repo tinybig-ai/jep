@@ -24,3 +24,11 @@ export function shownFrom(name: string, input: unknown): string[] {
   if (/jep_show$/i.test(name)) return Array.isArray(args.paths) ? args.paths.filter((p): p is string => typeof p === "string" && p !== "") : []
   return typeof args.command === "string" ? shownPaths(args.command) : []
 }
+
+/** a part with `shown` filled in when it is a call that showed something */
+export function withShown<P extends { kind: string }>(part: P): P {
+  if (part.kind !== "tool") return part
+  const call = part as unknown as { name: string; input: unknown }
+  const shown = shownFrom(call.name, call.input)
+  return shown.length ? { ...part, shown } : part
+}

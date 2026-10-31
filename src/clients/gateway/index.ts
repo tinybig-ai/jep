@@ -25,7 +25,7 @@ import {
   LOOP_MAX_TURNS,
   type LoopState,
 } from "../../core/loops.ts"
-import { shownFrom } from "../../core/show.ts"
+import { shownFrom, withShown } from "../../core/show.ts"
 import { detach } from "../../core/detach.ts"
 import type { TurnLedger } from "../../core/ledger.ts"
 import { TurnEngine, type PendingTurn, type TurnResult } from "../../core/turn-engine.ts"
@@ -845,6 +845,8 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           // the push all say "Access a folder outside the project?" instead of
           // the harness's `external_directory`
           if (out.type === "ask.requested") out = { ...out, ask: { ...out.ask, display: describeAsk(out.ask) } }
+          // the same for a picture the agent showed: say so as a field, not as a command line
+          if (out.type === "part.updated" && out.part) out = { ...out, part: withShown(out.part) }
           broadcast(out)
           detach("wake a waiting turn", wake(evt))
         }
@@ -1769,6 +1771,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const hasMore = limit > 0 && window.length > limit
         const messages = (limit > 0 ? window.slice(-limit) : window)
           .map(cleanForDisplay)
+          .map((m) => ({ ...m, parts: m.parts.map(withShown) }))
           // a loop turn has no words left after its marker: keep it so the
           // client can still draw the boundary
           .filter((m) => m.role !== "user" || m.parts.length > 0 || m.loop)

@@ -86,6 +86,8 @@ data class PartDto(
     // reasoning carries its duration once finalized ("Thought for 12s")
     val durationMs: Long? = null,
     val nativeType: String? = null,
+    // the image files a tool call showed the person; the gateway fills it in
+    val shown: List<String>? = null,
 )
 
 @Serializable

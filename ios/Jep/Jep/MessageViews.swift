@@ -191,7 +191,11 @@ struct ToolView: View {
             }
             .buttonStyle(.plain)
             if open {
-                if let image = toolImagePath(tool) {
+                if !toolShownImages(tool).isEmpty {
+                    ForEach(toolShownImages(tool), id: \.self) { image in
+                        FileView(file: FilePart(path: image, name: (image as NSString).lastPathComponent, mimeType: nil), chat: chat)
+                    }
+                } else if let image = toolImagePath(tool) {
                     FileView(file: FilePart(path: image, name: (image as NSString).lastPathComponent, mimeType: nil), chat: chat)
                 } else if let diff = tool.diff, !diff.isEmpty {
                     DiffText(diff: diff)
@@ -216,6 +220,13 @@ struct ToolView: View {
         default: Image(systemName: "wrench.and.screwdriver").foregroundStyle(.secondary)
         }
     }
+}
+
+/// The pictures a call showed the person (jep-show, the jep_show tool): the gateway names them
+/// in `shown`, so the app reads no command line and no harness's tool name.
+private func toolShownImages(_ tool: ToolCall) -> [String] {
+    guard tool.status != .error else { return [] }
+    return tool.shown.filter { isImagePart(FilePart(path: $0, name: ($0 as NSString).lastPathComponent, mimeType: nil)) }
 }
 
 /// A read of an image is the image, not "Read image successfully": FileView
