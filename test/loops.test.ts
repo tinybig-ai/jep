@@ -8,9 +8,12 @@ import assert from "node:assert/strict"
 import {
   continuationText,
   evaluateLoop,
+  isTransientError,
   loopMarker,
   readLoopMarker,
+  retryDelayMs,
   runVerifier,
+  LOOP_RETRY_CAP_MS,
   type LoopState,
 } from "../src/core/loops.ts"
 import { transcriptText } from "../src/core/transcript.ts"
@@ -74,6 +77,26 @@ test("the next turn carries the goal, the count and the verifier's own words", (
   assert.match(text, /Goal: make the tests pass/)
   assert.match(text, /exit 1/)
   assert.match(text, /2 failing: a, b/)
+})
+
+test("a dropped socket or a 429 is transient; a verdict is not", () => {
+  assert.equal(
+    isTransientError(
+      "AI_APICallError (opencode/deepseek-v4.1-flash-free): Cannot connect to API: The socket connection was closed unexpectedly.",
+    ),
+    true,
+  )
+  assert.equal(isTransientError("Error: request failed with status 429"), true)
+  assert.equal(isTransientError({ message: "fetch failed" }), true)
+  assert.equal(isTransientError("no such session"), false)
+  assert.equal(isTransientError("verifier failed: 2 assertions"), false)
+})
+
+test("retries back off and never wait longer than the cap", () => {
+  assert.equal(retryDelayMs(1), 5_000)
+  assert.equal(retryDelayMs(2), 10_000)
+  assert.equal(retryDelayMs(3), 20_000)
+  assert.equal(retryDelayMs(9), LOOP_RETRY_CAP_MS)
 })
 
 test("the verifier runs where it was told and reports exit and output", async () => {

@@ -45,6 +45,8 @@ export interface LoopState {
   startedAt: number
   updatedAt: number
   lastVerify?: LoopVerify
+  /** consecutive transient failures retried for the current turn */
+  attempts?: number
   /** why it stopped, when it did not stop because the goal was met */
   error?: string
 }
@@ -53,10 +55,28 @@ export const LOOP_MIN_TURNS = 1
 export const LOOP_MAX_TURNS = 50
 export const LOOP_DEFAULT_TURNS = 8
 export const LOOP_VERIFY_TIMEOUT_MS = 120_000
+/** a turn that dies on the provider is retried this many times for free */
+export const LOOP_RETRY_MAX = 3
+export const LOOP_RETRY_BASE_MS = 5_000
+export const LOOP_RETRY_CAP_MS = 60_000
 
 const OUTPUT_TAIL = 2000
 
 export type LoopVerdict = { done: boolean; reason: "verified" | "marker" | "exhausted" | "continue" }
+
+// A provider hiccup — a dropped socket, a 429, a gateway 5xx — is not the
+// loop's verdict on the goal, so it must not end the loop. The turn is retried
+// with backoff; only repeated failure is a failure.
+const TRANSIENT = /AI_APICallError|socket connection was closed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EAI_AGAIN|fetch failed|network error|rate limit|overloaded|\b(429|500|502|503|504)\b/i
+
+export function isTransientError(err: unknown): boolean {
+  const text = typeof err === "string" ? err : String((err as { message?: string })?.message ?? err ?? "")
+  return TRANSIENT.test(text)
+}
+
+export function retryDelayMs(attempt: number): number {
+  return Math.min(LOOP_RETRY_CAP_MS, LOOP_RETRY_BASE_MS * 2 ** Math.max(0, attempt - 1))
+}
 
 /** Whether the just-finished turn closes the loop. `iteration` includes it. */
 export function evaluateLoop(input: {
