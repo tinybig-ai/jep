@@ -351,7 +351,12 @@ internal fun groupWorkRuns(rows: List<Row>, hold: String? = null): List<Row> {
     }
     for (row in rows) {
         // a message carrying a card is never folded away: the card must show
-        val msg = (row as? Row.Msg)?.takeIf { it.cards.isEmpty() && it.m.id != hold && workParts(it.m) != null }
+        // nor one that shows an image: a picture folded under "Worked for"
+        // vanished the moment the chat was reopened and the turn was no longer live
+        val msg = (row as? Row.Msg)?.takeIf {
+            it.cards.isEmpty() && it.m.id != hold && workParts(it.m) != null &&
+                it.m.parts.none { p -> p is ChatPart.Tool && toolImagePaths(p).isNotEmpty() }
+        }
         if (msg == null) {
             flush()
             out += row
@@ -2595,7 +2600,7 @@ internal fun collapseTranscript(parts: List<ChatPart>, keep: Set<String> = empty
             part is ChatPart.Reasoning && part.text.isBlank() -> Unit
             part is ChatPart.Reasoning -> run.add(part)
             // a call with a card under it stays its own row, so the card has a place
-            part is ChatPart.Tool && part.id !in keep -> run.add(part)
+            part is ChatPart.Tool && part.id !in keep && toolImagePaths(part).isEmpty() -> run.add(part)
             else -> {
                 flush()
                 out += TranscriptRow.One(part)
@@ -2967,6 +2972,30 @@ private val ToolSubjectKeys = listOf("command", "filePath", "file_path", "path",
 
 // opencode sometimes hands the whole call input as the title; pull the one field
 // a person cares about rather than printing JSON at them.
+private fun toolImagePaths(part: ChatPart.Tool): List<String> {
+    if (part.status == ToolStatus.ERROR) return emptyList()
+    val name = part.name.lowercase()
+    val raw = part.input?.trim().orEmpty()
+    val obj = if (raw.startsWith("{")) runCatching { Json.parseToJsonElement(raw) as? JsonObject }.getOrNull() else null
+    val paths = when (name) {
+        // a Read is not a showing: the agent looked at the file, it did not hand it over
+        // `jep-show IMAGE...` is the agent showing a picture; the command names the files
+        "bash", "run" -> shownPaths((obj?.get("command") as? JsonPrimitive)?.contentOrNull ?: toolTitle(part).orEmpty())
+        else -> emptyList()
+    }
+    return paths.filter { it.substringAfterLast('.', "").lowercase() in IMAGE_EXTS }
+}
+
+// the same parse as core/show.ts, which the gateway uses to allow the fetch
+private val ShowWords = Regex("\"([^\"]*)\"|'([^']*)'|(\\S+)")
+private val ShowCommand = Regex("(^|/)jep-show(\\.mjs)?$")
+
+private fun shownPaths(command: String): List<String> = command.split(Regex("&&|\\|\\||[;|\\n]")).flatMap { segment ->
+    val words = ShowWords.findAll(segment).map { it.groupValues[1].ifEmpty { it.groupValues[2].ifEmpty { it.groupValues[3] } } }.toList()
+    val at = words.indexOfFirst { ShowCommand.containsMatchIn(it) }
+    if (at < 0) emptyList() else words.drop(at + 1).filter { it.isNotEmpty() && !it.startsWith("-") }
+}
+
 private fun toolTitle(part: ChatPart.Tool): String? {
     val raw = part.title?.trim().orEmpty()
     if (raw.isEmpty()) return null
@@ -2988,8 +3017,9 @@ private fun ToolRow(part: ChatPart.Tool) {
     val syntax = LocalSyntaxColors.current
     val diff = part.diff
     val title = toolTitle(part)
+    val images = toolImagePaths(part)
     var sheet by remember(part.id) { mutableStateOf(false) }
-    val hasDetail = diff != null || body != null
+    val hasDetail = diff != null || body != null || images.isNotEmpty()
     val keyboard = LocalSoftwareKeyboardController.current
     val focus = LocalFocusManager.current
     // One shape always: a quiet line, then the call's subject. Nothing expands or
@@ -3048,9 +3078,22 @@ private fun ToolRow(part: ChatPart.Tool) {
             }
         }
     }
+    // a picture the agent read or showed is drawn in the transcript, not behind a tap
+    images.forEach { path ->
+        AsyncImage(
+            model = LocalFileUrl.current(path),
+            contentDescription = path.substringAfterLast('/'),
+            contentScale = ContentScale.Fit,
+            modifier = Modifier
+                .padding(top = 6.dp)
+                .heightIn(max = 320.dp)
+                .clip(RoundedCornerShape(Radius.control))
+                .clickable { sheet = true },
+        )
+    }
     if (sheet) {
         if (diff != null) DiffSheet(part.title, diff) { sheet = false }
-        else ToolSheet(title ?: part.name, body.orEmpty()) { sheet = false }
+        else ToolSheet(title ?: part.name, body.orEmpty(), images.firstOrNull()) { sheet = false }
     }
 }
 
@@ -3058,7 +3101,7 @@ private fun ToolRow(part: ChatPart.Tool) {
 // grows the row in place.
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ToolSheet(title: String, body: String, onDismiss: () -> Unit) {
+private fun ToolSheet(title: String, body: String, imagePath: String? = null, onDismiss: () -> Unit) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(Modifier.fillMaxWidth().padding(bottom = 20.dp)) {
@@ -3069,8 +3112,23 @@ private fun ToolSheet(title: String, body: String, onDismiss: () -> Unit) {
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
             )
             HorizontalDivider(Modifier.padding(top = 8.dp))
+            // a read of an image is the image, not just "Read image successfully":
+            // /file serves the same bytes the attachment thumbnails use
+            val url = imagePath?.let { LocalFileUrl.current(it) }.orEmpty()
+            if (url.isNotBlank()) {
+                AsyncImage(
+                    model = url,
+                    contentDescription = title,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 420.dp)
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                        .clip(RoundedCornerShape(Radius.control)),
+                )
+            }
             Text(
-                body.ifBlank { "(no output)" },
+                body.ifBlank { if (url.isBlank()) "(no output)" else "" },
                 Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
                 fontSize = 12.sp,
                 lineHeight = 17.sp,

@@ -191,7 +191,9 @@ struct ToolView: View {
             }
             .buttonStyle(.plain)
             if open {
-                if let diff = tool.diff, !diff.isEmpty {
+                if let image = toolImagePath(tool) {
+                    FileView(file: FilePart(path: image, name: (image as NSString).lastPathComponent, mimeType: nil), chat: chat)
+                } else if let diff = tool.diff, !diff.isEmpty {
                     DiffText(diff: diff)
                 } else if let body = toolBody(tool) {
                     ScrollView(.horizontal, showsIndicators: false) {
@@ -214,6 +216,23 @@ struct ToolView: View {
         default: Image(systemName: "wrench.and.screwdriver").foregroundStyle(.secondary)
         }
     }
+}
+
+/// A read of an image is the image, not "Read image successfully": FileView
+/// fetches it through the same authenticated path as any other file part.
+private func toolImagePath(_ tool: ToolCall) -> String? {
+    guard tool.name.lowercased() == "read", tool.status != .error else { return nil }
+    var path: String?
+    if let input = tool.input, let data = input.data(using: .utf8),
+       let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+        for key in ["filePath", "file_path", "path"] {
+            if let value = obj[key] as? String, !value.isEmpty { path = value; break }
+        }
+    }
+    if path == nil, let title = toolTitle(tool), !title.hasPrefix("{") { path = title }
+    guard let p = path else { return nil }
+    let part = FilePart(path: p, name: (p as NSString).lastPathComponent, mimeType: nil)
+    return isImagePart(part) ? p : nil
 }
 
 struct WorkView: View {

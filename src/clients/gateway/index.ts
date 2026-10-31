@@ -26,6 +26,7 @@ import {
   LOOP_MAX_TURNS,
   type LoopState,
 } from "../../core/loops.ts"
+import { shownPaths } from "../../core/show.ts"
 import { newPairCode } from "../telegram/pair.ts"
 import { detach } from "../../core/detach.ts"
 import type { TurnLedger } from "../../core/ledger.ts"
@@ -909,6 +910,31 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     const roots = await Promise.all(rootsFor().map((r) => realpath(r).catch(() => r)))
     return within(real, roots) ? real : null
   }
+  // A file the agent has read in a session is already in that session's
+  // transcript, so letting the device fetch it reveals nothing it was not
+  // shown. This is what makes an image read from outside the workspace (a
+  // /tmp screenshot, say) renderable: it is not under a served root, but the
+  // read tool named it, and the tool card is about to display it.
+  const touched = new Map<string, { at: number; paths: Set<string> }>()
+  const readPaths = async (adapter: HarnessAdapter, sid: string, fresh = false): Promise<Set<string>> => {
+    const hit = touched.get(sid)
+    if (hit && Date.now() - hit.at < (fresh ? 500 : 10_000)) return hit.paths
+    const paths = new Set<string>()
+    const messages = await adapter.messages(sid, { limit: 200 }).catch(() => [] as Message[])
+    for (const message of messages) {
+      for (const part of message.parts) {
+        if (part.kind !== "tool" || !part.input || typeof part.input !== "object") continue
+        const input = part.input as Record<string, unknown>
+        for (const key of ["filePath", "file_path", "path"]) {
+          const value = input[key]
+          if (typeof value === "string" && value) paths.add(resolve(adapter.workspace, value))
+        }
+        if (typeof input.command === "string") for (const shown of shownPaths(input.command)) paths.add(resolve(adapter.workspace, shown))
+      }
+    }
+    touched.set(sid, { at: Date.now(), paths })
+    return paths
+  }
   const OUTSIDE = "only files in a served workspace or uploads can be opened"
   /** a reader shows text; a whole 200 MB file in a sheet helps nobody */
   const READ_MAX = 2 << 20
@@ -1001,25 +1027,28 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       }
 
       // bytes for a file part, so the phone can render an image inline. The
-      // phone builds this from the part's filePath; only uploaded files and
-      // served workspaces are readable (symlinks resolved), so this is not a
-      // general file reader. A relative path, as a transcript link gives, is in
-      // the workspace of the session named by `id`, as with /read.
+      // phone builds this from the part's filePath. Only uploads and served
+      // workspaces (symlinks resolved) are readable, plus a file the agent
+      // itself read in the session named by `id` — the transcript already
+      // shows that file, and this is what lets an image read from /tmp render.
+      // A relative path is in that session's workspace, as with /read.
       if (path === "/file" && req.method === "GET") {
         const encoded = url.searchParams.get("p") ?? ""
         const decoded = encoded ? Buffer.from(encoded, "base64url").toString("utf8") : ""
         if (!decoded) return json(res, 400, { error: "p required" })
         const sid = url.searchParams.get("id")
-        const owner = !isAbsolute(decoded) && sid ? await ensureListed(sid) : null
-        const abs = owner ? resolve(owner.workspace, decoded) : resolve(decoded)
-        if (!within(abs, rootsFor())) return json(res, 403, { error: OUTSIDE })
+        const owner = sid ? await ensureListed(sid) : null
+        const abs = owner && !isAbsolute(decoded) ? resolve(owner.workspace, decoded) : resolve(decoded)
+        // a read the agent did in this session is allowed; anything else must
+        // be inside a served root (a symlink out of one is still refused)
+        const real = await servedPath(abs).catch(() => null)
+        const read = !real && owner && sid ? ((await readPaths(owner, sid)).has(abs) || (await readPaths(owner, sid, true)).has(abs)) : false
+        if (!real && !read) return json(res, 403, { error: OUTSIDE })
         try {
-          const real = await servedPath(abs)
-          if (!real) return json(res, 403, { error: OUTSIDE })
-          const info = await stat(real)
+          const info = await stat(real ?? abs)
           if (!info.isFile() || info.size > FILE_MAX) return json(res, 404, { error: "no such file" })
-          const body = await readFile(real)
-          res.writeHead(200, { "content-type": mimeForPath(abs), "cache-control": "private, max-age=300" })
+          const body = await readFile(real ?? abs)
+          res.writeHead(200, { "content-type": mimeForPath(real ?? abs), "cache-control": "private, max-age=300" })
           return res.end(body)
         } catch {
           return json(res, 404, { error: "no such file" })

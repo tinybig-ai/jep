@@ -146,6 +146,8 @@
   details pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow-y: auto; font: 12px ui-monospace, Menlo, monospace; background: var(--code); padding: 8px; border-radius: 6px; }
   summary { cursor: pointer; }
   .msg img { max-width: 100%; border-radius: 8px; }
+  .tool-image-link { display: block; margin-top: 4px; }
+  .tool-image { max-height: 420px; width: auto; display: block; border-radius: 8px; }
   .ask { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin: 0 0 16px; }
   .ask .detail { color: var(--dim); font: 12px ui-monospace, Menlo, monospace; white-space: pre-wrap; margin: 6px 0 10px; }
   .ask button { margin: 0 6px 6px 0; }
@@ -889,7 +891,9 @@ function render(follow = true) {
 // ran 4 commands, read 2 files"), as the phone shows it. A lone call or
 // thought stays itself.
 // an edit is not folded away: what changed in the files is the point of a turn
-const isWork = (p) => (p.kind === "tool" && !isEdit(p)) || (p.kind === "reasoning" && p.text.trim())
+// nor is a picture the agent showed: folded under "Worked for", it was there but unseen
+const showsImage = (p) => p.kind === "tool" && /^(bash|run)$/i.test(p.name) && !!p.input && typeof p.input === "object" && shownImages(p.input.command).length > 0
+const isWork = (p) => (p.kind === "tool" && !isEdit(p) && !showsImage(p)) || (p.kind === "reasoning" && p.text.trim())
 const isEdit = (p) => !!editsOf(p.name.toLowerCase(), typeof p.input === "object" && p.input ? p.input : {})
 
 // opencode folds the history and writes a synthetic user message whose only
@@ -1272,7 +1276,8 @@ function toolNode(p) {
   const name = p.name.toLowerCase()
   const args = typeof p.input === "object" && p.input ? p.input : {}
   const arg = (...keys) => keys.map((k) => args[k]).find((v) => typeof v === "string")
-  const file = (arg("file_path", "filePath", "path") || p.title || "").split("/").pop()
+  const selected = arg("file_path", "filePath", "path") || p.title || ""
+  const file = selected.split("/").pop()
   const edits = editsOf(name, args)
   const diff = edits && edits.flatMap(([old, now]) => [...lines(old).map((l) => "-" + l), ...lines(now).map((l) => "+" + l)])
 
@@ -1295,14 +1300,19 @@ function toolNode(p) {
   head.classList.toggle("running", p.status === "running" || p.status === "pending")
   head.classList.toggle("failed", p.status === "error")
 
-  const body = diff ? diffNode(diff, langOf(file)) : outputNode(p, name, arg("command"))
+  // `jep-show` is the agent showing a picture: the command line names the files
+  const shown = name === "bash" || name === "run" ? shownImages(arg("command")) : []
+  const picture = name === "read" && p.status !== "error" && isImage(selected) ? imageNode(selected)
+    : shown.length && p.status !== "error" ? shownNode(shown)
+    : null
+  const body = diff ? diffNode(diff, langOf(file)) : picture || outputNode(p, name, arg("command"))
   if (body) body.dataset.keep = "t:" + p.id
   if (!body) {
     const line = el("div", "tool")
     line.append(head)
     return line
   }
-  const d = keep(el("details", "tool"), "t:" + p.id, !!diff)
+  const d = keep(el("details", "tool"), "t:" + p.id, !!diff || (shown.length > 0 && p.status !== "error"))
   const summary = el("summary")
   summary.append(head)
   d.append(summary, body)
@@ -1352,6 +1362,40 @@ function outputNode(p, name, command) {
   if (text.length > 4000) text = text.slice(0, 4000) + `\n… (${text.length - 4000} more characters)`
   return el("pre", "", text)
 }
+
+// a read of an image is the image, not "Read image successfully": /file is the
+// same bytes route attachments use, and it already scopes to the workspace
+function imageNode(filePath) {
+  const a = el("a", "tool-image-link")
+  a.href = `/file?p=${b64url(filePath)}&id=${encodeURIComponent(current)}&token=${token}`
+  a.target = "_blank"; a.rel = "noopener"
+  const img = el("img", "tool-image")
+  img.src = a.href
+  img.alt = filePath.split("/").pop() || "image"
+  img.loading = "lazy"
+  a.append(img)
+  return a
+}
+
+// the same parse as core/show.ts, which the gateway uses to allow the fetch
+function shownImages(command) {
+  const out = []
+  for (const segment of (command || "").split(/&&|\|\||[;|\n]/)) {
+    const words = [...segment.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3] ?? "")
+    const at = words.findIndex((w) => /(^|\/)jep-show(\.mjs)?$/.test(w))
+    if (at >= 0) out.push(...words.slice(at + 1).filter((w) => w && !w.startsWith("-") && isImage(w)))
+  }
+  return out
+}
+
+function shownNode(paths) {
+  const box = el("div", "tool-shown")
+  for (const p of paths) box.append(imageNode(p))
+  return box
+}
+
+const IMAGE = /\.(png|jpe?g|gif|webp|avif|bmp|svg|heic|heif)$/i
+const isImage = (file) => IMAGE.test(file || "")
 
 function fileNode(p) {
   const url = `/file?p=${b64url(p.filePath)}&id=${encodeURIComponent(current)}&token=${token}`
