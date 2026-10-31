@@ -37,6 +37,11 @@ const clamp = (n: number, lo: number, hi: number): number => Math.min(hi, Math.m
 export function parseWatch(req: WatchRequest): WatchSpec | null {
   const check = typeof req.check === "string" ? req.check.trim() : ""
   if (!check) return null
+  // A check is a *command*: its first word must be a program. `jep-watch --help`
+  // (or --list, or any flag the caller got wrong) used to arrive here as a check,
+  // be run as `/bin/sh -c --help`, and hold a watch slot for an hour while the
+  // shell printed its own usage. A bare flag is never runnable, so refuse it.
+  if (check.startsWith("-")) return null
   const every = Number(req.every_seconds)
   const max = Number(req.max_minutes)
   return {

@@ -7,6 +7,16 @@ test("a watch request without a check is refused", () => {
   assert.equal(parseWatch({ check: "   " }), null)
 })
 
+test("a check that is really a flag is refused, not shelled out", () => {
+  // `jep-watch --help` and `jep-watch --list` used to become checks named
+  // "--help"/"--list"; `sh -c --help` then exited non-zero for an hour while the
+  // operator waited on a watch that could never pass.
+  assert.equal(parseWatch({ check: "--help" }), null)
+  assert.equal(parseWatch({ check: "--list" }), null)
+  assert.equal(parseWatch({ check: "-v" }), null)
+  assert.ok(parseWatch({ check: "python3 bin/vault.py check bugcrowd --quiet" }))
+})
+
 test("the note falls back to the check and the timings are clamped", () => {
   const w = parseWatch({ check: "test -f /tmp/x", every_seconds: 1, max_minutes: 5 })!
   assert.equal(w.note, "test -f /tmp/x")

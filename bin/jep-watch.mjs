@@ -13,8 +13,12 @@ import { ask } from "./lib/control.mjs"
 
 const USAGE = "usage: jep-watch [--note TEXT] [--every SECONDS] [--max MINUTES] [--session ID] -- CHECK..."
 const args = process.argv.slice(2)
-// asking for help must not start a watch whose check is "--help"
-if (args[0] === "-h" || args[0] === "--help") {
+const dashdash = args.indexOf("--")
+const head = dashdash < 0 ? args : args.slice(0, dashdash)
+// Help is help wherever it appears. `jep-watch --help` alone was handled, but
+// `jep-watch --every 30 --help` fell through and offered "--help" to the daemon
+// as a check — which ran as `/bin/sh -c --help` and burned an hour of watch.
+if (head.includes("-h") || head.includes("--help")) {
   console.log(USAGE)
   process.exit(0)
 }
@@ -27,11 +31,24 @@ for (; i < args.length; i++) {
     break
   }
   const key = a.startsWith("--") ? a.slice(2) : ""
-  if (!(key in flags)) break
+  // An unknown option is a mistake, not a check. Silently folding it into CHECK
+  // is how "--list" and "--help" became watches that could never pass.
+  if (!(key in flags)) {
+    console.error(`jep-watch: unknown option ${a}`)
+    console.error(USAGE)
+    console.error("if a flag really is part of your command, put it after `--`.")
+    process.exit(2)
+  }
   flags[key] = args[++i] ?? ""
 }
 const check = args.slice(i).join(" ").trim()
 if (!check) {
+  console.error(USAGE)
+  process.exit(2)
+}
+// The same guard the daemon now applies: a check's first word must be a program.
+if (check.startsWith("-")) {
+  console.error(`jep-watch: "${check}" is a flag, not a command.`)
   console.error(USAGE)
   process.exit(2)
 }

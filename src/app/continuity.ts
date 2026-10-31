@@ -106,7 +106,7 @@ export async function startContinuity(opts: ContinuityOpts): Promise<{ close(): 
   }
   const watchRequest = async (req: ControlRequest): Promise<ControlReply> => {
     const spec = parseWatch(req)
-    if (!spec) return { ok: false, message: "give a check command" }
+    if (!spec) return { ok: false, message: "give a check command (a flag is not a command — run the tool with --help for usage)" }
     const owner = await turns.resolve(typeof req.session === "string" ? req.session : undefined, typeof req.cwd === "string" ? req.cwd : undefined)
     if (typeof owner === "string") return { ok: false, message: owner }
     const refused = startWatch(owner.key, owner.adapter, spec)
