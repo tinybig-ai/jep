@@ -3786,9 +3786,7 @@ private fun Composer(
                         val look = sendModeLook(mode)
                         val selected = sendMode == mode
                         Surface(
-                            Modifier
-                                .clickable { sendMode = mode }
-                                .weight(1f),
+                            Modifier.clickable { sendMode = mode },
                             color = Color.Transparent,
                             shape = pill,
                             border = if (selected)
