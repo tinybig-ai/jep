@@ -34,6 +34,7 @@ import dev.jep.client.domain.model.BrowseResult
 import dev.jep.client.domain.model.AgentInfo
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.FileDiff
+import dev.jep.client.domain.model.HarnessMark
 import dev.jep.client.domain.model.Harnesses
 import dev.jep.client.domain.model.AskEntry
 import dev.jep.client.domain.model.HarnessSetting
@@ -146,7 +147,7 @@ private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     override suspend fun harnesses(): Harnesses {
         val res = decode("/harnesses", HarnessesRes.serializer(), "{}")
-        return Harnesses(res.harnesses, res.default)
+        return Harnesses(res.harnesses, res.default, res.marks.mapValues { HarnessMark(it.value.box, it.value.path) }.filterValues { it.path.isNotBlank() })
     }
 
     override suspend fun browse(path: String?): BrowseResult =

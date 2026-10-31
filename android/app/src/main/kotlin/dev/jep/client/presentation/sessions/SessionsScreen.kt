@@ -1,5 +1,12 @@
 package dev.jep.client.presentation.sessions
 
+import androidx.compose.foundation.Canvas
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.graphics.vector.PathParser
+import androidx.compose.ui.graphics.drawscope.scale
+import dev.jep.client.domain.model.HarnessMark
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -575,30 +582,29 @@ private fun SessionRow(
     }
 }
 
-// The conversation's avatar is the harness behind it: the real brand mark,
-// monochromised to one colour and tinted, so it sits quietly beside the title.
-// An unknown harness falls back to a generic glyph rather than a blank circle.
+// each harness's brand mark, served by the daemon (GET /harnesses); empty until it answers
+val LocalHarnessMarks = compositionLocalOf<Map<String, HarnessMark>> { emptyMap() }
+
+// The conversation's avatar is the harness behind it: the mark the daemon sends,
+// drawn in one colour and tinted, so it sits quietly beside the title. The app
+// names no harness. One the daemon sent nothing for falls back to a generic
+// glyph rather than a blank circle.
 @Composable
 private fun HarnessAvatar(harness: String?) {
-    val mark = when (harness) {
-        "opencode" -> R.drawable.ic_harness_opencode
-        "codex" -> R.drawable.ic_harness_codex
-        "claude" -> R.drawable.ic_harness_claude
-        else -> null
-    }
+    val mark = LocalHarnessMarks.current[harness]
+    val tint = MaterialTheme.colorScheme.onSurfaceVariant
     Box(
         Modifier.size(34.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceContainer),
         contentAlignment = Alignment.Center,
     ) {
-        if (mark != null) {
-            Icon(
-                painterResource(mark),
-                harness ?: "harness",
-                Modifier.size(19.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        val path = remember(mark) { mark?.let { runCatching { PathParser().parsePathString(it.path).toPath() }.getOrNull() } }
+        if (mark != null && path != null) {
+            Canvas(Modifier.size(19.dp).semantics { contentDescription = harness ?: "harness" }) {
+                val scale = size.minDimension / mark.box
+                withTransform({ scale(scale, scale, pivot = Offset.Zero) }) { drawPath(path, tint) }
+            }
         } else {
-            Icon(Icons.Filled.SmartToy, harness ?: "harness", Modifier.size(19.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Icon(Icons.Filled.SmartToy, harness ?: "harness", Modifier.size(19.dp), tint = tint)
         }
     }
 }

@@ -3,7 +3,9 @@ import { startCodexAdapter } from "../harnesses/codex.ts"
 import { CLAUDE_SETTINGS, startClaudeAdapter } from "../harnesses/claude.ts"
 import { startEchoAdapter } from "../harnesses/echo.ts"
 import { startPiAdapter } from "../harnesses/pi.ts"
-import type { HarnessAdapter, HarnessSettingSpec, HarnessSupervisor } from "../core/ports.ts"
+import { startGooseAdapter } from "../harnesses/goose.ts"
+import { CLAUDE_MARK, CODEX_MARK, GOOSE_MARK, OPENCODE_MARK } from "../harnesses/marks.ts"
+import type { HarnessAdapter, HarnessMark, HarnessSettingSpec, HarnessSupervisor } from "../core/ports.ts"
 
 /**
  * The registry behind HarnessSupervisor: the one place that knows how to bring
@@ -25,6 +27,9 @@ export interface HarnessDef extends HarnessSupervisor {
    * fallback.
    */
   readonly icon: string
+  /** the brand mark clients draw, served by GET /harnesses. Absent: the client
+   * shows its generic glyph. */
+  readonly mark?: HarnessMark
   /** settings a client can offer when creating a session for this harness */
   settings?(): HarnessSettingSpec[]
   /** false when the harness isn't installed/usable on this machine */
@@ -83,6 +88,7 @@ function defineHarnesses(opts: HarnessOpts): HarnessDef[] {
       : []),
     {
       id: "opencode",
+      mark: OPENCODE_MARK,
       icon: "🔵",
       async start(workspace: string): Promise<HarnessAdapter> {
         return startOpenCodeServer(workspace, opts.dataHome ? { dataHome: opts.dataHome } : {})
@@ -95,6 +101,7 @@ function defineHarnesses(opts: HarnessOpts): HarnessDef[] {
     },
     {
       id: "codex",
+      mark: CODEX_MARK,
       icon: "🔺",
       async start(workspace: string): Promise<HarnessAdapter> {
         return startCodexAdapter(workspace)
@@ -113,6 +120,7 @@ function defineHarnesses(opts: HarnessOpts): HarnessDef[] {
     },
     {
       id: "claude",
+      mark: CLAUDE_MARK,
       icon: "🔶",
       settings: () => CLAUDE_SETTINGS,
       async start(workspace: string): Promise<HarnessAdapter> {
@@ -138,6 +146,24 @@ function defineHarnesses(opts: HarnessOpts): HarnessDef[] {
       async available(): Promise<boolean> {
         try {
           const probe = await startPiAdapter(process.cwd())
+          const h = await probe.health()
+          await probe.close()
+          return h.healthy
+        } catch {
+          return false
+        }
+      },
+    },
+    {
+      id: "goose",
+      mark: GOOSE_MARK,
+      icon: "🪿",
+      async start(workspace: string): Promise<HarnessAdapter> {
+        return startGooseAdapter(workspace)
+      },
+      async available(): Promise<boolean> {
+        try {
+          const probe = await startGooseAdapter(process.cwd())
           const h = await probe.health()
           await probe.close()
           return h.healthy

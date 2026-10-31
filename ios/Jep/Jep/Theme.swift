@@ -120,7 +120,7 @@ struct HarnessAvatar: View {
 
     @ViewBuilder private var mark: some View {
         switch harness {
-        case "opencode", "codex", "claude":
+        case "opencode", "codex", "claude", "goose":
             Image("harness-\(harness ?? "")").resizable().scaledToFit().frame(width: 19, height: 19)
         default:
             Image(systemName: "cpu").font(.system(size: 16, weight: .semibold))

@@ -65,7 +65,10 @@ data class Degraded(
 data class Workspace(val name: String, val harness: String, val dir: String = "", val pod: Boolean = false)
 
 /** the harnesses installed on the machine, and the default */
-data class Harnesses(val ids: List<String>, val default: String?)
+/** a harness's brand mark: one filled SVG path in a `box` × `box` square */
+data class HarnessMark(val box: Float, val path: String)
+
+data class Harnesses(val ids: List<String>, val default: String?, val marks: Map<String, HarnessMark> = emptyMap())
 
 /** Harness-owned controls rendered by the client without harness-specific UI. */
 data class HarnessSetting(

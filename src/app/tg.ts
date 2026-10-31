@@ -439,7 +439,13 @@ async function main() {
     const { startGateway } = await import("../clients/gateway/index.ts")
     const gw = await startGateway({
       adapters: () => workspaces.map((w) => ({ name: w.name, adapter: w.adapter })),
-      harnesses: () => ({ ids: available.map((h) => h.id), default: DEFAULT_HARNESS }),
+      // marks for every harness jep knows, not only the ones installed here: a chat
+      // from one that is gone still wears its mark in the list
+      harnesses: () => ({
+        ids: available.map((h) => h.id),
+        default: DEFAULT_HARNESS,
+        marks: Object.fromEntries(harnesses.flatMap((h) => (h.mark ? [[h.id, h.mark]] : []))),
+      }),
       harnessSettings: (id) => available.find((h) => h.id === id)?.settings ?? [],
       // the phone's "Add project": bring a directory up as a workspace under a
       // harness, exactly as the bot's workspace picker does

@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import dev.jep.client.data.GatewayChatRepository
 import dev.jep.client.device.AppSettings
 import dev.jep.client.device.JepHttp
+import dev.jep.client.domain.model.HarnessMark
 import dev.jep.client.domain.model.TextSize
 import dev.jep.client.domain.model.ThemeMode
 import dev.jep.client.device.PairingStore
@@ -215,6 +216,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // workspaces a conversation can be created in, for the creation picker
+    // each harness's brand mark, asked of the daemon once: the list draws what it is sent
+    private val _harnessMarks = MutableStateFlow<Map<String, HarnessMark>>(emptyMap())
+    val harnessMarks = _harnessMarks.asStateFlow()
     private val _workspaces = MutableStateFlow<List<Workspace>>(emptyList())
     val workspaces = _workspaces.asStateFlow()
 
@@ -313,6 +317,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             // the creation picker lists the same served workspaces; keep them
             // fresh with the session list so "New conversation" is never empty
             runCatching { r.workspaces() }.onSuccess { _workspaces.value = byRecency(it) }
+            if (_harnessMarks.value.isEmpty()) runCatching { r.harnesses() }.onSuccess { _harnessMarks.value = it.marks }
             _busy.value = false
             if (refreshQueued) {
                 refreshQueued = false

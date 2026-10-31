@@ -3,6 +3,8 @@ package dev.jep.client.presentation.app
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import dev.jep.client.presentation.sessions.LocalHarnessMarks
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -93,7 +95,7 @@ fun JepApp(app: AppViewModel) {
                 subagentCount = app.sessions.collectAsState().value.firstOrNull { it.id == c.sessionId }?.subagents ?: 0,
             )
         }
-        else -> SessionsScreen(
+        else -> CompositionLocalProvider(LocalHarnessMarks provides app.harnessMarks.collectAsState().value) { SessionsScreen(
             app.sessions.collectAsState().value,
             busy,
             notice,
@@ -121,7 +123,7 @@ fun JepApp(app: AppViewModel) {
             onPinSelected = { app.pinSelected(it) },
             undo = app.undo.collectAsState().value,
             onUndoArchive = { app.undoArchive() },
-        )
+        ) }
     }
     }
 }

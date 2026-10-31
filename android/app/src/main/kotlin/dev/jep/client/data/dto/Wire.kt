@@ -136,7 +136,15 @@ data class WorkspaceDto(val name: String = "", val harness: String = "", val dir
 data class WorkspacesRes(val items: List<WorkspaceDto> = emptyList())
 
 @Serializable
-data class HarnessesRes(val harnesses: List<String> = emptyList(), val default: String? = null)
+data class HarnessesRes(
+    val harnesses: List<String> = emptyList(),
+    val default: String? = null,
+    /** each harness's brand mark, served by the daemon: the app names no harness */
+    val marks: Map<String, HarnessMarkDto> = emptyMap(),
+)
+
+@Serializable
+data class HarnessMarkDto(val box: Float = 24f, val path: String = "")
 
 @Serializable
 data class HarnessSettingDto(

@@ -47,6 +47,12 @@ export interface AgentRef {
  * adapter" seam of the hexagonal core: every harness we ever support (opencode
  * serve, goosed, dsh) gets normalized down to exactly this surface.
  */
+/** a harness's brand mark: one filled SVG path in a `box` × `box` square */
+export interface HarnessMark {
+  box: number
+  path: string
+}
+
 export interface HarnessAdapter {
   readonly id: "opencode" | string
   readonly workspace: string

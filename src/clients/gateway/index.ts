@@ -10,7 +10,7 @@ import { mkdir, open, readdir, readFile, realpath, stat, unlink, writeFile } fro
 import { homedir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path"
-import type { HarnessAdapter, HarnessSettingSpec, SessionImport, Terminal } from "../../core/ports.ts"
+import type { HarnessAdapter, HarnessMark, HarnessSettingSpec, SessionImport, Terminal } from "../../core/ports.ts"
 import type { PairingAdmin } from "../../core/pairing.ts"
 import { describeAsk } from "../../core/asks.ts"
 import { pushFor, UnregisteredToken, type PushNotifier } from "../../core/push.ts"
@@ -46,7 +46,8 @@ export interface GatewayDeps {
   adapters(): Array<{ name: string; adapter: HarnessAdapter }>
   /** the harnesses installed here, and the default — what a conversation may
    * be created under, independent of any one workspace */
-  harnesses?(): { ids: string[]; default: string }
+  /** `marks`: each known harness's brand mark, so a client draws what it is sent and names no harness itself */
+  harnesses?(): { ids: string[]; default: string; marks?: Record<string, HarnessMark> }
   /** settings schemas for harnesses that have not started a workspace yet */
   harnessSettings?(harness: string): HarnessSettingSpec[]
   /** bring a directory up as a workspace under a harness, the way the bot's
@@ -1562,7 +1563,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           ids: [...new Set(deps.adapters().map((a) => a.adapter.id))],
           default: deps.adapters()[0]?.adapter.id ?? "",
         }
-        return json(res, 200, { harnesses: h.ids, default: h.default })
+        return json(res, 200, { harnesses: h.ids, default: h.default, marks: (h as { marks?: Record<string, HarnessMark> }).marks ?? {} })
       }
 
       // The same adapter-declared schema powers creation-time controls (by
