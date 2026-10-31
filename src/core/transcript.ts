@@ -135,7 +135,8 @@ export const splitQuoteText = (text: string): { quote?: string; text: string } =
 
 // Anchored to the end and only over lines that are all "- <path>", so a message
 // that merely talks about attached files keeps its words.
-const ATTACHMENT_BLOCK = new RegExp(`\\n{2}${ATTACHMENT_HEADER}\\n(?:- [^\\n]+(?:\\n|$))+$`)
+// the blank line before it is gone when the message was only pictures and a harness trimmed the start
+const ATTACHMENT_BLOCK = new RegExp(`(?:^|\\n{2})${ATTACHMENT_HEADER}\\n(?:- [^\\n]+(?:\\n|$))+$`)
 
 export const stripAttachments = (text: string): string => text.replace(ATTACHMENT_BLOCK, "")
 
