@@ -1,4 +1,5 @@
 import { runVerifier, type LoopVerify } from "./loops.ts"
+import { noticeMarker } from "./transcript.ts"
 
 // A watch is how an agent waits for something slow. Under jep a turn is one
 // `claude -p` process, and a background job started inside it dies with the
@@ -61,10 +62,15 @@ export async function lookAtWatch(spec: WatchSpec, cwd: string): Promise<LoopVer
 
 /** The words of the turn the daemon starts when the wait is over. */
 export function watchText(spec: WatchSpec, outcome: WatchOutcome): string {
+  // The marker first, so every client can tell this turn from one a person
+  // typed (see core/transcript.ts). Without it the wake-up is a user message:
+  // it queues in beside their prompts and comes back as if they had said it.
+  const minutes = Math.round(spec.maxMs / 60_000)
   const lines = [
+    noticeMarker(outcome.kind, minutes),
     outcome.kind === "done"
       ? `The thing you asked jep to watch has finished: ${spec.note}`
-      : `jep stopped watching after ${Math.round(spec.maxMs / 60_000)} min and it had not finished: ${spec.note}`,
+      : `jep stopped watching after ${minutes} min and it had not finished: ${spec.note}`,
     "",
     `Check: \`${spec.check}\``,
   ]

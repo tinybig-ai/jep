@@ -1,6 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { lookAtWatch, parseWatch, watchText, WATCH_DEFAULT_EVERY_MS, WATCH_MIN_EVERY_MS } from "../src/core/watches.ts"
+import { isScaffold, readNoticeMarker, transcriptText } from "../src/core/transcript.ts"
 
 test("a watch request without a check is refused", () => {
   assert.equal(parseWatch({}), null)
@@ -36,4 +37,21 @@ test("the new turn names the thing and carries the output", () => {
   const done = watchText(spec, { kind: "done", verify: { ok: true, code: 0, output: "all good" } })
   assert.ok(done.includes("the VAE test") && done.includes("all good"))
   assert.ok(watchText(spec, { kind: "timeout" }).includes("not finished"))
+})
+
+test("the wake-up is marked as jep's own, so no client shows it as a person's message", () => {
+  // The turn the daemon queues when a watch ends used to arrive as plain text:
+  // it queued beside the person's prompts and came back in the transcript as
+  // something they had said. The marker is what every client reads instead.
+  const spec = parseWatch({ check: "true", note: "the build", max_minutes: 90 })!
+  const done = watchText(spec, { kind: "done", verify: { ok: true, code: 0, output: "ok" } })
+  assert.match(done, /^<!-- jep:notice done -->\n/)
+  assert.deepEqual(readNoticeMarker(done), { kind: "done" })
+  const late = watchText(spec, { kind: "timeout" })
+  assert.match(late, /^<!-- jep:notice timeout 90 -->\n/)
+  assert.deepEqual(readNoticeMarker(late), { kind: "timeout", minutes: 90 })
+  // the body is still the model's, mapped back out of an ordinary message
+  assert.equal(transcriptText(done), "", "no words of it reach a bubble")
+  assert.equal(isScaffold(done), true)
+  assert.equal(isScaffold("the build"), false, "a person talking about a watch is still their message")
 })

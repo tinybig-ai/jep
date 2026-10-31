@@ -5,7 +5,7 @@ import path from "node:path"
 import { randomUUID } from "node:crypto"
 import type { HarnessAdapter, ModelCaps, ModelRef } from "../core/ports.ts"
 import type { DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionSummary, SkillDirs } from "../core/types.ts"
-import { splitQuoteText, transcriptText, withQuoteText, stripInjectedContext, contextFor } from "../core/transcript.ts"
+import { splitQuoteText, transcriptText, withQuoteText, stripInjectedContext, contextFor, isScaffold } from "../core/transcript.ts"
 import { TurnAbortedError } from "../core/types.ts"
 
 /**
@@ -484,7 +484,10 @@ export function mapPiEntries(entries: PiEntry[], sessionID: string): Message[] {
       const { quote, text } = splitQuoteText(raw)
       if (quote) parts.push({ kind: "quote", text: quote })
       if (text) parts.push({ kind: "text", text: transcriptText(text) })
-      if (!parts.length && raw) parts.push({ kind: "text", text: transcriptText(raw) })
+      // jep's own scaffolding (a loop's next step, a watch's wake-up) has no
+      // words a person typed: keep the marker whole so the client can draw the
+      // boundary, instead of turning it into an empty message
+      if (!parts.length && raw) parts.push({ kind: "text", text: isScaffold(raw) ? raw : transcriptText(raw) })
     } else {
       for (const content of Array.isArray(native.content) ? native.content : []) {
         if (content?.type === "text" && content.text) parts.push({ kind: "text", text: String(content.text) })

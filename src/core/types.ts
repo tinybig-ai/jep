@@ -135,6 +135,10 @@ export interface Message {
   /** this turn was queued by a loop, not typed: clients draw a boundary, not a
    * bubble whose words they hide */
   loop?: { iteration: number; max: number }
+  /** this turn was jep waking itself for a watch, not typed: the same boundary,
+   * named by how the wait ended. Clients never show the words — they are an
+   * instruction to the model, and shown back they read as the person's own. */
+  notice?: { kind: "done" | "timeout"; minutes?: number }
 }
 
 // one file's accumulated change within a session, as reported by the harness

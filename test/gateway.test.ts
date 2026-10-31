@@ -2096,3 +2096,42 @@ test("/harnesses serves each harness's mark, so a client names no harness itself
     await g.close()
   }
 })
+
+test("a watch's wake-up comes back as a boundary, never as the person's message", async () => {
+  // The daemon queued this turn itself when a watch ended. Shown as a user
+  // message it read as if the person had typed jep's note, and it queued in
+  // beside their own prompts. The marker makes it a divider instead.
+  const adapter = fakeAdapter()
+  const woke = "<!-- jep:notice timeout 60 -->\njep stopped watching after 60 min and it had not finished: --help\n\nCheck: `--help`"
+  adapter.messages = async () => [
+    { id: "u0", sessionID: "s1", role: "user", time: 1, parts: [{ kind: "text", text: "fix the reddit bug" }] },
+    { id: "u1", sessionID: "s1", role: "user", time: 2, parts: [{ kind: "text", text: woke }] },
+    { id: "a1", sessionID: "s1", role: "assistant", time: 3, parts: [{ kind: "text", text: "on it" }] },
+  ]
+  const g = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter }],
+    dataHome: mkdtempSync(join(tmpdir(), "gw-test-")),
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+  })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const token = await pair(base, "TESTCODE")
+    const res = await fetch(`${base}/history`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ id: "s1" }),
+    })
+    const { messages } = (await res.json()) as { messages: Message[] }
+    assert.equal(messages.length, 3, "the notice itself is kept, so a boundary can be drawn")
+    const notice = messages[1]!
+    assert.deepEqual(notice.notice, { kind: "timeout", minutes: 60 })
+    assert.deepEqual(notice.parts, [], "none of jep's words reach a bubble")
+    const said = messages[0]!
+    assert.equal(said.notice, undefined, "and a person's own message stays theirs")
+    assert.equal((said.parts[0] as { text?: string }).text, "fix the reddit bug")
+  } finally {
+    await g.close()
+  }
+})

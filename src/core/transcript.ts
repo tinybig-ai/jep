@@ -91,6 +91,34 @@ export const readLoopMarker = (text: string): { iteration: number; max: number }
   return m ? { iteration: Number(m[1]), max: Number(m[2]) } : null
 }
 
+// A watch's wake-up is jep talking to the harness for the same reason a loop
+// continuation is: the person did not type it, the daemon did, so it must never
+// come back as one of their messages. The marker carries the one thing the
+// client needs to name it — how the wait ended, and how long it was given — and
+// the body (the note, the check, its output) stays in the transcript for the
+// model, out of the bubble for the reader.
+const NOTICE_MARKER = /^<!-- jep:notice (done|timeout)(?: (\d{1,5}))? -->\n?/
+
+export type NoticeKind = "done" | "timeout"
+
+export const noticeMarker = (kind: NoticeKind, minutes?: number): string =>
+  kind === "timeout" && minutes !== undefined ? `<!-- jep:notice ${kind} ${minutes} -->` : `<!-- jep:notice ${kind} -->`
+
+export const readNoticeMarker = (text: string): { kind: NoticeKind; minutes?: number } | null => {
+  const m = text.match(NOTICE_MARKER)
+  if (!m) return null
+  return { kind: m[1] as NoticeKind, ...(m[2] ? { minutes: Number(m[2]) } : {}) }
+}
+
+/** is this whole message jep's own scaffolding (a loop's next step, a watch's
+ *  wake-up)? A harness that builds parts out of transcriptText() would empty
+ *  such a message; it keeps the raw text instead, and the client, which knows
+ *  the marker, draws a boundary and hides the body. */
+export const isScaffold = (text: string): boolean => {
+  const bare = stripInjectedContext(text)
+  return Boolean(readLoopMarker(bare) ?? readNoticeMarker(bare))
+}
+
 /** for a harness that takes only text: the block, a blank line, the message */
 export const withQuoteText = (text: string, quote?: string): string =>
   quote?.trim() ? `${quoteBlock(quote)}\n\n${text}` : text
@@ -158,7 +186,9 @@ export const dropBlocks = (text: string): string => {
 // surrounding bookkeeping does not.
 export const transcriptText = (raw: string): string => {
   const text = stripAttachments(stripInjectedContext(raw))
-  if (readLoopMarker(text)) return ""
+  // jep's own scaffolding is not anybody's words: the marker is the whole
+  // message, and the client draws it as a boundary instead
+  if (readLoopMarker(text) || readNoticeMarker(text)) return ""
   const cmd = text.match(/<command-name>([^<]*)<\/command-name>/)
   if (cmd) {
     const args = text.match(/<command-args>([^<]*)<\/command-args>/)

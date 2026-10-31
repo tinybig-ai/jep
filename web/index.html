@@ -868,12 +868,15 @@ function render(follow = true) {
       return { role: "user", parts: [{ kind: "text", text: p.text }], queued }
     }),
     // waiting in the daemon's line from another device: shown the same way
-    ...queue.filter((q) => !pendingText.some((p) => p.clientID && p.clientID === q.clientID)).map((q) => ({ role: "user", parts: [{ kind: "text", text: q.text }], queued: q })),
+    // jep's own notes wait in that line too, but they are not the person's
+    // words: they are drawn as the boundary they will become, further down
+    ...queue.filter((q) => !q.notice && !pendingText.some((p) => p.clientID && p.clientID === q.clientID)).map((q) => ({ role: "user", parts: [{ kind: "text", text: q.text }], queued: q })),
   ]
   nodes.push(...transcript(all))
   for (const a of asks) nodes.push(askNode(a))
   if (busy() && !asks.length) nodes.push(el("div", "spin", "working"))
   nodes.push(...transcript(waiting))
+  for (const q of queue) if (q.notice) nodes.push(dividerNode("· jep · a watch is done, waiting its turn ·", true))
   // A box that scrolls on its own (a turn's work, a tool's output) is a new
   // box after every redraw, and a new box starts at the top: whoever was
   // reading deep inside one was thrown back to its beginning every few
@@ -939,6 +942,14 @@ function dividerNode(label, quiet = false) {
 const compactionNode = () => dividerNode("compaction complete")
 const autoContinueNode = () => dividerNode("· auto-continued ·", true)
 const loopNode = (l) => dividerNode(`loop ${l.iteration}/${l.max}`, true)
+// jep woke itself for a watch. It is a boundary, not a message: the person did
+// not type it, so it never counts as one of theirs.
+const wakeNode = (n) => dividerNode(
+  n.kind === "timeout"
+    ? `· jep · stopped watching after ${n.minutes ?? 60} min ·`
+    : "· jep · the watch is done ·",
+  true,
+)
 
 function transcript(all) {
   const out = []
@@ -954,6 +965,7 @@ function transcript(all) {
       if (isCompactionOnly(m)) { out.push(compactionNode()); continue }
       if (isAutoContinueOnly(m)) { out.push(autoContinueNode()); continue }
       if (m.loop) { out.push(loopNode(m.loop)); continue }
+      if (m.notice) { out.push(wakeNode(m.notice)); continue }
       if (saysNothing(m)) continue
       // a send that failed carries its own Retry; a sent one gets Edit and Retry
       const failed = !m.queued && !!m.undelivered
@@ -1498,7 +1510,7 @@ $("input").onkeydown = (e) => {
   } else if (e.key === "ArrowUp" && !e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && !editing && !$("input").value) {
     // as in Slack: up in an empty box edits the last message still waiting
     const mine = pendingText.filter((p) => p.clientID && (p.expectQueue || queue.some((q) => q.clientID === p.clientID)))
-    const last = mine[mine.length - 1] ?? [...queue].reverse().find((q) => q.clientID)
+    const last = mine[mine.length - 1] ?? [...queue].reverse().find((q) => q.clientID && !q.notice)
     if (last) { e.preventDefault(); startEdit({ clientID: last.clientID, text: last.text }) }
   }
 }
@@ -1603,14 +1615,22 @@ function renderQueue() {
   const key = JSON.stringify(queue)
   if (key === queueShown || dragging) return
   queueShown = key
+  // jep's own notes are in the daemon's line but not in a person's: they are
+  // drawn as boundaries in the transcript, never as rows they can drag or drop
+  const line = queue.filter((q) => !q.notice)
   const box = $("queue")
-  box.hidden = queue.length < 2
-  if (queue.length < 2) return box.replaceChildren()
-  const head = el("div", "queue-head", `Queued · ${queue.length}`)
-  box.replaceChildren(head, ...queue.map((q, i) => {
+  box.hidden = line.length < 2
+  if (line.length < 2) return box.replaceChildren()
+  const head = el("div", "queue-head", `Queued · ${line.length}`)
+  box.replaceChildren(head, ...line.map((q, i) => {
     const row = el("div", "queued")
     const handle = !!q.clientID
-    row.draggable = handle && queue.length > 1
+    // the screen row and the daemon's line differ once a notice sits between
+    // prompts: move by the neighbouring *prompt's* index, not by the row's
+    const at = queue.indexOf(q)
+    const prev = line[i - 1] ? queue.indexOf(line[i - 1]) : -1
+    const next = line[i + 1] ? queue.indexOf(line[i + 1]) : -1
+    row.draggable = handle && line.length > 1
     const grip = el("span", "grip")
     grip.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01"/></svg>'
     const text = el("span", "queued-text", q.text.replace(/\s+/g, " "))
@@ -1624,8 +1644,8 @@ function renderQueue() {
       return b
     }
     row.append(
-      button("Move up", "M6 15l6-6 6 6", !handle || i === 0, () => moveQueued(q.clientID, i - 1)),
-      button("Move down", "M6 9l6 6 6-6", !handle || i === queue.length - 1, () => moveQueued(q.clientID, i + 1)),
+      button("Move up", "M6 15l6-6 6 6", !handle || i === 0, () => moveQueued(q.clientID, prev)),
+      button("Move down", "M6 9l6 6 6-6", !handle || i === line.length - 1, () => moveQueued(q.clientID, next)),
       button("Remove from the queue", "M6 6l12 12M18 6 6 18", !handle, () => cancelQueued(q.clientID)),
     )
     row.ondragstart = (e) => { dragging = q.clientID; row.classList.add("dragging"); e.dataTransfer.effectAllowed = "move" }
@@ -1639,12 +1659,17 @@ function renderQueue() {
     }
     row.ondrop = (e) => {
       e.preventDefault()
-      const from = queue.findIndex((x) => x.clientID === dragging)
-      let to = i + (row.classList.contains("drop-below") ? 1 : 0)
-      if (from < to) to--
       const id = dragging
       dragging = null
-      if (from >= 0 && to !== from) moveQueued(id, to)
+      const from = queue.findIndex((x) => x.clientID === id)
+      // Drop against this row's place in the daemon's line (notices included),
+      // and splice by where that place lands once the dropped one is taken out:
+      // a row ahead of it keeps its index, one behind it shifts down by one.
+      const pre = at
+      const target = row.classList.contains("drop-below")
+        ? (from > pre ? pre + 1 : pre)
+        : (from > pre ? pre : pre - 1)
+      if (from >= 0 && target !== from) moveQueued(id, target)
       else { queueShown = ""; renderQueue() }
     }
     return row

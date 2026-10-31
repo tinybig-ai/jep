@@ -89,7 +89,9 @@ export async function startContinuity(opts: ContinuityOpts): Promise<{ close(): 
       if (!mine.size) watches.delete(key)
       saveWatches()
       console.error(`[watch] ${outcome.kind} "${spec.note}" (gateway session ${key})`)
-      turns.enqueue(key, watchText(spec, outcome))
+      // marked a notice: this turn is the daemon's, not the person's, so it is
+      // drawn as a boundary and never as one of their queued messages
+      turns.enqueue(key, watchText(spec, outcome), { notice: true })
     }
     const look = async (): Promise<void> => {
       if (!mine.has(watch) || turns.closing()) return

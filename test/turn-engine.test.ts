@@ -106,6 +106,21 @@ test("the daemon's services see what the engine runs, and a turn it cuts off at 
   assert.deepEqual(events, ["start s1", "end s1 true"])
 })
 
+test("stopping everything does not hand jep's own note back as the person's words", async () => {
+  let release!: () => void
+  const gate = new Promise<void>((r) => (release = r))
+  const { engine, adapter } = engineOf({ prompt: () => gate })
+  engine.submit("s1", pending("first").turn)
+  await new Promise((r) => setTimeout(r, 30))
+  engine.enqueue("s1", "<!-- jep:notice done -->\nthe wait is over", { notice: true })
+  engine.enqueue("s1", "mine")
+  const stopped = await engine.stop("s1", true, adapter)
+  // the notice stops too, but Stop hands back only what the person typed
+  assert.deepEqual(stopped.dropped, ["mine"])
+  release()
+  engine.close()
+})
+
 test("stopping a loop takes back what it queued", async () => {
   const { engine, changed } = engineOf()
   const loop: LoopState = { sessionID: "s1", workspace: "/tmp", spec: { goal: "g", max: 3 }, iteration: 0, status: "running", startedAt: 1, updatedAt: 1 }
@@ -116,5 +131,31 @@ test("stopping a loop takes back what it queued", async () => {
   const stopped = engine.stopLoopByPerson("s1")
   assert.equal(stopped?.status, "stopped")
   assert.ok(changed.includes("s1"), "clients are told to read it again")
+  engine.close()
+})
+
+test("a notice runs alone and is not the person's to edit, move or force", async () => {
+  let release!: () => void
+  const gate = new Promise<void>((r) => (release = r))
+  const { engine, prompts } = engineOf({ prompt: (text) => (text === "first" ? gate : Promise.resolve()) })
+  engine.submit("s1", pending("first").turn)
+  await new Promise((r) => setTimeout(r, 30))
+  const mine = pending("what I typed", { clientID: "a" })
+  engine.submit("s1", mine.turn)
+  // the daemon's own wake-up lands behind their prompt
+  engine.enqueue("s1", "<!-- jep:notice done -->\nthe wait is over", { notice: true })
+  const notice = engine.queueOf("s1").find((q) => q.notice)!
+  assert.match(notice.clientID ?? "", /^notice-/)
+  assert.deepEqual(engine.queueOf("s1").map((q) => q.notice), [false, true])
+  assert.deepEqual(engine.editQueued("s1", notice.clientID!, "x"), { status: 409, error: "jep's own note cannot be edited" })
+  const moved = engine.moveQueued("s1", notice.clientID!, 0)
+  assert.ok("error" in moved && moved.status === 409)
+  assert.deepEqual(engine.forceQueued("s1", notice.clientID!), { status: 409, error: "jep's own note is not yours to run now" })
+  release()
+  await mine.done
+  // the notice is a turn of its own, never folded into their words
+  const deadline = Date.now() + 2_000
+  while (prompts.length < 3 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10))
+  assert.deepEqual(prompts, ["first", "what I typed", "<!-- jep:notice done -->\nthe wait is over"])
   engine.close()
 })

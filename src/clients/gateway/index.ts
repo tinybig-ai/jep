@@ -19,7 +19,7 @@ import { isRepo, repoStatus } from "../../core/git.ts"
 import { listSkills, defaultSkillDirs, writeSkillModelInvocation } from "../../core/skills.ts"
 import type { AskRequest, DomainEvent, Message, Part } from "../../core/types.ts"
 import { usageOf } from "../../core/usage.ts"
-import { attachedPaths, readLoopMarker, stripInjectedContext, transcriptText } from "../../core/transcript.ts"
+import { attachedPaths, readLoopMarker, readNoticeMarker, stripInjectedContext, transcriptText } from "../../core/transcript.ts"
 import {
   LOOP_DEFAULT_TURNS,
   LOOP_MAX_TURNS,
@@ -194,21 +194,30 @@ function cleanForDisplay(m: Message): Message {
   // boundary the client draws, and the instruction itself is dropped — shown
   // back, it reads as if the person typed jep's scaffolding.
   let loop: Message["loop"]
+  let notice: Message["notice"]
   const parts: Part[] = []
   for (const p of m.parts) {
     if (p.kind !== "text") {
       parts.push(p)
       continue
     }
-    const marker = readLoopMarker(stripInjectedContext(p.text))
+    const bare = stripInjectedContext(p.text)
+    const marker = readLoopMarker(bare)
     if (marker) {
       loop = marker
+      continue
+    }
+    // the same for a watch's wake-up: the words are jep's, the divider is the
+    // reader's. Left in, the nudge came back as a message the person sent.
+    const woke = readNoticeMarker(bare)
+    if (woke) {
+      notice = woke
       continue
     }
     const text = transcriptText(p.text)
     if (text.trim()) parts.push({ ...p, text })
   }
-  return { ...m, parts: [...parts, ...files], ...(loop ? { loop } : {}) }
+  return { ...m, parts: [...parts, ...files], ...(loop ? { loop } : {}), ...(notice ? { notice } : {}) }
 }
 
 // A pod: a conversation that needs a harness but no folder of its own. The
@@ -1772,9 +1781,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const messages = (limit > 0 ? window.slice(-limit) : window)
           .map(cleanForDisplay)
           .map((m) => ({ ...m, parts: m.parts.map(withShown) }))
-          // a loop turn has no words left after its marker: keep it so the
-          // client can still draw the boundary
-          .filter((m) => m.role !== "user" || m.parts.length > 0 || m.loop)
+          // a loop turn and a watch's notice have no words left after their
+          // marker: keep them so the client can still draw the boundary
+          .filter((m) => m.role !== "user" || m.parts.length > 0 || m.loop || m.notice)
         // the asks ride along whole (they are few): each is placed by its own
         // anchor, and the pending one is what holds the composer
         const asks = (askLedger.get(id) ?? []).map((r) => ({

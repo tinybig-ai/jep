@@ -60,8 +60,11 @@ export interface TurnHost {
   resolve(session: string | undefined, cwd: string | undefined): Promise<{ key: string; adapter: HarnessAdapter } | string>
   /** a conversation by key, while it still exists */
   find(key: string): Promise<HarnessAdapter | null>
-  /** queue a turn that steers nothing, behind whatever is running */
-  enqueue(key: string, text: string, opts?: { resume?: boolean }): void
+  /** queue a turn that steers nothing, behind whatever is running. `notice` is
+   * the daemon's own business (a watch's wake-up): it runs alone instead of
+   * merging with a person's waiting words, and clients draw it as a boundary
+   * rather than as something they said */
+  enqueue(key: string, text: string, opts?: { resume?: boolean; notice?: boolean }): void
   /** conversations with a turn running, settling or waiting */
   busy(): number
   /** told as turns begin and end */

@@ -49,6 +49,10 @@ export type PendingTurn = {
   /** queued by a loop, so this turn advances it and never merges with a
    * person's waiting words */
   loop?: boolean
+  /** queued by the daemon on its own account (a watch's wake-up): it runs
+   * alone, never merges with a person's waiting words, and is not theirs to
+   * edit or reorder */
+  notice?: boolean
   /** a pick-up of a turn a restart cut off (core/restarts.ts) */
   resume?: boolean
   resolve: (r: TurnResult) => void
@@ -168,8 +172,8 @@ export class TurnEngine implements TurnHost {
     return st != null && (st.running != null || st.settling === true || st.waiting.length > 0)
   }
   /** what waits behind the running turn, as a client draws it */
-  queueOf(id: string): Array<{ clientID: string | null; text: string; steer: boolean }> {
-    return (this.turnOf(id)?.waiting ?? []).map((p) => ({ clientID: p.clientID ?? null, text: p.text, steer: p.steer }))
+  queueOf(id: string): Array<{ clientID: string | null; text: string; steer: boolean; notice: boolean }> {
+    return (this.turnOf(id)?.waiting ?? []).map((p) => ({ clientID: p.clientID ?? null, text: p.text, steer: p.steer, notice: p.notice === true }))
   }
   /** the conversation did something (a person answered an ask): the watchdog's clock restarts */
   touch(id: string): void {
@@ -195,14 +199,17 @@ export class TurnEngine implements TurnHost {
   find(key: string): Promise<HarnessAdapter | null> {
     return this.#env.find(key)
   }
-  enqueue(key: string, text: string, opts?: { resume?: boolean }): void {
+  enqueue(key: string, text: string, opts?: { resume?: boolean; notice?: boolean }): void {
     const st = this.#state(key)
     st.waiting.push({
       text,
       filePaths: [],
       steer: false,
-      clientID: `${opts?.resume ? "resume" : "queued"}-${Date.now().toString(36)}`,
+      // `notice` is the handle's own word for what this is: clients read it and
+      // draw jep's own note as a boundary, not as one of the person's prompts
+      clientID: `${opts?.resume ? "resume" : opts?.notice ? "notice" : "queued"}-${Date.now().toString(36)}`,
       ...(opts?.resume ? { resume: true } : {}),
+      ...(opts?.notice ? { notice: true } : {}),
       resolve: () => {},
     })
     this.#run(key)
@@ -270,7 +277,10 @@ export class TurnEngine implements TurnHost {
     const dropped = all && st ? st.waiting.splice(0) : []
     for (const p of dropped) p.resolve({ status: 200, cancelled: true })
     const stopped = await adapter.abort(id).catch(() => false)
-    return { stopped, dropped: dropped.map((p) => p.text) }
+    // jep's own turns (a loop's next step, a watch's wake-up) stop with the
+    // rest, but their words are not the person's: handing them back would paste
+    // jep's scaffolding into their message box as if they had typed it
+    return { stopped, dropped: dropped.filter((p) => !p.notice && !p.loop).map((p) => p.text) }
   }
 
   // Acting on a queued prompt the client still holds a handle to (a clientID).
@@ -297,6 +307,8 @@ export class TurnEngine implements TurnHost {
     // a continuation's text is jep's instruction, marker and all;
     // rewriting it would break the boundary the clients draw
     if (q.entry.loop) return { status: 409, error: "a loop turn cannot be edited" }
+    // and a notice is jep's own account of a finished wait, not a draft
+    if (q.entry.notice) return { status: 409, error: "jep's own note cannot be edited" }
     if (!text.trim()) return { status: 400, error: "text required" }
     q.entry.text = text
     return null
@@ -309,6 +321,8 @@ export class TurnEngine implements TurnHost {
     if ("error" in q) return q
     if (typeof to !== "number" || !Number.isInteger(to)) return { status: 400, error: "to required" }
     if (q.entry.force) return { status: 409, error: "runs next" }
+    // a notice is placed by the daemon, not dragged by a reader
+    if (q.entry.notice) return { status: 409, error: "jep's own note is not in your line" }
     q.st.waiting.splice(q.idx, 1)
     const first = q.st.waiting.findIndex((p) => !p.force)
     const lo = first < 0 ? q.st.waiting.length : first
@@ -320,6 +334,8 @@ export class TurnEngine implements TurnHost {
   forceQueued(id: string, clientID: string): QueueRefusal | null {
     const q = this.#queued(id, clientID)
     if ("error" in q) return q
+    // forcing jep's own note would abort the person's running turn for it
+    if (q.entry.notice) return { status: 409, error: "jep's own note is not yours to run now" }
     q.st.waiting.splice(q.idx, 1)
     q.entry.force = true
     q.st.waiting.unshift(q.entry)
@@ -655,11 +671,12 @@ export class TurnEngine implements TurnHost {
       return
     }
     // a forced prompt runs on its own: it was asked for ahead of the rest.
-    // A loop turn does too, and a person's prompts ahead of one never merge
-    // across it: the continuation is jep's instruction, not a thought of theirs.
+    // A loop turn does too, and a notice too (jep's own wake-up): neither is
+    // the person's words, so neither may merge into their batch, and a person's
+    // prompts ahead of one never merge across it.
     const head = st.waiting[0]!
-    const firstLoop = st.waiting.findIndex((p) => p.loop === true)
-    const take = head.force || head.loop ? 1 : firstLoop > 0 ? firstLoop : st.waiting.length
+    const solo = st.waiting.findIndex((p) => p.loop === true || p.notice === true)
+    const take = head.force || solo === 0 ? 1 : solo > 0 ? solo : st.waiting.length
     const next = this.#mergeWaiting(st.waiting.splice(0, take))
     const adapter = await this.#env.find(id)
     if (!adapter) {
