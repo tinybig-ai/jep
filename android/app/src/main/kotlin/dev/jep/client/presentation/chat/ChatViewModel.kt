@@ -94,7 +94,7 @@ class ChatViewModel(
 
     /** a message typed while the agent was busy: held, shown as queued, handed
      * over when the current turn ends */
-    data class Queued(val id: String, val text: String, val attachments: List<Attachment> = emptyList(), val mode: SendMode = SendMode.STEER, val quote: String? = null, /** served user message ids already present when this was queued, so an older message with the same words cannot clear it */ val seen: Set<String> = emptySet())
+    data class Queued(val id: String, val text: String, val attachments: List<Attachment> = emptyList(), val mode: SendMode = SendMode.STEER, val quote: String? = null, /** served user message ids already present when this was queued, so an older message with the same words cannot clear it */ val seen: Set<String> = emptySet(), /** the daemon holds it and this device did not send it (another device did, or this app was restarted): it leaves when the daemon stops listing it */ val remote: Boolean = false)
 
     /** the turn being written right now, unit = streaming part */
     data class LiveTurn(
@@ -523,13 +523,29 @@ class ChatViewModel(
                         // picked up: it is no longer waiting, it is the turn. A
                         // NEW record entry only — an older message with the same
                         // words must not clear it.
-                        queued = st.queued.filterNot { q -> servedNow.any { m -> m.id !in q.seen && textOf(m) == q.text } },
+                        queued = reconcileQueued(
+                            st.queued.filterNot { q -> servedNow.any { m -> m.id !in q.seen && textOf(m) == q.text } },
+                            batch.waiting,
+                        ),
                     )
                 }
             }
             .onFailure { _state.update { it.copy(loadingHistory = false) } }
             // the gateway just answered: a good moment for what never got there
             .onSuccess { retryOutboxIfDue() }
+    }
+
+    /** The daemon's line is the account of what waits. A message this device holds stays until the record
+     * shows it; one only the daemon holds (sent from another device, or before this app restarted) is drawn
+     * from the daemon's list and goes when the daemon stops listing it. */
+    private fun reconcileQueued(local: List<Queued>, waiting: List<dev.jep.client.domain.repository.Waiting>): List<Queued> {
+        val held = local.filter { !it.remote }
+        val heldIds = held.map { it.id }.toSet()
+        val remote = waiting.filter { it.id !in heldIds }.map {
+            Queued(it.id, it.text, mode = if (it.steer) SendMode.STEER else SendMode.AFTER_REPLY, remote = true)
+        }
+        // keep the order the person already sees for what they hold; the daemon's others follow in its order
+        return held + remote
     }
 
     fun loadOlder() {
@@ -690,7 +706,7 @@ class ChatViewModel(
                     }
                     _state.update {
                         it.copy(
-                            sending = it.queued.isNotEmpty(),
+                            sending = it.queued.any { q -> !q.remote },
                             live = null,
                             failure = if (err is TurnAborted) null else (err.message ?: "the turn failed"),
                         )

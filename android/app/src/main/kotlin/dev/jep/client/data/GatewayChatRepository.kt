@@ -27,6 +27,7 @@ import dev.jep.client.data.dto.UsageRes
 import dev.jep.client.data.dto.WorkspacesRes
 import dev.jep.client.domain.repository.ChatEvent
 import dev.jep.client.domain.repository.HistoryBatch
+import dev.jep.client.domain.repository.Waiting
 import dev.jep.client.domain.repository.ModelChoices
 import dev.jep.client.domain.repository.TurnAborted
 import dev.jep.client.domain.model.SendMode
@@ -318,6 +319,7 @@ private val json = Json { ignoreUnknownKeys = true; isLenient = true }
                 res.messages.map { it.toDomain() },
                 res.hasMore,
                 res.asks.map { AskEntry(it.toDomain(), pending = it.state == "pending", choice = it.answer) },
+                res.queue.filter { !it.notice && !it.clientID.isNullOrEmpty() }.map { Waiting(it.clientID!!, it.text, it.steer) },
             )
             if (key != null && res.etag != null) lastPage[key] = res.etag to batch
             batch

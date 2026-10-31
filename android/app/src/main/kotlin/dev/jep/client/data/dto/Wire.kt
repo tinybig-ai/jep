@@ -126,6 +126,17 @@ data class HistoryRes(
     val etag: String? = null,
     /** the answer is the one tagged `etag`, which this client already holds */
     val unchanged: Boolean = false,
+    /** what waits behind the running turn, in the daemon's order: its own account, from any device */
+    val queue: List<QueueEntryDto> = emptyList(),
+)
+
+@Serializable
+data class QueueEntryDto(
+    val clientID: String? = null,
+    val text: String = "",
+    val steer: Boolean = true,
+    /** jep's own note (a watch or a restart), not something a person queued */
+    val notice: Boolean = false,
 )
 
 @Serializable

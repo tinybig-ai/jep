@@ -30,7 +30,12 @@ data class HistoryBatch(
     val hasMore: Boolean,
     /** the conversation's asks and how each ended, oldest first */
     val asks: List<AskEntry> = emptyList(),
+    /** what the daemon holds behind the running turn, people's messages only, in its order */
+    val waiting: List<Waiting> = emptyList(),
 )
+
+/** a message the daemon is holding until the running turn ends */
+data class Waiting(val id: String, val text: String, val steer: Boolean)
 
 /** the models a conversation may run on, the one it is set to (null = the
  * harness default), and what "default" actually resolves to */
