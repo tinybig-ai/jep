@@ -111,7 +111,7 @@ bubble, and `/history` hides the instruction itself.
 | `POST /setskill` | `{id,path,disabled}` | `{ok}`: hide (or allow) a skill for the model; flips `disable-model-invocation` in its frontmatter |
 | `POST /mcp` | `{id}` | `{servers[]}`: the MCP servers this harness will start (`{name,kind,enabled,detail}`), read from its config |
 | `POST /setmcp` | `{id,name,enabled}` | `{ok}`: enable/disable an MCP server in the harness's own config |
-| `POST /rename` | `{id,title}` | `{ok}`: a client-side title override (Telegram-style chat rename), persisted in `<DATA_HOME>/gateway-titles.json`, overlaid on `/sessions` |
+| `POST /rename` | `{id,title}` | `{ok}`: a client-side title override (Telegram-style chat rename), persisted in `<DATA_HOME>/gateway-titles.json`, overlaid on `/sessions`. Where the harness keeps its own title (opencode), the session is renamed there too, so its TUI and other readers agree |
 | `POST /importable` | (none) | `{sessions[]}`: sessions in the *user's own* opencode store (in a folder jep serves) that jep doesn't have, offered for import |
 | `POST /import` | `{id}` | `{ok,id,output}`: fork one in via `opencode export` from the user's store, then `opencode import` into jep's. A copy; the original is untouched |
 | `POST /seen` | `{id,at?}` | `{ok,seenAt}`: the conversation was looked at (`at` defaults to now; the later time is kept); `at: 0` marks it unread. Persisted in `<DATA_HOME>/gateway-seen.json`, and every `/sessions` item carries `seenAt` |
