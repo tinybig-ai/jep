@@ -58,20 +58,8 @@ const toNativeId = (id: string) =>
 // accept a partial reply — the turn stays parked until the answers arrive
 // together). A one-question ask still sends the bare id, and a bare id is not
 // valid JSON, so JSON is only attempted for something that looks like an array.
-export function parseOptionIDs(optionID: string): string[] {
-  const trimmed = optionID.trim()
-  if (trimmed.startsWith("[")) {
-    try {
-      const parsed = JSON.parse(trimmed)
-      if (Array.isArray(parsed)) {
-        return parsed.filter((x): x is string => typeof x === "string" && x.length > 0)
-      }
-    } catch {
-      // not JSON after all: fall through and treat it as a single id
-    }
-  }
-  return optionID ? [optionID] : []
-}
+// (Lives in core/questions.ts so every harness decodes it the same way.)
+export { parseOptionIDs } from "../core/questions.ts"
 
 // Two listings of the same store seen through different scopes: union them by
 // id, the project-scoped entry winning a tie. One opencode data home can hold

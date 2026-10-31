@@ -55,7 +55,14 @@ function askJep(toolName, input, toolUseID) {
         if (!line) continue
         try {
           const msg = JSON.parse(line)
-          done(msg.decision === "allow" ? { behavior: "allow", updatedInput: input } : denied(msg.message ?? "denied from Telegram"))
+          // A permission answers allow/deny. A question (AskUserQuestion) sends
+          // back the tool input with the answers folded in — `updatedInput` is
+          // how Claude Code takes the model's selected options.
+          done(
+            msg.decision === "allow"
+              ? { behavior: "allow", updatedInput: msg.updatedInput ?? input }
+              : denied(msg.message ?? "denied from Telegram"),
+          )
         } catch {
           done(denied("jep: unreadable answer"))
         }
@@ -68,7 +75,8 @@ function askJep(toolName, input, toolUseID) {
 
 const TOOL = {
   name: "ask",
-  description: "Ask the person running jep whether this tool call may proceed.",
+  description:
+    "Ask the person running jep about this tool call: whether it may proceed, or — for AskUserQuestion — which options they chose.",
   inputSchema: {
     type: "object",
     properties: {

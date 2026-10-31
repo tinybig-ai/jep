@@ -241,8 +241,16 @@ export class ClaudeAdapter implements HarnessAdapter {
   #askSocket: string | null = null
   #askServer: net.Server | null = null
   // the session each parked ask belongs to, so standing one down can say which
-  // conversation's card to take away
-  #askWaiters = new Map<string, { sessionID: string; answer: (decision: { decision: "allow" | "deny"; message?: string }) => void }>()
+  // conversation's card to take away. `updatedInput` is how a question ask
+  // carries its answers back: Claude's AskUserQuestion tool reads them out of
+  // its own input (see core/questions.ts).
+  #askWaiters = new Map<
+    string,
+    { sessionID: string; answer: (decision: { decision: "allow" | "deny"; message?: string; updatedInput?: Record<string, unknown> }) => void }
+  >()
+  // asks that are a question rather than a permission, with the input to fold
+  // the answers into when they are answered
+  #questionAsks = new Map<string, { input: Record<string, unknown>; grouped: GroupedQuestions }>()
   #askSeq = 0
   // whether this CLI build takes --permission-prompt-tool at all; asked once
   #askSupported: boolean | null = null
@@ -534,7 +542,13 @@ export class ClaudeAdapter implements HarnessAdapter {
     // or strings", space-separated), so whatever follows it is swallowed as
     // another config — including the prompt, which then reads as a missing file
     // and kills the run before it starts.
-    if (!opts?.harnessSettings?.dangerouslySkipPermissions && await this.#asksSupported()) {
+    //
+    // Attached even when permissions are skipped. Measured against the real
+    // CLI (haiku, a dummy host): under --dangerously-skip-permissions the
+    // CLI still sends AskUserQuestion to this host, and sends nothing else, so
+    // the host never sees a permission. Without it, -p does not offer the
+    // tool at all.
+    if (await this.#asksSupported()) {
       const sock = await this.#askChannel()
       if (sock) {
         args.push(
@@ -818,11 +832,23 @@ export class ClaudeAdapter implements HarnessAdapter {
     const waiter = this.#askWaiters.get(askID)
     if (!waiter) return false
     this.#askWaiters.delete(askID)
-    waiter.answer(
-      optionID === "allow"
-        ? { decision: "allow" }
-        : { decision: "deny", message: "denied from Telegram" },
-    )
+    // A question is answered with the picked labels, folded into the tool's own
+    // input: Claude's AskUserQuestion reads `answers` from there. A permission
+    // is the allow/deny it always was.
+    const question = this.#questionAsks.get(askID)
+    if (question) {
+      this.#questionAsks.delete(askID)
+      waiter.answer({
+        decision: "allow",
+        updatedInput: { ...question.input, answers: answersFor(optionID, question.grouped) },
+      })
+    } else {
+      waiter.answer(
+        optionID === "allow"
+          ? { decision: "allow" }
+          : { decision: "deny", message: "denied from Telegram" },
+      )
+    }
     // every other client holding this card now learns it is spent
     this.#emit({ type: "ask.resolved", sessionID: waiter.sessionID, askID })
     return true
@@ -834,6 +860,7 @@ export class ClaudeAdapter implements HarnessAdapter {
     const waiter = this.#askWaiters.get(askID)
     if (!waiter) return false
     this.#askWaiters.delete(askID)
+    this.#questionAsks.delete(askID)
     waiter.answer({ decision: "deny", message: "answered in chat" })
     this.#emit({ type: "ask.resolved", sessionID: waiter.sessionID, askID })
     return true
@@ -852,6 +879,7 @@ export class ClaudeAdapter implements HarnessAdapter {
     for (const [id, waiter] of [...this.#askWaiters]) {
       if (sessionID && waiter.sessionID && waiter.sessionID !== sessionID) continue
       this.#askWaiters.delete(id)
+      this.#questionAsks.delete(id)
       try {
         waiter.answer({ decision: "deny", message: why })
       } catch {
@@ -917,16 +945,27 @@ export class ClaudeAdapter implements HarnessAdapter {
         : typeof input.file_path === "string"
           ? input.file_path
           : JSON.stringify(input)
-    this.#askWaiters.set(askID, {
+    const waiter = {
       sessionID: msg.session ?? "",
-      answer: (decision) => {
+      answer: (decision: { decision: "allow" | "deny"; message?: string; updatedInput?: Record<string, unknown> }) => {
         try {
           conn.write(`${JSON.stringify({ id: msg.id, ...decision })}\n`)
         } catch (err) {
           console.error(`[claude] ask answer failed: ${(err as Error)?.message ?? err}`)
         }
       },
-    })
+    }
+    this.#askWaiters.set(askID, waiter)
+    // The built-in AskUserQuestion tool arrives on this same permission channel
+    // (its permission check is what calls the tool). It is not a yes/no: its
+    // input carries the questions, and its tool reads the choices back out of
+    // `updatedInput.answers` (see core/questions.ts and claude-ask-mcp.mjs).
+    const question = questionAsk(askID, msg.session ?? "", input, { callID: msg.toolUseID, at: Date.now() })
+    if (question) {
+      this.#questionAsks.set(askID, { input, grouped: question.grouped })
+      this.#emit({ type: "ask.requested", sessionID: question.ask.sessionID, ask: question.ask })
+      return
+    }
     const ask: AskRequest = {
       id: askID,
       sessionID: msg.session ?? "",
