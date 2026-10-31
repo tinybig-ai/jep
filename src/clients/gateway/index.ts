@@ -16,7 +16,6 @@ import { describeAsk } from "../../core/asks.ts"
 import { pushFor, UnregisteredToken, type PushNotifier } from "../../core/push.ts"
 import { LIVENESS, type LivenessConfig } from "../../core/liveness.ts"
 import { isRepo, repoStatus } from "../../core/git.ts"
-import { readClaudeMcp, readCodexMcp, readOpencodeMcp, writeClaudeProjectEnabled, writeCodexMcpEnabled, writeOpencodeMcpEnabled } from "../../core/mcpconfig.ts"
 import { listSkills, skillDirsFor, writeSkillModelInvocation } from "../../core/skills.ts"
 import type { AskRequest, DomainEvent, Message, Part } from "../../core/types.ts"
 import { usageOf } from "../../core/usage.ts"
@@ -506,15 +505,6 @@ async function listDirs(cwd: string): Promise<Array<{ name: string; git: boolean
 
 // where each harness keeps its MCP config, so the phone can list and toggle
 // servers the way the bot does — read straight from the file, zero turns
-function mcpPaths(): { opencode: string; codex: string; claude: string } {
-  const xdg = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config")
-  return {
-    opencode: join(xdg, "opencode", "opencode.json"),
-    codex: join(homedir(), ".codex", "config.toml"),
-    claude: join(homedir(), ".claude.json"),
-  }
-}
-
 /** keep a phone-supplied leaf filename from walking out of the uploads dir */
 function leafName(name: string): string {
   const base = name.split(/[\\/]/).pop() ?? "file"
@@ -1733,15 +1723,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
 
       // the MCP servers this harness will start, and whether each is enabled
       if (path === "/mcp") {
-        const paths = mcpPaths()
         let servers: unknown[] = []
         try {
-          if (adapter.id === "opencode") servers = await readOpencodeMcp(paths.opencode)
-          else if (adapter.id === "codex") servers = await readCodexMcp(paths.codex)
-          else if (adapter.id === "claude") {
-            const c = await readClaudeMcp(paths.claude, adapter.workspace)
-            servers = [...c.user, ...c.project]
-          }
+          servers = (await adapter.mcpServers?.()) ?? []
         } catch (err) {
           console.error(`[gw] mcp: ${(err as Error)?.message ?? err}`)
         }
@@ -1752,10 +1736,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const name = str("name")
         if (!name) return json(res, 400, { error: "name required" })
         const enabled = b.enabled === true
-        const paths = mcpPaths()
-        if (adapter.id === "opencode") await writeOpencodeMcpEnabled(paths.opencode, name, enabled)
-        else if (adapter.id === "codex") await writeCodexMcpEnabled(paths.codex, name, enabled)
-        else if (adapter.id === "claude") await writeClaudeProjectEnabled(paths.claude, adapter.workspace, name, enabled)
+        await adapter.setMcpEnabled?.(name, enabled)
         return json(res, 200, { ok: true })
       }
 

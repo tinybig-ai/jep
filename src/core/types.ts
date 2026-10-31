@@ -315,3 +315,15 @@ export const isAborted = (err: unknown): boolean => {
 // instead of scattering `"sessionID" in evt` through the consumers.
 export const eventSession = (e: DomainEvent): string | undefined => ("sessionID" in e ? e.sessionID : undefined)
 export const eventMessage = (e: DomainEvent): string | undefined => ("messageID" in e ? e.messageID : undefined)
+
+/** one MCP server a harness will start, as its own config lists it */
+export interface McpServer {
+  name: string
+  /** local = spawned command, remote = URL */
+  kind: "local" | "remote"
+  enabled: boolean
+  /** the command line or URL, for the list row */
+  detail: string
+  /** false where the harness has no off state for it (the row should not offer a switch) */
+  toggleable?: boolean
+}

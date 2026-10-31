@@ -17,15 +17,10 @@
 // a structure it only partially understands.
 
 import { readFile, writeFile } from "node:fs/promises"
+import { homedir } from "node:os"
+import { join } from "node:path"
+import type { McpServer } from "../core/types.ts"
 
-export interface McpServer {
-  name: string
-  /** local = spawned command, remote = URL */
-  kind: "local" | "remote"
-  enabled: boolean
-  /** the command line or URL, for the list row */
-  detail: string
-}
 
 // ─── opencode ────────────────────────────────────────────────────────────────
 
@@ -221,4 +216,15 @@ export async function writeClaudeProjectEnabled(claudeJsonPath: string, projectD
   else disabled.add(serverName)
   entry.disabledMcpjsonServers = [...disabled]
   await writeFile(claudeJsonPath, JSON.stringify(config, null, 2))
+}
+
+/** where each harness keeps its MCP config: the same resolution the harness itself uses, so what a
+ *  client shows is what the agent will load */
+export function mcpPaths(): { opencode: string; codex: string; claude: string } {
+  const xdg = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config")
+  return {
+    opencode: join(xdg, "opencode", "opencode.json"),
+    codex: join(homedir(), ".codex", "config.toml"),
+    claude: join(homedir(), ".claude.json"),
+  }
 }

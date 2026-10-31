@@ -29,8 +29,6 @@ src/
                           // whisper; serialized, one model load at a time
     usage.ts              // PURE: tokens + harness-reported cost per session
     recycle.ts            // PURE: when a grown harness server is restarted
-    mcpconfig.ts          // PURE: MCP servers per harness: opencode JSON,
-                          // codex TOML (section-line editor), claude .claude.json
     skills.ts             // PURE: SKILL.md discovery (bounded walk) + the
                           // disable-model-invocation frontmatter toggle
   harnesses/
@@ -822,7 +820,7 @@ harnesses resolve them. Where the toggle means something, a tap flips
 `disable-model-invocation` in the skill's own frontmatter (one line, prose
 untouched).
 
-Both parsers are pure (`core/mcpconfig.ts`, `core/skills.ts`) and covered by
+Both parsers are pure (`harnesses/mcpconfig.ts`, `core/skills.ts`) and covered by
 unit tests on real temp files; the codex toggle is additionally round-tripped
 against a copy of the machine's actual config.
 

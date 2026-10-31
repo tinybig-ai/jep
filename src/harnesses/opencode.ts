@@ -1,3 +1,5 @@
+import { readOpencodeMcp, writeOpencodeMcpEnabled, mcpPaths } from "./mcpconfig.ts"
+import type { McpServer } from "../core/types.ts"
 import { spawn, execFile, type ChildProcess } from "node:child_process"
 import { readFile } from "node:fs/promises"
 import os from "node:os"
@@ -1000,6 +1002,15 @@ export class OpenCodeAdapter implements HarnessAdapter {
       if (err instanceof HttpError && err.status === 404) return !(await this.#askStillPending(askID))
       throw err
     }
+  }
+
+  // opencode keeps its MCP servers in opencode.json (mcp.<name>.enabled)
+  async mcpServers(): Promise<McpServer[]> {
+    return readOpencodeMcp(mcpPaths().opencode)
+  }
+
+  async setMcpEnabled(name: string, enabled: boolean): Promise<void> {
+    await writeOpencodeMcpEnabled(mcpPaths().opencode, name, enabled)
   }
 
   // opencode auto-loads the cross-agent user dirs and its own project roots

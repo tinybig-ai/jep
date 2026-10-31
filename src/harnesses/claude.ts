@@ -1,3 +1,5 @@
+import { readClaudeMcp, writeClaudeProjectEnabled, mcpPaths } from "./mcpconfig.ts"
+import type { McpServer } from "../core/types.ts"
 import { spawn, execFile, type ChildProcess } from "node:child_process"
 import net from "node:net"
 import { mkdir, readFile, readdir, rm, mkdtemp, stat, writeFile } from "node:fs/promises"
@@ -997,6 +999,20 @@ export class ClaudeAdapter implements HarnessAdapter {
       this.#askSupported = false
     }
     return this.#askSupported
+  }
+
+  // claude: user-scoped servers in ~/.claude.json have no off state (present means on), so
+  // only a project server, or a remote one, offers a switch
+  async mcpServers(): Promise<McpServer[]> {
+    const c = await readClaudeMcp(mcpPaths().claude, this.workspace)
+    return [
+      ...c.user.map((s) => ({ ...s, toggleable: s.detail.startsWith("http") })),
+      ...c.project.map((s) => ({ ...s, toggleable: true })),
+    ]
+  }
+
+  async setMcpEnabled(name: string, enabled: boolean): Promise<void> {
+    await writeClaudeProjectEnabled(mcpPaths().claude, this.workspace, name, enabled)
   }
 
   // claude scans the cross-agent user dirs plus its own project root

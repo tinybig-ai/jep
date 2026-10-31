@@ -3,6 +3,7 @@ import type {
   DomainEvent,
   FileDiff,
   HarnessError,
+  McpServer,
   Message,
   ProjectSummary,
   SessionHold,
@@ -148,6 +149,10 @@ export interface HarnessAdapter {
    * shared convention table in core/skills.ts, so a new harness works before
    * it customizes — but every harness can own its own roots. */
   skillDirs?(): SkillDirs
+  /** the MCP servers this harness will start, read from its own config: zero turns, true while an agent runs */
+  mcpServers?(): Promise<McpServer[]>
+  /** switch one of them on or off in the harness's own config, changing nothing else */
+  setMcpEnabled?(name: string, enabled: boolean): Promise<void>
   /** the primary agents this harness offers (opencode's build/plan, claude's
    * agent types), for a picker. Omitted or empty when it has no such switch. */
   agents?(): Promise<AgentRef[]>

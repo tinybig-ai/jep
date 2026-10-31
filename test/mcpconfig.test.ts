@@ -1,4 +1,4 @@
-// core/mcpconfig.ts — the three harness config formats, as unit tests against
+// harnesses/mcpconfig.ts — the three harness config formats, as unit tests against
 // real files in a temp dir. The codex TOML writer is the one that must never
 // damage its file, so every test there asserts the untouched sections come
 // back byte-identical.
@@ -8,7 +8,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { readOpencodeMcp, readCodexMcp, writeOpencodeMcpEnabled, writeCodexMcpEnabled, readClaudeMcp, writeClaudeProjectEnabled } from "../src/core/mcpconfig.ts"
+import { readOpencodeMcp, readCodexMcp, writeOpencodeMcpEnabled, writeCodexMcpEnabled, readClaudeMcp, writeClaudeProjectEnabled } from "../src/harnesses/mcpconfig.ts"
 
 function withDir(fn: (dir: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), "jep-mcp-"))
@@ -169,4 +169,21 @@ test("claude: user-scoped servers are always enabled; project ones honour disabl
   const after = JSON.parse(readFileSync(claudeJson, "utf8"))
   assert.deepEqual(after.projects[dir].disabledMcpjsonServers, [], "re-enabling clears the entry")
   assert.deepEqual((await readClaudeMcp(claudeJson, dir)).project[0]!.enabled, true)
+})
+
+test("an adapter reads its own MCP config through the port, and only claude's user servers cannot be switched", async () => {
+  const { ClaudeAdapter } = await import("../src/harnesses/claude.ts")
+  const home = mkdtempSync(join(tmpdir(), "jep-mcp-port-"))
+  const prev = process.env.HOME
+  writeFileSync(join(home, ".claude.json"), JSON.stringify({ mcpServers: { local: { command: "x" }, remote: { type: "http", url: "http://h" } } }))
+  process.env.HOME = home
+  try {
+    const { mcpPaths } = await import("../src/harnesses/mcpconfig.ts")
+    assert.equal(mcpPaths().claude, join(home, ".claude.json"))
+    const a = new ClaudeAdapter(home)
+    const servers = await a.mcpServers()
+    assert.deepEqual(servers.map((s) => [s.name, s.toggleable]), [["local", false], ["remote", true]])
+  } finally {
+    process.env.HOME = prev
+  }
 })

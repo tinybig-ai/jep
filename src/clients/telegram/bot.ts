@@ -20,8 +20,7 @@ import { transcribe } from "../../core/transcribe.ts"
 import { addUsage, emptyUsage, fmtMoney, usageChip, usageOf } from "../../core/usage.ts"
 import { JEP_CONTEXT, JEP_CONTEXT_FOOTER, transcriptText } from "../../core/transcript.ts"
 import type { Usage } from "../../core/usage.ts"
-import { readClaudeMcp, readCodexMcp, readOpencodeMcp, writeClaudeProjectEnabled, writeCodexMcpEnabled, writeOpencodeMcpEnabled } from "../../core/mcpconfig.ts"
-import type { McpServer } from "../../core/mcpconfig.ts"
+import type { McpServer } from "../../core/types.ts"
 import { listSkills, skillDirsFor, writeSkillModelInvocation } from "../../core/skills.ts"
 import type { Skill } from "../../core/skills.ts"
 import { matches, rankHits, snippet } from "./search.ts"
@@ -3687,17 +3686,6 @@ export class TelegramBot {
 
   // ─── MCP servers & skills ────────────────────────────────────────────────
 
-  // Where each harness keeps its MCP config — the same resolution the
-  // harnesses themselves use, so what this shows is what the agent will load.
-  #mcpPaths(): { opencode: string; codex: string; claude: string } {
-    const xdg = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config")
-    return {
-      opencode: join(xdg, "opencode", "opencode.json"),
-      codex: join(homedir(), ".codex", "config.toml"),
-      claude: join(homedir(), ".claude.json"),
-    }
-  }
-
   // 🔌 MCP: what tool servers the active harness will start, read from the
   // harness's own config — zero turns, and true while an agent runs. Tap a
   // server to toggle it: a native `enabled` flag for opencode and codex, the
@@ -3708,16 +3696,10 @@ export class TelegramBot {
     const c = this.#chat(chatID)
     const ws = this.#activeWs(chatID)
     const harness = ws.adapter.id
-    const paths = this.#mcpPaths()
     let servers: McpServer[] = []
     let note = ""
     try {
-      if (harness === "opencode") servers = await readOpencodeMcp(paths.opencode)
-      else if (harness === "codex") servers = await readCodexMcp(paths.codex)
-      else if (harness === "claude") {
-        const claude = await readClaudeMcp(paths.claude, ws.dir)
-        servers = [...claude.user, ...claude.project]
-      }
+      servers = (await ws.adapter.mcpServers?.()) ?? []
     } catch (err) {
       note = `⚠️ couldn't read the config: ${(err as Error).message}`
     }
@@ -3733,11 +3715,10 @@ export class TelegramBot {
       const state = s.enabled ? "✅" : "🚫"
       const detail = s.detail ? ` — ${clipTitle(s.detail, 24)}` : ""
       items.push(`${state} **${s.name}** · ${s.kind}${detail}`)
-      // claude user-scoped has no off state: a row without a toggle is more
+      // a server the harness cannot switch off gets no button: a row without one is more
       // honest than one that promises an action it can't perform
-      const toggles = harness === "claude" && !s.detail.startsWith("http") && !("disabled" in s)
       // the toggle sits directly under the line it acts on
-      if (!toggles) items.push([btn(`${s.enabled ? "Disable" : "Enable"} ${s.name}`, `mcpt:${s.name}`)])
+      if (s.toggleable !== false) items.push([btn(`${s.enabled ? "Disable" : "Enable"} ${s.name}`, `mcpt:${s.name}`)])
     }
     const nav: InlineButton[] = []
     if (p > 0) nav.push(btn("‹ Prev", "mcpp:prev"))
@@ -3750,14 +3731,11 @@ export class TelegramBot {
   async #mcpToggle(chatID: number, name: string, messageID: number): Promise<string> {
     const ws = this.#activeWs(chatID)
     const harness = ws.adapter.id
-    const paths = this.#mcpPaths()
-    const servers = harness === "opencode" ? await readOpencodeMcp(paths.opencode) : harness === "codex" ? await readCodexMcp(paths.codex) : (await readClaudeMcp(paths.claude, ws.dir)).project
+    const servers = (await ws.adapter.mcpServers?.()) ?? []
     const current = servers.find((s) => s.name === name)
     if (!current) throw new Error(`no MCP server named ${name}`)
     const enabled = !current.enabled
-    if (harness === "opencode") await writeOpencodeMcpEnabled(paths.opencode, name, enabled)
-    else if (harness === "codex") await writeCodexMcpEnabled(paths.codex, name, enabled)
-    else await writeClaudeProjectEnabled(paths.claude, ws.dir, name, enabled)
+    await ws.adapter.setMcpEnabled?.(name, enabled)
     return `${name}: ${enabled ? "enabled" : "disabled"}`
   }
 

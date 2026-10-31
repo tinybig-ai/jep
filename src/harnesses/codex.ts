@@ -1,3 +1,5 @@
+import { readCodexMcp, writeCodexMcpEnabled, mcpPaths } from "./mcpconfig.ts"
+import type { McpServer } from "../core/types.ts"
 import { spawn, execFile, type ChildProcess } from "node:child_process"
 import { DatabaseSync } from "node:sqlite"
 import { readFile, readdir } from "node:fs/promises"
@@ -639,6 +641,15 @@ export class CodexAdapter implements HarnessAdapter {
   // down
   async rejectAsk(_sessionID: string, _askID: string): Promise<boolean> {
     return false
+  }
+
+  // codex keeps its MCP servers in config.toml ([mcp_servers.<name>] enabled =)
+  async mcpServers(): Promise<McpServer[]> {
+    return readCodexMcp(mcpPaths().codex)
+  }
+
+  async setMcpEnabled(name: string, enabled: boolean): Promise<void> {
+    await writeCodexMcpEnabled(mcpPaths().codex, name, enabled)
   }
 
   // The port wants one long-lived stream; Codex only streams inside a turn.
