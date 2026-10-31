@@ -186,14 +186,21 @@ struct WorkspaceDto: Decodable {
     }
 }
 
+struct MarkDto: Decodable {
+    var box: Double
+    var path: String
+}
+
 struct HarnessesRes: Decodable {
     var harnesses: [String]
     var defaultId: String?
-    enum K: String, CodingKey { case harnesses, defaultId = "default" }
+    var marks: [String: MarkDto]
+    enum K: String, CodingKey { case harnesses, defaultId = "default", marks }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: K.self)
         harnesses = c.v(.harnesses, [])
         defaultId = c.o(.defaultId)
+        marks = (try? c.decode([String: MarkDto].self, forKey: .marks)) ?? [:]
     }
 }
 

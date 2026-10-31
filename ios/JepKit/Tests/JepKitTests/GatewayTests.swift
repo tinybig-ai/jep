@@ -2,6 +2,20 @@ import XCTest
 @testable import JepKit
 
 final class GatewayTests: XCTestCase {
+    func testHarnessesCarryTheMarksTheDaemonSends() async throws {
+        let gw = FakeGateway()
+        gw.on("/harnesses", json: #"{"harnesses":["claude","goose"],"default":"claude","marks":{"claude":{"box":24,"path":"M0 0h24v24H0z"}}}"#)
+        let repo = GatewayChatRepository(base: "http://gw", token: { "tok" }, http: gw)
+        let h = try await repo.harnesses()
+        XCTAssertEqual(h.ids, ["claude", "goose"])
+        XCTAssertEqual(h.marks["claude"], HarnessMark(box: 24, path: "M0 0h24v24H0z"))
+        XCTAssertNil(h.marks["goose"], "a harness with no mark gets the generic glyph in the app")
+        // an older daemon sends none, and that still decodes
+        gw.on("/harnesses", json: #"{"harnesses":["claude"],"default":"claude"}"#)
+        let bare = try await repo.harnesses()
+        XCTAssertEqual(bare.marks, [:])
+    }
+
     func testHistoryEtagServesHeldPage() async throws {
         let gw = FakeGateway()
         gw.on("/history") { body in

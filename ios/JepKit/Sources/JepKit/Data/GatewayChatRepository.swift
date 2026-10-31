@@ -108,7 +108,7 @@ public final class GatewayChatRepository: ChatRepository, @unchecked Sendable {
 
     public func harnesses() async throws -> Harnesses {
         let r = try await decode("/harnesses", HarnessesRes.self)
-        return Harnesses(ids: r.harnesses, defaultId: r.defaultId)
+        return Harnesses(ids: r.harnesses, defaultId: r.defaultId, marks: r.marks.mapValues { HarnessMark(box: $0.box, path: $0.path) })
     }
 
     public func browse(path: String?) async throws -> BrowseResult {

@@ -73,6 +73,8 @@ public final class AppStore {
     public private(set) var busy = false
     public private(set) var unread: Set<String> = []
     public private(set) var workspaces: [Workspace] = []
+    /// each harness's brand mark, as the daemon sends it; loaded once
+    public private(set) var harnessMarks: [String: HarnessMark] = [:]
     public private(set) var newChat = NewChatState()
     public var notice: String?
     public private(set) var paired = false
@@ -199,6 +201,7 @@ public final class AppStore {
                 notice = "gateway unreachable: \(describe(error))"
             }
             if let w = try? await r.workspaces() { workspaces = w }
+            if harnessMarks.isEmpty, let h = try? await r.harnesses() { harnessMarks = h.marks }
             busy = false
             if refreshQueued {
                 refreshQueued = false

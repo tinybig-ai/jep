@@ -70,9 +70,12 @@ public struct Workspace: Equatable, Hashable, Sendable {
 public struct Harnesses: Equatable, Sendable {
     public var ids: [String]
     public var defaultId: String?
-    public init(ids: [String], defaultId: String?) {
+    /// each harness's brand mark, drawn from what the daemon sends: the app names no harness itself
+    public var marks: [String: HarnessMark]
+    public init(ids: [String], defaultId: String?, marks: [String: HarnessMark] = [:]) {
         self.ids = ids
         self.defaultId = defaultId
+        self.marks = marks
     }
 }
 

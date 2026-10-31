@@ -109,6 +109,7 @@ extension ThemeMode {
 }
 
 struct HarnessAvatar: View {
+    @Environment(AppStore.self) private var store
     let harness: String?
     var body: some View {
         mark
@@ -118,13 +119,33 @@ struct HarnessAvatar: View {
             .accessibilityLabel(harness ?? "harness")
     }
 
+    /// the mark the daemon sent for this harness; a harness it sent none for gets the generic glyph
     @ViewBuilder private var mark: some View {
-        switch harness {
-        case "opencode", "codex", "claude", "goose":
-            Image("harness-\(harness ?? "")").resizable().scaledToFit().frame(width: 19, height: 19)
-        default:
+        if let harness, let m = store.harnessMarks[harness] {
+            MarkShape(mark: m).fill(style: FillStyle(eoFill: false)).frame(width: 19, height: 19)
+        } else {
             Image(systemName: "cpu").font(.system(size: 16, weight: .semibold))
         }
+    }
+}
+
+/// A harness mark as a filled shape, scaled from its own square to whatever it is given.
+struct MarkShape: Shape {
+    let mark: HarnessMark
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        let k = min(rect.width, rect.height) / mark.box
+        func pt(_ x: Double, _ y: Double) -> CGPoint { CGPoint(x: rect.minX + x * k, y: rect.minY + y * k) }
+        for s in mark.segments {
+            switch s {
+            case let .move(x, y): p.move(to: pt(x, y))
+            case let .line(x, y): p.addLine(to: pt(x, y))
+            case let .cubic(a, b, c, d, x, y): p.addCurve(to: pt(x, y), control1: pt(a, b), control2: pt(c, d))
+            case let .quad(a, b, x, y): p.addQuadCurve(to: pt(x, y), control: pt(a, b))
+            case .close: p.closeSubpath()
+            }
+        }
+        return p
     }
 }
 
