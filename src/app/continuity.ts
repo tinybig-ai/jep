@@ -174,7 +174,7 @@ export async function startContinuity(opts: ContinuityOpts): Promise<{ close(): 
         continue
       }
       console.error(`[restart] picking up the turn a restart cut off (${key})`)
-      turns.enqueue(key, RESUME_TEXT, { resume: true })
+      turns.enqueue(key, RESUME_TEXT, { resume: true, notice: true })
     }
     saveJournal()
   }

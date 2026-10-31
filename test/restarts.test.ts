@@ -22,3 +22,13 @@ test("saved watches read back whole, and a broken row is dropped", () => {
   assert.deepEqual(parseSavedWatches(JSON.stringify([good, { key: "s2", startedAt: 1, spec: { note: "no check" } }, null])), [good])
   assert.deepEqual(parseSavedWatches("oops"), [])
 })
+
+test("the resume turn is jep's own note, not words a person typed", async () => {
+  const { readNoticeMarker, isScaffold, transcriptText } = await import("../src/core/transcript.ts")
+  const { RESUME_TEXT } = await import("../src/core/restarts.ts")
+  assert.deepEqual(readNoticeMarker(RESUME_TEXT), { kind: "resumed" })
+  assert.equal(isScaffold(RESUME_TEXT), true)
+  // the model still reads the whole instruction
+  assert.match(RESUME_TEXT, /jep-restart/)
+  assert.ok(transcriptText(RESUME_TEXT).length >= 0)
+})

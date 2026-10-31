@@ -1,3 +1,4 @@
+import { readNoticeMarker } from "./transcript.ts"
 import type { HarnessAdapter, TurnHost, TurnListener } from "./ports.ts"
 import type { DomainEvent, HarnessError, Message } from "./types.ts"
 import { eventSession, isAborted } from "./types.ts"
@@ -172,8 +173,11 @@ export class TurnEngine implements TurnHost {
     return st != null && (st.running != null || st.settling === true || st.waiting.length > 0)
   }
   /** what waits behind the running turn, as a client draws it */
-  queueOf(id: string): Array<{ clientID: string | null; text: string; steer: boolean; notice: boolean }> {
-    return (this.turnOf(id)?.waiting ?? []).map((p) => ({ clientID: p.clientID ?? null, text: p.text, steer: p.steer, notice: p.notice === true }))
+  queueOf(id: string): Array<{ clientID: string | null; text: string; steer: boolean; notice: boolean; noticeKind?: string }> {
+    return (this.turnOf(id)?.waiting ?? []).map((p) => {
+      const kind = p.notice === true ? readNoticeMarker(p.text)?.kind : undefined
+      return { clientID: p.clientID ?? null, text: p.text, steer: p.steer, notice: p.notice === true, ...(kind ? { noticeKind: kind } : {}) }
+    })
   }
   /** the conversation did something (a person answered an ask): the watchdog's clock restarts */
   touch(id: string): void {

@@ -1,3 +1,4 @@
+import { noticeMarker } from "./transcript.ts"
 import type { WatchSpec } from "./watches.ts"
 
 // A restart of the daemon must not cost anyone their work. Three parts keep it
@@ -27,8 +28,10 @@ export function restartWaitMs(req: RestartRequest): number {
   return Math.min(Math.round(minutes * 60_000), RESTART_CAP_WAIT_MS)
 }
 
-/** the turn that picks up where a restart cut one off */
+/** the turn that picks up where a restart cut one off. The marker first: the person did not
+ *  type this, so clients draw a boundary and never the words (see core/transcript.ts). */
 export const RESUME_TEXT =
+  `${noticeMarker("resumed")}\n` +
   "The jep daemon restarted while you were working, so your last turn was cut off. " +
   "Check what is already done and carry on from there. Do not restart the daemon again; " +
   "if it needs another restart, run `jep-restart` and end your turn."

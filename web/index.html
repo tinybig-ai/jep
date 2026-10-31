@@ -876,7 +876,7 @@ function render(follow = true) {
   for (const a of asks) nodes.push(askNode(a))
   if (busy() && !asks.length) nodes.push(el("div", "spin", "working"))
   nodes.push(...transcript(waiting))
-  for (const q of queue) if (q.notice) nodes.push(dividerNode("· jep · a watch is done, waiting its turn ·", true))
+  for (const q of queue) if (q.notice) nodes.push(dividerNode(q.noticeKind === "resumed" ? "· jep · restarted, waiting its turn ·" : "· jep · a watch is done, waiting its turn ·", true))
   // A box that scrolls on its own (a turn's work, a tool's output) is a new
   // box after every redraw, and a new box starts at the top: whoever was
   // reading deep inside one was thrown back to its beginning every few
@@ -945,8 +945,8 @@ const loopNode = (l) => dividerNode(`loop ${l.iteration}/${l.max}`, true)
 // jep woke itself for a watch. It is a boundary, not a message: the person did
 // not type it, so it never counts as one of theirs.
 const wakeNode = (n) => dividerNode(
-  n.kind === "timeout"
-    ? `· jep · stopped watching after ${n.minutes ?? 60} min ·`
+  n.kind === "resumed" ? "· jep · restarted, picking the work back up ·"
+    : n.kind === "timeout" ? `· jep · stopped watching after ${n.minutes ?? 60} min ·`
     : "· jep · the watch is done ·",
   true,
 )

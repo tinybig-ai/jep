@@ -97,9 +97,10 @@ export const readLoopMarker = (text: string): { iteration: number; max: number }
 // client needs to name it — how the wait ended, and how long it was given — and
 // the body (the note, the check, its output) stays in the transcript for the
 // model, out of the bubble for the reader.
-const NOTICE_MARKER = /^<!-- jep:notice (done|timeout)(?: (\d{1,5}))? -->\n?/
+const NOTICE_MARKER = /^<!-- jep:notice (done|timeout|resumed)(?: (\d{1,5}))? -->\n?/
 
-export type NoticeKind = "done" | "timeout"
+/** done/timeout: how a watch ended; resumed: a restart cut the turn off and jep picked it up */
+export type NoticeKind = "done" | "timeout" | "resumed"
 
 export const noticeMarker = (kind: NoticeKind, minutes?: number): string =>
   kind === "timeout" && minutes !== undefined ? `<!-- jep:notice ${kind} ${minutes} -->` : `<!-- jep:notice ${kind} -->`
