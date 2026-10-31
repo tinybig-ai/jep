@@ -1886,6 +1886,15 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         if (!name) return json(res, 400, { error: "title required" })
         titles.set(id, name)
         await saveTitles(deps.dataHome, titles)
+        // The overlay is what jep's clients show, so the rename lands even when
+        // the harness is down. Where the harness also keeps a title (opencode),
+        // tell it, so its own TUI and anything else reading the session agree.
+        const owner = sessionAdapters.get(id) ?? (await ensureListed(id))
+        if (owner?.renameSession) {
+          await owner.renameSession(id, name).catch((err) => {
+            console.error(`[gw] ${owner.id} rename failed: ${(err as Error)?.message ?? err}`)
+          })
+        }
         return json(res, 200, { ok: true })
       }
 

@@ -1424,6 +1424,11 @@ export class TelegramBot {
     }
     const t = text.trim()
     this.#store.setTitle(a.sessionID, t)
+    // where the harness keeps its own title (opencode), carry the name there
+    // too, so its TUI agrees. Only an adapter already running is used: a cold
+    // project is not started just to rename it — the store title is enough.
+    const owner = this.#workspaces.find((w) => w.adapter.renameSession && w.adapter.id === this.#harnessOf(a.sessionID))
+    if (owner) await owner.adapter.renameSession!(a.sessionID, t).catch(logFail("rename"))
     // confirm without a chatty receipt: a 👍 on the name they just sent
     if (messageID !== undefined) {
       await this.#tg.setMessageReaction({ chatID, messageID, emoji: "👍" }).catch(logFail("reaction"))
@@ -4335,8 +4340,8 @@ export class TelegramBot {
         if (!p) return tg.answerCallbackQuery({ id: cq.id, text: "menu expired — reopen the list" })
         const row = p.sessions[i]
         if (!row) return tg.answerCallbackQuery({ id: cq.id, text: "no such conversation" })
-        // renaming is client-side only (ChatStore titles), so a row from a
-        // project with no server running needs nothing started for it
+        // the rename is the store's (ChatStore titles) first; the harness's own
+        // title follows when a server for it is already running
         const current = this.#displayTitle(row.id, await this.#rowTitle(row))
         c.awaiting = { kind: "rename", sessionID: row.id, backTo: msg.message_id }
         await this.#tg.editMessageText({

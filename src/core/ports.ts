@@ -88,6 +88,11 @@ export interface HarnessAdapter {
    * page. A long conversation is otherwise megabytes for a 30-message window. */
   messages(sessionID: string, opts?: { limit?: number }): Promise<Message[]>
   deleteSession(id: string): Promise<boolean>
+  /** Give the conversation a name in the harness's own store, when it has
+   * one. Renaming is otherwise a client-side overlay; a harness that can
+   * carry the name (opencode) should, so its TUI and every other reader see
+   * it too. Absent or false leaves the overlay as the only name. */
+  renameSession?(sessionID: string, title: string): Promise<boolean>
   abort(sessionID: string): Promise<boolean>
   /** answer a pending ask with one of its own option ids. False when the ask
    * is unknown or already answered — it may have timed out in the harness, or

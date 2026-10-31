@@ -605,6 +605,30 @@ test("standing a permission ask down answers it reject", async () => {
   }
 })
 
+test("renameSession PATCHes the session's own title", async () => {
+  const calls: { method?: string; path?: string; body?: string }[] = []
+  const srv = createServer((req, res) => {
+    let body = ""
+    req.on("data", (chunk) => (body += chunk))
+    req.on("end", () => {
+      calls.push({ method: req.method, path: new URL(req.url ?? "/", "http://127.0.0.1").pathname, body })
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify(row("ses_a", { title: "New name" })))
+    })
+  })
+  await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r))
+  const base = `http://127.0.0.1:${(srv.address() as { port: number }).port}`
+  try {
+    const adapter = new OpenCodeAdapter({} as any, WS, base)
+    assert.equal(await adapter.renameSession("opencode://ses_a", "  New name  "), true)
+    assert.equal(calls[0]?.method, "PATCH")
+    assert.equal(calls[0]?.path, "/session/ses_a")
+    assert.deepEqual(JSON.parse(calls[0]!.body!), { title: "New name" })
+  } finally {
+    await new Promise<void>((r) => srv.close(() => r()))
+  }
+})
+
 test("events() retries a subscription that fails while the server comes up", async () => {
   let hits = 0
   const srv = createServer((req, res) => {
@@ -629,5 +653,138 @@ test("events() retries a subscription that fails while the server comes up", asy
     ac.abort()
     srv.closeAllConnections()
     srv.close()
+  }
+})
+
+// what `opencode serve` answers a prompt with: enough for mapMessage to read
+const reply = (sessionID: string): Record<string, unknown> => ({
+  info: { id: "msg_1", role: "assistant", sessionID, time: { created: 1, completed: 2 } },
+  parts: [{ type: "text", text: "ok" }],
+})
+
+test("skip-permissions installs opencode's catch-all allow once", async () => {
+  const rules: Record<string, unknown[]> = {}
+  const calls: { method?: string; path?: string; body?: any }[] = []
+  const srv = createServer((req, res) => {
+    let body = ""
+    req.on("data", (chunk) => (body += chunk))
+    req.on("end", () => {
+      const url = new URL(req.url ?? "/", "http://127.0.0.1")
+      const parsed = body ? JSON.parse(body) : undefined
+      calls.push({ method: req.method, path: url.pathname, body: parsed })
+      if (url.pathname === "/session/ses_a" && req.method === "GET") {
+        res.end(JSON.stringify({ id: "ses_a", permission: rules.ses_a }))
+        return
+      }
+      if (url.pathname === "/session/ses_a" && req.method === "PATCH") {
+        rules.ses_a = (rules.ses_a ?? []).concat(parsed.permission)
+        res.end(JSON.stringify({ id: "ses_a", permission: rules.ses_a }))
+        return
+      }
+      if (url.pathname === "/session/ses_a/message") {
+        res.end(JSON.stringify(reply("ses_a")))
+        return
+      }
+      res.writeHead(404)
+      res.end("{}")
+    })
+  })
+  await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r))
+  const base = `http://127.0.0.1:${(srv.address() as { port: number }).port}`
+  try {
+    const adapter = new OpenCodeAdapter({} as any, WS, base)
+    const skip = { harnessSettings: { dangerouslySkipPermissions: true } }
+    await adapter.prompt("opencode://ses_a", "one", skip)
+    await adapter.prompt("opencode://ses_a", "two", skip)
+    const patches = calls.filter((c) => c.method === "PATCH")
+    assert.equal(patches.length, 1, "a chat that keeps skipping patches once")
+    assert.deepEqual(patches[0]!.body, {
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+  } finally {
+    await new Promise<void>((r) => srv.close(() => r()))
+  }
+})
+
+test("skip-permissions recognises a ruleset an earlier daemon left behind", async () => {
+  let patches = 0
+  const srv = createServer((req, res) => {
+    const url = new URL(req.url ?? "/", "http://127.0.0.1")
+    let body = ""
+    req.on("data", (chunk) => (body += chunk))
+    req.on("end", () => {
+      if (url.pathname === "/session/ses_a" && req.method === "GET") {
+        res.end(JSON.stringify({ id: "ses_a", permission: [{ permission: "*", pattern: "*", action: "allow" }] }))
+        return
+      }
+      if (url.pathname === "/session/ses_a" && req.method === "PATCH") {
+        patches++
+        res.end(JSON.stringify({ id: "ses_a" }))
+        return
+      }
+      if (url.pathname === "/session/ses_a/message") {
+        res.end(JSON.stringify(reply("ses_a")))
+        return
+      }
+      res.writeHead(404)
+      res.end("{}")
+    })
+  })
+  await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r))
+  const base = `http://127.0.0.1:${(srv.address() as { port: number }).port}`
+  try {
+    const adapter = new OpenCodeAdapter({} as any, WS, base)
+    await adapter.prompt("opencode://ses_a", "one", { harnessSettings: { dangerouslySkipPermissions: true } })
+    assert.equal(patches, 0, "already allowing everything")
+  } finally {
+    await new Promise<void>((r) => srv.close(() => r()))
+  }
+})
+
+test("turning skip-permissions off puts the session's own rules back", async () => {
+  const calls: { method?: string; path?: string; body?: any }[] = []
+  const srv = createServer((req, res) => {
+    let body = ""
+    req.on("data", (chunk) => (body += chunk))
+    req.on("end", () => {
+      const url = new URL(req.url ?? "/", "http://127.0.0.1")
+      const parsed = body ? JSON.parse(body) : undefined
+      calls.push({ method: req.method, path: url.pathname, body: parsed })
+      if (url.pathname === "/session/ses_a" && req.method === "GET") {
+        res.end(JSON.stringify({ id: "ses_a", permission: [] }))
+        return
+      }
+      if (url.pathname === "/config") {
+        res.end(JSON.stringify({ permission: { webfetch: "ask", read: "allow" } }))
+        return
+      }
+      if (url.pathname === "/session/ses_a" && req.method === "PATCH") {
+        res.end(JSON.stringify({ id: "ses_a", permission: parsed.permission }))
+        return
+      }
+      if (url.pathname === "/session/ses_a/message") {
+        res.end(JSON.stringify(reply("ses_a")))
+        return
+      }
+      res.writeHead(404)
+      res.end("{}")
+    })
+  })
+  await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r))
+  const base = `http://127.0.0.1:${(srv.address() as { port: number }).port}`
+  try {
+    const adapter = new OpenCodeAdapter({} as any, WS, base)
+    await adapter.prompt("opencode://ses_a", "one", { harnessSettings: { dangerouslySkipPermissions: true } })
+    await adapter.prompt("opencode://ses_a", "two", { harnessSettings: { dangerouslySkipPermissions: false } })
+    const patches = calls.filter((c) => c.method === "PATCH")
+    assert.equal(patches.length, 2)
+    const putBack = patches[1]!.body.permission as { permission: string; pattern: string; action: string }[]
+    assert.ok(!putBack.some((r) => r.permission === "*"), "nothing re-allows everything")
+    assert.ok(putBack.some((r) => r.permission === "external_directory" && r.action === "ask"))
+    assert.ok(putBack.some((r) => r.permission === "doom_loop" && r.action === "ask"))
+    assert.ok(putBack.some((r) => r.permission === "webfetch" && r.action === "ask"), "config wins")
+    assert.ok(!putBack.some((r) => r.permission === "read" && r.pattern !== "*"), "configured read is not given the .env exceptions")
+  } finally {
+    await new Promise<void>((r) => srv.close(() => r()))
   }
 })

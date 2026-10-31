@@ -313,18 +313,30 @@ function mapError(e: any): HarnessError {
 }
 
 // opencode asks before a tool touches what its config does not allow, and jep
-// shows the ask as a card. Skipping is jep answering "Allow once" itself, for
-// the turns a chat runs with this on: opencode's own rules stay as they were,
-// and a question (the question tool asking you something) still comes to you.
+// shows the ask as a card. Skipping is opencode's own permission ruleset: a
+// catch-all allow appended to the session, so the check never reaches the ask
+// stage at all. A question (the question tool asking you something) is not a
+// permission and still comes to you.
 export const OPENCODE_SETTINGS: HarnessSettingSpec[] = [
   {
     id: "dangerouslySkipPermissions",
-    label: "Skip permission prompts",
-    description: "Answer opencode's permission requests with Allow once, so tool use does not stop for approval. Questions it asks you still come to you.",
+    label: "Skip all permission checks",
+    description: "Approve every tool opencode would ask about, for this chat: file edits, commands, and paths outside the workspace. Questions it asks you still come to you.",
     default: false,
     danger: true,
   },
 ]
+
+// one session-level permission rule, as opencode's PATCH /session accepts it
+interface PermissionRule {
+  permission: string
+  pattern: string
+  action: "allow" | "ask" | "deny"
+}
+
+const SKIP_ALL: PermissionRule = { permission: "*", pattern: "*", action: "allow" }
+const isSkipAll = (rule: PermissionRule): boolean =>
+  rule?.permission === "*" && rule?.pattern === "*" && rule?.action === "allow"
 
 export class OpenCodeAdapter implements HarnessAdapter {
   readonly id = "opencode"
@@ -350,6 +362,12 @@ export class OpenCodeAdapter implements HarnessAdapter {
   #askedPermissions = new Set<string>()
   // sessions running a turn with permission prompts skipped (native ids)
   #autoAllow = new Set<string>()
+  // sessions whose permission ruleset already carries the catch-all allow
+  // (native ids), so a chat that keeps skipping patches once, not every turn
+  #skipped = new Set<string>()
+  // sessions checked and found without it: a later turn with the setting off
+  // has nothing to put back, and does not need to ask again
+  #unskipped = new Set<string>()
   // A question ask is answered by LABEL, not by jep's option id, and the ids
   // carry a truncated label (and a question index) that opencode would not
   // recognise. So the real label of each option is remembered here, keyed by
@@ -641,11 +659,21 @@ export class OpenCodeAdapter implements HarnessAdapter {
   async prompt(
     sessionID: string,
     text: string,
-    opts?: { timeoutMs?: number; signal?: AbortSignal; model?: ModelRef; filePaths?: string[]; agent?: string; quote?: string; harnessSettings?: Record<string, boolean> },
+    opts?: { timeoutMs?: number; signal?: AbortSignal; model?: ModelRef; filePaths?: string[]; agent?: string; quote?: string; harnessSettings?: Record<string, boolean>; brief?: boolean },
   ): Promise<Message> {
     const timeout = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS
     const skip = opts?.harnessSettings?.dangerouslySkipPermissions === true
-    if (skip) this.#autoAllow.add(toNativeId(sessionID))
+    const native = toNativeId(sessionID)
+    if (skip) this.#autoAllow.add(native)
+    // The ruleset is what makes opencode skip the check, not just its prompt.
+    // A harness too old to take the PATCH still gets answered by the event
+    // handler below, so a failure here must not stop the turn.
+    try {
+      if (skip) await this.#allowAll(native)
+      else await this.#putPermissionsBack(native)
+    } catch (err) {
+      console.error(`[opencode] skip-permissions ${skip ? "on" : "off"} for ${native}: ${(err as Error).message}`)
+    }
     // a fresh turn invalidates the last turn's provider failure: whatever we
     // recorded before is no longer this prompt's story
     this.#providerErrors.delete(toNativeId(sessionID))
@@ -716,6 +744,92 @@ export class OpenCodeAdapter implements HarnessAdapter {
     }
   }
 
+  // A session's permission ruleset is append-only and the last matching rule
+  // wins, so skipping is one rule appended to the session: every tool check
+  // finds "allow" and opencode never raises an ask. It is the same rule the
+  // runtime's own `--auto` mode installs, scoped to this chat rather than to
+  // the whole server.
+  async #allowAll(native: string): Promise<void> {
+    if (this.#skipped.has(native)) return
+    if (!this.#unskipped.has(native)) {
+      const rules = await this.#sessionRules(native)
+      if (rules.some(isSkipAll)) {
+        this.#skipped.add(native)
+        return
+      }
+    }
+    await this.#json(`/session/${encodeURIComponent(native)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ permission: [SKIP_ALL] }),
+    })
+    this.#skipped.add(native)
+    this.#unskipped.delete(native)
+  }
+
+  // The rule cannot be removed, so putting the checks back appends the
+  // session's real policy on top of it: the config's own rules, then the two
+  // defaults a catch-all allow would otherwise keep answering (and the .env
+  // reads opencode asks about even under permissive defaults).
+  async #putPermissionsBack(native: string): Promise<void> {
+    if (!this.#skipped.has(native)) {
+      if (this.#unskipped.has(native)) return
+      const rules = await this.#sessionRules(native)
+      if (!rules.some(isSkipAll)) {
+        this.#unskipped.add(native)
+        return
+      }
+    }
+    await this.#json(`/session/${encodeURIComponent(native)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ permission: await this.#defaultRules() }),
+    })
+    this.#skipped.delete(native)
+    this.#unskipped.add(native)
+  }
+
+  async #sessionRules(native: string): Promise<PermissionRule[]> {
+    const session = await this.#json<{ permission?: PermissionRule[] }>(`/session/${encodeURIComponent(native)}`)
+    return Array.isArray(session?.permission) ? session.permission : []
+  }
+
+  // What the session asked about before skipping covered it up. /config is the
+  // effective policy, already merged from every config file, so this is the
+  // same set of rules opencode was enforcing before the catch-all allow.
+  async #defaultRules(): Promise<PermissionRule[]> {
+    const config = await this.#json<{ permission?: unknown }>("/config").catch(() => null)
+    const permission = config?.permission
+    if (typeof permission === "string") {
+      return [{ permission: "*", pattern: "*", action: permission as PermissionRule["action"] }]
+    }
+    const rules: PermissionRule[] = []
+    const set = new Set<string>()
+    if (permission && typeof permission === "object") {
+      for (const [name, value] of Object.entries(permission as Record<string, unknown>)) {
+        set.add(name)
+        if (typeof value === "string") {
+          rules.push({ permission: name, pattern: "*", action: value as PermissionRule["action"] })
+        } else if (value && typeof value === "object") {
+          for (const [pattern, action] of Object.entries(value as Record<string, unknown>)) {
+            if (typeof action === "string") {
+              rules.push({ permission: name, pattern, action: action as PermissionRule["action"] })
+            }
+          }
+        }
+      }
+    }
+    const defaults: PermissionRule[] = [
+      { permission: "doom_loop", pattern: "*", action: "ask" },
+      { permission: "external_directory", pattern: "*", action: "ask" },
+      { permission: "read", pattern: "*.env", action: "ask" },
+      { permission: "read", pattern: "*.env.*", action: "ask" },
+      { permission: "read", pattern: "*.env.example", action: "allow" },
+    ]
+    for (const rule of defaults) {
+      if (!set.has(rule.permission) && !set.has("*")) rules.push(rule)
+    }
+    return rules
+  }
+
   settings(): HarnessSettingSpec[] {
     return OPENCODE_SETTINGS
   }
@@ -725,7 +839,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
     // tried, so walking back is done by asking for a bigger newest-N instead
     const q = opts?.limit && opts.limit > 0 ? `?limit=${Math.floor(opts.limit)}` : ""
     const rows = await this.#json<any[]>(`/session/${encodeURIComponent(toNativeId(sessionID))}/message${q}`)
-    return rows
+    const out = rows
       .map((r) => mapMessage(r?.info ?? {}, r?.parts ?? [], this.workspace))
       .sort((a, b) => a.time - b.time)
     // a compaction folds the early conversation (and jep's header) away, so the
@@ -740,6 +854,20 @@ export class OpenCodeAdapter implements HarnessAdapter {
 
   async deleteSession(id: string): Promise<boolean> {
     return this.#json(`/session/${encodeURIComponent(toNativeId(id))}`, { method: "DELETE" })
+  }
+
+  // opencode keeps its own title on the session, and PATCH is where it is set.
+  // The gateway's overlay still wins for jep's clients (a rename must show even
+  // if the harness is down); this is what makes the TUI and any other reader of
+  // the session agree.
+  async renameSession(sessionID: string, title: string): Promise<boolean> {
+    const name = title.trim()
+    if (!name) return false
+    await this.#json(`/session/${encodeURIComponent(toNativeId(sessionID))}`, {
+      method: "PATCH",
+      body: JSON.stringify({ title: name }),
+    })
+    return true
   }
 
   async abort(sessionID: string): Promise<boolean> {
