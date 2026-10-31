@@ -217,6 +217,7 @@ import coil3.compose.AsyncImage
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -2986,7 +2987,8 @@ private fun toolImagePaths(part: ChatPart.Tool): List<String> {
         // a Read is not a showing: the agent looked at the file, it did not hand it over
         // `jep-show IMAGE...` is the agent showing a picture; the command names the files
         "bash", "run" -> shownPaths((obj?.get("command") as? JsonPrimitive)?.contentOrNull ?: toolTitle(part).orEmpty())
-        else -> emptyList()
+        // the jep_show tool of jep's MCP server names them in `paths`, however the harness prefixes it
+        else -> if (name.endsWith("jep_show")) (obj?.get("paths") as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull } ?: emptyList() else emptyList()
     }
     return paths.filter { it.substringAfterLast('.', "").lowercase() in IMAGE_EXTS }
 }

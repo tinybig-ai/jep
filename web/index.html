@@ -898,7 +898,10 @@ function render(follow = true) {
 // thought stays itself.
 // an edit is not folded away: what changed in the files is the point of a turn
 // nor is a picture the agent showed: folded under "Worked for", it was there but unseen
-const showsImage = (p) => p.kind === "tool" && /^(bash|run)$/i.test(p.name) && !!p.input && typeof p.input === "object" && shownImages(p.input.command).length > 0
+// what a tool call shows: a `jep-show` command line, or the jep_show tool's own paths
+const shownBy = (name, args) => /jep_show$/i.test(name) ? (Array.isArray(args.paths) ? args.paths.filter((x) => typeof x === "string" && x) : [])
+  : /^(bash|run)$/i.test(name) ? shownImages(args.command) : []
+const showsImage = (p) => p.kind === "tool" && !!p.input && typeof p.input === "object" && shownBy(p.name, p.input).length > 0
 const isWork = (p) => (p.kind === "tool" && !isEdit(p) && !showsImage(p)) || (p.kind === "reasoning" && p.text.trim())
 const isEdit = (p) => !!editsOf(p.name.toLowerCase(), typeof p.input === "object" && p.input ? p.input : {})
 
@@ -1343,7 +1346,7 @@ function toolNode(p) {
   head.classList.toggle("failed", p.status === "error")
 
   // `jep-show` is the agent showing a picture: the command line names the files
-  const shown = name === "bash" || name === "run" ? shownImages(arg("command")) : []
+  const shown = shownBy(p.name, args)
   const picture = name === "read" && p.status !== "error" && isImage(selected) ? imageNode(selected)
     : shown.length && p.status !== "error" ? shownNode(shown)
     : null

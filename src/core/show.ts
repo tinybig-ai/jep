@@ -15,3 +15,12 @@ export function shownPaths(command: string): string[] {
   }
   return out
 }
+
+/** the paths one tool call shows: a `jep-show` command line, or the `jep_show` MCP tool
+ *  (whose name each harness decorates its own way: mcp__jep-tools__jep_show, jep-tools_jep_show) */
+export function shownFrom(name: string, input: unknown): string[] {
+  if (!input || typeof input !== "object") return []
+  const args = input as Record<string, unknown>
+  if (/jep_show$/i.test(name)) return Array.isArray(args.paths) ? args.paths.filter((p): p is string => typeof p === "string" && p !== "") : []
+  return typeof args.command === "string" ? shownPaths(args.command) : []
+}

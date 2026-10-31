@@ -16,3 +16,11 @@ test("shownPaths stops at the end of the call and ignores other commands", () =>
 test("shownPaths: a flag is not a path", () => {
   assert.deepEqual(shownPaths("jep-show --x a.png"), ["a.png"])
 })
+
+test("the jep_show tool shows its paths, however a harness prefixes the name", async () => {
+  const { shownFrom } = await import("../src/core/show.ts")
+  for (const name of ["jep_show", "mcp__jep-tools__jep_show", "jep-tools_jep_show", "jep-tools__jep_show"])
+    assert.deepEqual(shownFrom(name, { paths: ["/a.png", "", 3, "/b.jpg"] }), ["/a.png", "/b.jpg"])
+  assert.deepEqual(shownFrom("bash", { command: "jep-show /a.png" }), ["/a.png"])
+  assert.deepEqual(shownFrom("read", { filePath: "/a.png" }), [])
+})

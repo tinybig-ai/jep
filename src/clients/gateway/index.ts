@@ -26,7 +26,7 @@ import {
   LOOP_MAX_TURNS,
   type LoopState,
 } from "../../core/loops.ts"
-import { shownPaths } from "../../core/show.ts"
+import { shownFrom } from "../../core/show.ts"
 import { newPairCode } from "../telegram/pair.ts"
 import { detach } from "../../core/detach.ts"
 import type { TurnLedger } from "../../core/ledger.ts"
@@ -929,7 +929,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           const value = input[key]
           if (typeof value === "string" && value) paths.add(resolve(adapter.workspace, value))
         }
-        if (typeof input.command === "string") for (const shown of shownPaths(input.command)) paths.add(resolve(adapter.workspace, shown))
+        for (const shown of shownFrom(part.name, input)) paths.add(resolve(adapter.workspace, shown))
       }
     }
     touched.set(sid, { at: Date.now(), paths })
