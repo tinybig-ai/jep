@@ -161,7 +161,9 @@ struct HistoryRes: Decodable {
     var asks: [AskDto]
     var etag: String?
     var unchanged: Bool
-    enum K: String, CodingKey { case messages, hasMore, asks, etag, unchanged }
+    /// what waits behind the running turn, in the daemon's order: its own account, from any device
+    var queue: [QueueEntryDto]
+    enum K: String, CodingKey { case messages, hasMore, asks, etag, unchanged, queue }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: K.self)
         messages = c.v(.messages, [])
@@ -169,6 +171,23 @@ struct HistoryRes: Decodable {
         asks = c.v(.asks, [])
         etag = c.o(.etag)
         unchanged = c.v(.unchanged, false)
+        queue = (try? c.decode([QueueEntryDto].self, forKey: .queue)) ?? []
+    }
+}
+
+struct QueueEntryDto: Decodable {
+    var clientID: String?
+    var text: String
+    var steer: Bool
+    /// jep's own note (a watch or a restart), not something a person queued
+    var notice: Bool
+    enum K: String, CodingKey { case clientID, text, steer, notice }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: K.self)
+        clientID = c.o(.clientID)
+        text = c.v(.text, "")
+        steer = c.v(.steer, true)
+        notice = c.v(.notice, false)
     }
 }
 

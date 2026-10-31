@@ -241,7 +241,15 @@ public final class GatewayChatRepository: ChatRepository, @unchecked Sendable {
             "etag": held?.0,
         ])
         if res.unchanged, let held, res.etag == held.0 { return held.1 }
-        let batch = HistoryBatch(messages: res.messages.map { $0.toDomain() }, hasMore: res.hasMore, asks: res.asks.map { $0.toEntry() })
+        let batch = HistoryBatch(
+            messages: res.messages.map { $0.toDomain() },
+            hasMore: res.hasMore,
+            asks: res.asks.map { $0.toEntry() },
+            waiting: res.queue.compactMap { q in
+                guard !q.notice, let id = q.clientID, !id.isEmpty else { return nil }
+                return Waiting(id: id, text: q.text, steer: q.steer)
+            }
+        )
         if let key, let etag = res.etag { lock.withLock { lastPage[key] = (etag, batch) } }
         return batch
     }

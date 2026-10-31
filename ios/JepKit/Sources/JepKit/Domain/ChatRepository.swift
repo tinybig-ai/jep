@@ -6,10 +6,25 @@ public struct HistoryBatch: Equatable, Sendable {
     public var hasMore: Bool
     /// the conversation's asks and how each ended, oldest first
     public var asks: [AskEntry]
-    public init(messages: [ChatMessage], hasMore: Bool, asks: [AskEntry] = []) {
+    /// what the daemon holds behind the running turn, people's messages only, in its order
+    public var waiting: [Waiting]
+    public init(messages: [ChatMessage], hasMore: Bool, asks: [AskEntry] = [], waiting: [Waiting] = []) {
         self.messages = messages
         self.hasMore = hasMore
         self.asks = asks
+        self.waiting = waiting
+    }
+}
+
+/// a message the daemon is holding until the running turn ends
+public struct Waiting: Equatable, Sendable {
+    public var id: String
+    public var text: String
+    public var steer: Bool
+    public init(id: String, text: String, steer: Bool) {
+        self.id = id
+        self.text = text
+        self.steer = steer
     }
 }
 

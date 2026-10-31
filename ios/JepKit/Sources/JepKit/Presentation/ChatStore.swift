@@ -38,6 +38,9 @@ public struct Queued: Equatable, Sendable, Identifiable {
     public var quote: String?
     /// served user message ids present when queued, so an older identical message cannot clear it
     public var seen: Set<String> = []
+    /// the daemon holds it and this device did not send it (another device did, or the app restarted):
+    /// it leaves when the daemon stops listing it
+    public var remote = false
 }
 
 /// the turn being written right now: parts in arrival order, keyed by part id
@@ -384,9 +387,12 @@ public final class ChatStore {
                     st.hasMore = batch.hasMore
                     st.loadingHistory = false
                     st = st.withServedAsks(batch.asks)
-                    st.queued = prior.queued.filter { q in
-                        !servedNow.contains { m in !q.seen.contains(m.id) && textOf(m) == q.text }
-                    }
+                    st.queued = reconcileQueued(
+                        prior.queued.filter { q in
+                            !servedNow.contains { m in !q.seen.contains(m.id) && textOf(m) == q.text }
+                        },
+                        batch.waiting
+                    )
                 }
                 retryOutboxIfDue()
             } catch {
@@ -495,7 +501,7 @@ public final class ChatStore {
                             return m
                         }
                     }
-                    st.sending = !st.queued.isEmpty
+                    st.sending = st.queued.contains { !$0.remote }
                     st.live = nil
                     st.failure = aborted ? nil : describe(error, "the turn failed")
                 }
@@ -972,4 +978,16 @@ func describe(_ error: Error, _ fallback: String? = nil) -> String {
     let s = (error as NSError).localizedDescription
     if let fallback, s.isEmpty { return fallback }
     return s.isEmpty ? String(describing: error) : s
+}
+
+/// The daemon's line is the account of what waits. A message this device holds stays until the record
+/// shows it; one only the daemon holds (sent from another device, or before the app restarted) is drawn
+/// from the daemon's list and goes when the daemon stops listing it.
+func reconcileQueued(_ local: [Queued], _ waiting: [Waiting]) -> [Queued] {
+    let held = local.filter { !$0.remote }
+    let heldIds = Set(held.map(\.id))
+    let remote = waiting.filter { !heldIds.contains($0.id) }.map {
+        Queued(id: $0.id, text: $0.text, mode: $0.steer ? .steer : .afterReply, remote: true)
+    }
+    return held + remote
 }

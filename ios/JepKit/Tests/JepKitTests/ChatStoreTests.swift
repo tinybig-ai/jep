@@ -132,3 +132,16 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertFalse(liveRowIsSettled(nil, [msg("m", durationMs: 3)]))
     }
 }
+
+final class QueueReconcileTests: XCTestCase {
+    func testDaemonEntriesThisDeviceDoesNotHoldAreDrawnAndLeaveWhenTheDaemonDropsThem() {
+        let mine = Queued(id: "a", text: "mine")
+        var line = reconcileQueued([mine], [Waiting(id: "a", text: "mine", steer: true), Waiting(id: "b", text: "theirs", steer: false)])
+        XCTAssertEqual(line.map(\.id), ["a", "b"])
+        XCTAssertEqual(line[1].remote, true)
+        XCTAssertEqual(line[1].mode, .afterReply)
+        // the daemon ran "theirs": it goes; "mine" stays until the record shows it
+        line = reconcileQueued(line, [])
+        XCTAssertEqual(line.map(\.id), ["a"])
+    }
+}
