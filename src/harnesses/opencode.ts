@@ -9,7 +9,8 @@ import type { AskOption, AskQuestion, DomainEvent, FileDiff, HarnessError, Messa
 import { TurnAbortedError } from "../core/types.ts"
 import { resolveAgent } from "../core/agents.ts"
 import type { ServerLoad } from "../core/recycle.ts"
-import { quoteBlock, readQuoteBlock } from "../core/transcript.ts"
+import { quoteBlock, readQuoteBlock, contextFor } from "../core/transcript.ts"
+import { parseOptionIDs } from "../core/questions.ts"
 import { parseOpencodeLogError } from "./opencode-log.ts"
 import { detach } from "../core/detach.ts"
 const OPENCODE_BIN = process.env.OPENCODE_BIN ?? "opencode"
@@ -331,6 +332,11 @@ export class OpenCodeAdapter implements HarnessAdapter {
   readonly endpoint: string
   #child: ChildProcess
   #eventReaders = new Set<ReadableStreamDefaultReader<Uint8Array>>()
+  // conversations that already got jep's context header (see contextFor)
+  #briefed = new Set<string>()
+  // the last compaction handled per conversation, so the same one does not
+  // un-brief again (see #noteCompaction)
+  #compactions = new Map<string, string>()
   #modelsAt = 0
   #modelsCache: ModelRef[] = []
   #capsAt = 0
@@ -383,6 +389,17 @@ export class OpenCodeAdapter implements HarnessAdapter {
     if (/[?&]directory=/.test(path)) return `${this.endpoint}${path}`
     const sep = path.includes("?") ? "&" : "?"
     return `${this.endpoint}${path}${sep}directory=${encodeURIComponent(this.workspace)}`
+  }
+
+  // A compaction folds the early conversation — and jep's header — into a
+  // summary, so the next turn is briefed again. Only a compaction not handled
+  // before counts: history keeps the marker, and re-briefing on the same one
+  // would put the header on every turn after the first compaction.
+  #noteCompaction(key: string, marker: string): void {
+    const seen = this.#compactions.get(key)
+    if (marker ? seen === marker : seen !== undefined) return
+    this.#compactions.set(key, marker)
+    this.#briefed.delete(key)
   }
 
   async #json<T>(path: string, init?: Omit<RequestInit, "headers"> & { headers?: Record<string, string> }): Promise<T> {
@@ -662,7 +679,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
         // a quote is a part of its own, tagged jep's, so it comes back as a
         // quote and not as words in the message; the model reads its text
         ...(opts?.quote?.trim() ? [{ type: "text", text: quoteBlock(opts.quote), metadata: { jep: "quote", quote: opts.quote.trim() } }] : []),
-        { type: "text", text },
+        { type: "text", text: `${contextFor(text, this.#briefed, native, opts?.brief)}${text}` },
         ...(opts?.filePaths ?? []).map((fp) => ({ type: "file", mime: mimeFor(fp), url: pathToFileURL(fp).href })),
       ]
       const res = await fetch(this.#url(`/session/${encodeURIComponent(toNativeId(sessionID))}/message`), {
@@ -711,6 +728,14 @@ export class OpenCodeAdapter implements HarnessAdapter {
     return rows
       .map((r) => mapMessage(r?.info ?? {}, r?.parts ?? [], this.workspace))
       .sort((a, b) => a.time - b.time)
+    // a compaction folds the early conversation (and jep's header) away, so the
+    // next turn is briefed again. The live event stream catches this too; this
+    // is the backstop for a read-only history fetch after an auto-compaction.
+    const key = toNativeId(sessionID)
+    for (const m of out) {
+      if (m.parts.some((p) => p.kind === "other" && p.nativeType === "compaction")) this.#noteCompaction(key, m.id)
+    }
+    return out
   }
 
   async deleteSession(id: string): Promise<boolean> {
@@ -956,6 +981,9 @@ export class OpenCodeAdapter implements HarnessAdapter {
           if (this.#partTypes.size > 5_000) this.#partTypes.clear()
           this.#partTypes.set(part.id, part.type)
         }
+        // a compaction just folded the early conversation away: the next turn
+        // needs jep's header again (see #noteCompaction)
+        if (part?.type === "compaction" && rawSession) this.#noteCompaction(rawSession, String(part.id ?? part.messageID ?? ""))
         return {
           type: "part.updated",
           sessionID: sessionID ?? "",

@@ -78,6 +78,10 @@ export interface HarnessAdapter {
        * in whatever form it takes, and messages() gives them back as a quote
        * part, never as text in the message (see quoteBlock) */
       quote?: string
+      /** whether this turn may carry jep's context header (see contextFor).
+       * Default true; a client that has its own header or a user toggle turns
+       * it off. The adapter still adds it at most once per conversation. */
+      brief?: boolean
     },
   ): Promise<Message>
   /** @param opts.limit ask the harness for only the newest N, when it can

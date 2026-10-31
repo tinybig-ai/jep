@@ -6,6 +6,8 @@ import assert from "node:assert/strict"
 import { mkdtemp, mkdir, writeFile, chmod, readFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { JEP_CONTEXT, JEP_CONTEXT_FOOTER } from "../src/core/transcript.ts"
+const CONTEXT = `${JEP_CONTEXT}\n\n${JEP_CONTEXT_FOOTER}\n\n`
 
 const home = await mkdtemp(path.join(os.tmpdir(), "jep-claude-quote-"))
 const SID = "0b7c3a52-1111-4a4a-9b9b-7cfc686cbe0e"
@@ -40,7 +42,7 @@ test("a quote goes in as its own block, and the words stay as typed", async (t) 
   const sent = JSON.parse((await readFile(stdinSeen, "utf8")).trim())
   assert.deepEqual(sent.message.content, [
     { type: "text", text: "[in reply to]\n> shall I?" },
-    { type: "text", text: "yes, that" },
+    { type: "text", text: `${CONTEXT}yes, that` },
   ])
 })
 

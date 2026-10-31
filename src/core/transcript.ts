@@ -1,14 +1,46 @@
 // The first prompt of a fresh session carries a jep context header (see
 // JEP_CONTEXT): a note telling the harness it is being driven through jep, not
-// a terminal. It is addressed to the model, not the reader. Left in a
-// transcript it buries the message a person actually sent under a screen of
-// preamble, so every client strips it before showing history. The cleanup is
-// pure and lives here so no client has to reinvent it.
+// a terminal, and naming the shell tools jep puts within reach (jep-watch,
+// jep-restart, jep-show) so the agent can find them with no setup. It is
+// addressed to the model, not the reader. Left in a transcript it buries the
+// message a person actually sent under a screen of preamble, so every client
+// strips it before showing history. The cleanup is pure and lives here so no
+// client has to reinvent it.
 export const JEP_CONTEXT = [
   "[jep context — background only, not a request]",
   "This conversation is relayed through jep, a phone-first control plane for coding agents (headless, no terminal on the other end). jep's own code and docs are in this checkout — see docs/PROCESSES.md and docs/PHILOSOPHY.md.",
+  "",
+  "jep exposes these tools for the agent to use:",
+  "  jep-watch   -- wait for a condition (e.g., a test to pass, a file to appear)",
+  "  jep-restart -- queue a daemon restart (waits for all turns to end, then restarts)",
+  "  jep-show    -- display an image file in the phone (path or URL)",
+  "Run them as shell commands. They find the conversation from the working directory.",
 ].join("\n")
 export const JEP_CONTEXT_FOOTER = "Ignore the block above. Treat the message below as the user's entire, only request.\n---"
+
+// The header to put ahead of a prompt, or "" when it must not be added. It is
+// added once per conversation, not per turn: the first prompt of a fresh
+// session carries it, so the model learns jep is driving and which shell tools
+// jep exposes, without paying for the block on every turn. `briefed` is the
+// adapter's own set of conversations that have been briefed, so it is the one
+// truth whichever client sends the turn.
+//
+// It stands down when the text already carries the footer: the Telegram bot
+// builds its own header (with its own extra line and its own per-chat toggle),
+// and a second copy would just be noise. `brief === false` is the client
+// saying "not this turn" (the bot's context toggle). Every adapter calls this
+// the same way, so the tools are announced on every harness without any of
+// them (or their clients) growing a special case.
+export const contextFor = (text: string, briefed: Set<string>, key: string, brief = true): string => {
+  if (!brief) return ""
+  if (text.includes(JEP_CONTEXT_FOOTER)) {
+    briefed.add(key)
+    return ""
+  }
+  if (briefed.has(key)) return ""
+  briefed.add(key)
+  return `${JEP_CONTEXT}\n\n${JEP_CONTEXT_FOOTER}\n\n`
+}
 
 export const stripInjectedContext = (text: string): string => {
   const i = text.indexOf(JEP_CONTEXT_FOOTER)

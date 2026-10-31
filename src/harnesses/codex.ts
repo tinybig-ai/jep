@@ -6,7 +6,7 @@ import os from "node:os"
 import path from "node:path"
 import type { HarnessAdapter, HarnessSettingSpec, ModelRef, ModelCaps } from "../core/ports.ts"
 import type { DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionSummary, SkillDirs } from "../core/types.ts"
-import { splitQuoteText, withQuoteText } from "../core/transcript.ts"
+import { splitQuoteText, withQuoteText, stripInjectedContext, contextFor } from "../core/transcript.ts"
 
 /**
  * Codex CLI as a harness.
@@ -64,6 +64,8 @@ export class CodexAdapter implements HarnessAdapter {
 
   // pending id -> real thread id, once the first turn names it
   #alias = new Map<string, string>()
+  // conversations that already got jep's context header (see contextFor)
+  #briefed = new Set<string>()
   // titles for sessions we created but Codex hasn't recorded yet
   #pendingTitles = new Map<string, { title: string; createdAt: number }>()
   // live `codex exec` children, by session, so abort() has something to kill
@@ -403,7 +405,7 @@ export class CodexAdapter implements HarnessAdapter {
               break
             }
             if (payload.role === "user") {
-              const { quote, text: words } = splitQuoteText(text)
+              const { quote, text: words } = splitQuoteText(stripInjectedContext(text).trimStart())
               push("user", quote ? [{ kind: "quote", text: quote }, { kind: "text", text: words }] : { kind: "text", text: words })
             } else {
               push("assistant", { kind: "text", text })
@@ -466,6 +468,7 @@ export class CodexAdapter implements HarnessAdapter {
       agent?: string
       quote?: string
       harnessSettings?: Record<string, boolean>
+      brief?: boolean
     },
   ): Promise<Message> {
     const native = this.#real(sessionID)
@@ -478,8 +481,9 @@ export class CodexAdapter implements HarnessAdapter {
     // resume keeps the thread; a pending session starts a fresh one
     if (!pending) args.push("resume", native)
     // codex takes nothing but text, so a quote is a headed block ahead of the
-    // message, and messages() takes back exactly that block (splitQuoteText)
-    args.push(withQuoteText(text, opts?.quote))
+    // message, and messages() takes back exactly that block (splitQuoteText).
+    // jep's header goes first, once per conversation (see contextFor).
+    args.push(`${contextFor(text, this.#briefed, native, opts?.brief)}${withQuoteText(text, opts?.quote)}`)
 
     const child = spawn(CODEX_BIN, args, { cwd: this.workspace, stdio: ["ignore", "pipe", "pipe"] })
     this.#running.set(native, child)
@@ -516,6 +520,9 @@ export class CodexAdapter implements HarnessAdapter {
               if (pending) {
                 this.#alias.set(native, threadID)
                 this.#running.set(threadID, child)
+                // the next turn arrives under the real id; same conversation,
+                // so it must not be briefed a second time
+                this.#briefed.add(threadID)
               }
               this.#emit({ type: "message.created", sessionID: toInternalId(threadID), messageID: "", role: "assistant" })
               continue

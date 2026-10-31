@@ -5,7 +5,7 @@ import path from "node:path"
 import { randomUUID } from "node:crypto"
 import type { HarnessAdapter, ModelCaps, ModelRef } from "../core/ports.ts"
 import type { DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionSummary, SkillDirs } from "../core/types.ts"
-import { splitQuoteText, transcriptText, withQuoteText } from "../core/transcript.ts"
+import { splitQuoteText, transcriptText, withQuoteText, stripInjectedContext, contextFor } from "../core/transcript.ts"
 import { TurnAbortedError } from "../core/types.ts"
 
 /**
@@ -67,6 +67,8 @@ export class PiAdapter implements HarnessAdapter {
   readonly endpoint: string
 
   #sessionDir: string
+  // conversations that already got jep's context header (see contextFor)
+  #briefed = new Set<string>()
   #pendingTitles = new Map<string, { title: string; createdAt: number }>()
   #running = new Map<string, ChildProcess>()
   #aborting = new Set<string>()
@@ -137,7 +139,7 @@ export class PiAdapter implements HarnessAdapter {
       const firstText = first ? messageText(first.message) : ""
       out.push({
         id: toInternalId(parsed.header.id),
-        title: clip(named || transcriptText(splitQuoteText(firstText).text)),
+        title: clip(named || transcriptText(splitQuoteText(stripInjectedContext(firstText).trimStart()).text)),
         workspace: this.workspace,
         createdAt,
         updatedAt: Math.max(mtime, lastEntryTime(parsed.entries, createdAt)),
@@ -186,11 +188,12 @@ export class PiAdapter implements HarnessAdapter {
       filePaths?: string[]
       agent?: string
       quote?: string
+      brief?: boolean
     },
   ): Promise<Message> {
     const native = toNativeId(sessionID)
     const model = opts?.model ?? { providerID: PI_PROVIDER, modelID: PI_MODEL }
-    const prompt = withQuoteText(text, opts?.quote)
+    const prompt = `${contextFor(text, this.#briefed, native, opts?.brief)}${withQuoteText(text, opts?.quote)}`
     const args = [
       "--mode",
       "json",
@@ -477,7 +480,7 @@ export function mapPiEntries(entries: PiEntry[], sessionID: string): Message[] {
     if (native.role !== "user" && native.role !== "assistant") continue
     const parts: Part[] = []
     if (native.role === "user") {
-      const raw = messageText(native)
+      const raw = stripInjectedContext(messageText(native)).trimStart()
       const { quote, text } = splitQuoteText(raw)
       if (quote) parts.push({ kind: "quote", text: quote })
       if (text) parts.push({ kind: "text", text: transcriptText(text) })

@@ -5,6 +5,9 @@ import assert from "node:assert/strict"
 import { createServer } from "node:http"
 import { OpenCodeAdapter } from "../src/harnesses/opencode.ts"
 
+import { JEP_CONTEXT, JEP_CONTEXT_FOOTER } from "../src/core/transcript.ts"
+const CONTEXT = `${JEP_CONTEXT}\n\n${JEP_CONTEXT_FOOTER}\n\n`
+
 test("a quote is its own tagged part going in, and a quote part coming out", async () => {
   let stored: any[] = []
   const server = createServer((req, res) => {
@@ -28,12 +31,12 @@ test("a quote is its own tagged part going in, and a quote part coming out", asy
     await a.prompt("opencode://ses_q", "yes, that", { quote: "shall I?", timeoutMs: 0 })
     assert.deepEqual(stored.slice(0, 2), [
       { type: "text", text: "[in reply to]\n> shall I?", metadata: { jep: "quote", quote: "shall I?" } },
-      { type: "text", text: "yes, that" },
+      { type: "text", text: `${CONTEXT}yes, that` },
     ])
     const [m] = await a.messages("opencode://ses_q")
     assert.deepEqual(m!.parts, [
       { kind: "quote", text: "shall I?" },
-      { kind: "text", text: "yes, that" },
+      { kind: "text", text: `${CONTEXT}yes, that` },
     ])
   } finally {
     await new Promise<void>((r) => server.close(() => r()))

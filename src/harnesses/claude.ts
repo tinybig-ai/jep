@@ -8,7 +8,8 @@ import { fileURLToPath } from "node:url"
 import type { AgentRef, HarnessAdapter, HarnessSettingSpec, ModelRef, ModelCaps } from "../core/ports.ts"
 import type { AskRequest, DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionHold, SessionSummary, SkillDirs } from "../core/types.ts"
 import { resolveAgent } from "../core/agents.ts"
-import { quoteBlock, readQuoteBlock, withAttachments } from "../core/transcript.ts"
+import { quoteBlock, readQuoteBlock, withAttachments, contextFor } from "../core/transcript.ts"
+import { questionAsk, answersFor, type GroupedQuestions } from "../core/questions.ts"
 import { detach } from "../core/detach.ts"
 
 // claude's `--agent` takes a subagent type jep can't enumerate reliably, so it
@@ -223,6 +224,14 @@ export class ClaudeAdapter implements HarnessAdapter {
   }
   #bus = new Set<(evt: DomainEvent) => void>()
   #closed = false
+  // conversations that already got jep's context header, so it is sent once
+  // (see contextFor); keyed by native id, with the placeholder a fresh session
+  // starts under swapped for the real id once Claude names it
+  #briefed = new Set<string>()
+  // the last compaction handled per conversation, so a boundary already in the
+  // transcript does not un-brief on every read: only a *new* compaction folds
+  // the header away and earns another one
+  #compactions = new Map<string, string>()
   // the transcripts directory, watched once something is listening, so a
   // conversation continued elsewhere (the desktop) reaches the phone on its own
   #watcher: FSWatcher | null = null
@@ -270,6 +279,18 @@ export class ClaudeAdapter implements HarnessAdapter {
   #real(sessionID: string): string {
     const native = toNativeId(sessionID)
     return this.#alias.get(native) ?? native
+  }
+
+  // A compaction folds the early conversation — and jep's header — into a
+  // summary, so the conversation needs briefing again. Only a boundary not
+  // seen before counts: the transcript keeps every boundary, and re-briefing
+  // on the same one would put the header on every turn after the first
+  // compaction. An empty marker still un-briefs once.
+  #noteCompaction(key: string, marker: string): void {
+    const seen = this.#compactions.get(key)
+    if (marker ? seen === marker : seen !== undefined) return
+    this.#compactions.set(key, marker)
+    this.#briefed.delete(key)
   }
 
   async health(): Promise<{ healthy: boolean; version: string }> {
@@ -428,6 +449,9 @@ export class ClaudeAdapter implements HarnessAdapter {
       // divider an opencode compaction draws; the summary is written for the
       // model, so it stays out of the conversation, as it does in Claude Code.
       if (d.type === "system" && d.subtype === "compact_boundary") {
+        // a compaction folds the early conversation (including jep's header)
+        // into a summary, so the next turn must be briefed again — once
+        this.#noteCompaction(native, String(d.uuid ?? d.timestamp ?? ""))
         out.push({
           id: toInternalId(`${native}:${d.uuid ?? out.length}`),
           sessionID: toInternalId(native),
@@ -477,6 +501,7 @@ export class ClaudeAdapter implements HarnessAdapter {
       agent?: string
       harnessSettings?: Record<string, boolean>
       quote?: string
+      brief?: boolean
     },
   ): Promise<Message> {
     const native = this.#real(sessionID)
@@ -496,7 +521,9 @@ export class ClaudeAdapter implements HarnessAdapter {
     if (!pending) args.push("--resume", native)
     // attachments have no flag in print mode; naming the paths is what lets
     // the agent read them with its own tools
-    const body = withAttachments(text, opts?.filePaths)
+    // jep's header goes first (once per conversation), then the message
+    const textWithContext = `${contextFor(text, this.#briefed, native, opts?.brief)}${text}`
+    const body = withAttachments(textWithContext, opts?.filePaths)
     if (!quote) args.push(body)
 
     // Route permission prompts to the phone. Without this, print mode has
@@ -587,6 +614,9 @@ export class ClaudeAdapter implements HarnessAdapter {
               if (pending) {
                 this.#alias.set(native, realID)
                 this.#track(realID, child)
+                // the next turn arrives under the real id; it is the same
+                // conversation, so it must not be briefed a second time
+                this.#briefed.add(realID)
               }
             }
             const sid = toInternalId(realID || native)

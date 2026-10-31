@@ -2049,10 +2049,14 @@ export class TelegramBot {
     let sessionID: string
     let ws: Ws
     let harnessText: string
+    // whether this chat allows jep's header at all; the adapter also adds it at
+    // most once per conversation, so a later turn does not repeat it
+    let allowContext = false
     try {
       sessionID = await this.#ensureSession(chatID, promptText)
       ws = this.#activeWs(chatID)
       const injectContext = c.sessionFresh && this.#store.injectContext(chatID)
+      allowContext = this.#store.injectContext(chatID)
       harnessText = injectContext ? `${JEP_CONTEXT}\n${JEP_TELEGRAM_CONTEXT}\n\n${JEP_CONTEXT_FOOTER}\n\n${promptText}` : promptText
       c.sessionFresh = false
     } catch (err) {
@@ -2613,6 +2617,8 @@ export class TelegramBot {
         ...(model ? { model } : {}),
         ...(filePaths?.length ? { filePaths } : {}),
         ...(agent ? { agent } : {}),
+        // the chat's Context toggle rules the header; the adapter adds it once
+        brief: allowContext,
       })
       // the turn is over: no more live previews, and stop pulling events
       finished = true

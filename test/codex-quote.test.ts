@@ -5,6 +5,8 @@ import assert from "node:assert/strict"
 import { mkdtemp, mkdir, writeFile, chmod, readFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { JEP_CONTEXT, JEP_CONTEXT_FOOTER } from "../src/core/transcript.ts"
+const CONTEXT = `${JEP_CONTEXT}\n\n${JEP_CONTEXT_FOOTER}\n\n`
 
 const home = await mkdtemp(path.join(os.tmpdir(), "jep-codex-quote-"))
 const TID = "019a0000-aaaa-7bbb-8ccc-000000000001"
@@ -30,7 +32,7 @@ test("a quote goes in as the headed block, and comes back as a quote part", asyn
   await a.prompt(`codex://${TID}`, "yes, that", { quote: "shall I?" })
   const args = (await readFile(argsSeen, "utf8")).split("\n")
   const prompt = args.slice(args.lastIndexOf(TID) + 1).join("\n").trim()
-  assert.equal(prompt, "[in reply to]\n> shall I?\n\nyes, that")
+  assert.equal(prompt, `${CONTEXT}[in reply to]\n> shall I?\n\nyes, that`)
 
   const said = (text: string) =>
     JSON.stringify({ timestamp: "2026-09-27T10:00:00Z", type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text }] } })
