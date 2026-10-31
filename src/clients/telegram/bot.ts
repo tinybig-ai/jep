@@ -48,6 +48,7 @@ import type { ChatStore, HeldPrompt, VerbositySettings, DetailMode, VerbosityLay
 import type { ReminderRecord, ReminderStore } from "./reminders.ts"
 import { matchModel } from "./model-match.ts"
 import { detach } from "../../core/detach.ts"
+import type { TurnLedger } from "../../core/ledger.ts"
 
 interface Ws {
   name: string
@@ -727,6 +728,8 @@ export class TelegramBot {
   // ids for queued turns: small, monotonic, and short enough for callback_data
   #turnSeq = 0
   #reminderStore: ReminderStore
+  // the daemon's record of running turns, shared with the other clients
+  #ledger: TurnLedger | undefined
   // id -> live timer for every reminder currently scheduled from #reminderStore
   #reminderTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
@@ -765,6 +768,7 @@ export class TelegramBot {
     spawn: (dir: string, harness?: string) => Promise<Ws>,
     harnessList: Array<{ id: string; label: string; icon: string }>,
     reminders: ReminderStore,
+    ledger?: TurnLedger,
   ) {
     this.#tg = this.#recording(tg)
     this.#workspaces = workspaces
@@ -776,6 +780,7 @@ export class TelegramBot {
     this.#spawn = spawn
     this.#harnessList = harnessList
     this.#reminderStore = reminders
+    this.#ledger = ledger
     for (const r of reminders.list()) this.#scheduleReminder(r)
     this.#detach("recover", this.#recoverPending())
   }
@@ -2615,6 +2620,8 @@ export class TelegramBot {
       }
     })()
 
+    // on the daemon's ledger while it runs, so a restart waits for it
+    const turnOver = this.#ledger?.begin(sessionID)
     try {
       const reply = await ws.adapter.prompt(sessionID, harnessText, {
         signal: ac.signal,
@@ -2750,6 +2757,7 @@ export class TelegramBot {
       sub.abort()
       await streamTask.catch(logFail("stream"))
       c.inflight = null
+      turnOver?.()
     }
   }
 

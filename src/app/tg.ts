@@ -14,6 +14,8 @@ import { TelegramBot } from "../clients/telegram/bot.ts"
 import { createTelegramApi, type ReplyMarkup, type TelegramApi, type TgUpdate } from "../clients/telegram/api.ts"
 import { Pairing, newPairCode } from "../clients/telegram/pair.ts"
 import { ChatStore } from "../clients/telegram/store.ts"
+import { startContinuity } from "./continuity.ts"
+import { TurnLedger } from "../core/ledger.ts"
 import { ReminderStore } from "../clients/telegram/reminders.ts"
 import type { PairingAdmin } from "../core/pairing.ts"
 import type { PushNotifier } from "../core/push.ts"
@@ -362,6 +364,9 @@ async function main() {
   // silently across restarts. launchd stops us with SIGTERM, so take the hint
   // and shut the children down first. `workspaces` is the live array the bot
   // itself appends to, so lazily-started servers get cleaned up too.
+  // every client's running turns, so a restart waits for the bot's as well as the phone's
+  const ledger = new TurnLedger()
+
   let stopping = false
   let gwClose: (() => Promise<void>) | null = null
   let gwActivity: (() => number) | null = null
@@ -377,6 +382,8 @@ async function main() {
       console.error(`${sig} — shutdown budget spent; exiting anyway`)
       process.exit(0)
     }, 12_000)
+    // turns that end from here on were cut off, not finished
+    ledger.close()
     await gwClose?.().catch(() => {})
     await Promise.race([
       Promise.all(workspaces.map((w) => w.adapter.close().catch(() => {}))),
@@ -430,7 +437,7 @@ async function main() {
   const bot = new TelegramBot(tg, workspaces, activeWsName, pairing, store, (process.env.JEP_TG_MODELS ?? "")
     .split(",")
     .map((s) => s.trim())
-    .filter(Boolean), UPLOADS_DIR, spawnWorkspace, available, ReminderStore.load(join(DATA_HOME, "reminders.json")))
+    .filter(Boolean), UPLOADS_DIR, spawnWorkspace, available, ReminderStore.load(join(DATA_HOME, "reminders.json")), ledger)
 
   // The native phone client's side door: same process, same workspace
   // servers, no Telegram involved. Optional — set JEP_GW_PORT to turn it on.
@@ -439,6 +446,7 @@ async function main() {
     const { startGateway } = await import("../clients/gateway/index.ts")
     const gw = await startGateway({
       adapters: () => workspaces.map((w) => ({ name: w.name, adapter: w.adapter })),
+      ledger,
       // marks for every harness jep knows, not only the ones installed here: a chat
       // from one that is gone still wears its mark in the list
       harnesses: () => ({
@@ -522,7 +530,18 @@ async function main() {
     })
     console.error(`gateway: POST /pair {"code":…} on http://<tailscale-or-lan-ip>:${process.env.JEP_GW_PORT}`)
     gwPairingAdmin = gw.pairingAdmin
-    gwClose = () => gw.close()
+    // what keeps work across a restart, and lets an agent hand off a wait or a
+    // restart: the daemon's own, reaching the turns only through the gateway's port.
+    // A restart is the clean shutdown, then launchd starts the daemon again.
+    const continuity = await startContinuity({
+      dataHome: DATA_HOME,
+      turns: gw.turns,
+      restart: () => detach("restart", shutdown("restart")),
+    })
+    gwClose = async () => {
+      continuity.close()
+      await gw.close()
+    }
     gwActivity = () => gw.lastActivity()
   }
 

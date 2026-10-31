@@ -12,11 +12,17 @@ long-poll (409 "terminated by other getUpdates request") and updates vanished.
 
 The rules, in `docs/PROCESSES.md` § launchd:
 
-- `launchctl kickstart -k gui/$(id -u)/com.jep.tg` for **code-only** changes.
-  Prefer a graceful `kill -TERM <pid>` when you can (launchd `KeepAlive` still
-  restarts it): the daemon's SIGTERM handler closes the gateway and every
-  harness child, while `kickstart -k` can orphan the shared `opencode serve`
-  (the next boot reaps a parentless one, but a graceful stop never leaves it).
+- From inside an agent turn, restart with `jep-restart`, then end your turn.
+  It queues a clean restart that waits until every turn has ended (the
+  caller's own included), then runs the daemon's SIGTERM handler, which closes
+  the gateway and every harness child. Never run `launchctl kickstart` or
+  `kill` from inside a turn: the restart ends your own process mid-command, and
+  a turn it cuts off only resumes because the turn journal catches it. Do not
+  sleep, poll or wait for the restart in the same turn.
+- From a plain terminal (no turn in flight), `kill -TERM <pid>` is the graceful
+  stop (launchd `KeepAlive` restarts it); `launchctl kickstart -k
+  gui/$(id -u)/com.jep.tg` can orphan the shared `opencode serve` (the next
+  boot reaps a parentless one, but a graceful stop never leaves it).
 - If `scripts/jep-daemon.sh` changed, refresh the copy the plist actually runs
   (`cp scripts/jep-daemon.sh ~/.local/share/jep-tg/jep-daemon.sh`), or a restart
   execs a stale path and crash-loops. `scripts/install.sh` does this for you.

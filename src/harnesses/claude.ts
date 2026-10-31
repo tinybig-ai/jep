@@ -573,7 +573,8 @@ export class ClaudeAdapter implements HarnessAdapter {
     const asked = opts?.model?.modelID ?? (await this.#configuredModel())
     const child = spawn(CLAUDE_BIN, args, {
       cwd: this.workspace,
-      env: turnEnv(process.env, opts?.harnessSettings?.lowPriority === true),
+      // JEP_SESSION is how `jep-watch` run from the agent's shell finds its conversation
+      env: { ...turnEnv(process.env, opts?.harnessSettings?.lowPriority === true), JEP_SESSION: sessionID },
       stdio: [quote ? "pipe" : "ignore", "pipe", "pipe"],
     })
     if (quote) {
