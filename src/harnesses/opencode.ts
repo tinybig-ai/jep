@@ -9,6 +9,7 @@ import type { AskOption, AskQuestion, DomainEvent, FileDiff, HarnessError, Messa
 import { TurnAbortedError } from "../core/types.ts"
 import { resolveAgent } from "../core/agents.ts"
 import type { ServerLoad } from "../core/recycle.ts"
+import { MCP_SERVER_PATH, TOOLS_SERVER, toolsMode, wantsMcp } from "../core/tools.ts"
 import { quoteBlock, readQuoteBlock, contextFor } from "../core/transcript.ts"
 import { parseOptionIDs } from "../core/questions.ts"
 import { parseOpencodeLogError } from "./opencode-log.ts"
@@ -1410,6 +1411,23 @@ export async function reapOrphanedServers(): Promise<number[]> {
   return reaped
 }
 
+/** the server's environment; with jep's tools on, they join the config the person already has
+ *  (OPENCODE_CONFIG_CONTENT is merged over their files, so their own servers stay). One server
+ *  serves every conversation, so the tools find theirs by the directory they run in. */
+function serverEnv(dataHome?: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = dataHome ? { ...process.env, XDG_DATA_HOME: dataHome } : { ...process.env }
+  if (!wantsMcp(toolsMode())) return env
+  let config: { mcp?: Record<string, unknown> } = {}
+  try {
+    if (env.OPENCODE_CONFIG_CONTENT) config = JSON.parse(env.OPENCODE_CONFIG_CONTENT)
+  } catch {
+    /* an unreadable config of theirs is theirs to fix; ours stands alone */
+  }
+  config.mcp = { ...config.mcp, [TOOLS_SERVER]: { type: "local", command: [process.execPath, MCP_SERVER_PATH], enabled: true } }
+  env.OPENCODE_CONFIG_CONTENT = JSON.stringify(config)
+  return env
+}
+
 async function spawnOpenCodeServer(key: string, opts?: { dataHome?: string }): Promise<SharedServer> {
   // --print-logs: opencode otherwise keeps its logs to its own file, and the
   // one record that matters here — `message="stream error"` (a 429, a usage
@@ -1418,7 +1436,7 @@ async function spawnOpenCodeServer(key: string, opts?: { dataHome?: string }): P
   const child = spawn(OPENCODE_BIN, SERVE_ARGS, {
     // started in no workspace in particular: every request names its own
     cwd: os.homedir(),
-    env: opts?.dataHome ? { ...process.env, XDG_DATA_HOME: opts.dataHome } : process.env,
+    env: serverEnv(opts?.dataHome),
     stdio: ["ignore", "pipe", "pipe"],
   })
 

@@ -7,6 +7,7 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import type { AgentRef, HarnessAdapter, HarnessSettingSpec, ModelRef, ModelCaps } from "../core/ports.ts"
 import type { AskRequest, DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionHold, SessionSummary, SkillDirs } from "../core/types.ts"
+import { MCP_SERVER_PATH, TOOL_NAMES, TOOLS_SERVER, toolsMode, wantsMcp } from "../core/tools.ts"
 import { resolveAgent } from "../core/agents.ts"
 import { quoteBlock, readQuoteBlock, withAttachments, contextFor } from "../core/transcript.ts"
 import { questionAsk, answersFor, type GroupedQuestions } from "../core/questions.ts"
@@ -548,25 +549,20 @@ export class ClaudeAdapter implements HarnessAdapter {
     // CLI still sends AskUserQuestion to this host, and sends nothing else, so
     // the host never sees a permission. Without it, -p does not offer the
     // tool at all.
+    const servers: Record<string, unknown> = {}
     if (await this.#asksSupported()) {
       const sock = await this.#askChannel()
       if (sock) {
-        args.push(
-          "--permission-prompt-tool",
-          "mcp__jep__ask",
-          "--mcp-config",
-          JSON.stringify({
-            mcpServers: {
-              jep: {
-                command: process.execPath,
-                args: [ASK_MCP],
-                env: { JEP_ASK_SOCKET: sock, JEP_ASK_SESSION: sessionID },
-              },
-            },
-          }),
-        )
+        args.push("--permission-prompt-tool", "mcp__jep__ask")
+        servers.jep = { command: process.execPath, args: [ASK_MCP], env: { JEP_ASK_SOCKET: sock, JEP_ASK_SESSION: sessionID } }
       }
     }
+    // jep's own tools, added beside whatever servers the person has configured
+    // (no --strict-mcp-config) and allowed up front: they are jep's, not a stranger's
+    const tools = wantsMcp(toolsMode())
+    if (tools) servers[TOOLS_SERVER] = { command: process.execPath, args: [MCP_SERVER_PATH, "--session", sessionID] }
+    if (Object.keys(servers).length) args.push("--mcp-config", JSON.stringify({ mcpServers: servers }))
+    if (tools) args.push("--allowed-tools", TOOL_NAMES.map((n) => `mcp__${TOOLS_SERVER}__${n}`).join(","))
 
     // what this turn asked for, alias or not, so its context window can be
     // found again under the name a client knows it by

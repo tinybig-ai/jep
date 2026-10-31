@@ -6,6 +6,7 @@ import os from "node:os"
 import path from "node:path"
 import type { HarnessAdapter, HarnessSettingSpec, ModelRef, ModelCaps } from "../core/ports.ts"
 import type { DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionSummary, SkillDirs } from "../core/types.ts"
+import { MCP_SERVER_PATH, TOOL_NAMES, TOOLS_SERVER, toolsMode, wantsMcp } from "../core/tools.ts"
 import { splitQuoteText, withQuoteText, stripInjectedContext, contextFor } from "../core/transcript.ts"
 
 /**
@@ -476,6 +477,15 @@ export class CodexAdapter implements HarnessAdapter {
 
     const sandbox = opts?.harnessSettings?.dangerouslySkipPermissions ? ["--dangerously-bypass-approvals-and-sandbox"] : ["-s", DEFAULT_SANDBOX]
     const args = ["exec", "--json", "--skip-git-repo-check", "-C", this.workspace, ...sandbox]
+    // jep's own tools, added beside the person's own servers: dotted keys set only
+    // this server, where a whole `mcp_servers` table would replace the lot
+    if (wantsMcp(toolsMode()))
+      args.push(
+        "-c", `mcp_servers.${TOOLS_SERVER}.command=${JSON.stringify(process.execPath)}`,
+        "-c", `mcp_servers.${TOOLS_SERVER}.args=${JSON.stringify([MCP_SERVER_PATH, "--session", sessionID])}`,
+        // exec has no one to approve a call, and an unapproved MCP call just fails
+        ...TOOL_NAMES.flatMap((n) => ["-c", `mcp_servers.${TOOLS_SERVER}.tools.${n}.approval_mode="approve"`]),
+      )
     if (opts?.model?.modelID) args.push("-m", opts.model.modelID)
     for (const f of opts?.filePaths ?? []) args.push("-i", f)
     // resume keeps the thread; a pending session starts a fresh one

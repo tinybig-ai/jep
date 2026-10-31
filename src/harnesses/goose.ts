@@ -6,6 +6,7 @@ import path from "node:path"
 import { randomUUID } from "node:crypto"
 import type { HarnessAdapter, ModelRef } from "../core/ports.ts"
 import type { DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionSummary } from "../core/types.ts"
+import { MCP_SERVER_PATH, TOOLS_SERVER, toolsMode, wantsMcp } from "../core/tools.ts"
 import { splitQuoteText, transcriptText, withQuoteText, stripInjectedContext, contextFor } from "../core/transcript.ts"
 import { TurnAbortedError } from "../core/types.ts"
 
@@ -182,7 +183,10 @@ export class GooseAdapter implements HarnessAdapter {
     // jep's header goes first, once per conversation (see contextFor)
     body = `${contextFor(text, this.#briefed, native, opts?.brief)}${body}`
     const exists = (await this.#rows(true)).some((r) => r.name === gooseName(native))
-    const args = ["run", "--name", gooseName(native), ...(exists ? ["--resume"] : []), "--output-format", "stream-json", "-t", body]
+    const args = ["run", "--name", gooseName(native), ...(exists ? ["--resume"] : [])]
+    // jep's own tools, as one more extension beside the ones goose already has
+    if (wantsMcp(toolsMode())) args.push("--with-extension", `${TOOLS_SERVER}:${process.execPath} ${MCP_SERVER_PATH} --session ${sessionID}`)
+    args.push("--output-format", "stream-json", "-t", body)
     if (opts?.model?.providerID && opts.model.modelID) args.push("--provider", opts.model.providerID, "--model", opts.model.modelID)
     const child = spawn(GOOSE_BIN, args, {
       cwd: this.workspace,

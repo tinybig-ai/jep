@@ -201,6 +201,18 @@ the probe output pasted in. See [CONTRIBUTING.md](../CONTRIBUTING.md).
   normal, not errors. Don't impose a short wall-clock timeout; liveness is the
   caller's idle watchdog.
 
+## jep's own tools
+
+jep ships `jep-watch`, `jep-restart` and `jep-show` as shell commands, and the
+context header (`contextFor`) names them once per conversation. With
+`JEP_TOOLS=mcp` the same three are also offered as the `jep-tools` MCP server
+(`bin/jep-mcp.mjs`, `src/core/tools.ts`). A harness adds that server **beside**
+the person's own configuration, never in place of it, and passes the
+conversation id with `--session`: Claude `--mcp-config` + `--allowed-tools`,
+Codex dotted `-c mcp_servers.jep-tools.*` keys (never the whole table), Goose
+`--with-extension`, opencode `OPENCODE_CONFIG_CONTENT`. Pi has no verified form
+yet and keeps the shell commands.
+
 ## Checklist
 
 - [ ] `src/harnesses/<id>.ts` implements every required method
