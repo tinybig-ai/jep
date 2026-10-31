@@ -85,7 +85,12 @@ const routes = {
     { name: "web", harness: "claude", dir: "~/code/web" },
     { name: "media", harness: "codex", dir: "~/code/media" },
   ] }),
-  "/harnesses": () => ({ harnesses: ["opencode", "claude", "codex"], default: "opencode" }),
+  "/harnesses": () => ({
+    harnesses: ["opencode", "claude", "codex"],
+    default: "opencode",
+    // the daemon serves each harness's mark; a plain square stands in for the real paths
+    marks: Object.fromEntries(["opencode", "claude", "codex"].map((h) => [h, { box: 24, path: "M4 4h16v16H4z" }])),
+  }),
   "/harness-settings": () => ({
     options: [
       { id: "auto-approve", label: "Auto-approve edits", description: "Apply file edits without asking.", default: false },
