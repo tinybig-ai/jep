@@ -11,7 +11,13 @@
 // Plain node, no imports from the tree: it runs from whatever shell the agent has.
 import { ask } from "./lib/control.mjs"
 
+const USAGE = "usage: jep-watch [--note TEXT] [--every SECONDS] [--max MINUTES] [--session ID] -- CHECK..."
 const args = process.argv.slice(2)
+// asking for help must not start a watch whose check is "--help"
+if (args[0] === "-h" || args[0] === "--help") {
+  console.log(USAGE)
+  process.exit(0)
+}
 const flags = { note: "", every: "", max: "", session: process.env.JEP_SESSION ?? "" }
 let i = 0
 for (; i < args.length; i++) {
@@ -26,7 +32,7 @@ for (; i < args.length; i++) {
 }
 const check = args.slice(i).join(" ").trim()
 if (!check) {
-  console.error("usage: jep-watch [--note TEXT] [--every SECONDS] [--max MINUTES] [--session ID] -- CHECK...")
+  console.error(USAGE)
   process.exit(2)
 }
 

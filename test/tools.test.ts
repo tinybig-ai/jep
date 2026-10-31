@@ -120,3 +120,12 @@ test("codex gets the server as dotted keys that add to the person's own, only wi
   assert.ok(args.indexOf("exec") < args.indexOf("resume"), "-c belongs to exec, before resume")
   assert.ok(args.lastIndexOf("-c") < args.indexOf("resume"))
 })
+
+test("jep-watch --help prints usage and starts nothing", async () => {
+  const { execFileSync } = await import("node:child_process")
+  const out = execFileSync(process.execPath, [path.join(path.dirname(MCP_SERVER_PATH), "jep-watch.mjs"), "--help"], {
+    env: { ...process.env, JEP_DATA_HOME: "/nonexistent" },
+    encoding: "utf8",
+  })
+  assert.match(out, /^usage: jep-watch/)
+})
