@@ -489,7 +489,16 @@ class ChatViewModel(
                     val servedNow = batch.messages.filter { it.role == Role.USER }
                     val windowIds = batch.messages.map { it.id }.toSet()
                     val optimisticIds = optimistic.map { it.id }.toSet()
-                    val olderThanWindow = stWithoutReconciled.messages.filter { it.id !in windowIds && it.id !in optimisticIds }
+                    // Only what is OLDER than the window is kept from before. A
+                    // message inside the window's span that the record no longer
+                    // serves under that id is a stale twin (a mid-turn read can
+                    // number a reply's blocks differently from the settled
+                    // record), and keeping it showed the answer twice until the
+                    // app was killed.
+                    val windowFloor = batch.messages.minOfOrNull { it.time }
+                    val olderThanWindow = stWithoutReconciled.messages.filter {
+                        it.id !in windowIds && it.id !in optimisticIds && (windowFloor == null || it.time < windowFloor)
+                    }
                     val mergedMessages = (batch.messages + olderThanWindow)
                         .distinctBy { it.id }
                         .sortedByDescending { it.time }

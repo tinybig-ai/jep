@@ -299,6 +299,10 @@ private class OlderAnchor {
     var row: String? = null
     var offset = 0
     var loading = false
+    /** how many messages the screen held when the pull began: a load that
+     *  finishes between two frames is never seen "loading", but it still
+     *  changes this */
+    var held = 0
 }
 
 /**
@@ -816,13 +820,14 @@ fun ChatScreen(
             .firstOrNull { it.key != "loading-older" && it.index - skip in displayRows.indices }
             ?.let { olderAnchor.offset = it.offset; displayRows[it.index - skip].anchor() }
         olderAnchor.loading = false
+        olderAnchor.held = state.messages.size
         vm.loadOlder()
     }
     olderAnchor.row?.let { anchor ->
         // the screen hears of the load a frame after it starts: restore only
         // once it has been seen to start and then to finish
         if (state.loadingOlder) olderAnchor.loading = true
-        else if (olderAnchor.loading) {
+        else if (olderAnchor.loading || state.messages.size != olderAnchor.held) {
             olderAnchor.row = null
             val at = displayRows.indexOfFirst { it.anchor() == anchor }
             if (at >= 0) listState.requestScrollToItem(at, -olderAnchor.offset)
