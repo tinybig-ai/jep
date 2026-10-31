@@ -5,147 +5,11 @@ import type { HarnessAdapter } from "../src/core/ports.ts"
 import type { DomainEvent, Message, SessionSummary } from "../src/core/types.ts"
 import { TurnAbortedError } from "../src/core/types.ts"
 import { JEP_CONTEXT, JEP_CONTEXT_FOOTER } from "../src/core/transcript.ts"
-import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
+import net from "node:net"
+import { fakeAdapter, pair, spawnGateway, stallable } from "./support/gateway.ts"
 import { join } from "node:path"
-
-// A fake driven adapter: enough of the port for the gateway's surface —
-// listings, history, one streamed turn, an ask to answer. No network, no
-// harness, so the tests run in milliseconds.
-function fakeAdapter(): HarnessAdapter {
-  const session: SessionSummary = { id: "s1", title: "Test", workspace: "/tmp/ws", createdAt: 1, updatedAt: 2 }
-  return {
-    id: "fake",
-    workspace: "/tmp/ws",
-    endpoint: "",
-    async health() {
-      return { healthy: true, version: "0" }
-    },
-    async createSession() {
-      return session
-    },
-    async getSession(id: string) {
-      return id === "s1" ? session : null
-    },
-    async listSessions() {
-      return [session]
-    },
-async prompt(_sessionID, text) {
-      const message: Message = {
-        id: "m1",
-        sessionID: "s1",
-        role: "assistant",
-        time: 2,
-        parts: [{ kind: "text", text: `echo: ${text}` }],
-      }
-      return message
-    },
-    async deleteSession() {
-      return true
-    },
-    async messages() {
-      return [{ id: "m0", sessionID: "s1", role: "user", time: 1, parts: [{ kind: "text", text: "hi" }] }]
-    },
-    async abort() {
-      return true
-    },
-    async respondAsk() {
-      return true
-    },
-    async rejectAsk() {
-      return true
-    },
-    async *events() {
-      yield { type: "message.created", sessionID: "s1", messageID: "m1", role: "assistant" } as DomainEvent
-      yield { type: "part.delta", sessionID: "s1", messageID: "m1", partID: "p1", text: "hel" } as DomainEvent
-    },
-    async close() {},
-  }
-}
-
-function spawnGateway(): { gw: Promise<GatewayHandle> } {
-  const adapter = fakeAdapter()
-  return {
-    gw: startGateway({
-      adapters: () => [{ name: "fake-ws", adapter }],
-      dataHome: mkdtempSync(join(tmpdir(), "gw-test-")),
-      port: 0,
-      pairCode: "TESTCODE",
-      pairLimit: 100,
-    }),
-  }
-}
-
-async function pair(base: string, code: string): Promise<string> {
-  const res = await fetch(`${base}/pair`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ code }),
-  })
-  assert.equal(res.status, 200)
-  const { token } = (await res.json()) as { token: string }
-  return token
-}
-
-// A turn that stays in flight until released or aborted, and an event feed a
-// test can push into — enough to exercise the queue, steering and force.
-function stallable(opts: { hold?: (text: string) => boolean } = {}) {
-  const releases = new Map<string, () => void>()
-  const pendingEvents: DomainEvent[] = []
-  let wakeFeed: (() => void) | null = null
-  const calls: string[] = []
-  const base = fakeAdapter()
-  const feed = (e: DomainEvent) => {
-    pendingEvents.push(e)
-    wakeFeed?.()
-    wakeFeed = null
-  }
-  const hold = opts.hold ?? ((text: string) => text === "first")
-  const adapter: HarnessAdapter = {
-    ...base,
-    async prompt(_id, text, opts) {
-      calls.push(text)
-      // only the turn that is meant to stay in flight waits; the rest answer at once
-      if (hold(text)) {
-        await new Promise<void>((resolve, reject) => {
-          releases.set(text, resolve)
-          opts?.signal?.addEventListener("abort", () => {
-            // like opencode: a stop is announced, then the session goes idle
-            feed({ type: "turn.aborted", sessionID: "s1" })
-            feed({ type: "session.idle", sessionID: "s1" })
-            reject(new TurnAbortedError())
-          }, { once: true })
-        })
-      }
-      feed({ type: "session.idle", sessionID: "s1" })
-      return {
-        id: `m-${text}`,
-        sessionID: "s1",
-        role: "assistant",
-        time: 2,
-        parts: [{ kind: "text", text: `echo: ${text}` }],
-      } as Message
-    },
-    async *events(signal?: AbortSignal) {
-      while (!signal?.aborted) {
-        if (pendingEvents.length === 0) {
-          await Promise.race([
-            new Promise<void>((r) => { wakeFeed = r }),
-            new Promise<void>((r) => signal?.addEventListener("abort", () => r(), { once: true })),
-          ])
-        }
-        if (signal?.aborted) return
-        while (pendingEvents.length) yield pendingEvents.shift()!
-      }
-    },
-  }
-  return {
-    adapter,
-    calls,
-    release: (text: string) => releases.get(text)?.(),
-    feed,
-  }
-}
 
 async function startWith(
   a: ReturnType<typeof stallable>,
@@ -467,6 +331,57 @@ test("a named provider failure beats a silent stall", async () => {
     assert.match(j.error ?? "", /Go usage limit exceeded/)
     assert.match(j.error ?? "", /opencode-go\/glm-5\.3-flash/, "the failure names the endpoint that produced it")
     assert.doesNotMatch(j.error ?? "", /no activity/, "a known cause is never reported as an unexplained stall")
+  } finally {
+    await g.close()
+  }
+})
+
+test("a loop survives a dropped provider socket and retries the same turn", { timeout: 20_000 }, async () => {
+  const a = stallable({ hold: () => false })
+  const calls: string[] = []
+  const flaky: ReturnType<typeof stallable> = {
+    ...a,
+    adapter: {
+      ...a.adapter,
+      async prompt(id, text, opts) {
+        calls.push(text)
+        // the goal turn is fine; the loop's own continuation dies the way a
+        // free model's socket does, which is not the goal's verdict
+        if (calls.length === 2) {
+          throw new Error(
+            "AI_APICallError (opencode/deepseek-v4.1-flash-free): Cannot connect to API: The socket connection was closed unexpectedly",
+          )
+        }
+        return a.adapter.prompt(id, text, opts)
+      },
+    },
+  }
+  const { base, headers, g } = await startWith(flaky, flaky.adapter.workspace, FAST)
+  try {
+    const started = await fetch(`${base}/loop`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ id: "s1", goal: "ship it", max: 4 }),
+    })
+    assert.equal(started.status, 200)
+    type Seen = { status?: string; attempts?: number; error?: string; iteration?: number }
+    let st: Seen = {}
+    const deadline = Date.now() + 4_000
+    while (Date.now() < deadline) {
+      const j = (await (await fetch(`${base}/history`, { method: "POST", headers, body: JSON.stringify({ id: "s1" }) })).json()) as { loop?: Seen }
+      st = j.loop ?? {}
+      if (st.attempts === 1) break
+      await sleep(25)
+    }
+    assert.equal(st.status, "running", "a provider failure does not end the loop")
+    assert.equal(st.attempts, 1, "the failure counts as an attempt, not a turn")
+    assert.equal(st.iteration, 1, "the failed turn did not consume the cap")
+    assert.equal(st.error, undefined, "the failure is not reported as the loop's verdict")
+
+    // and the retry actually runs: the first backoff is 5s
+    const retried = Date.now() + 8_000
+    while (Date.now() < retried && calls.length < 3) await sleep(50)
+    assert.ok(calls.length >= 3, `the retried turn ran (calls=${calls.length})`)
   } finally {
     await g.close()
   }
@@ -926,6 +841,37 @@ test("rename overlays a client-side title; delete removes; attach feeds the next
 
     const del = await fetch(`${base}/delete`, { method: "POST", headers, body: JSON.stringify({ id: "s1" }) })
     assert.equal(del.status, 200)
+  } finally {
+    await g.close()
+  }
+})
+
+test("a rename reaches the harness that keeps its own title", async () => {
+  const calls: Array<[string, string]> = []
+  const inner = fakeAdapter()
+  const adapter: HarnessAdapter = {
+    ...inner,
+    async renameSession(id, title) {
+      calls.push([id, title])
+      return true
+    },
+  }
+  const g = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter }],
+    dataHome: mkdtempSync(join(tmpdir(), "gw-test-")),
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+  })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const token = await pair(base, "TESTCODE")
+    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" }
+    const res = await fetch(`${base}/rename`, { method: "POST", headers, body: JSON.stringify({ id: "s1", title: "My Chat" }) })
+    assert.equal(res.status, 200)
+    assert.deepEqual(calls, [["s1", "My Chat"]], "opencode's own title is set, not just the overlay")
+    const { items } = (await (await fetch(`${base}/sessions`, { method: "POST", headers })).json()) as { items: Array<{ title: string }> }
+    assert.equal(items[0]?.title, "My Chat")
   } finally {
     await g.close()
   }
@@ -2092,6 +2038,60 @@ test("settings read by the real id show what the chat was created with, mid-firs
     const res = await fetch(`${url}/harness-settings`, { method: "POST", headers, body: JSON.stringify({ id: "real-1" }) })
     assert.equal(res.status, 200)
     assert.deepEqual(((await res.json()) as { values: unknown }).values, { skip: true })
+  } finally {
+    await g.close()
+  }
+})
+
+test("/file serves an image the agent read outside every served root", async () => {
+  const ws = mkdtempSync(join(tmpdir(), "gw-ws-"))
+  const outside = mkdtempSync(join(tmpdir(), "gw-outside-"))
+  const image = join(outside, "h2.png")
+  writeFileSync(image, "not-really-a-png")
+  const a = stallable()
+  a.adapter.messages = async () => [
+    {
+      id: "m2",
+      sessionID: "s1",
+      role: "assistant",
+      time: 3,
+      parts: [{ kind: "tool", id: "t1", name: "read", input: { filePath: image }, output: "Image read successfully", status: "completed" }],
+    },
+  ]
+  const { base, headers, g } = await startWith(a, ws)
+  try {
+    const token = headers.authorization!.slice("Bearer ".length)
+    const file = (path: string) =>
+      fetch(`${base}/file?p=${Buffer.from(path).toString("base64url")}&id=s1&token=${token}`)
+    const ok = await file(image)
+    assert.equal(ok.status, 200)
+    assert.equal(await ok.text(), "not-really-a-png")
+    // anything the session did not read is still refused
+    const denied = await file(join(outside, "secret.txt"))
+    assert.equal(denied.status, 403)
+  } finally {
+    await g.close()
+  }
+})
+
+test("/harnesses serves each harness's mark, so a client names no harness itself", async () => {
+  const dataHome = mkdtempSync(join(tmpdir(), "gw-marks-"))
+  const mark = { box: 24, path: "M0 0h24v24H0z" }
+  const g = await startGateway({
+    adapters: () => [],
+    harnesses: () => ({ ids: ["x"], default: "x", marks: { x: mark } }),
+    dataHome,
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+  })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const token = await pair(base, "TESTCODE")
+    const res = await fetch(`${base}/harnesses`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: "{}" })
+    const body = (await res.json()) as { harnesses: string[]; marks: Record<string, unknown> }
+    assert.deepEqual(body.harnesses, ["x"])
+    assert.deepEqual(body.marks, { x: mark })
   } finally {
     await g.close()
   }

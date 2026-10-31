@@ -10,30 +10,26 @@ import { mkdir, open, readdir, readFile, realpath, stat, unlink, writeFile } fro
 import { homedir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path"
-import type { HarnessAdapter, HarnessMark, HarnessSettingSpec, SessionImport, Terminal } from "../../core/ports.ts"
+import type { HarnessAdapter, HarnessMark, HarnessSettingSpec, SessionImport, Terminal, TurnHost } from "../../core/ports.ts"
 import type { PairingAdmin } from "../../core/pairing.ts"
 import { describeAsk } from "../../core/asks.ts"
 import { pushFor, UnregisteredToken, type PushNotifier } from "../../core/push.ts"
-import { judgeTurn, LIVENESS, type LivenessConfig } from "../../core/liveness.ts"
+import { LIVENESS, type LivenessConfig } from "../../core/liveness.ts"
 import { isRepo, repoStatus } from "../../core/git.ts"
 import { readClaudeMcp, readCodexMcp, readOpencodeMcp, writeClaudeProjectEnabled, writeCodexMcpEnabled, writeOpencodeMcpEnabled } from "../../core/mcpconfig.ts"
 import { listSkills, skillDirsFor, writeSkillModelInvocation } from "../../core/skills.ts"
-import type { AskRequest, DomainEvent, HarnessError, Message, Part } from "../../core/types.ts"
-import { eventSession, isAborted } from "../../core/types.ts"
-import { describeError } from "../../core/errors.ts"
+import type { AskRequest, DomainEvent, Message, Part } from "../../core/types.ts"
 import { usageOf } from "../../core/usage.ts"
-import { attachedPaths, quoteBlock, readLoopMarker, stripInjectedContext, transcriptText } from "../../core/transcript.ts"
+import { attachedPaths, readLoopMarker, stripInjectedContext, transcriptText } from "../../core/transcript.ts"
 import {
-  continuationText,
-  evaluateLoop,
-  runVerifier,
   LOOP_DEFAULT_TURNS,
   LOOP_MAX_TURNS,
   type LoopState,
-  type LoopVerify,
 } from "../../core/loops.ts"
 import { newPairCode } from "../telegram/pair.ts"
 import { detach } from "../../core/detach.ts"
+import type { TurnLedger } from "../../core/ledger.ts"
+import { TurnEngine, type PendingTurn, type TurnResult } from "../../core/turn-engine.ts"
 
 // web/ at the package root: three levels up from this file, from src/ and from
 // the compiled dist/ alike. index.html and the scripts it loads.
@@ -48,6 +44,8 @@ export interface GatewayDeps {
    * be created under, independent of any one workspace */
   /** `marks`: each known harness's brand mark, so a client draws what it is sent and names no harness itself */
   harnesses?(): { ids: string[]; default: string; marks?: Record<string, HarnessMark> }
+  /** every client's running turns; the daemon shares one with the bot (default: the gateway's own) */
+  ledger?: TurnLedger
   /** settings schemas for harnesses that have not started a workspace yet */
   harnessSettings?(harness: string): HarnessSettingSpec[]
   /** bring a directory up as a workspace under a harness, the way the bot's
@@ -97,6 +95,8 @@ export interface GatewayHandle {
   pairingAdmin: PairingAdmin
   /** when the last harness event arrived, from any client */
   lastActivity(): number
+  /** the turns, as the daemon's own services see them (watches, restart) */
+  turns: TurnHost
 }
 
 const TOKEN_FILE = "gateway-tokens.json"
@@ -289,8 +289,9 @@ const saveTokens = async (dataHome: string, tokens: Map<string, number>): Promis
 }
 
 // The phone renames conversations its own way — like Telegram, the rename is a
-// client concern. jep's harnesses don't expose one, so the gateway keeps its
-// own overrides (persisted, like the tokens) and overlays them on listings.
+// client concern. Most harnesses expose no rename, so the gateway keeps its own
+// overrides (persisted, like the tokens) and overlays them on listings; where a
+// harness does keep a title of its own (opencode), /rename sets that too.
 async function loadTitles(dataHome: string): Promise<Map<string, string>> {
   try {
     const raw = JSON.parse(await readFile(join(dataHome, TITLES_FILE), "utf8")) as Record<string, string>
@@ -644,6 +645,18 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   const agents = await loadAgents(deps.dataHome)
   const harnessSettings = await loadHarnessSettings(deps.dataHome)
   const loops = await loadLoops(deps.dataHome)
+  // A loop the previous daemon was driving has no driver now. Left "running"
+  // it reads as alive forever and blocks a restart with 409; say what happened
+  // instead, so the goal can be started again in one move.
+  let staleLoops = false
+  for (const loop of loops.values()) {
+    if (loop.status !== "running") continue
+    loop.status = "stopped"
+    loop.error = "jep restarted while the loop was running; start it again to continue"
+    loop.updatedAt = Date.now()
+    staleLoops = true
+  }
+  if (staleLoops) await saveLoops(deps.dataHome, loops)
   // A session's settings, under the id the phone uses now. Claude names a new
   // conversation with a placeholder and learns its real id once the first turn
   // starts streaming; the phone moves to the real id right then, mid-turn,
@@ -674,7 +687,6 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   const sessionAdapters = new Map<string, HarnessAdapter>()
   const askSessions = new Map<string, string>()
   const liveness: LivenessConfig = { ...LIVENESS, ...deps.liveness }
-  const idleGraceMs = liveness.idleGraceMs
   // Asks still waiting on a human, per session. A turn parked on a permission
   // prompt is not stalled — it is being polite — so the watchdog holds its fire
   // until the ask is answered or stood down.
@@ -795,6 +807,23 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   // a restart waits for before it exits.
   let lastActivity = Date.now()
 
+  // The turns: queue, runner, watchdog and loops are the engine's (core/turn-engine.ts).
+  // This file feeds it the harnesses' events and calls it from its routes.
+  const engine = new TurnEngine(
+    {
+      adapterOf: (id) => sessionAdapters.get(id),
+      find: (id) => ensureListed(id),
+      settingsOf,
+      openAsks: (id) => asksBySession.get(id)?.size ?? 0,
+      recordChanged: (id) => void msgCache.delete(id),
+      loopChanged: (all, sessionID) => {
+        detach("save loops", saveLoops(deps.dataHome, all))
+        broadcast({ type: "session.changed", sessionID })
+      },
+    },
+    { liveness, loops, ...(deps.ledger ? { ledger: deps.ledger } : {}) },
+  )
+
   const pumps = new Map<HarnessAdapter, AbortController>()
   async function pump(adapter: HarnessAdapter, signal: AbortSignal): Promise<void> {
     let backoff = 2_000
@@ -804,28 +833,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         for await (const evt of adapter.events(signal)) {
           got = true
           lastActivity = Date.now()
-          // every event on a session pushes that session's watchdog deadline
-          // out: a turn producing anything at all has not stalled
-          const sid = eventSession(evt)
-          const live = sid ? turnOf(sid) : undefined
-          if (live) live.lastActivity = Date.now()
-          // what the running turn itself produced, as opposed to the end markers
-          // a turn that was just cancelled still has in flight
-          const ending = evt.type === "session.idle" || evt.type === "turn.aborted" || evt.type === "session.error" || evt.type === "session.changed"
-          if (live?.running && !ending) {
-            live.sawActivity = true
-            // the harness said idle and then kept working: that idle belonged to
-            // something else (a cancelled turn's tail), not to this one
-            if (live.idleGrace) {
-              clearTimeout(live.idleGrace)
-              live.idleGrace = undefined
-            }
-          }
-          if (evt.type === "session.idle" && live) {
-            if (live.running) live.idleSeen = true
-            // the turn before is fully over: the next one may start
-            live.settled?.()
-          }
+          // the engine keeps the watchdog's clock, notices a turn ending on the
+          // stream, steers a waiting prompt in, and hands back the event to show
+          let out = engine.onEvent(evt, adapter)
           if (evt.type === "ask.requested") {
             askSessions.set(evt.ask.id, evt.ask.sessionID)
             openAsks(evt.ask.sessionID).add(evt.ask.id)
@@ -838,63 +848,13 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           if (evt.type === "ask.resolved") {
             closeAsk(evt.askID)
             settleAsk(evt.askID, "closed")
-            if (live) live.lastActivity = Date.now()
+            engine.touch(evt.sessionID)
             console.error(`[ask] resolved ${evt.askID}`)
           }
-          // what the turn is doing decides which ceiling applies, so track the
-          // tools the harness reports as running (and when each one started)
-          if (evt.type === "part.updated" && evt.part?.kind === "tool" && live) {
-            if (evt.part.status === "running") {
-              if (!live.runningTools.has(evt.partID)) {
-                live.runningTools.set(evt.partID, { name: evt.part.name, startedAt: evt.part.startedAt ?? Date.now() })
-              }
-            } else live.runningTools.delete(evt.partID)
-          }
-          // the turn is over and the record is settled: drop the snapshot so the
-          // next read is the finished one
-          if (evt.type === "session.idle" || evt.type === "turn.aborted" || evt.type === "session.changed") msgCache.delete(evt.sessionID)
-          // The harness says the turn is done. prompt() normally returns right
-          // about now — but that POST can hang even with the answer fully
-          // streamed, which pinned the turn (and everything queued behind it)
-          // forever. Give it a grace period, then finalize from the transcript.
-          // Only for a turn that has produced something: an idle that arrives
-          // before that is the previous turn's, and finalizing on it killed the
-          // steered-in turn five seconds after it started.
-          if (evt.type === "session.idle" && live?.running && live.sawActivity && !live.ending && live.idleGrace === undefined) {
-            live.idleGrace = setTimeout(() => {
-              live.idleGrace = undefined
-              endTurn(evt.sessionID, live, { kind: "idle" }, "idle-grace")
-            }, idleGraceMs)
-          }
-          // The harness's own account of a failed turn, delivered on the stream
-          // rather than by prompt() rejecting. Left unhandled it vanished and the
-          // turn sat until somebody hit stop.
-          if (evt.type === "session.error" && live?.running) {
-            console.error(`[turn] session.error (gateway session ${evt.sessionID}): ${evt.message}`)
-            endTurn(evt.sessionID, live, { kind: "error", message: evt.message || "the harness reported an error" }, "session-error")
-            void adapter.abort(evt.sessionID).catch(() => {})
-          }
-          // steer: a prompt waiting behind this turn is folded in at the next tool
-          // boundary — end the turn cleanly (so the running prompt gets the
-          // answer from the transcript) and the runner starts the waiting prompt
-          if (evt.type === "part.updated" && evt.part?.kind === "other" && evt.part.nativeType === "step-finish") {
-            const st = turnOf(evt.sessionID)
-            // only a prompt that asked to steer interrupts the running turn; one
-            // that asked to wait for the end is left alone
-            if (st?.running && st.waiting.some((p) => p.steer)) {
-              st.handover = true
-              endTurn(evt.sessionID, st, { kind: "idle" }, "steer-in")
-              st.signal?.abort()
-            }
-          }
-          // an abort jep made to hand the session to a waiting prompt is not a
-          // stop: say so, so a client keeps the turn on screen as running
-          // instead of announcing "the turn was stopped"
-          let out: DomainEvent = evt
-          if (evt.type === "turn.aborted" && live?.handover) {
-            live.handover = false
-            out = { ...evt, reason: "handover" }
-          }
+          // every client reads the same sentence, so the card, the notice and
+          // the push all say "Access a folder outside the project?" instead of
+          // the harness's `external_directory`
+          if (out.type === "ask.requested") out = { ...out, ask: { ...out.ask, display: describeAsk(out.ask) } }
           broadcast(out)
           detach("wake a waiting turn", wake(evt))
         }
@@ -931,384 +891,6 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       }
     }
     return null
-  }
-
-  // One turn in flight per session, plus whatever waits behind it. The queue is
-  // what makes "send while it works" real: a prompt that arrives mid-turn waits,
-  // and is steered in at the next tool boundary — or forced, when the client asks
-  // to abort the running turn and run it now. This mirrors the Telegram client's
-  // own turn queue.
-  type TurnResult = { status: number; message?: Message; aborted?: boolean; cancelled?: boolean; error?: string }
-  type PendingTurn = {
-    text: string
-    filePaths: string[]
-    model?: { providerID: string; modelID: string }
-    agent?: string
-    /** steer at the next tool boundary (the default) or wait for the turn to end */
-    steer: boolean
-    /** asked to run ahead of everything else, aborting the running turn */
-    force?: boolean
-    /** the client's own handle, so it can edit / cancel / force this while it waits */
-    clientID?: string
-    /** the words this answers; the adapter hands it to its harness */
-    quote?: string
-    /** queued by a loop, so this turn advances it and never merges with a
-     * person's waiting words */
-    loop?: boolean
-    resolve: (r: TurnResult) => void
-    /** set on a turn built from several waiting prompts: every handle in it */
-    clientIDs?: string[]
-  }
-  // How a turn ended when something other than prompt() decided it. The runner
-  // reads this after the abort lands, so a stalled or failed turn reports what
-  // actually happened instead of the bare "aborted" every abort used to become.
-  type TurnEnd =
-    /** the harness said session.idle; the answer is streamed, prompt() just hung */
-    | { kind: "idle" }
-    /** a provider failure the harness logged but never put on the event stream */
-    | { kind: "provider"; error: HarnessError }
-    /** the harness's own session.error */
-    | { kind: "error"; message: string }
-    /** nothing came back at all for a whole ceiling */
-    | { kind: "stall"; elapsedMs: number; tool?: string }
-  type TurnState = {
-    running: PendingTurn | null
-    waiting: PendingTurn[]
-    signal?: AbortController
-    /** when this session last produced any harness event — the watchdog's clock */
-    lastActivity: number
-    /** tools the harness says are running now, so a stall can name the culprit */
-    runningTools: Map<string, { name: string; startedAt: number }>
-    /** set by the watchdog or the event stream, read by the runner */
-    ending?: TurnEnd
-    /** armed by session.idle, cleared when the turn settles */
-    idleGrace?: ReturnType<typeof setTimeout>
-    /** the running turn produced an event of its own (not an end marker) */
-    sawActivity?: boolean
-    /** the harness already said idle for the running turn */
-    idleSeen?: boolean
-    /** between turns: waiting for the last one's session.idle */
-    settling?: boolean
-    /** ends the settle wait early, when that idle arrives */
-    settled?: () => void
-    /** the running turn is being ended to let a waiting prompt in */
-    handover?: boolean
-  }
-  const newTurnState = (): TurnState => ({ running: null, waiting: [], lastActivity: Date.now(), runningTools: new Map() })
-  // read through a function: the assignment above narrows the property to
-  // undefined for the rest of runNext, and the abort path sets it behind our back
-  const endingOf = (state: TurnState): TurnEnd | undefined => state.ending
-  const turns = new Map<string, TurnState>()
-  // One conversation, one line. Claude names a new conversation with a
-  // placeholder and learns its real id mid-turn; clients move to the real id
-  // then, and its events carry the real id from then on. Keyed by the raw id,
-  // a turn started under the placeholder and a prompt sent under the real id
-  // were two lines: two harness processes writing one record at once, a
-  // watchdog and a steer that never saw the first, and a stop that reached
-  // only one of them.
-  const turnKey = (id: string): string => {
-    if (turns.has(id)) return id
-    const canon = (x: string): string => sessionAdapters.get(x)?.canonicalId?.(x) ?? x
-    const want = canon(id)
-    for (const key of turns.keys()) if (key === want || canon(key) === want) return key
-    return id
-  }
-  const turnOf = (id: string): TurnState | undefined => turns.get(turnKey(id))
-  const isActive = (id: string): boolean => turnOf(id)?.running != null
-
-  // ─── loops ──────────────────────────────────────────────────────────────
-  // A loop is one chat that keeps going: a goal, a stop condition that runs
-  // outside the model, and a cap. The gateway owns the queue, so it owns the
-  // next turn; the decisions live in core/loops.ts so the bot can drive the
-  // same loop without copying them.
-  const loopKey = (id: string): string => sessionAdapters.get(id)?.canonicalId?.(id) ?? id
-  const loopOf = (id: string): LoopState | null => loops.get(loopKey(id)) ?? null
-  const putLoop = (loop: LoopState): void => {
-    loops.set(loop.sessionID, loop)
-    detach("save loops", saveLoops(deps.dataHome, loops))
-    // the iteration and the ending are state a client cannot infer from the
-    // record; one nudge makes every open tab read history again
-    broadcast({ type: "session.changed", sessionID: loop.sessionID })
-  }
-  function adapterFor(id: string): HarnessAdapter | undefined {
-    return sessionAdapters.get(id) ?? sessionAdapters.get(loopKey(id))
-  }
-  // Stop the loop and take back everything it queued, so a Stop is not
-  // immediately followed by the next continuation.
-  const stopLoop = (key: string, status: LoopState["status"], error?: string): LoopState | null => {
-    const loop = loops.get(key)
-    if (!loop) return null
-    loop.status = status
-    loop.updatedAt = Date.now()
-    if (error) loop.error = error
-    const st = turns.get(key)
-    if (st) {
-      for (let i = st.waiting.length - 1; i >= 0; i--) {
-        const waiting = st.waiting[i]!
-        if (!waiting.loop) continue
-        st.waiting.splice(i, 1)
-        waiting.resolve({ status: 200, cancelled: true })
-      }
-    }
-    putLoop(loop)
-    return loop
-  }
-  const textOf = (m: Message | undefined): string =>
-    (m?.parts ?? []).map((p) => (p.kind === "text" ? p.text : "")).join("\n")
-
-  // The turn that just ended is the loop's; say whether it goes on, and if it
-  // does, put the next instruction in line. The verifier runs here, outside
-  // the model: an agent never grades its own work.
-  async function advanceLoop(key: string, loop: LoopState, answer: Message | undefined): Promise<void> {
-    if (loops.get(key) !== loop || loop.status !== "running") return
-    loop.iteration += 1
-    loop.updatedAt = Date.now()
-    let verify: LoopVerify | undefined
-    if (loop.spec.verify) {
-      const adapter = adapterFor(key)
-      if (!adapter) {
-        stopLoop(key, "failed", "the harness went away")
-        return
-      }
-      verify = await runVerifier(loop.spec.verify, loop.workspace)
-      loop.lastVerify = verify
-    }
-    const verdict = evaluateLoop({ iteration: loop.iteration, spec: loop.spec, lastText: textOf(answer), ...(verify ? { verify } : {}) })
-    if (verdict.done) {
-      loop.status = verdict.reason === "verified" || verdict.reason === "marker" ? "done" : "exhausted"
-      putLoop(loop)
-      return
-    }
-    // between the verifier and this push the person may have stopped it
-    if (loops.get(key) !== loop || loop.status !== "running") return
-    const st = turns.get(key) ?? newTurnState()
-    turns.set(key, st)
-    st.waiting.push({
-      text: continuationText(loop, verify),
-      filePaths: [],
-      steer: false,
-      loop: true,
-      clientID: `loop-${loop.iteration}-${Date.now().toString(36)}`,
-      resolve: () => {},
-    })
-    putLoop(loop)
-  }
-
-  // End the running turn for a reason that is not a client stop. The abort is
-  // what unblocks prompt(); `ending` is what tells the runner why, so the phone
-  // gets a named failure rather than a silent stop.
-  const endTurn = (id: string, st: TurnState, end: TurnEnd, origin: string): void => {
-    if (!st.running || st.ending) return
-    st.ending = end
-    console.error(`[stop] origin=${origin} (gateway session ${id})`)
-    st.signal?.abort()
-  }
-
-  // The liveness the gateway used to be missing entirely. Every turn runs with
-  // timeoutMs: 0, so without this a turn whose harness went silent — a 429, a
-  // usage cap, a dropped upstream socket — stayed "running" forever, and every
-  // prompt queued behind it waited with it. The only way out was the human
-  // hitting stop.
-  const watchdogTimer = setInterval(() => {
-    for (const [id, st] of turns) {
-      if (!st.running || !st.signal || st.ending) continue
-      const adapter = sessionAdapters.get(id)
-      // A provider failure opencode logs to its own stderr and never emits as an
-      // event (a 429, a usage cap). This is the one place that failure is
-      // legible, so prefer it over waiting out the ceiling for an unexplained
-      // stall: the turn is not coming back, and now we can say why.
-      const pe = adapter?.providerError?.(id)
-      if (pe) {
-        console.error(`[watchdog] provider error (gateway session ${id}): ${describeError(pe)}`)
-        endTurn(id, st, { kind: "provider", error: pe }, "watchdog-provider-error")
-        detach(`abort ${id}`, adapter?.abort(id))
-        continue
-      }
-      const v = judgeTurn({
-        now: Date.now(),
-        lastActivity: st.lastActivity,
-        // parked on a permission ask: waiting on the human, not stalled
-        waitingOnHuman: (asksBySession.get(id)?.size ?? 0) > 0,
-        tools: [...st.runningTools.values()],
-        config: liveness,
-      })
-      if (!v.stalled) continue
-      console.error(
-        `[watchdog] turn stalled ${Math.round(v.elapsedMs / 1000)}s (ceiling ${Math.round(v.ceilingMs / 1000)}s, tools=${st.runningTools.size}${v.wedgedMs !== undefined ? `, ${v.tool} wedged ${Math.round(v.wedgedMs / 60_000)}m` : ""}, gateway session ${id})`,
-      )
-      endTurn(id, st, { kind: "stall", elapsedMs: v.elapsedMs, ...(v.tool ? { tool: v.tool } : {}) }, "watchdog-stall")
-      detach(`abort ${id}`, adapter?.abort(id))
-    }
-  }, liveness.tickMs)
-  watchdogTimer.unref()
-
-  // Everything waiting runs as one turn. Three messages typed while the agent
-  // worked are one thought; running them one by one cost three turns, and each
-  // steer-in aborted the one before. The first quote rides as the quote, any
-  // later one goes in as words, ahead of the message it belongs to.
-  const mergeWaiting = (batch: PendingTurn[]): PendingTurn => {
-    if (batch.length === 1) return batch[0]!
-    const head = batch[0]!
-    const quote = batch.find((p) => p.quote?.trim())?.quote
-    const text = batch
-      .map((p) => (p.quote?.trim() && p.quote !== quote ? `${quoteBlock(p.quote)}\n\n${p.text}` : p.text))
-      .join("\n\n")
-    return {
-      ...head,
-      text,
-      filePaths: batch.flatMap((p) => p.filePaths),
-      ...(quote ? { quote } : {}),
-      steer: batch.some((p) => p.steer),
-      clientIDs: batch.flatMap((p) => (p.clientID ? [p.clientID] : [])),
-      resolve: (r) => {
-        for (const p of batch) p.resolve(r)
-      },
-    }
-  }
-
-  // After a turn ends, hold the next one until the harness says the session is
-  // idle (or a short while passes). A cancelled turn's own idle event and its
-  // "Aborted" log line used to land on the turn started right after it.
-  const settle = (st: TurnState): Promise<void> => {
-    if (st.idleSeen) return Promise.resolve()
-    st.settling = true
-    return new Promise<void>((done) => {
-      const finish = (): void => {
-        clearTimeout(timer)
-        st.settling = false
-        st.settled = undefined
-        done()
-      }
-      const timer = setTimeout(finish, liveness.settleMs)
-      st.settled = finish
-    })
-  }
-
-  async function runNext(id: string): Promise<void> {
-    const st = turns.get(id)
-    if (!st || st.running || st.settling) return
-    if (st.waiting.length === 0) {
-      turns.delete(id)
-      return
-    }
-    // a forced prompt runs on its own: it was asked for ahead of the rest.
-    // A loop turn does too, and a person's prompts ahead of one never merge
-    // across it: the continuation is jep's instruction, not a thought of theirs.
-    const head = st.waiting[0]!
-    const firstLoop = st.waiting.findIndex((p) => p.loop === true)
-    const take = head.force || head.loop ? 1 : firstLoop > 0 ? firstLoop : st.waiting.length
-    const next = mergeWaiting(st.waiting.splice(0, take))
-    const adapter = await ensureListed(id)
-    if (!adapter) {
-      next.resolve({ status: 404, error: "no such session" })
-      detach(`turn queue ${id}`, runNext(id))
-      return
-    }
-    st.running = next
-    st.ending = undefined
-    st.sawActivity = false
-    st.idleSeen = false
-    st.handover = false
-    st.runningTools.clear()
-    st.lastActivity = Date.now()
-    const ac = new AbortController()
-    st.signal = ac
-    let answer: Message | undefined
-    try {
-      const message = await adapter.prompt(id, next.text, {
-        timeoutMs: 0,
-        filePaths: next.filePaths,
-        ...(next.model ? { model: next.model } : {}),
-        ...(next.agent ? { agent: next.agent } : {}),
-        harnessSettings: settingsOf(adapter, adapter.canonicalId?.(id) ?? id) ?? {},
-        ...(next.quote ? { quote: next.quote } : {}),
-        signal: ac.signal,
-      })
-      answer = message
-      next.resolve({ status: 200, message })
-    } catch (err) {
-      // An abort with a reason behind it is not a client stop: the watchdog or
-      // the event stream ended this turn, and the reason is the whole point.
-      const end = endingOf(st)
-      if (end && isAborted(err)) {
-        const result = await settleEnded(adapter, id, end)
-        answer = result.message
-        // an idle is a finish; every other ending is the loop's stop condition
-        if (next.loop && end.kind !== "idle") stopLoop(turnKey(id), "failed", result.error)
-        next.resolve(result)
-      }
-      // a stop is not a failure: it is the turn ending because somebody asked
-      else if (isAborted(err)) {
-        if (next.loop) stopLoop(turnKey(id), "stopped")
-        next.resolve({ status: 200, aborted: true })
-      } else {
-        const message = String((err as Error)?.message ?? err)
-        if (next.loop) stopLoop(turnKey(id), "failed", message)
-        next.resolve({ status: 502, error: message })
-      }
-    } finally {
-      st.running = null
-      st.signal = undefined
-      st.ending = undefined
-      st.runningTools.clear()
-      if (st.idleGrace) clearTimeout(st.idleGrace)
-      st.idleGrace = undefined
-      // the turn wrote to the record; a snapshot from during it must not outlive it
-      msgCache.delete(id)
-      // A first turn can give the session its real id, and the phone moves to
-      // it. Settings left under the placeholder were lost from then on: the
-      // second turn ran without "skip permissions" and stopped at every tool.
-      const real = adapter.canonicalId?.(id)
-      let key = id
-      if (real && real !== id) {
-        settingsOf(adapter, real)
-        // the line moves with them, so it is found by the id clients use now
-        if (turns.get(id) === st && !turns.has(real)) {
-          turns.delete(id)
-          turns.set(real, st)
-          key = real
-        }
-      }
-      // The loop sees the turn's own record before the queue settles, so the
-      // continuation it queues is next in line, not a race with it.
-      if (next.loop) {
-        const running = loops.get(key)
-        if (running?.status === "running") {
-          try {
-            await advanceLoop(key, running, answer)
-          } catch (err) {
-            console.error(`[loop] advance failed (gateway session ${key}): ${(err as Error)?.message ?? err}`)
-            stopLoop(key, "failed", String((err as Error)?.message ?? err))
-          }
-        }
-      }
-      detach(`turn queue ${key}`, settle(st).then(() => runNext(key)))
-    }
-  }
-
-  // Turn a watchdog/stream ending into the answer the phone gets. `idle` is a
-  // success — the harness finished and only the blocking POST hung, so the
-  // streamed answer is read back off the transcript. The rest are real
-  // failures, named as precisely as the harness let us name them.
-  async function settleEnded(adapter: HarnessAdapter, id: string, end: TurnEnd): Promise<TurnResult> {
-    if (end.kind === "idle") {
-      msgCache.delete(id)
-      const rows = await adapter.messages(id, { limit: 8 }).catch(() => [] as Message[])
-      const last = [...rows].reverse().find((m) => m.role === "assistant")
-      // the harness said the turn is done; if the record somehow has no
-      // assistant message, a bare stop is still truer than inventing one
-      return last ? { status: 200, message: last } : { status: 200, aborted: true }
-    }
-    if (end.kind === "provider") return { status: 502, error: describeError(end.error) }
-    if (end.kind === "error") return { status: 502, error: end.message }
-    const secs = Math.round(end.elapsedMs / 1000)
-    const forHowLong = secs >= 60 ? `${Math.round(secs / 60)}m` : `${secs}s`
-    return {
-      status: 504,
-      error: end.tool
-        ? `tool ${end.tool} ran ${forHowLong} with no progress — turn abandoned`
-        : `no activity for ${forHowLong} — turn abandoned`,
-    }
   }
 
   // the only directories a client may read: uploaded files (the phone's and
@@ -1537,7 +1119,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
             // conversation cannot move between harnesses after it exists.
             // `active` = a turn is in flight for it right now (a reply streaming,
             // a tool running) — the phone shows a live mark on the row
-            items.push({ ...s, title: overridden ?? s.title, adapter: name, harness: adapter.id, active: isActive(s.id), seenAt: seen.get(s.id) ?? 0, pinned: pinned.has(s.id), pod: isPod(adapter.workspace, deps.dataHome) })
+            items.push({ ...s, title: overridden ?? s.title, adapter: name, harness: adapter.id, active: engine.isActive(s.id), seenAt: seen.get(s.id) ?? 0, pinned: pinned.has(s.id), pod: isPod(adapter.workspace, deps.dataHome) })
           }
         }
         // pinned conversations first, then newest — pinning is the user saying
@@ -1829,8 +1411,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         // clock starts running on it once more
         closeAsk(askID)
         if (ok) settleAsk(askID, "answered", optionID)
-        const live = turnOf(sid)
-        if (live) live.lastActivity = Date.now()
+        engine.touch(sid)
         console.error(`[ask] respond askID=${askID} option=${optionID} -> ${ok ? "ok" : "failed"}`)
         return json(res, ok ? 200 : 409, ok ? { ok: true } : { error: "ask already answered" })
       }
@@ -1849,8 +1430,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const ok = await owner.rejectAsk(sid, askID).catch(() => false)
         closeAsk(askID)
         if (ok) settleAsk(askID, "closed")
-        const live = turnOf(sid)
-        if (live) live.lastActivity = Date.now()
+        engine.touch(sid)
         console.error(`[ask] reject askID=${askID} -> ${ok ? "ok" : "failed"}`)
         return json(res, ok ? 200 : 409, ok ? { ok: true } : { error: "ask already answered" })
       }
@@ -2198,12 +1778,11 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         // the daemon's own account of the turn and what waits behind it, so a
         // client never has to guess from its own requests (it may have been
         // restarted, or the prompt may have come from another device)
-        const st = turnOf(id)
-        const busy = st != null && (st.running != null || st.settling === true || st.waiting.length > 0)
-        const queue = (st?.waiting ?? []).map((p) => ({ clientID: p.clientID ?? null, text: p.text, steer: p.steer }))
+        const busy = engine.isBusy(id)
+        const queue = engine.queueOf(id)
         // the same answer carries the loop, so a client that already asks for
         // history every few seconds does not need a second poll to draw it
-        const loop = loopOf(id)
+        const loop = engine.loopOf(id)
         const tag = createHash("sha1").update(JSON.stringify({ messages, hasMore, asks, busy, queue, loop })).digest("hex").slice(0, 20)
         if (str("etag") === tag) return json(res, 200, { unchanged: true, etag: tag })
         return json(res, 200, { messages, hasMore, asks, busy, queue, loop, etag: tag })
@@ -2236,23 +1815,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           quote: str("quote") ?? undefined,
           resolve: settle,
         }
-        const key = turnKey(id)
-        const st = turns.get(key) ?? newTurnState()
-        turns.set(key, st)
-        if (b.force === true) {
-          // force: run this next, and if a turn is in flight, end it cleanly
-          // (so the running prompt gets the answer from the transcript) then
-          // abort so the forced prompt runs next
-          pending.force = true
-          st.waiting.unshift(pending)
-          if (st.running && !st.ending) st.handover = true
-          if (st.running) endTurn(id, st, { kind: "idle" }, "force")
-          st.signal?.abort()
-        } else {
-          // queue normally: the pump steers it in at the next tool boundary
-          st.waiting.push(pending)
-        }
-        detach(`turn queue ${key}`, runNext(key))
+        // queued behind the running turn and steered in at the next tool
+        // boundary, or (force) run next with the running turn ended cleanly
+        engine.submit(id, pending, b.force === true)
         const result = await done
         if (result.message) return json(res, 200, { message: result.message })
         if (result.aborted) return json(res, 200, { aborted: true })
@@ -2270,7 +1835,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         if (!verify && !until && max < 2) return json(res, 400, { error: "a loop without a stop condition needs more than one turn" })
         const adapter = await ensureListed(id)
         if (!adapter) return json(res, 404, { error: "no such session" })
-        const key = turnKey(id)
+        const key = engine.turnKey(id)
         const existing = loops.get(key)
         if (existing?.status === "running") return json(res, 409, { error: "a loop is already running" })
         const ref = models.get(id)
@@ -2284,12 +1849,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           startedAt: Date.now(),
           updatedAt: Date.now(),
         }
-        putLoop(loop)
         // the goal is a normal turn: the loop opens with words the person can
         // read, and only what jep says after it is scaffolding
-        const st = turns.get(key) ?? newTurnState()
-        turns.set(key, st)
-        st.waiting.push({
+        engine.startLoop(loop, {
           text: goal,
           filePaths: [],
           ...(providerID && modelID ? { model: { providerID, modelID } } : {}),
@@ -2299,47 +1861,26 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           clientID: `loop-0-${Date.now().toString(36)}`,
           resolve: () => {},
         })
-        detach(`turn queue ${key}`, runNext(key))
         return json(res, 200, { loop })
       }
 
       if (path === "/loop/stop") {
-        const key = turnKey(id)
-        const loop = loops.get(key)
-        if (!loop) return json(res, 404, { error: "no loop" })
-        if (loop.status === "running") {
-          const running = turns.get(key)?.running
-          stopLoop(key, "stopped")
-          // only the loop's own turn: a person's turn is theirs to finish
-          if (running?.loop) turns.get(key)?.signal?.abort()
-        }
-        return json(res, 200, { loop: loops.get(key) ?? null })
+        if (!loops.get(engine.turnKey(id))) return json(res, 404, { error: "no loop" })
+        return json(res, 200, { loop: engine.stopLoopByPerson(id) })
       }
 
       if (path === "/loop/clear") {
-        const key = turnKey(id)
-        if (!loops.has(key)) return json(res, 200, { ok: true })
-        if (loops.get(key)?.status === "running") stopLoop(key, "stopped")
-        loops.delete(key)
-        await saveLoops(deps.dataHome, loops)
-        broadcast({ type: "session.changed", sessionID: key })
+        engine.clearLoop(id)
         return json(res, 200, { ok: true })
       }
 
       if (path === "/stop") {
         console.error(`[stop] origin=client (gateway session ${id}, device ${token.slice(0, 6)}, from ${req.socket.remoteAddress ?? "?"})`)
-        // all: the prompts waiting behind the turn stop too, instead of the
-        // next one starting the moment this one ends. Their words come back,
-        // so the client can hand them to its composer.
-        const st = turnOf(id)
-        // Stop means the loop stops too: otherwise the next continuation is
-        // already in line and the stop did nothing visible. All of it, or the
-        // loop's own running turn; a turn a person started is theirs to finish.
-        if (b.all === true || st?.running?.loop) stopLoop(turnKey(id), "stopped")
-        const dropped = b.all === true && st ? st.waiting.splice(0) : []
-        for (const p of dropped) p.resolve({ status: 200, cancelled: true })
-        const stopped = await adapter.abort(id).catch(() => false)
-        return json(res, 200, { stopped, dropped: dropped.map((p) => p.text) })
+        // all: the prompts waiting behind the turn stop too (their words come
+        // back, so the client can hand them to its composer), and so does a loop
+        const { stopped, dropped } = await engine.stop(id, b.all === true, adapter)
+        return json(res, 200, { stopped, dropped })
+
       }
 
       // act on a queued prompt the client still holds a handle to (a clientID):
@@ -2348,50 +1889,16 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       if (path === "/queue/cancel" || path === "/queue/edit" || path === "/queue/force" || path === "/queue/move") {
         const clientID = str("clientID")
         if (!clientID) return json(res, 400, { error: "clientID required" })
-        const st = turnOf(id)
-        if (st?.running?.clientID === clientID || st?.running?.clientIDs?.includes(clientID)) return json(res, 409, { error: "already running" })
-        const idx = st ? st.waiting.findIndex((p) => p.clientID === clientID) : -1
-        if (!st || idx < 0) return json(res, 404, { error: "not queued" })
-        const entry = st.waiting[idx]!
-        if (path === "/queue/cancel") {
-          st.waiting.splice(idx, 1)
-          entry.resolve({ status: 200, cancelled: true })
-          // dropping the continuation is dropping the loop's next step
-          if (entry.loop) stopLoop(turnKey(id), "stopped")
-          return json(res, 200, { ok: true })
-        }
-        if (path === "/queue/edit") {
-          // a continuation's text is jep's instruction, marker and all;
-          // rewriting it would break the boundary the clients draw
-          if (entry.loop) return json(res, 409, { error: "a loop turn cannot be edited" })
-          const more = str("text") ?? ""
-          if (!more.trim()) return json(res, 400, { error: "text required" })
-          entry.text = more
-          return json(res, 200, { ok: true })
-        }
-        // move: put it at another place in the line. The waiting prompts run
-        // as one turn, their words in this order. A forced prompt runs first
-        // and alone, so nothing moves ahead of one, and one does not move.
-        if (path === "/queue/move") {
-          const to = b.to
-          if (typeof to !== "number" || !Number.isInteger(to)) return json(res, 400, { error: "to required" })
-          if (entry.force) return json(res, 409, { error: "runs next" })
-          st.waiting.splice(idx, 1)
-          const first = st.waiting.findIndex((p) => !p.force)
-          const lo = first < 0 ? st.waiting.length : first
-          st.waiting.splice(Math.min(st.waiting.length, Math.max(lo, to)), 0, entry)
-          return json(res, 200, { ok: true, queue: st.waiting.map((p) => ({ clientID: p.clientID ?? null, text: p.text, steer: p.steer })) })
-        }
-        // force: run it next, ending the running turn cleanly so it
-        // gets the answer from the transcript, then abort so the
-        // forced prompt runs next
-        st.waiting.splice(idx, 1)
-        entry.force = true
-        st.waiting.unshift(entry)
-        if (st.running && !st.ending) st.handover = true
-        if (st.running) endTurn(id, st, { kind: "idle" }, "queue-force")
-        st.signal?.abort()
-        return json(res, 200, { ok: true })
+        const refused =
+          path === "/queue/cancel"
+            ? engine.cancelQueued(id, clientID)
+            : path === "/queue/edit"
+              ? engine.editQueued(id, clientID, str("text") ?? "")
+              : path === "/queue/force"
+                ? engine.forceQueued(id, clientID)
+                : engine.moveQueued(id, clientID, b.to)
+        if (refused && "error" in refused) return json(res, refused.status, { error: refused.error })
+        return json(res, 200, refused ? { ok: true, queue: refused.queue } : { ok: true })
       }
 
       return json(res, 404, { error: "no such route" })
@@ -2414,11 +1921,11 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     port: bound,
     pairingAdmin,
     lastActivity: () => lastActivity,
+    turns: engine,
     close: async () => {
+      engine.close()
       clearInterval(pumpTimer)
       clearInterval(pingTimer)
-      clearInterval(watchdogTimer)
-      for (const st of turns.values()) if (st.idleGrace) clearTimeout(st.idleGrace)
       for (const signal of pumps.values()) signal.abort()
       for (const res of clients) res.end()
       await new Promise<void>((resolve) => server.close(() => resolve()))

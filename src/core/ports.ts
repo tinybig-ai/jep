@@ -47,6 +47,35 @@ export interface AgentRef {
  * adapter" seam of the hexagonal core: every harness we ever support (opencode
  * serve, goosed, dsh) gets normalized down to exactly this surface.
  */
+/**
+ * What the daemon's own services (watches, restart, picking up after a
+ * restart) need of whoever runs the turns. They know nothing of HTTP or of any
+ * one client: the gateway implements this today, and anything else that runs
+ * turns can implement it too.
+ */
+export interface TurnHost {
+  /** the conversation a caller means: the one it names, else the only turn
+   * running in its directory. A string is the reason none can be found. */
+  resolve(session: string | undefined, cwd: string | undefined): Promise<{ key: string; adapter: HarnessAdapter } | string>
+  /** a conversation by key, while it still exists */
+  find(key: string): Promise<HarnessAdapter | null>
+  /** queue a turn that steers nothing, behind whatever is running */
+  enqueue(key: string, text: string, opts?: { resume?: boolean }): void
+  /** conversations with a turn running, settling or waiting */
+  busy(): number
+  /** told as turns begin and end */
+  observe(listener: TurnListener): void
+  /** true once the daemon is shutting down */
+  closing(): boolean
+}
+
+export interface TurnListener {
+  /** `resume`: this turn is itself a pick-up of one a restart cut off */
+  started?(key: string, resume: boolean): void
+  /** `cutOff`: the daemon is shutting down and the turn died, it did not finish */
+  ended?(key: string, cutOff: boolean): void
+}
+
 /** a harness's brand mark: one filled SVG path in a `box` × `box` square */
 export interface HarnessMark {
   box: number
