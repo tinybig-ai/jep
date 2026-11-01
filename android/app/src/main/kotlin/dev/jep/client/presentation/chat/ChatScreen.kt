@@ -222,13 +222,13 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import androidx.compose.ui.unit.sp
 import com.mikepenz.markdown.m3.Markdown
+import com.mikepenz.markdown.annotator.buildMarkdownAnnotatedString
+import com.mikepenz.markdown.annotator.annotatorSettings
+import androidx.compose.foundation.layout.BoxWithConstraints
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
 import com.mikepenz.markdown.compose.components.markdownComponents
-import com.mikepenz.markdown.compose.elements.MarkdownTableHeader
-import com.mikepenz.markdown.compose.elements.MarkdownTableRow
 import com.mikepenz.markdown.model.markdownDimens
-import com.mikepenz.markdown.compose.elements.MarkdownTable
 import com.mikepenz.markdown.model.rememberMarkdownState
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.CoroutineScope
@@ -1542,63 +1542,81 @@ private fun compactMarkdownDimens() = markdownDimens(
 )
 
 /**
- * Custom markdown components: tables get sticky first column + adaptive padding via header/row blocks.
+ * Tables sized to their content. The library gives every column an equal share of the width, so a
+ * one-digit "#" column took half the screen and the text column beside it wrapped into a sliver and
+ * was cut off after three lines. Here each column is as wide as its widest cell (capped, so one long
+ * cell wraps instead of pushing the rest away), any spare width goes to the wide columns, every cell
+ * wraps in full, and the table scrolls sideways only when the columns truly do not fit.
  */
 @Composable
 private fun nordicMarkdownComponents() = markdownComponents(
-    table = { model ->
-        MarkdownTable(
-            content = model.content,
-            node = model.node,
-            style = model.typography.table,
-            headerBlock = { content, header, tableWidth, style ->
-                NordicTableHeader(content, header, tableWidth, style)
-            },
-            rowBlock = { content, header, tableWidth, style ->
-                NordicTableRow(content, header, tableWidth, style)
-            },
-        )
-    },
+    table = { model -> FitTable(model.content, model.node, model.typography.table) },
 )
 
-/**
- * Header row with sticky first column (bold, distinct background).
- */
 @Composable
-private fun NordicTableHeader(
-    content: String,
-    header: org.intellij.markdown.ast.ASTNode,
-    tableWidth: androidx.compose.ui.unit.Dp,
-    style: androidx.compose.ui.text.TextStyle,
-) {
-    MarkdownTableHeader(
-        content = content,
-        header = header,
-        tableWidth = tableWidth,
-        style = style,
-        maxLines = 3,
-        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-    )
-}
-
-/**
- * Body row with sticky first column (normal weight, same width as header).
- */
-@Composable
-private fun NordicTableRow(
-    content: String,
-    header: org.intellij.markdown.ast.ASTNode,
-    tableWidth: androidx.compose.ui.unit.Dp,
-    style: androidx.compose.ui.text.TextStyle,
-) {
-    MarkdownTableRow(
-        content = content,
-        header = header,
-        tableWidth = tableWidth,
-        style = style,
-        maxLines = 3,
-        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-    )
+private fun FitTable(content: String, node: org.intellij.markdown.ast.ASTNode, style: TextStyle) {
+    val annotator = annotatorSettings()
+    val header = style.copy(fontWeight = FontWeight.SemiBold)
+    // header row first, then the body rows; each a list of cells as styled text
+    val rows: List<List<androidx.compose.ui.text.AnnotatedString>> = remember(content, node) {
+        node.children
+            .filter { it.type == org.intellij.markdown.flavours.gfm.GFMElementTypes.HEADER || it.type == org.intellij.markdown.flavours.gfm.GFMElementTypes.ROW }
+            .map { row ->
+                row.children
+                    .filter { it.type == org.intellij.markdown.flavours.gfm.GFMTokenTypes.CELL }
+                    .map { cell -> content.buildMarkdownAnnotatedString(cell, style, annotator) }
+            }
+    }
+    if (rows.isEmpty()) return
+    val columns = rows.maxOf { it.size }
+    val measurer = androidx.compose.ui.text.rememberTextMeasurer()
+    val density = LocalDensity.current
+    val pad = 8.dp
+    BoxWithConstraints(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        val available = maxWidth
+        val widths: List<androidx.compose.ui.unit.Dp> = remember(rows, available) {
+            val cap = available * 0.7f
+            val natural = (0 until columns).map { c ->
+                val px = rows.withIndex().maxOf { (r, cells) ->
+                    val text = cells.getOrNull(c) ?: return@maxOf 0
+                    measurer.measure(text, if (r == 0) header else style).size.width
+                }
+                with(density) { px.toDp() } + pad * 2
+            }
+            val fitted = natural.map { minOf(it, cap) }
+            val total = fitted.fold(0.dp) { acc, w -> acc + w }
+            if (total >= available) fitted
+            else {
+                // spare width goes to the columns that wrap, in proportion to how much they wanted
+                val spare = available - total
+                val want = natural.zip(fitted).map { (n, f) -> (n - f).coerceAtLeast(0.dp) }
+                val wantTotal = want.fold(0.dp) { acc, w -> acc + w }
+                if (wantTotal > 0.dp) fitted.zip(want).map { (f, w) -> f + spare * (w / wantTotal) }
+                else {
+                    val all = fitted.fold(0.dp) { acc, w -> acc + w }
+                    fitted.map { it + spare * (it / all) }
+                }
+            }
+        }
+        val line = MaterialTheme.colorScheme.outlineVariant
+        Column(
+            Modifier
+                .horizontalScroll(rememberScrollState())
+                .clip(RoundedCornerShape(10.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)),
+        ) {
+            rows.forEachIndexed { r, cells ->
+                Row(Modifier.height(IntrinsicSize.Min)) {
+                    for (c in 0 until columns) {
+                        Box(Modifier.width(widths[c]).fillMaxHeight().padding(horizontal = pad, vertical = 6.dp)) {
+                            Text(cells.getOrNull(c) ?: androidx.compose.ui.text.AnnotatedString(""), style = if (r == 0) header else style)
+                        }
+                    }
+                }
+                if (r < rows.size - 1) Box(Modifier.width(widths.fold(0.dp) { a, w -> a + w }).height(if (r == 0) 1.dp else 0.5.dp).background(line))
+            }
+        }
+    }
 }
 
 /**
