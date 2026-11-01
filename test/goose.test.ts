@@ -14,11 +14,14 @@ await writeFile(
 import { readFileSync, writeFileSync, existsSync } from "node:fs"
 const args = process.argv.slice(2)
 const store = ${JSON.stringify(store)}
+const dirsFile = store + ".dirs"
 const db = existsSync(store) ? JSON.parse(readFileSync(store, "utf8")) : {}
+// like goose: a session remembers the folder its first run started in
+const dirs = existsSync(dirsFile) ? JSON.parse(readFileSync(dirsFile, "utf8")) : {}
 const value = (flag) => args[args.indexOf(flag) + 1]
 if (args[0] === "--version") { console.log("1.57.0-test"); process.exit(0) }
 if (args[0] === "session" && args[1] === "list") {
-  console.log(JSON.stringify(Object.entries(db).map(([name, s]) => ({ id: "2026_" + name, name, working_dir: process.cwd(), created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:09Z" }))))
+  console.log(JSON.stringify(Object.entries(db).map(([name, s]) => ({ id: "2026_" + name, name, working_dir: dirs[name] ?? process.cwd(), created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:09Z" }))))
   process.exit(0)
 }
 if (args[0] === "session" && args[1] === "export") {
@@ -39,6 +42,8 @@ if (args[0] === "run") {
   const hidden = { id: "h" + conv.length, role: "user", created: 1767225601, content: [{ type: "text", text: "<turn-context>" }], metadata: { userVisible: false, agentVisible: true } }
   db[name] = [...conv, user, hidden, call, result, answer]
   writeFileSync(store, JSON.stringify(db))
+  dirs[name] ??= process.cwd()
+  writeFileSync(dirsFile, JSON.stringify(dirs))
   for (const m of [call, result, answer]) console.log(JSON.stringify({ type: "message", message: m }))
   console.log(JSON.stringify({ type: "complete", total_tokens: 10 }))
   process.exit(0)
@@ -101,4 +106,24 @@ test("Goose lists the models of its custom providers after the default", async (
     { providerID: "custom_p", modelID: "m2" },
   ])
   await adapter.close()
+})
+
+test("a goose adapter lists only the sessions of its own folder, not those of a folder inside it", async () => {
+  const parent = await mkdtemp(path.join(home, "parent-"))
+  const child = path.join(parent, "child")
+  const { mkdir } = await import("node:fs/promises")
+  await mkdir(child)
+  const outer = await startGooseAdapter(parent)
+  const inner = await startGooseAdapter(child)
+  try {
+    const s = await inner.createSession("in the child")
+    await inner.prompt(s.id, "hello")
+    const innerIds = (await inner.listSessions()).map((x) => x.id)
+    const outerIds = (await outer.listSessions()).map((x) => x.id)
+    assert.ok(innerIds.includes(s.id))
+    assert.ok(!outerIds.includes(s.id), "goose's -w matches by prefix; the parent must not claim the child's chat")
+  } finally {
+    await outer.close?.()
+    await inner.close?.()
+  }
 })

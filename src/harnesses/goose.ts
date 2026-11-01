@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs"
 import { spawn, execFile, type ChildProcess } from "node:child_process"
 import { readFileSync } from "node:fs"
 import { readdir, readFile } from "node:fs/promises"
@@ -96,7 +97,16 @@ export class GooseAdapter implements HarnessAdapter {
     let rows: GooseListed[] = []
     try {
       const parsed = JSON.parse(await run(["session", "list", "--format", "json", "-w", this.workspace], 20_000))
-      if (Array.isArray(parsed)) rows = parsed.filter((r) => typeof r?.name === "string" && r.name.startsWith(NAME_PREFIX))
+      // goose's -w matches by prefix, so the adapter for ~/code also got every session of
+      // ~/code/project, and the gateway listed that chat once per adapter. Only the exact folder.
+      const here = realDir(this.workspace)
+      if (Array.isArray(parsed))
+        rows = parsed.filter(
+          (r) =>
+            typeof r?.name === "string" &&
+            r.name.startsWith(NAME_PREFIX) &&
+            (typeof r.working_dir !== "string" || realDir(r.working_dir) === here),
+        )
     } catch {
       rows = []
     }
@@ -360,6 +370,15 @@ function keyEnv(): Record<string, string> {
     // no key file: goose uses whatever it finds in the environment or keychain
   }
   return out
+}
+
+/** a folder as the filesystem names it (macOS's /var is /private/var), or as given when it is gone */
+function realDir(dir: string): string {
+  try {
+    return realpathSync(dir)
+  } catch {
+    return path.resolve(dir)
+  }
 }
 
 function run(args: string[], timeout: number): Promise<string> {
