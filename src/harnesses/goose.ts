@@ -425,6 +425,10 @@ function resultText(content: any): string {
  */
 export function mapGooseMessages(conversation: any[], sessionID: string, provider?: string): Message[] {
   const out: Message[] = []
+  // goose stamps messages in whole seconds, so a message and the reply that started in the same
+  // second tie, and a client ordering by time could draw the reply above the message. The record's
+  // order is the truth: each message is at least a millisecond after the one before it.
+  let last = 0
   const toolByID = new Map<string, Part & { kind: "tool" }>()
   conversation.forEach((native, index) => {
     if (native?.metadata?.userVisible === false) return
@@ -474,7 +478,7 @@ export function mapGooseMessages(conversation: any[], sessionID: string, provide
       id: `${sessionID}:${native.id ?? index}`,
       sessionID,
       role,
-      time: (Number(native.created) || 0) * 1000 || Date.now(),
+      time: (last = Math.max((Number(native.created) || 0) * 1000 || Date.now(), last + 1)),
       ...(usage?.elapsedMs ? { durationMs: Number(usage.elapsedMs) } : {}),
       parts,
       ...(role === "assistant" && inference?.requestedModel ? { model: `${inference.provider ?? provider ?? "goose"}/${inference.requestedModel}` } : {}),

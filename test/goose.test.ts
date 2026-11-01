@@ -127,3 +127,20 @@ test("a goose adapter lists only the sessions of its own folder, not those of a 
     await inner.close?.()
   }
 })
+
+test("messages stamped in the same second keep the record's order", async () => {
+  const { mapGooseMessages } = await import("../src/harnesses/goose.ts")
+  const meta = { userVisible: true, agentVisible: true }
+  const msgs = mapGooseMessages(
+    [
+      { id: "u", role: "user", created: 1767225601, content: [{ type: "text", text: "hi" }], metadata: meta },
+      { id: "a", role: "assistant", created: 1767225601, content: [{ type: "text", text: "on it" }], metadata: meta },
+      { id: "b", role: "assistant", created: 1767225601, content: [{ type: "text", text: "done" }], metadata: meta },
+    ],
+    "goose://x",
+  )
+  const times = msgs.map((m) => m.time)
+  assert.deepEqual(msgs.map((m) => m.role), ["user", "assistant", "assistant"])
+  assert.ok(times[0]! < times[1]! && times[1]! < times[2]!, `strictly increasing: ${times}`)
+  assert.equal(times[0], 1767225601000)
+})
