@@ -1,4 +1,4 @@
-import { realpathSync } from "node:fs"
+import { realpathSync, statSync } from "node:fs"
 import { spawn, execFile, type ChildProcess } from "node:child_process"
 import { readFileSync } from "node:fs"
 import { readdir, readFile } from "node:fs/promises"
@@ -192,7 +192,8 @@ export class GooseAdapter implements HarnessAdapter {
     if (opts?.filePaths?.length) body += `\n\nAttached files:\n${opts.filePaths.map((file) => `- ${file}`).join("\n")}`
     // jep's header goes first, once per conversation (see contextFor)
     body = `${contextFor(text, this.#briefed, native, opts?.brief)}${body}`
-    const exists = (await this.#rows(true)).some((r) => r.name === gooseName(native))
+    const row = (await this.#rows(true)).find((r) => r.name === gooseName(native))
+    const exists = row !== undefined
     const args = ["run", "--name", gooseName(native), ...(exists ? ["--resume"] : [])]
     // jep's own tools, as one more extension beside the ones goose already has
     if (wantsMcp(toolsMode())) args.push("--with-extension", `${TOOLS_SERVER}:${process.execPath} ${MCP_SERVER_PATH} --session ${sessionID}`)
@@ -210,6 +211,17 @@ export class GooseAdapter implements HarnessAdapter {
     const sid = toInternalId(native)
     let stderr = ""
     let failure: { name: string; message: string } | undefined
+    // goose waits out a provider's Retry-After in silence (an hour, for a usage cap) and says
+    // nothing on stdout, so the turn looked hung until the watchdog killed it with no reason.
+    // Its own log does say: a long refusal ends the turn now, with the provider's words.
+    let gaveUp = false
+    const stopLog = watchGooseLog(Date.now(), row?.id, (problem) => {
+      if (failure) return
+      failure = { name: "ProviderRefused", message: problem }
+      this.#emit({ type: "session.error", sessionID: sid, message: problem })
+      gaveUp = true
+      child.kill("SIGTERM")
+    })
     let buf = ""
     const calls = new Map<string, { messageID: string; part: Part & { kind: "tool" } }>()
     const onAbort = () => {
@@ -241,6 +253,7 @@ export class GooseAdapter implements HarnessAdapter {
         })
         child.on("error", reject)
         child.on("close", (code) => {
+          if (gaveUp) return resolve()
           if (this.#aborting.has(native) || opts?.signal?.aborted) return reject(new TurnAbortedError())
           if (buf.trim()) consume(`${buf}\n`)
           if (code !== 0 && !failure) failure = { name: "GooseError", message: stderr.trim().slice(-500) || `goose exited ${code}` }
@@ -248,6 +261,7 @@ export class GooseAdapter implements HarnessAdapter {
         })
       })
     } finally {
+      stopLog()
       if (timer) clearTimeout(timer)
       opts?.signal?.removeEventListener("abort", onAbort)
       this.#running.delete(native)
@@ -379,6 +393,78 @@ function realDir(dir: string): string {
   } catch {
     return path.resolve(dir)
   }
+}
+
+/** where goose writes each CLI run's log, one folder per day */
+const GOOSE_LOG_DIR = process.env.JEP_GOOSE_LOG_DIR ?? path.join(os.homedir(), ".local", "state", "goose", "logs", "cli")
+/** a refusal goose would wait longer than this to retry is the turn's end, not a pause */
+const GIVE_UP_AFTER_S = 120
+
+/** Watch the log of the goose run started at `since` for a provider refusal goose would sit out
+ *  for long (a usage cap, a long rate limit). `conversation` is goose's own session id, when the
+ *  session already exists, so a parallel run's log is never read as this one's. */
+export function watchGooseLog(since: number, conversation: string | undefined, onProblem: (message: string) => void): () => void {
+  const read = new Map<string, number>()
+  let done = false
+  const scan = async () => {
+    if (done) return
+    const day = (t: number) => new Date(t).toISOString().slice(0, 10)
+    for (const dir of new Set([day(since), day(Date.now())]).values()) {
+      const folder = path.join(GOOSE_LOG_DIR, dir)
+      let names: string[] = []
+      try {
+        names = await readdir(folder)
+      } catch {
+        continue
+      }
+      for (const name of names) {
+        const file = path.join(folder, name)
+        let size = 0
+        try {
+          const st = statSync(file)
+          if (st.mtimeMs < since - 2_000) continue
+          size = st.size
+        } catch {
+          continue
+        }
+        const from = read.get(file) ?? 0
+        if (size <= from) continue
+        read.set(file, size)
+        let text = ""
+        try {
+          text = (await readFile(file, "utf8")).slice(from)
+        } catch {
+          continue
+        }
+        for (const line of text.split("\n")) {
+          if (!line.includes("RateLimitExceeded") && !line.includes("Provider request failed")) continue
+          if (conversation && !line.includes(`"gen_ai.conversation.id":"${conversation}"`)) continue
+          const problem = gooseRefusal(line)
+          if (problem) {
+            done = true
+            onProblem(problem)
+            return
+          }
+        }
+      }
+    }
+  }
+  const timer = setInterval(() => void scan(), 3_000)
+  return () => {
+    done = true
+    clearInterval(timer)
+  }
+}
+
+/** a log line goose writes when it will sit out a refusal, as words for the person, or null */
+export function gooseRefusal(line: string): string | null {
+  // the log holds JSON, so the quotes around details are escaped: details: \"...\"
+  const m = line.match(/RateLimitExceeded \{ details: \\"(.*?)\\", retry_delay: Some\((\d+)s\)/)
+  if (!m) return null
+  const seconds = Number(m[2])
+  if (!(seconds > GIVE_UP_AFTER_S)) return null
+  const minutes = Math.round(seconds / 60)
+  return `The model's provider refused: ${m[1]}. goose would wait ${minutes} min before trying again, so this turn stopped. Pick another model, or try later.`
 }
 
 function run(args: string[], timeout: number): Promise<string> {

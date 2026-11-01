@@ -55,6 +55,8 @@ await chmod(bin, 0o755)
 await writeFile(path.join(home, "config.yaml"), "GOOSE_PROVIDER: openrouter\nGOOSE_MODEL: m1\n")
 process.env.JEP_GOOSE_BIN = bin
 process.env.JEP_GOOSE_CONFIG = path.join(home, "config.yaml")
+const logDir = path.join(home, "logs")
+process.env.JEP_GOOSE_LOG_DIR = logDir
 
 const { startGooseAdapter } = await import("../src/harnesses/goose.ts")
 
@@ -143,4 +145,38 @@ test("messages stamped in the same second keep the record's order", async () => 
   assert.deepEqual(msgs.map((m) => m.role), ["user", "assistant", "assistant"])
   assert.ok(times[0]! < times[1]! && times[1]! < times[2]!, `strictly increasing: ${times}`)
   assert.equal(times[0], 1767225601000)
+})
+
+
+// what goose 1.57 writes when a provider refuses with Retry-After: the JSON escapes the quotes
+const refusal = (conversation: string, seconds: number) =>
+  `{"level":"WARN","fields":{"message":"Request failed, retrying (1/3): RateLimitExceeded { details: \\"Go usage limit exceeded\\", retry_delay: Some(${seconds}s) }"},"span":{"gen_ai.conversation.id":"${conversation}"}}`
+
+test("a refusal goose would sit out for an hour reads as words; a short one does not", async () => {
+  const { gooseRefusal } = await import("../src/harnesses/goose.ts")
+  assert.match(gooseRefusal(refusal("c1", 3600)) ?? "", /Go usage limit exceeded.*60 min/)
+  assert.equal(gooseRefusal(refusal("c1", 5)), null, "a few seconds is goose's to retry")
+  assert.equal(gooseRefusal('{"fields":{"message":"RateLimitExceeded { details: \\"x\\", retry_delay: None }"}}'), null)
+})
+
+test("the log watcher reports this run's refusal and ignores another conversation's", async () => {
+  const { watchGooseLog } = await import("../src/harnesses/goose.ts")
+  const { mkdir, appendFile } = await import("node:fs/promises")
+  const since = Date.now()
+  const dir = path.join(logDir, new Date(since).toISOString().slice(0, 10))
+  await mkdir(dir, { recursive: true })
+  const file = path.join(dir, "run.log")
+  const seen: string[] = []
+  const stop = watchGooseLog(since, "mine", (m) => seen.push(m))
+  try {
+    await appendFile(file, refusal("theirs", 3600) + "\n")
+    await new Promise((r) => setTimeout(r, 3_500))
+    assert.equal(seen.length, 0, "another run's refusal is not this turn's")
+    await appendFile(file, refusal("mine", 3600) + "\n")
+    await new Promise((r) => setTimeout(r, 3_500))
+    assert.equal(seen.length, 1)
+    assert.match(seen[0]!, /usage limit/)
+  } finally {
+    stop()
+  }
 })
