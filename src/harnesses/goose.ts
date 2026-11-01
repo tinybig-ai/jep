@@ -123,7 +123,7 @@ export class GooseAdapter implements HarnessAdapter {
     for (const row of rows) {
       const native = row.name!.slice(NAME_PREFIX.length)
       const createdAt = Date.parse(row.created_at ?? "") || Date.now()
-      const first = this.#titles.get(native) ?? this.#pending.get(native)?.title ?? clip(row.last_message_snippet ?? "")
+      const first = this.#titles.get(native) ?? this.#pending.get(native)?.title ?? clip(transcriptText(row.last_message_snippet ?? ""))
       out.push({
         id: toInternalId(native),
         title: first,

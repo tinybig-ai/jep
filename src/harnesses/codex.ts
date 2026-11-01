@@ -10,7 +10,7 @@ import type { HarnessAdapter, HarnessSettingSpec, ModelRef, ModelCaps } from "..
 import type { DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionSummary, SkillDirs } from "../core/types.ts"
 import { hasMcp, type ConversationMcp } from "../core/mcp.ts"
 import { MCP_SERVER_PATH, TOOL_NAMES, TOOLS_SERVER, toolsMode, wantsMcp } from "../core/tools.ts"
-import { splitQuoteText, withQuoteText, stripInjectedContext, contextFor } from "../core/transcript.ts"
+import { splitQuoteText, withQuoteText, stripInjectedContext, contextFor, transcriptText } from "../core/transcript.ts"
 
 /**
  * Codex CLI as a harness.
@@ -236,7 +236,7 @@ export class CodexAdapter implements HarnessAdapter {
           // falls back to as well.
           // preview is the raw opening prompt and can be a whole paragraph;
           // a list row has no room for that
-          title: clip(str(r.name) || str(r.preview)),
+          title: clip(str(r.name) || transcriptText(str(r.preview))),
           workspace: this.workspace,
           createdAt: Number(r.created_at_ms ?? 0) || updated,
           updatedAt: updated,

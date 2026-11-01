@@ -12,7 +12,7 @@ import type { AskRequest, DomainEvent, FileDiff, Message, Part, ProjectSummary, 
 import { hasMcp, type ConversationMcp } from "../core/mcp.ts"
 import { MCP_SERVER_PATH, TOOL_NAMES, TOOLS_SERVER, toolsMode, wantsMcp } from "../core/tools.ts"
 import { resolveAgent } from "../core/agents.ts"
-import { quoteBlock, readQuoteBlock, withAttachments, contextFor } from "../core/transcript.ts"
+import { quoteBlock, readQuoteBlock, withAttachments, contextFor, transcriptText } from "../core/transcript.ts"
 import { questionAsk, answersFor, type GroupedQuestions } from "../core/questions.ts"
 import { detach } from "../core/detach.ts"
 
@@ -185,7 +185,8 @@ async function parseMeta(file: string): Promise<TranscriptMeta | null> {
       meta = { id: String(d.sessionId), cwd: String(d.cwd), title: "", createdAt: ts || Date.now(), updatedAt: ts || Date.now(), file }
     }
     if (!firstUser && d.type === "user" && !d.isSidechain && !d.isMeta && !isLocalCommandWrapper(d.message?.content)) {
-      firstUser = clip(contentText(d.message?.content))
+      // what the person typed: jep's context header and attachment list are not the title
+      firstUser = clip(transcriptText(contentText(d.message?.content)))
     }
   }
   if (meta) {
