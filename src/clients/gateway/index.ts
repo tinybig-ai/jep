@@ -1599,7 +1599,12 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const gone = await adapter.deleteSession(id).catch(() => false)
         if (gone) {
           harnessSettings.delete(id)
-          if (conversationMcp.delete(id)) await saveConversationMcp(deps.dataHome, conversationMcp)
+          // under the id the client knows, or still under the placeholder a new conversation
+          // started with: either way the definition (and any token in it) goes with it
+          let mcpGone = false
+          for (const key of [...conversationMcp.keys()])
+            if (key === id || adapter.canonicalId?.(key) === id) mcpGone = conversationMcp.delete(key) || mcpGone
+          if (mcpGone) await saveConversationMcp(deps.dataHome, conversationMcp)
           asksBySession.delete(id)
           for (const r of askLedger.get(id) ?? []) askRecords.delete(r.ask.id)
           askLedger.delete(id)

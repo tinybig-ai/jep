@@ -81,3 +81,29 @@ test("a bad definition is refused with the reason", async (t) => {
   assert.equal(r.status, 400)
   assert.match(((await r.json()) as { error: string }).error, /jep's own/)
 })
+
+test("deleting by the real id also removes a definition still kept under the placeholder", async (t) => {
+  const base = fakeAdapter()
+  // a harness whose new conversations start as "s1" and are later known as "real-1"
+  const real = { id: "real-1", title: "Test", workspace: "/tmp/ws", createdAt: 1, updatedAt: 2 }
+  const adapter = {
+    ...base,
+    takesMcp: true,
+    canonicalId: (id: string) => (id === "s1" ? "real-1" : id),
+    async getSession(id: string) { return id === "real-1" || id === "s1" ? real : null },
+    async listSessions() { return [real] },
+    async deleteSession() { return true },
+  }
+  const dataHome = mkdtempSync(join(tmpdir(), "gw-mcp-"))
+  const gw = await startGateway({ adapters: () => [{ name: "fake-ws", adapter }], dataHome, port: 0, pairCode: "TESTCODE", pairLimit: 100 })
+  t.after(() => gw.close())
+  const url = `http://127.0.0.1:${gw.port}`
+  const token = await pair(url, "TESTCODE")
+  const call = (path: string, body: unknown) =>
+    fetch(`${url}${path}`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body: JSON.stringify(body) })
+  assert.equal((await call("/new", { workspace: "fake-ws", mcp: def })).status, 200)
+  const file = join(dataHome, "gateway-mcp.json")
+  assert.match(readFileSync(file, "utf8"), /"s1"/)
+  assert.equal((await call("/delete", { id: "real-1" })).status, 200)
+  assert.doesNotMatch(readFileSync(file, "utf8"), /factormost-tools/, "the token went with the conversation")
+})
