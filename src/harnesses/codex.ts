@@ -8,6 +8,7 @@ import os from "node:os"
 import path from "node:path"
 import type { HarnessAdapter, HarnessSettingSpec, ModelRef, ModelCaps } from "../core/ports.ts"
 import type { DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionSummary, SkillDirs } from "../core/types.ts"
+import { hasMcp, type ConversationMcp } from "../core/mcp.ts"
 import { MCP_SERVER_PATH, TOOL_NAMES, TOOLS_SERVER, toolsMode, wantsMcp } from "../core/tools.ts"
 import { splitQuoteText, withQuoteText, stripInjectedContext, contextFor } from "../core/transcript.ts"
 
@@ -61,6 +62,8 @@ interface SessionMeta {
 }
 
 export class CodexAdapter implements HarnessAdapter {
+  // every turn can be given servers of its own (-c mcp_servers.<name>.*)
+  readonly takesMcp = true
   readonly id = "codex"
   readonly workspace: string
   readonly endpoint: string
@@ -471,6 +474,7 @@ export class CodexAdapter implements HarnessAdapter {
       agent?: string
       quote?: string
       harnessSettings?: Record<string, boolean>
+      mcp?: ConversationMcp
       brief?: boolean
     },
   ): Promise<Message> {
@@ -488,6 +492,15 @@ export class CodexAdapter implements HarnessAdapter {
         // exec has no one to approve a call, and an unapproved MCP call just fails
         ...TOOL_NAMES.flatMap((n) => ["-c", `mcp_servers.${TOOLS_SERVER}.tools.${n}.approval_mode="approve"`]),
       )
+    // a client's servers for this conversation, the same way: dotted keys add one server
+    // each and leave the person's own alone; the client chose them, so they need no approval
+    if (hasMcp(opts?.mcp))
+      for (const [name, def] of Object.entries(opts.mcp)) {
+        const key = `mcp_servers.${name}`
+        args.push("-c", `${key}.command=${JSON.stringify(def.command)}`, "-c", `${key}.args=${JSON.stringify(def.args ?? [])}`)
+        for (const [k, v] of Object.entries(def.env ?? {})) args.push("-c", `${key}.env.${k}=${JSON.stringify(v)}`)
+        args.push("-c", `${key}.default_tools_approval_mode="approve"`)
+      }
     if (opts?.model?.modelID) args.push("-m", opts.model.modelID)
     for (const f of opts?.filePaths ?? []) args.push("-i", f)
     // resume keeps the thread; a pending session starts a fresh one

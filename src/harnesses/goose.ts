@@ -7,6 +7,7 @@ import path from "node:path"
 import { randomUUID } from "node:crypto"
 import type { HarnessAdapter, ModelRef } from "../core/ports.ts"
 import type { DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionSummary } from "../core/types.ts"
+import { hasMcp, type ConversationMcp } from "../core/mcp.ts"
 import { MCP_SERVER_PATH, TOOLS_SERVER, toolsMode, wantsMcp } from "../core/tools.ts"
 import { splitQuoteText, transcriptText, withQuoteText, stripInjectedContext, contextFor } from "../core/transcript.ts"
 import { TurnAbortedError } from "../core/types.ts"
@@ -43,6 +44,8 @@ interface GooseListed {
 }
 
 export class GooseAdapter implements HarnessAdapter {
+  // every turn can be given servers of its own (--with-extension)
+  readonly takesMcp = true
   readonly id = "goose"
   readonly workspace: string
   readonly endpoint: string
@@ -185,7 +188,7 @@ export class GooseAdapter implements HarnessAdapter {
   async prompt(
     sessionID: string,
     text: string,
-    opts?: { timeoutMs?: number; signal?: AbortSignal; model?: ModelRef; filePaths?: string[]; agent?: string; quote?: string; brief?: boolean },
+    opts?: { timeoutMs?: number; signal?: AbortSignal; model?: ModelRef; filePaths?: string[]; agent?: string; quote?: string; brief?: boolean; mcp?: ConversationMcp },
   ): Promise<Message> {
     const native = toNativeId(sessionID)
     let body = withQuoteText(text, opts?.quote)
@@ -197,6 +200,13 @@ export class GooseAdapter implements HarnessAdapter {
     const args = ["run", "--name", gooseName(native), ...(exists ? ["--resume"] : [])]
     // jep's own tools, as one more extension beside the ones goose already has
     if (wantsMcp(toolsMode())) args.push("--with-extension", `${TOOLS_SERVER}:${process.execPath} ${MCP_SERVER_PATH} --session ${sessionID}`)
+    // a client's servers for this conversation: one more extension each. Values never hold
+    // spaces (core/mcp.ts refuses them), so goose's own splitting cannot break them apart.
+    if (hasMcp(opts?.mcp))
+      for (const [name, def] of Object.entries(opts.mcp)) {
+        const env = Object.entries(def.env ?? {}).map(([k, v]) => `${k}=${v} `).join("")
+        args.push("--with-extension", `${name}:${env}${[def.command, ...(def.args ?? [])].join(" ")}`)
+      }
     args.push("--output-format", "stream-json", "-t", body)
     if (opts?.model?.providerID && opts.model.modelID) args.push("--provider", opts.model.providerID, "--model", opts.model.modelID)
     const child = spawn(GOOSE_BIN, args, {

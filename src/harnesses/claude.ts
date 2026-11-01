@@ -9,6 +9,7 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import type { AgentRef, HarnessAdapter, HarnessSettingSpec, ModelRef, ModelCaps } from "../core/ports.ts"
 import type { AskRequest, DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionHold, SessionSummary, SkillDirs } from "../core/types.ts"
+import { hasMcp, type ConversationMcp } from "../core/mcp.ts"
 import { MCP_SERVER_PATH, TOOL_NAMES, TOOLS_SERVER, toolsMode, wantsMcp } from "../core/tools.ts"
 import { resolveAgent } from "../core/agents.ts"
 import { quoteBlock, readQuoteBlock, withAttachments, contextFor } from "../core/transcript.ts"
@@ -204,6 +205,8 @@ async function parseMeta(file: string): Promise<TranscriptMeta | null> {
 const META_CACHE = new Map<string, { size: number; mtimeMs: number; meta: Promise<TranscriptMeta | null> }>()
 
 export class ClaudeAdapter implements HarnessAdapter {
+  // every turn can be given servers of its own (--mcp-config, added beside the person's)
+  readonly takesMcp = true
   readonly id = "claude"
   readonly workspace: string
   readonly endpoint: string
@@ -511,6 +514,7 @@ export class ClaudeAdapter implements HarnessAdapter {
       filePaths?: string[]
       agent?: string
       harnessSettings?: Record<string, boolean>
+      mcp?: ConversationMcp
       quote?: string
       brief?: boolean
     },
@@ -562,9 +566,20 @@ export class ClaudeAdapter implements HarnessAdapter {
     // jep's own tools, added beside whatever servers the person has configured
     // (no --strict-mcp-config) and allowed up front: they are jep's, not a stranger's
     const tools = wantsMcp(toolsMode())
-    if (tools) servers[TOOLS_SERVER] = { command: process.execPath, args: [MCP_SERVER_PATH, "--session", sessionID] }
+    const allowed: string[] = []
+    if (tools) {
+      servers[TOOLS_SERVER] = { command: process.execPath, args: [MCP_SERVER_PATH, "--session", sessionID] }
+      allowed.push(...TOOL_NAMES.map((n) => `mcp__${TOOLS_SERVER}__${n}`))
+    }
+    // the servers a client defined for this conversation: the client put them there on
+    // purpose, so their tools are allowed too ("mcp__name" allows every tool of a server)
+    if (hasMcp(opts?.mcp))
+      for (const [name, def] of Object.entries(opts.mcp)) {
+        servers[name] = { command: def.command, args: def.args ?? [], ...(def.env ? { env: def.env } : {}) }
+        allowed.push(`mcp__${name}`)
+      }
     if (Object.keys(servers).length) args.push("--mcp-config", JSON.stringify({ mcpServers: servers }))
-    if (tools) args.push("--allowed-tools", TOOL_NAMES.map((n) => `mcp__${TOOLS_SERVER}__${n}`).join(","))
+    if (allowed.length) args.push("--allowed-tools", allowed.join(","))
 
     // what this turn asked for, alias or not, so its context window can be
     // found again under the name a client knows it by

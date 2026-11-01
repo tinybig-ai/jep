@@ -37,3 +37,14 @@ test("skipping permissions keeps both the bypass flag and the ask host", async (
   assert.ok(args.includes("--dangerously-skip-permissions"))
   assert.ok(args.includes("--permission-prompt-tool"))
 })
+
+test("a conversation's own MCP servers are added beside the ask host, and their tools allowed", async (t) => {
+  const a = new ClaudeAdapter(home, { dataHome: home })
+  t.after(() => a.close())
+  await a.prompt(`claude://${SID}`, "hi", { mcp: { mm: { command: "factormost-tools", env: { MM_TOKEN: "tok" } } } })
+  const args = (await readFile(argsSeen, "utf8")).trim().split("\n")
+  const config = JSON.parse(args[args.indexOf("--mcp-config") + 1]!)
+  assert.deepEqual(Object.keys(config.mcpServers).sort(), ["jep", "mm"])
+  assert.deepEqual(config.mcpServers.mm, { command: "factormost-tools", args: [], env: { MM_TOKEN: "tok" } })
+  assert.match(args[args.indexOf("--allowed-tools") + 1]!, /(^|,)mcp__mm(,|$)/)
+})

@@ -129,3 +129,23 @@ test("jep-watch --help prints usage and starts nothing", async () => {
   })
   assert.match(out, /^usage: jep-watch/)
 })
+
+test("a conversation's own MCP servers ride along on codex as added servers, approved", async (t) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "jep-codex-conv-"))
+  const TID = "019a0000-bbbb-7ccc-8ddd-00000000000a"
+  const argsSeen = path.join(home, "args.txt")
+  const bin = path.join(home, "codex")
+  await writeFile(bin, `#!/bin/sh\nprintf '%s\\n' "$@" > "${argsSeen}"\necho '{"type":"thread.started","thread_id":"${TID}"}'\necho '{"type":"turn.completed","usage":{}}'\n`)
+  await chmod(bin, 0o755)
+  process.env.CODEX_BIN = bin
+  const { CodexAdapter } = await import(`../src/harnesses/codex.ts?conv=${Date.now()}`)
+  const a = new CodexAdapter(home)
+  t.after(() => a.close?.())
+  await a.prompt(`codex://${TID}`, "hi", { mcp: { mm: { command: "factormost-tools", args: ["--character", "ada"], env: { MM_TOKEN: "tok" } } } })
+  const args = (await readFile(argsSeen, "utf8")).split("\n")
+  assert.ok(args.includes('mcp_servers.mm.command="factormost-tools"'))
+  assert.ok(args.includes('mcp_servers.mm.args=["--character","ada"]'))
+  assert.ok(args.includes('mcp_servers.mm.env.MM_TOKEN="tok"'))
+  assert.ok(args.includes('mcp_servers.mm.default_tools_approval_mode="approve"'))
+  assert.ok(args.lastIndexOf("-c") < args.indexOf("resume"), "-c belongs to exec, before resume")
+})
