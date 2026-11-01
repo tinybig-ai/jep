@@ -1,3 +1,4 @@
+import type { ConversationMcp } from "./mcp.ts"
 import { readNoticeMarker } from "./transcript.ts"
 import type { HarnessAdapter, TurnHost, TurnListener } from "./ports.ts"
 import type { DomainEvent, HarnessError, Message } from "./types.ts"
@@ -106,6 +107,8 @@ export interface TurnEnv {
   find(id: string): Promise<HarnessAdapter | null>
   /** the conversation's per-session settings (also carries them to a new id) */
   settingsOf(adapter: HarnessAdapter, id: string): Record<string, boolean> | undefined
+  /** the MCP servers a client defined for the conversation (also carried to a new id) */
+  mcpOf?(adapter: HarnessAdapter, id: string): ConversationMcp | undefined
   /** permission asks open on a conversation: a turn parked on one waits on a person */
   openAsks(id: string): number
   /** the record changed: drop any snapshot of it */
@@ -719,6 +722,10 @@ export class TurnEngine implements TurnHost {
         ...(next.model ? { model: next.model } : {}),
         ...(next.agent ? { agent: next.agent } : {}),
         harnessSettings: this.#env.settingsOf(adapter, adapter.canonicalId?.(id) ?? id) ?? {},
+        ...(() => {
+          const mcp = this.#env.mcpOf?.(adapter, adapter.canonicalId?.(id) ?? id)
+          return mcp && Object.keys(mcp).length ? { mcp } : {}
+        })(),
         ...(next.quote ? { quote: next.quote } : {}),
         signal: ac.signal,
       })

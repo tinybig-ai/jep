@@ -6,13 +6,14 @@
 // which stays in step with this file.
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
-import { mkdir, open, readdir, readFile, realpath, stat, unlink, writeFile } from "node:fs/promises"
+import { chmod, mkdir, open, readdir, readFile, realpath, stat, unlink, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path"
 import type { HarnessAdapter, HarnessMark, HarnessSettingSpec, SessionImport, Terminal, TurnHost } from "../../core/ports.ts"
 import { newPairCode, type PairingAdmin } from "../../core/pairing.ts"
 import { describeAsk } from "../../core/asks.ts"
+import { hasMcp, parseConversationMcp, type ConversationMcp } from "../../core/mcp.ts"
 import { pushFor, UnregisteredToken, type PushNotifier } from "../../core/push.ts"
 import { LIVENESS, type LivenessConfig } from "../../core/liveness.ts"
 import { isRepo, repoStatus } from "../../core/git.ts"
@@ -109,6 +110,9 @@ const PINNED_FILE = "gateway-pinned.json"
 const SEEN_FILE = "gateway-seen.json"
 const PUSH_FILE = "gateway-push.json"
 const HARNESS_SETTINGS_FILE = "gateway-harness-settings.json"
+// MCP servers clients defined per conversation. They can carry tokens, so the file is
+// readable by this user only.
+const MCP_FILE = "gateway-mcp.json"
 const LOOPS_FILE = "gateway-loops.json"
 // asks remembered per conversation for /history; pending ones are never dropped
 const ASK_LEDGER_MAX = 50
@@ -350,6 +354,24 @@ const saveAgents = async (dataHome: string, agents: Map<string, string>): Promis
 }
 
 type SessionHarnessSettings = Record<string, boolean>
+
+async function loadConversationMcp(dataHome: string): Promise<Map<string, ConversationMcp>> {
+  try {
+    const raw = JSON.parse(await readFile(join(dataHome, MCP_FILE), "utf8")) as Record<string, unknown>
+    return new Map(Object.entries(raw).flatMap(([id, value]) => {
+      const parsed = parseConversationMcp(value)
+      return parsed.ok && hasMcp(parsed.value) ? [[id, parsed.value]] : []
+    }))
+  } catch {
+    return new Map()
+  }
+}
+
+async function saveConversationMcp(dataHome: string, all: Map<string, ConversationMcp>): Promise<void> {
+  const file = join(dataHome, MCP_FILE)
+  await writeFile(file, JSON.stringify(Object.fromEntries(all), null, 2), { mode: 0o600 })
+  await chmod(file, 0o600)
+}
 
 async function loadHarnessSettings(dataHome: string): Promise<Map<string, SessionHarnessSettings>> {
   try {
@@ -643,6 +665,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   const models = await loadModels(deps.dataHome)
   const agents = await loadAgents(deps.dataHome)
   const harnessSettings = await loadHarnessSettings(deps.dataHome)
+  const conversationMcp = await loadConversationMcp(deps.dataHome)
   const loops = await loadLoops(deps.dataHome)
   // A loop the previous daemon was driving has no driver now. Left "running"
   // it reads as alive forever and blocks a restart with 409; say what happened
@@ -672,7 +695,20 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       return values
     }
     return undefined
+  }  // the same move to the real id as the settings above, for a client's MCP servers
+  function mcpOf(adapter: HarnessAdapter, id: string): ConversationMcp | undefined {
+    const own = conversationMcp.get(id)
+    if (own || !adapter.canonicalId) return own
+    for (const [key, value] of conversationMcp) {
+      if (key === id || adapter.canonicalId(key) !== id) continue
+      conversationMcp.set(id, value)
+      conversationMcp.delete(key)
+      detach("save conversation mcp", saveConversationMcp(deps.dataHome, conversationMcp))
+      return value
+    }
+    return undefined
   }
+
   const terminalTokens = await loadTerminalTokens(deps.dataHome)
   const pushTokens = await loadPushTokens(deps.dataHome)
   // Whether this gateway offers a shell at all — an operator decision on the
@@ -813,6 +849,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       adapterOf: (id) => sessionAdapters.get(id),
       find: (id) => ensureListed(id),
       settingsOf,
+      mcpOf,
       openAsks: (id) => asksBySession.get(id)?.size ?? 0,
       recordChanged: (id) => void msgCache.delete(id),
       loopChanged: (all, sessionID) => {
@@ -1316,11 +1353,22 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         if (Object.keys(requestedSettings).some((key) => !settingSpecs.some((spec) => spec.id === key))) {
           return json(res, 400, { error: "unknown harness setting" })
         }
+        // MCP servers the client wants this conversation to have on every turn. A harness that
+        // cannot take them per conversation is told so: dropping them silently would leave the
+        // client's agent without the tools it was promised.
+        const mcp = parseConversationMcp(b.mcp)
+        if (!mcp.ok) return json(res, 400, { error: mcp.error })
+        if (hasMcp(mcp.value) && picked.adapter.takesMcp !== true)
+          return json(res, 400, { error: `${picked.adapter.id} cannot take MCP servers for one conversation` })
         const s = await picked.adapter.createSession(title || undefined)
         sessionAdapters.set(s.id, picked.adapter)
         if (settingSpecs.length) {
           harnessSettings.set(s.id, valuesForSettings(settingSpecs, requestedSettings))
           await saveHarnessSettings(deps.dataHome, harnessSettings)
+        }
+        if (hasMcp(mcp.value)) {
+          conversationMcp.set(s.id, mcp.value)
+          await saveConversationMcp(deps.dataHome, conversationMcp)
         }
         return json(res, 200, { session: { ...s, adapter: picked.name, harness: picked.adapter.id, pod: isPod(picked.adapter.workspace, deps.dataHome) } })
       }
@@ -1551,6 +1599,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const gone = await adapter.deleteSession(id).catch(() => false)
         if (gone) {
           harnessSettings.delete(id)
+          if (conversationMcp.delete(id)) await saveConversationMcp(deps.dataHome, conversationMcp)
           asksBySession.delete(id)
           for (const r of askLedger.get(id) ?? []) askRecords.delete(r.ask.id)
           askLedger.delete(id)
