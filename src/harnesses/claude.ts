@@ -926,6 +926,12 @@ export class ClaudeAdapter implements HarnessAdapter {
 
   // one question from the MCP server: turn it into an ask the frontend can
   // render, and hold the socket open until somebody taps an answer
+  /** a session id as clients know it now: a fresh conversation's placeholder becomes its real id */
+  #currentId(id: string): string {
+    const real = this.#alias.get(toNativeId(id))
+    return real ? toInternalId(real) : id
+  }
+
   #onAsk(line: string, conn: net.Socket): void {
     let msg: { id?: string; session?: string; tool?: string; input?: Record<string, unknown>; toolUseID?: string }
     try {
@@ -934,7 +940,13 @@ export class ClaudeAdapter implements HarnessAdapter {
       console.error(`[claude] unreadable ask: ${line.slice(0, 200)}`)
       return
     }
-    const askID = `ask${++this.#askSeq}`
+    // A new conversation starts under a placeholder id, and the ask server was told that one.
+    // Claude names the real id at once, and every client shows the conversation under it, so an
+    // ask filed under the placeholder was a card nobody could see: the turn waited for an answer
+    // forever. File it under the name the conversation has now.
+    const session = this.#currentId(msg.session ?? "")
+    // unique across restarts and conversations, so a stale card can never be mistaken for this one
+    const askID = `ask-${Date.now().toString(36)}-${++this.#askSeq}`
     const input = msg.input ?? {}
     // the command for Bash, the path for a file tool, the whole input when it
     // is something else — whatever actually says what is about to happen
@@ -945,7 +957,7 @@ export class ClaudeAdapter implements HarnessAdapter {
           ? input.file_path
           : JSON.stringify(input)
     const waiter = {
-      sessionID: msg.session ?? "",
+      sessionID: session,
       answer: (decision: { decision: "allow" | "deny"; message?: string; updatedInput?: Record<string, unknown> }) => {
         try {
           conn.write(`${JSON.stringify({ id: msg.id, ...decision })}\n`)
@@ -959,7 +971,7 @@ export class ClaudeAdapter implements HarnessAdapter {
     // (its permission check is what calls the tool). It is not a yes/no: its
     // input carries the questions, and its tool reads the choices back out of
     // `updatedInput.answers` (see core/questions.ts and claude-ask-mcp.mjs).
-    const question = questionAsk(askID, msg.session ?? "", input, { callID: msg.toolUseID, at: Date.now() })
+    const question = questionAsk(askID, session, input, { callID: msg.toolUseID, at: Date.now() })
     if (question) {
       this.#questionAsks.set(askID, { input, grouped: question.grouped })
       this.#emit({ type: "ask.requested", sessionID: question.ask.sessionID, ask: question.ask })
@@ -967,7 +979,7 @@ export class ClaudeAdapter implements HarnessAdapter {
     }
     const ask: AskRequest = {
       id: askID,
-      sessionID: msg.session ?? "",
+      sessionID: session,
       title: `${msg.tool ?? "a tool"} wants to run`,
       ...(detail ? { detail } : {}),
       options: [
