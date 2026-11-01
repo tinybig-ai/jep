@@ -88,6 +88,9 @@ export interface HarnessMark {
 
 export interface HarnessAdapter {
   readonly id: string
+  /** true when the harness reports the end of each step (opencode's step-finish), so a steer waits
+   *  for the step; otherwise it folds in as soon as a tool call finishes */
+  readonly reportsSteps?: boolean
   readonly workspace: string
   readonly endpoint: string
 

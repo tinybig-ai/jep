@@ -461,7 +461,17 @@ export class TurnEngine implements TurnHost {
     // steer: a prompt waiting behind this turn is folded in at the next tool
     // boundary. End the turn cleanly (so the running prompt gets the answer
     // from the transcript) and the runner starts the waiting prompt.
-    if (evt.type === "part.updated" && evt.part?.kind === "other" && evt.part.nativeType === "step-finish") {
+    // The boundary is the harness's own step end where it reports one (opencode's step-finish,
+    // after every tool of the step is done); for the others, any tool call that has finished.
+    // Matching opencode's event alone meant a steer never folded in on claude, codex, goose or pi:
+    // it waited for the whole turn to end.
+    const stepEnd = evt.type === "part.updated" && evt.part?.kind === "other" && evt.part.nativeType === "step-finish"
+    const toolDone =
+      evt.type === "part.updated" &&
+      evt.part?.kind === "tool" &&
+      (evt.part.status === "completed" || evt.part.status === "error") &&
+      adapter.reportsSteps !== true
+    if (stepEnd || toolDone) {
       const st = this.turnOf(evt.sessionID)
       // only a prompt that asked to steer interrupts the running turn; one
       // that asked to wait for the end is left alone

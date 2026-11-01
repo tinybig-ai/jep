@@ -330,6 +330,8 @@ const isSkipAll = (rule: PermissionRule): boolean =>
   rule?.permission === "*" && rule?.pattern === "*" && rule?.action === "allow"
 
 export class OpenCodeAdapter implements HarnessAdapter {
+  // a step-finish part ends each step, so a steer waits for the step rather than the first tool
+  readonly reportsSteps = true
   readonly id = "opencode"
   readonly workspace: string
   readonly endpoint: string

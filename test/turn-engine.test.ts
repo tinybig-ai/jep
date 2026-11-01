@@ -159,3 +159,58 @@ test("a notice runs alone and is not the person's to edit, move or force", async
   assert.deepEqual(prompts, ["first", "what I typed", "<!-- jep:notice done -->\nthe wait is over"])
   engine.close()
 })
+
+// A steer folds in at the next boundary: opencode reports step ends, the other harnesses only
+// report tool calls, and for them a finished tool call is the boundary.
+function steerable(reportsSteps: boolean) {
+  const base = fakeAdapter()
+  const prompts: string[] = []
+  const adapter = {
+    ...base,
+    ...(reportsSteps ? { reportsSteps: true } : {}),
+    async prompt(sessionID: string, text: string, opts?: { signal?: AbortSignal }) {
+      prompts.push(text)
+      if (text === "first")
+        await new Promise<void>((_, reject) => opts?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true }))
+      return { id: "m", sessionID, role: "assistant" as const, time: 1, parts: [{ kind: "text" as const, text: `echo: ${text}` }] }
+    },
+  }
+  const env: TurnEnv = {
+    adapterOf: () => adapter,
+    find: async () => adapter,
+    settingsOf: () => undefined,
+    openAsks: () => 0,
+    recordChanged: () => {},
+    loopChanged: () => {},
+  }
+  const engine = new TurnEngine(env, { liveness: { ...LIVENESS, settleMs: 20 }, loops: new Map() })
+  return { engine, prompts, adapter }
+}
+
+const toolDone = { type: "part.updated" as const, sessionID: "s1", messageID: "m1", partID: "t1", partType: "tool", part: { kind: "tool" as const, id: "t1", name: "bash", input: {}, output: "ok", status: "completed" as const } }
+const stepEnd = { type: "part.updated" as const, sessionID: "s1", messageID: "m1", partID: "f1", partType: "other", part: { kind: "other" as const, nativeType: "step-finish" } }
+
+test("a steer folds in when a tool call finishes, on a harness that reports no steps", async () => {
+  const { engine, prompts, adapter } = steerable(false)
+  engine.submit("s1", pending("first").turn)
+  await new Promise((r) => setTimeout(r, 30))
+  engine.submit("s1", pending("second", { steer: true, clientID: "c" }).turn)
+  engine.onEvent(toolDone as never, adapter as never)
+  await new Promise((r) => setTimeout(r, 200))
+  assert.ok(prompts.some((p) => p.includes("second")), `second ran: ${JSON.stringify(prompts)}`)
+  engine.close()
+})
+
+test("on a harness that reports steps, a finished tool waits for the step to end", async () => {
+  const { engine, prompts, adapter } = steerable(true)
+  engine.submit("s1", pending("first").turn)
+  await new Promise((r) => setTimeout(r, 30))
+  engine.submit("s1", pending("second", { steer: true, clientID: "c" }).turn)
+  engine.onEvent(toolDone as never, adapter as never)
+  await new Promise((r) => setTimeout(r, 150))
+  assert.ok(!prompts.some((p) => p.includes("second")), "not before the step ends")
+  engine.onEvent(stepEnd as never, adapter as never)
+  await new Promise((r) => setTimeout(r, 200))
+  assert.ok(prompts.some((p) => p.includes("second")), `second ran: ${JSON.stringify(prompts)}`)
+  engine.close()
+})
