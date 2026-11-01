@@ -1,3 +1,4 @@
+import type { ConversationMcp } from "./mcp.ts"
 import type {
   AskRequest,
   DomainEvent,
@@ -91,6 +92,9 @@ export interface HarnessAdapter {
   /** true when the harness reports the end of each step (opencode's step-finish), so a steer waits
    *  for the step; otherwise it folds in as soon as a tool call finishes */
   readonly reportsSteps?: boolean
+  /** true when every turn can be given MCP servers of its own (opts.mcp); a client's definition is
+   *  refused for a harness without it, never silently dropped */
+  readonly takesMcp?: boolean
   readonly workspace: string
   readonly endpoint: string
 
@@ -116,6 +120,8 @@ export interface HarnessAdapter {
       agent?: string
       /** boolean settings declared by this harness, persisted per session */
       harnessSettings?: Record<string, boolean>
+      /** MCP servers a client defined for this conversation (core/mcp.ts), added beside the person's own */
+      mcp?: ConversationMcp
       /** the words this message answers. The adapter hands them to its harness
        * in whatever form it takes, and messages() gives them back as a quote
        * part, never as text in the message (see quoteBlock) */
