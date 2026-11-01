@@ -254,11 +254,11 @@
   .menu label small { display: block; color: var(--dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
   .menu .empty { padding: 8px 10px; color: var(--dim); font-size: 13px; }
   .session { position: relative; }
-  /* on hover the age gives its place to a delete button */
-  .session .del { position: absolute; right: 8px; top: 6px; display: none; padding: 4px; line-height: 0; border-radius: 6px; }
-  .session:hover .del { display: block; }
-  .session:hover .age { visibility: hidden; }
-  .session .del:hover { color: var(--accent); }
+  /* a conversation's own menu (right click): the composer menu's look, placed where the click was */
+  .menu.ctx { position: fixed; bottom: auto; left: 0; top: 0; width: auto; min-width: 200px; max-height: none; z-index: 30; padding: 4px; }
+  .menu.ctx hr { border: none; border-top: 1px solid var(--line); margin: 4px 6px; }
+  .menu.ctx button.danger { color: var(--accent); }
+  .session .title input { width: 100%; font: inherit; padding: 1px 4px; border: 1px solid var(--accent); border-radius: 4px; background: var(--bg); color: inherit; }
   dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--bg); color: var(--text); width: min(440px, calc(100vw - 32px)); padding: 20px; }
   dialog::backdrop { background: #0006; }
   dialog h2 { margin: 0 0 14px; font-size: 17px; }
@@ -630,13 +630,21 @@ function harnessMark(h) {
   return svg
 }
 
+// the conversation whose title is being edited in place: a redraw would throw the edit away
+let renaming = null
+
 function renderSessions() {
+  if (renaming) return
   $("sessions").replaceChildren(...sessions.map((s) => {
     const unread = s.id !== current && s.updatedAt > (s.seenAt || 0)
     const a = el("a", "session" + (s.id === current ? " open" : "") + (unread ? " unread" : ""))
     a.href = "#" + encodeURIComponent(s.id)
+    a.dataset.id = s.id
+    a.oncontextmenu = (e) => { e.preventDefault(); sessionMenu(s, e.clientX, e.clientY) }
     const row = el("div", "row")
-    row.append(el("div", "title", s.title || "untitled"), el("div", "age", ago(s.updatedAt)))
+    const title = el("div", "title", s.title || "untitled")
+    title.ondblclick = (e) => { e.preventDefault(); e.stopPropagation(); renameInline(s, title) }
+    row.append(title, el("div", "age", ago(s.updatedAt)))
     const meta = el("div", "meta")
     if (s.pinned) meta.append("📌")
     meta.append(harnessMark(s.harness), s.adapter)
@@ -645,13 +653,109 @@ function renderSessions() {
       dot.title = "Working"
       meta.append(dot)
     }
-    const del = el("button", "icon del")
-    del.title = "Delete conversation"
-    del.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>'
-    del.onclick = (e) => { e.preventDefault(); e.stopPropagation(); remove(s) }
-    a.append(row, meta, del)
+    a.append(row, meta)
     return a
   }))
+}
+
+// Right click on a conversation: what can be done to it without opening it. Every item is a
+// gateway route that already exists; the menu only gathers them where the conversation is.
+function sessionMenu(s, x, y) {
+  closeSessionMenu()
+  const m = el("div", "menu ctx")
+  m.setAttribute("role", "menu")
+  const item = (label, run, cls = "") => {
+    const b = el("button", cls, label)
+    b.type = "button"
+    b.onclick = async () => {
+      closeSessionMenu()
+      try { await run() } catch (err) { fail(err) }
+    }
+    m.append(b)
+  }
+  const reload = () => loadSessions().catch(() => {})
+  item("Open in new tab", () => window.open(`${location.pathname}${location.search}#${encodeURIComponent(s.id)}`, "_blank"))
+  item("Rename…", () => {
+    const title = document.querySelector(`.session[data-id="${CSS.escape(s.id)}"] .title`)
+    if (title) renameInline(s, title)
+  })
+  item(s.pinned ? "Unpin" : "Pin", async () => { await call(s.pinned ? "/unpin" : "/pin", { id: s.id }); reload() })
+  // the open conversation is read by being open, so it gets no read/unread switch
+  if (s.id !== current) {
+    const unread = s.updatedAt > (s.seenAt || 0)
+    item(unread ? "Mark as read" : "Mark as unread", async () => { await call("/seen", unread ? { id: s.id } : { id: s.id, at: 0 }); reload() })
+  }
+  item("Copy ID", () => copyText(s.id))
+  if (s.active) item("Stop", () => call("/stop", { id: s.id }))
+  m.append(el("hr"))
+  item("Archive", async () => {
+    await call("/archive", { id: s.id })
+    sessions = sessions.filter((x) => x.id !== s.id)
+    renderSessions()
+    if (s.id === current) location.hash = ""
+    reload()
+  })
+  item("Delete…", () => remove(s), "danger")
+  document.body.append(m)
+  // where the click was, kept on screen
+  const r = m.getBoundingClientRect()
+  m.style.left = `${Math.max(8, Math.min(x, innerWidth - r.width - 8))}px`
+  m.style.top = `${Math.max(8, Math.min(y, innerHeight - r.height - 8))}px`
+  m.querySelector("button")?.focus()
+}
+
+function closeSessionMenu() { document.querySelector(".menu.ctx")?.remove() }
+document.addEventListener("pointerdown", (e) => { if (!e.target.closest?.(".menu.ctx")) closeSessionMenu() })
+addEventListener("keydown", (e) => { if (e.key === "Escape") closeSessionMenu() })
+addEventListener("blur", closeSessionMenu)
+addEventListener("resize", closeSessionMenu)
+
+// The clipboard API needs a secure page, and jep is often reached over plain http on a
+// tailnet address, so the old copy command stands in when it is missing.
+async function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text)
+  const t = el("textarea")
+  t.value = text
+  t.style.position = "fixed"
+  t.style.opacity = "0"
+  document.body.append(t)
+  t.select()
+  const ok = document.execCommand("copy")
+  t.remove()
+  if (!ok) throw new Error("could not copy")
+}
+
+// Double click on a title, or Rename… in the menu: the title becomes a field. Enter or leaving
+// it saves, Escape keeps the old title.
+function renameInline(s, title) {
+  if (renaming) return
+  renaming = s.id
+  const input = el("input")
+  input.value = s.title || ""
+  title.replaceChildren(input)
+  input.focus()
+  input.select()
+  let done = false
+  const finish = async (save) => {
+    if (done) return
+    done = true
+    const next = input.value.trim()
+    renaming = null
+    if (save && next && next !== s.title) {
+      s.title = next
+      if (s.id === current) $("title").textContent = next
+      renderSessions()
+      try { await call("/rename", { id: s.id, title: next }) } catch (err) { fail(err) }
+      loadSessions().catch(() => {})
+    } else renderSessions()
+  }
+  input.onkeydown = (e) => {
+    if (e.key === "Enter") { e.preventDefault(); finish(true) }
+    else if (e.key === "Escape") { e.preventDefault(); finish(false) }
+  }
+  input.onblur = () => finish(true)
+  // a click in the field must not follow the conversation's link
+  input.onclick = (e) => { e.preventDefault(); e.stopPropagation() }
 }
 
 // A conversation is made in a folder under a harness, chosen apart: the gateway
