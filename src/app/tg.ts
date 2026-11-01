@@ -429,10 +429,12 @@ async function main() {
 
   console.error(`jep-tg  ·  data home: ${DATA_HOME}`)
   console.error(`workspaces: ${workspaces.map((w) => w.name).join(", ")}  ·  mode: ${mockMode ? "MOCK" : "live"}`)
-  if (pairing.owner === null) {
-    console.error(`pairing code: ${code}   (send /pair ${code} in Telegram to claim the bot)`)
-  } else {
-    console.error(`owner: ${pairing.owner}  ·  paired chats: ${pairing.count()}`)
+  if (mockMode || process.env.JEP_TG_TOKEN) {
+    if (pairing.owner === null) {
+      console.error(`pairing code: ${code}   (send /pair ${code} in Telegram to claim the bot)`)
+    } else {
+      console.error(`owner: ${pairing.owner}  ·  paired chats: ${pairing.count()}`)
+    }
   }
 
   const bot = new TelegramBot(tg, workspaces, activeWsName, pairing, store, (process.env.JEP_TG_MODELS ?? "")
@@ -578,6 +580,17 @@ async function main() {
       console.error(`[recycle] opencode serve ${big.pid} at ${big.rssMB} MB after ${Math.round(big.ageMs / 3_600_000)}h, all quiet — restarting for a fresh one`)
       await shutdown("recycle")
     })()), RECYCLE.tickMs).unref()
+  }
+
+  // No token, no bot. A factormost daemon runs this process for the gateway
+  // alone, and long-polling a bot that was never configured is a 404 every
+  // thirty seconds for the life of the machine — noise that teaches whoever
+  // reads the log to ignore it, which is exactly when it matters.
+  if (!mockMode && !process.env.JEP_TG_TOKEN) {
+    console.error("telegram: no JEP_TG_TOKEN — the bot is off; serving the client gateway only")
+    // The gateway holds the process open, and the SIGTERM/SIGINT handlers
+    // above exit unconditionally. Nothing here needs to race them.
+    await new Promise<void>(() => {})
   }
 
   // One-shot at boot, and boot is exactly when the network is least likely to

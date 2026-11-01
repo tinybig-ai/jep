@@ -283,6 +283,8 @@
   #stop { display: flex; align-items: center; gap: 6px; color: var(--accent); border-color: var(--accent); }
   #stop[hidden] { display: none; }
   #stop svg { width: 12px; height: 12px; fill: currentColor; }
+  /* files dragged over the conversation: the composer says it will take them */
+  form.compose.dropping .box { outline: 2px dashed var(--accent); outline-offset: 2px; }
   form.compose .box { max-width: 780px; margin: 0 auto; display: flex; gap: 8px; align-items: flex-end; }
   textarea {
     flex: 1; resize: none; max-height: 40vh; min-height: 42px; padding: 10px 12px;
@@ -2197,6 +2199,41 @@ $("skills").onclick = async () => {
 }
 
 $("newHere").onclick = () => $("attachInput").click()
+
+// A file pasted into the message box (a screenshot, a file copied in Finder) or dropped
+// on the conversation is attached the same way as one picked with the paperclip. A paste
+// that also carries text, as a copy from a document does, keeps the text as well.
+$("input").addEventListener("paste", (e) => {
+  const files = [...(e.clipboardData?.files || [])]
+  if (!files.length || !current) return
+  if (!e.clipboardData.types.includes("text/plain")) e.preventDefault()
+  uploadAttachments(files).catch((err) => fail(err))
+})
+const carriesFiles = (e) => [...(e.dataTransfer?.types || [])].includes("Files")
+let dragDepth = 0
+const composeForm = () => $("input").closest("form")
+document.querySelector("main").addEventListener("dragenter", (e) => {
+  if (!carriesFiles(e) || !current) return
+  dragDepth++
+  composeForm()?.classList.add("dropping")
+})
+document.querySelector("main").addEventListener("dragleave", (e) => {
+  if (!carriesFiles(e)) return
+  if (--dragDepth <= 0) { dragDepth = 0; composeForm()?.classList.remove("dropping") }
+})
+document.querySelector("main").addEventListener("dragover", (e) => {
+  if (!carriesFiles(e) || !current) return
+  e.preventDefault()
+  e.dataTransfer.dropEffect = "copy"
+})
+document.querySelector("main").addEventListener("drop", (e) => {
+  if (!carriesFiles(e)) return
+  e.preventDefault()
+  dragDepth = 0
+  composeForm()?.classList.remove("dropping")
+  const files = [...(e.dataTransfer.files || [])]
+  if (files.length && current) uploadAttachments(files).catch((err) => fail(err))
+})
 $("attachInput").onchange = () => {
   const files = [...$("attachInput").files]
   $("attachInput").value = ""

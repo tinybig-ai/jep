@@ -198,15 +198,22 @@ export class GooseAdapter implements HarnessAdapter {
     const row = (await this.#rows(true)).find((r) => r.name === gooseName(native))
     const exists = row !== undefined
     const args = ["run", "--name", gooseName(native), ...(exists ? ["--resume"] : [])]
-    // jep's own tools, as one more extension beside the ones goose already has
-    if (wantsMcp(toolsMode())) args.push("--with-extension", `${TOOLS_SERVER}:${process.execPath} ${MCP_SERVER_PATH} --session ${sessionID}`)
-    // a client's servers for this conversation: one more extension each. Values never hold
-    // spaces (core/mcp.ts refuses them), so goose's own splitting cannot break them apart.
-    if (hasMcp(opts?.mcp))
-      for (const [name, def] of Object.entries(opts.mcp)) {
-        const env = Object.entries(def.env ?? {}).map(([k, v]) => `${k}=${v} `).join("")
-        args.push("--with-extension", `${name}:${env}${[def.command, ...(def.args ?? [])].join(" ")}`)
-      }
+    // Extensions are only handed over when the session is being created: goose
+    // stores them in the session, and being handed a name it already has is a
+    // hard error — "extension name 'x' is already in use", exit 1, with the
+    // words on stdout and nothing at all on stderr, so the turn read as a bare
+    // "goose exited 1" on every resume after the first.
+    if (!exists) {
+      // jep's own tools, as one more extension beside the ones goose already has
+      if (wantsMcp(toolsMode())) args.push("--with-extension", `${TOOLS_SERVER}:${process.execPath} ${MCP_SERVER_PATH} --session ${sessionID}`)
+      // a client's servers for this conversation: one more extension each. Values never hold
+      // spaces (core/mcp.ts refuses them), so goose's own splitting cannot break them apart.
+      if (hasMcp(opts?.mcp))
+        for (const [name, def] of Object.entries(opts.mcp)) {
+          const env = Object.entries(def.env ?? {}).map(([k, v]) => `${k}=${v} `).join("")
+          args.push("--with-extension", `${name}:${env}${[def.command, ...(def.args ?? [])].join(" ")}`)
+        }
+    }
     args.push("--output-format", "stream-json", "-t", body)
     if (opts?.model?.providerID && opts.model.modelID) args.push("--provider", opts.model.providerID, "--model", opts.model.modelID)
     const child = spawn(GOOSE_BIN, args, {
