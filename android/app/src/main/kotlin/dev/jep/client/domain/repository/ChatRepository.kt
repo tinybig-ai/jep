@@ -127,6 +127,8 @@ interface ChatRepository {
         harness: String? = null,
         harnessSettings: Map<String, Boolean> = emptyMap(),
         pod: Boolean = false,
+        /** another conversation's id: its whole transcript goes to this one's first prompt, as a file */
+        carryover: String? = null,
     ): SessionSummary
     /** harness controls for the creation form; every client renders the schema generically */
     suspend fun harnessOptions(harness: String): List<HarnessSetting>

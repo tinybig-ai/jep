@@ -93,6 +93,8 @@ fun JepApp(app: AppViewModel) {
                 terminalEnabled = app.prefs.collectAsState().value.terminalEnabled,
                 onOpenSession = { app.open(it) },
                 subagentCount = app.sessions.collectAsState().value.firstOrNull { it.id == c.sessionId }?.subagents ?: 0,
+                carryHarnesses = app.harnessIds.collectAsState().value,
+                onCarryOver = { app.carryOver(c.sessionId, it) },
             )
         }
         else -> CompositionLocalProvider(LocalHarnessMarks provides app.harnessMarks.collectAsState().value) { SessionsScreen(

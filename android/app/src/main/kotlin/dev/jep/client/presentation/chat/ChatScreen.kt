@@ -573,6 +573,8 @@ fun ChatScreen(
     terminalEnabled: Boolean = false,
     onOpenSession: (SessionSummary) -> Unit = {},
     subagentCount: Int = 0,
+    carryHarnesses: List<String> = emptyList(),
+    onCarryOver: (String) -> Unit = {},
 ) {
     val state by vm.state.collectAsState()
     var retainedStatus by remember(vm.sessionId) { mutableStateOf(StatusSummary()) }
@@ -1221,6 +1223,8 @@ fun ChatScreen(
         onDismiss = { settingsOpen = false },
         onSkills = { settingsOpen = false; skillsView = true },
         onMcp = { settingsOpen = false; mcpView = true },
+        carryHarnesses = carryHarnesses,
+        onCarryOver = { settingsOpen = false; onCarryOver(it) },
     )
     if (skillsView) ManageScreen("Skills", onClose = { skillsView = false }) { SkillsBody(vm) }
     if (mcpView) ManageScreen("MCP servers", onClose = { mcpView = false }) { McpBody(vm) }
@@ -1271,6 +1275,8 @@ private fun SettingsSheet(
     onDismiss: () -> Unit,
     onSkills: () -> Unit,
     onMcp: () -> Unit,
+    carryHarnesses: List<String>,
+    onCarryOver: (String) -> Unit,
 ) {
     val state by vm.state.collectAsState()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -1311,6 +1317,15 @@ private fun SettingsSheet(
                     onPick = onMcp,
                     leading = { SettingIcon(Icons.Filled.Dns) },
                 )
+
+                // Move the work to another agent: a new conversation in this
+                // folder, handed this one's whole transcript as a file.
+                if (carryHarnesses.isNotEmpty()) {
+                    SectionLabel("CARRY OVER TO", top = 14.dp)
+                    carryHarnesses.forEach { h ->
+                        SettingRow(h, selected = false, subtitle = "new chat here, with this one's transcript", onPick = { onCarryOver(h) }, leading = { SettingIcon(Icons.Filled.Dns) })
+                    }
+                }
 
                 // Last, and the only destructive thing here: whatever this
                 // conversation's harness declares. The adapter owns the ids and

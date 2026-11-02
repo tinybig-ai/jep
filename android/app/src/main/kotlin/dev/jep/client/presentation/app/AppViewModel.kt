@@ -219,6 +219,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     // each harness's brand mark, asked of the daemon once: the list draws what it is sent
     private val _harnessMarks = MutableStateFlow<Map<String, HarnessMark>>(emptyMap())
     val harnessMarks = _harnessMarks.asStateFlow()
+    private val _harnessIds = MutableStateFlow<List<String>>(emptyList())
+    /** every installed harness, for "carry over to…" */
+    val harnessIds = _harnessIds.asStateFlow()
     private val _workspaces = MutableStateFlow<List<Workspace>>(emptyList())
     val workspaces = _workspaces.asStateFlow()
 
@@ -317,7 +320,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             // the creation picker lists the same served workspaces; keep them
             // fresh with the session list so "New conversation" is never empty
             runCatching { r.workspaces() }.onSuccess { _workspaces.value = byRecency(it) }
-            if (_harnessMarks.value.isEmpty()) runCatching { r.harnesses() }.onSuccess { _harnessMarks.value = it.marks }
+            if (_harnessMarks.value.isEmpty() || _harnessIds.value.isEmpty()) runCatching { r.harnesses() }.onSuccess { _harnessMarks.value = it.marks; _harnessIds.value = it.ids }
             _busy.value = false
             if (refreshQueued) {
                 refreshQueued = false
@@ -777,6 +780,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     open(it)
                 }
                 .onFailure { e -> _newChat.update { it.copy(creating = false, error = "couldn't start it: ${e.message}") } }
+        }
+    }
+
+    /** Carry a conversation over: a new one in the same workspace, on `harness`,
+     *  whose first prompt is handed the whole transcript as a file. */
+    fun carryOver(sourceId: String, harness: String) {
+        val r = repo ?: connect()
+        val from = _sessions.value.firstOrNull { it.id == sourceId } ?: return
+        viewModelScope.launch {
+            runCatching { r.newSession(workspace = from.adapter, path = if (from.adapter == null) from.workspace else null, harness = harness, carryover = sourceId) }
+                .onSuccess { refresh(); open(it) }
+                .onFailure { e -> _notice.value = "couldn't carry it over: ${e.message}" }
         }
     }
 

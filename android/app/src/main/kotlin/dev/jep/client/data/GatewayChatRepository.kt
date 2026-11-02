@@ -176,6 +176,7 @@ private val json = Json { ignoreUnknownKeys = true; isLenient = true }
         harness: String?,
         harnessSettings: Map<String, Boolean>,
         pod: Boolean,
+        carryover: String?,
     ): SessionSummary {
         val body = buildJsonObject {
             title?.let { put("title", it) }
@@ -183,6 +184,7 @@ private val json = Json { ignoreUnknownKeys = true; isLenient = true }
             path?.let { put("path", it) }
             harness?.let { put("harness", it) }
             if (pod) put("pod", true)
+            carryover?.let { put("carryover", it) }
             if (harnessSettings.isNotEmpty()) {
                 put("harnessSettings", buildJsonObject { harnessSettings.forEach { (key, enabled) -> put(key, enabled) } })
             }
