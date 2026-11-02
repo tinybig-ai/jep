@@ -50,6 +50,13 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -2818,45 +2825,83 @@ private fun ImageThumb(part: ChatPart.File) {
 }
 
 @Composable
-private fun ImageViewer(url: String, name: String, onClose: () -> Unit) {
+private fun ImageViewer(url: String, name: String, onClose: () -> Unit) = ImageGallery(listOf(url), listOf(name), 0, onClose)
+
+/**
+ * Full-screen pictures you can swipe between and pinch into. Pinch or double-tap
+ * zooms the one in view; while it is zoomed a drag pans it, and at normal size
+ * a drag belongs to the pager, so the next picture is one swipe away. A tap
+ * closes it.
+ */
+@Composable
+private fun ImageGallery(urls: List<String>, names: List<String>, start: Int, onClose: () -> Unit) {
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        var scale by remember { mutableFloatStateOf(1f) }
-        var offset by remember { mutableStateOf(Offset.Zero) }
-        AsyncImage(
-            model = url,
-            contentDescription = name,
-            contentScale = ContentScale.Fit,
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black)
-                .pointerInput(Unit) {
-                    detectTapGestures(
-                        onTap = { onClose() },
-                        onDoubleTap = { at ->
-                            if (scale > 1f) {
-                                scale = 1f
-                                offset = Offset.Zero
-                            } else {
-                                scale = 2.5f
-                                offset = clampPan((Offset(size.width / 2f, size.height / 2f) - at) * 1.5f, scale, size)
-                            }
-                        },
-                    )
-                }
-                .pointerInput(Unit) {
-                    detectTransformGestures { _, pan, zoom, _ ->
-                        scale = (scale * zoom).coerceIn(1f, 5f)
-                        offset = clampPan(offset + pan, scale, size)
-                    }
-                }
-                .graphicsLayer {
-                    scaleX = scale
-                    scaleY = scale
-                    translationX = offset.x
-                    translationY = offset.y
-                },
-        )
+        val pager = rememberPagerState(initialPage = start.coerceIn(0, urls.lastIndex)) { urls.size }
+        var zoomed by remember { mutableStateOf(false) }
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            HorizontalPager(pager, Modifier.fillMaxSize(), userScrollEnabled = !zoomed, key = { it }) { page ->
+                ZoomableImage(urls[page], names.getOrElse(page) { "image" }, onTap = onClose, onZoomed = { zoomed = it })
+            }
+            if (urls.size > 1) {
+                Text(
+                    "${pager.currentPage + 1} / ${urls.size}",
+                    Modifier.align(Alignment.BottomCenter).padding(bottom = 28.dp),
+                    color = Color.White.copy(alpha = 0.8f),
+                    fontSize = 13.sp,
+                )
+            }
+        }
     }
+}
+
+@Composable
+private fun ZoomableImage(url: String, name: String, onTap: () -> Unit, onZoomed: (Boolean) -> Unit) {
+    var scale by remember { mutableFloatStateOf(1f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+    LaunchedEffect(scale) { onZoomed(scale > 1f) }
+    AsyncImage(
+        model = url,
+        contentDescription = name,
+        contentScale = ContentScale.Fit,
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onTap = { onTap() },
+                    onDoubleTap = { at ->
+                        if (scale > 1f) {
+                            scale = 1f
+                            offset = Offset.Zero
+                        } else {
+                            scale = 2.5f
+                            offset = clampPan((Offset(size.width / 2f, size.height / 2f) - at) * 1.5f, scale, size)
+                        }
+                    },
+                )
+            }
+            // Takes a gesture only when it is a pinch or the picture is already
+            // zoomed. One finger on an unzoomed picture is left alone, so the
+            // pager can have it.
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    do {
+                        val event = awaitPointerEvent()
+                        if (event.changes.size > 1 || scale > 1f) {
+                            scale = (scale * event.calculateZoom()).coerceIn(1f, 5f)
+                            offset = if (scale == 1f) Offset.Zero else clampPan(offset + event.calculatePan(), scale, size)
+                            event.changes.forEach { if (it.positionChanged()) it.consume() }
+                        }
+                    } while (event.changes.any { it.pressed })
+                }
+            }
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+                translationX = offset.x
+                translationY = offset.y
+            },
+    )
 }
 
 private fun clampPan(offset: Offset, scale: Float, size: IntSize): Offset {
@@ -3111,7 +3156,8 @@ private fun ToolRow(part: ChatPart.Tool) {
         }
     }
     // a picture the agent read or showed is drawn in the transcript, not behind a tap
-    images.forEach { path ->
+    var galleryAt by remember { mutableStateOf<Int?>(null) }
+    images.forEachIndexed { index, path ->
         AsyncImage(
             model = LocalFileUrl.current(path),
             contentDescription = path.substringAfterLast('/'),
@@ -3120,8 +3166,12 @@ private fun ToolRow(part: ChatPart.Tool) {
                 .padding(top = 6.dp)
                 .heightIn(max = 320.dp)
                 .clip(RoundedCornerShape(Radius.control))
-                .clickable { sheet = true },
+                .clickable { galleryAt = index },
         )
+    }
+    galleryAt?.let { at ->
+        val fileUrl = LocalFileUrl.current
+        ImageGallery(images.map { fileUrl(it) }, images.map { it.substringAfterLast('/') }, at) { galleryAt = null }
     }
     if (sheet) {
         if (diff != null) DiffSheet(part.title, diff) { sheet = false }
