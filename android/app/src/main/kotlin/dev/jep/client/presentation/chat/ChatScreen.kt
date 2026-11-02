@@ -1028,6 +1028,8 @@ fun ChatScreen(
                 }
                 val busy = state.sending || state.live != null
                 items(displayRows.size, key = { displayRows[it].key }) { i ->
+                  // opening a thinking block is the reader choosing to read, not to follow the end
+                  CompositionLocalProvider(LocalStopFollowing provides { followLatest = false }) {
                     when (val row = displayRows[i]) {
                         is Row.Work -> WorkRow(row.parts, row.durationMs)
                         is Row.Pending -> AskBar(row.ask, vm, spent = askAnswered, choiceId = state.askChoice)
@@ -1062,6 +1064,7 @@ fun ChatScreen(
                             )
                         }
                     }
+                  }
                 }
                 // sent, and the harness has not written a word back yet
                 if (busy && !askPending && rows.firstOrNull { it is Row.Msg }?.let { (it as Row.Msg).m.role } != Role.ASSISTANT) {
@@ -1281,7 +1284,10 @@ private fun SettingsSheet(
     val state by vm.state.collectAsState()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     LaunchedEffect(Unit) { vm.loadModels(); vm.loadAgent(); vm.loadSkills(); vm.loadMcp(); vm.loadHarnessSettings() }
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    // Gestures off: the sheet's own drag fought the list inside it at the bottom,
+    // so reaching the end of Settings made it shake. Close, the scrim and Back
+    // still dismiss it.
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState, sheetGesturesEnabled = false) {
         Column(
             Modifier.fillMaxWidth().heightIn(max = 720.dp).padding(horizontal = 18.dp).padding(bottom = 24.dp),
         ) {
@@ -1321,9 +1327,14 @@ private fun SettingsSheet(
                 // Move the work to another agent: a new conversation in this
                 // folder, handed this one's whole transcript as a file.
                 if (carryHarnesses.isNotEmpty()) {
-                    SectionLabel("CARRY OVER TO", top = 14.dp)
-                    carryHarnesses.forEach { h ->
-                        SettingRow(h, selected = false, subtitle = "new chat here, with this one's transcript", onPick = { onCarryOver(h) }, leading = { SettingIcon(Icons.Filled.Dns) })
+                    var picking by remember { mutableStateOf(false) }
+                    Box(Modifier.padding(top = 14.dp)) {
+                        androidx.compose.material3.OutlinedButton(onClick = { picking = true }) { Text("Carry over…") }
+                        DropdownMenu(expanded = picking, onDismissRequest = { picking = false }) {
+                            carryHarnesses.forEach { h ->
+                                DropdownMenuItem(text = { Text(h) }, onClick = { picking = false; onCarryOver(h) })
+                            }
+                        }
                     }
                 }
 
@@ -2942,6 +2953,9 @@ private fun FileRow(part: ChatPart.File) {
     }
 }
 
+/** what a reader opening a fold calls so the list stops chasing the end under their eyes */
+private val LocalStopFollowing = compositionLocalOf<() -> Unit> { {} }
+
 @Composable
 private fun ReasoningRow(part: ChatPart.Reasoning, active: Boolean = false) {
     var open by remember { mutableStateOf(false) }
@@ -2950,14 +2964,17 @@ private fun ReasoningRow(part: ChatPart.Reasoning, active: Boolean = false) {
     // composition: a loop there keeps the screen "busy" forever, which also
     // makes it untestable. One unit per second, so elapsed reads as seconds.
     val transition = rememberInfiniteTransition(label = "thinking")
-    val elapsed by transition.animateFloat(
+    val elapsedState = transition.animateFloat(
         initialValue = 0f,
         targetValue = 3_600f,
         animationSpec = infiniteRepeatable(tween(3_600_000, easing = LinearEasing)),
         label = "seconds",
     )
-    val secs = elapsed.toInt()
-    Column(Modifier.fillMaxWidth().combinedClickable(onClick = { open = !open }, onLongClick = {})) {
+    // read through derivedStateOf: reading the animated float itself recomposes
+    // this row, thinking text and all, on every frame; this only on each second
+    val secs by remember { derivedStateOf { elapsedState.value.toInt() } }
+    val stopFollowing = LocalStopFollowing.current
+    Column(Modifier.fillMaxWidth().combinedClickable(onClick = { open = !open; if (open) stopFollowing() }, onLongClick = {})) {
         Row(
             Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
