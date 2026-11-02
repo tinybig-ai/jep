@@ -123,10 +123,11 @@ public final class GatewayChatRepository: ChatRepository, @unchecked Sendable {
         try await decode("/archived", ItemsRes<SessionDto>.self).items.map { $0.toDomain() }
     }
 
-    public func newSession(title: String?, workspace: String?, path: String?, harness: String?, pod: Bool, harnessSettings: [String: Bool]) async throws -> SessionSummary {
+    public func newSession(title: String?, workspace: String?, path: String?, harness: String?, pod: Bool, harnessSettings: [String: Bool], carryover: String?) async throws -> SessionSummary {
         try await decode("/new", NewSessionRes.self, [
             "title": title, "workspace": workspace, "path": path, "harness": harness,
             "pod": pod ? true : nil,
+            "carryover": carryover,
             "harnessSettings": harnessSettings.isEmpty ? nil : harnessSettings,
         ]).session.toDomain()
     }

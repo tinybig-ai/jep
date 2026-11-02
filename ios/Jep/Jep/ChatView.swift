@@ -172,6 +172,13 @@ struct ChatView: View {
                 Button("Changes", systemImage: "plusminus") { sheet = .diff }
                 Button("Git", systemImage: "arrow.triangle.branch") { sheet = .git }
                 Button("Subagents", systemImage: "person.2") { sheet = .subagents }
+                if !app.harnessIds.isEmpty {
+                    Menu("Carry over", systemImage: "arrow.right.circle") {
+                        ForEach(app.harnessIds, id: \.self) { h in
+                            Button(h) { app.carryOver(chat.sessionId, to: h) }
+                        }
+                    }
+                }
                 if app.prefs.terminalEnabled {
                     Button("Terminal", systemImage: "apple.terminal") { sheet = .terminal }
                 }
@@ -256,9 +263,33 @@ struct ChatView: View {
                 }
             }
             composer(st)
+            modelChip(st)
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 6)
+    }
+
+    /// the model, under the message box where it is written: a tap opens the list
+    private func modelChip(_ st: ChatState) -> some View {
+        let current = st.models?.current
+        let label: String = {
+            guard let m = st.models else { return "Loading…" }
+            if let c = current { return c.split(separator: "/").last.map(String.init) ?? c }
+            if let d = m.defaultRef { return "Default · " + (d.split(separator: "/").last.map(String.init) ?? d) }
+            return "Default"
+        }()
+        return Button { sheet = .model } label: {
+            HStack(spacing: 4) {
+                Text(label).font(.footnote).lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .semibold))
+            }
+            .foregroundStyle(.secondary)
+            .padding(.leading, 52)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .disabled(st.models == nil)
+        .accessibilityLabel("model")
     }
 
     private func composer(_ st: ChatState) -> some View {

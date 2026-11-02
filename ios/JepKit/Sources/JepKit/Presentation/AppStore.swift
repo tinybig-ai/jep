@@ -70,6 +70,8 @@ public final class AppStore {
     public private(set) var termAccess: TerminalAccess?
     public private(set) var screen: Screen = .sessions
     public private(set) var sessions: [SessionSummary] = []
+    /// every installed harness, for "carry over to…"
+    public private(set) var harnessIds: [String] = []
     public private(set) var busy = false
     public private(set) var unread: Set<String> = []
     public private(set) var workspaces: [Workspace] = []
@@ -201,7 +203,7 @@ public final class AppStore {
                 notice = "gateway unreachable: \(describe(error))"
             }
             if let w = try? await r.workspaces() { workspaces = w }
-            if harnessMarks.isEmpty, let h = try? await r.harnesses() { harnessMarks = h.marks }
+            if harnessMarks.isEmpty || harnessIds.isEmpty, let h = try? await r.harnesses() { harnessMarks = h.marks; harnessIds = h.ids }
             busy = false
             if refreshQueued {
                 refreshQueued = false
@@ -561,12 +563,28 @@ public final class AppStore {
         return Task {
             do {
                 let title = st.title.trimmingCharacters(in: .whitespaces)
-                let s = try await r.newSession(title: title.isEmpty ? nil : title, workspace: st.workspace, path: st.path, harness: st.harness, pod: st.pod, harnessSettings: st.harnessSettings)
+                let s = try await r.newSession(title: title.isEmpty ? nil : title, workspace: st.workspace, path: st.path, harness: st.harness, pod: st.pod, harnessSettings: st.harnessSettings, carryover: nil)
                 refresh()
                 open(s)
             } catch {
                 newChat.creating = false
                 newChat.error = "couldn't start it: \(describe(error))"
+            }
+        }
+    }
+
+    /// Carry a conversation over: a new one in the same workspace, on `harness`,
+    /// whose first prompt is handed the whole transcript as a file.
+    public func carryOver(_ sourceId: String, to harness: String) {
+        let r = repo ?? connect()
+        guard let from = sessions.first(where: { $0.id == sourceId }) else { return }
+        Task {
+            do {
+                let s = try await r.newSession(workspace: from.adapter, path: from.adapter == nil ? from.workspace : nil, harness: harness, carryover: sourceId)
+                refresh()
+                open(s)
+            } catch {
+                notice = "couldn't carry it over: \(describe(error))"
             }
         }
     }
