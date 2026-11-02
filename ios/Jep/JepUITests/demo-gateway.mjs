@@ -15,6 +15,7 @@ const sessions = [
   session("s2", "Add dark mode to settings", "web", "claude", 25 * min),
   session("s3", "Profile the image pipeline", "media", "codex", 3 * 3600_000, { seenAt: now }),
   session("s4", "Write release notes for 0.4", "docs", "opencode", 26 * 3600_000, { seenAt: now }),
+  session("s5", "Chart the build times", "docs", "claude", 27 * 3600_000, { seenAt: now }),
 ]
 
 const tool = (id, name, title, input, output, status = "completed") => ({ kind: "tool", id, name, title, status, input, output })
@@ -103,7 +104,10 @@ const routes = {
   "/browse": () => ({ cwd: "~/code", root: "~", parent: "~", dirs: [
     { name: "api", git: true }, { name: "web", git: true }, { name: "media", git: true }, { name: "scratch", git: false },
   ] }),
-  "/history": (b) => b.id === "s2" ? { messages: themeMessages, hasMore: false, asks: [], etag: "e2" } : { messages, hasMore: false, asks, etag: "e1" },
+  "/history": (b) => b.id === "s5" ? { messages: [
+    { id: "g1", role: "user", time: now - 5 * min, parts: [{ kind: "text", text: "show me the charts" }] },
+    { id: "g2", role: "assistant", time: now - 4 * min, parts: [{ ...tool("gt", "bash", "jep-show a.png b.png", { command: "jep-show /tmp/a.png /tmp/b.png" }, "showing"), shown: ["/tmp/a.png", "/tmp/b.png"] }] },
+  ], hasMore: false, asks: [], etag: "e5" } : b.id === "s2" ? { messages: themeMessages, hasMore: false, asks: [], etag: "e2" } : { messages, hasMore: false, asks, etag: "e1" },
   "/models": () => ({
     models: [
       { providerID: "anthropic", modelID: "claude-sonnet-4", image: true, contextLimit: 200000 },
@@ -150,6 +154,12 @@ http.createServer(async (req, res) => {
     res.write(": ok\n\n")
     const beat = setInterval(() => res.write(": beat\n\n"), 10_000)
     req.on("close", () => clearInterval(beat))
+    return
+  }
+  // any picture asked for is a 1x1 PNG; the viewer scales it to the screen
+  if (req.method === "GET" && path === "/file") {
+    res.writeHead(200, { "content-type": "image/png" })
+    res.end(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64"))
     return
   }
   let raw = ""

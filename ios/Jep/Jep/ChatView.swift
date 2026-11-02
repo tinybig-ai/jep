@@ -165,13 +165,8 @@ struct ChatView: View {
         }
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
-                Button("Model", systemImage: "cpu") { sheet = .model }
                 Button("Agent", systemImage: "person.crop.circle") { sheet = .agent }
                 Button("Settings", systemImage: "slider.horizontal.3") { sheet = .settings }
-                Button("Usage", systemImage: "chart.bar") { sheet = .usage }
-                Button("Changes", systemImage: "plusminus") { sheet = .diff }
-                Button("Git", systemImage: "arrow.triangle.branch") { sheet = .git }
-                Button("Subagents", systemImage: "person.2") { sheet = .subagents }
                 if !app.harnessIds.isEmpty {
                     Menu("Carry over", systemImage: "arrow.right.circle") {
                         ForEach(app.harnessIds, id: \.self) { h in
@@ -179,6 +174,10 @@ struct ChatView: View {
                         }
                     }
                 }
+                Button("Usage", systemImage: "chart.bar") { sheet = .usage }
+                Button("Changes", systemImage: "plusminus") { sheet = .diff }
+                Button("Git", systemImage: "arrow.triangle.branch") { sheet = .git }
+                Button("Subagents", systemImage: "person.2") { sheet = .subagents }
                 if app.prefs.terminalEnabled {
                     Button("Terminal", systemImage: "apple.terminal") { sheet = .terminal }
                 }

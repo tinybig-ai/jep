@@ -192,8 +192,9 @@ struct ToolView: View {
             .buttonStyle(.plain)
             if open {
                 if !toolShownImages(tool).isEmpty {
-                    ForEach(toolShownImages(tool), id: \.self) { image in
-                        FileView(file: FilePart(path: image, name: (image as NSString).lastPathComponent, mimeType: nil), chat: chat)
+                    let shown = toolShownImages(tool)
+                    ForEach(shown, id: \.self) { image in
+                        FileView(file: FilePart(path: image, name: (image as NSString).lastPathComponent, mimeType: nil), chat: chat, siblings: shown)
                     }
                 } else if let image = toolImagePath(tool) {
                     FileView(file: FilePart(path: image, name: (image as NSString).lastPathComponent, mimeType: nil), chat: chat)
@@ -360,6 +361,8 @@ final class ImageCache {
 struct FileView: View {
     let file: FilePart
     let chat: ChatStore
+    /// the other pictures shown with this one: tapping opens them all, swipeable
+    var siblings: [String] = []
     @State private var image: UIImage?
     @State private var failed = false
     @State private var zoomed = false
@@ -379,7 +382,10 @@ struct FileView: View {
             .frame(maxWidth: 260, maxHeight: 320)
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .task(id: file.path) { await load() }
-            .fullScreenCover(isPresented: $zoomed) { ImageViewer(image: image) }
+            .fullScreenCover(isPresented: $zoomed) {
+                if siblings.count > 1 { ImageGallery(paths: siblings, start: siblings.firstIndex(of: file.path) ?? 0, chat: chat) }
+                else { ImageViewer(image: image) }
+            }
         } else {
             Button {
                 chat.openFile(file.path)
@@ -437,14 +443,16 @@ struct ImageViewer: View {
                     .onTapGesture(count: 2) { withAnimation { zoom(to: scale > 1 ? 1 : 2.5) } }
                     .gesture(MagnifyGesture()
                         .onChanged { scale = max(1, settledScale * $0.magnification) }
-                        .onEnded { _ in withAnimation { zoom(to: min(scale, 5)) } }
-                        .simultaneously(with: DragGesture()
-                            .onChanged { d in
-                                guard scale > 1 else { return }
-                                offset = CGSize(width: settledOffset.width + d.translation.width,
-                                                height: settledOffset.height + d.translation.height)
-                            }
-                            .onEnded { _ in settledOffset = offset }))
+                        .onEnded { _ in withAnimation { zoom(to: min(scale, 5)) } })
+                    // a drag pans only a zoomed picture; at normal size it is left
+                    // for whatever pages around it (the gallery's swipe)
+                    .gesture(DragGesture()
+                        .onChanged { d in
+                            offset = CGSize(width: settledOffset.width + d.translation.width,
+                                            height: settledOffset.height + d.translation.height)
+                        }
+                        .onEnded { _ in settledOffset = offset },
+                        including: scale > 1 ? .all : .none)
             }
             Button { dismiss() } label: { Image(systemName: "xmark").padding(12).glass(Circle()) }
                 .padding()
@@ -458,6 +466,51 @@ struct ImageViewer: View {
         if s == 1 {
             offset = .zero
             settledOffset = .zero
+        }
+    }
+}
+
+/// Pictures you can swipe between and pinch into, full screen. Each page is the
+/// same zoomable viewer; a drag pans only a zoomed one, so at normal size a
+/// swipe goes to the next picture.
+struct ImageGallery: View {
+    let paths: [String]
+    let chat: ChatStore
+    @State private var page: Int
+    @State private var images: [String: UIImage] = [:]
+
+    init(paths: [String], start: Int, chat: ChatStore) {
+        self.paths = paths
+        self.chat = chat
+        _page = State(initialValue: min(max(0, start), max(0, paths.count - 1)))
+    }
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            TabView(selection: $page) {
+                ForEach(Array(paths.enumerated()), id: \.offset) { index, path in
+                    ImageViewer(image: images[path]).tag(index)
+                        .task(id: path) { await load(path) }
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .ignoresSafeArea()
+            Text("\(page + 1) / \(paths.count)")
+                .jepFont(13).foregroundStyle(.white.opacity(0.8)).padding(.bottom, 28)
+                .accessibilityLabel("image \(page + 1) of \(paths.count)")
+        }
+        .background(Color.black.ignoresSafeArea())
+    }
+
+    private func load(_ path: String) async {
+        let key = path.hasPrefix("/") ? path : chat.sessionId + ":" + path
+        if let cached = ImageCache.shared.image(key) {
+            images[path] = cached
+            return
+        }
+        if let data = try? await chat.fileBytes(path), let img = UIImage(data: data) {
+            ImageCache.shared.put(key, img)
+            images[path] = img
         }
     }
 }
