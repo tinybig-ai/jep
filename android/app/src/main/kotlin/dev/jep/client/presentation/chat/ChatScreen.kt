@@ -878,16 +878,29 @@ fun ChatScreen(
             },
             actions = {
                 var menu by remember { mutableStateOf(false) }
+                var carryMenu by remember { mutableStateOf(false) }
                 val clipboard = LocalClipboardManager.current
                 Box {
                     IconButton(onClick = { menu = true }) {
                         Icon(Icons.Filled.MoreVert, "chat menu")
+                    }
+                    // which harness to move this conversation's work to; a menu of its
+                    // own, opened from the item below
+                    DropdownMenu(expanded = carryMenu, onDismissRequest = { carryMenu = false }) {
+                        carryHarnesses.forEach { h ->
+                            DropdownMenuItem(text = { Text(h) }, onClick = { carryMenu = false; onCarryOver(h) })
+                        }
                     }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                         DropdownMenuItem(
                             text = { Text("Settings") },
                             leadingIcon = { Icon(Icons.Filled.Settings, null) },
                             onClick = { menu = false; settingsOpen = true },
+                        )
+                        if (carryHarnesses.isNotEmpty()) DropdownMenuItem(
+                            text = { Text("Carry over") },
+                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.Send, null) },
+                            onClick = { menu = false; carryMenu = true },
                         )
                         DropdownMenuItem(
                             text = { Text("Usage") },
@@ -1226,8 +1239,6 @@ fun ChatScreen(
         onDismiss = { settingsOpen = false },
         onSkills = { settingsOpen = false; skillsView = true },
         onMcp = { settingsOpen = false; mcpView = true },
-        carryHarnesses = carryHarnesses,
-        onCarryOver = { settingsOpen = false; onCarryOver(it) },
     )
     if (skillsView) ManageScreen("Skills", onClose = { skillsView = false }) { SkillsBody(vm) }
     if (mcpView) ManageScreen("MCP servers", onClose = { mcpView = false }) { McpBody(vm) }
@@ -1278,8 +1289,6 @@ private fun SettingsSheet(
     onDismiss: () -> Unit,
     onSkills: () -> Unit,
     onMcp: () -> Unit,
-    carryHarnesses: List<String>,
-    onCarryOver: (String) -> Unit,
 ) {
     val state by vm.state.collectAsState()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -1323,20 +1332,6 @@ private fun SettingsSheet(
                     onPick = onMcp,
                     leading = { SettingIcon(Icons.Filled.Dns) },
                 )
-
-                // Move the work to another agent: a new conversation in this
-                // folder, handed this one's whole transcript as a file.
-                if (carryHarnesses.isNotEmpty()) {
-                    var picking by remember { mutableStateOf(false) }
-                    Box(Modifier.padding(top = 14.dp)) {
-                        androidx.compose.material3.OutlinedButton(onClick = { picking = true }) { Text("Carry over…") }
-                        DropdownMenu(expanded = picking, onDismissRequest = { picking = false }) {
-                            carryHarnesses.forEach { h ->
-                                DropdownMenuItem(text = { Text(h) }, onClick = { picking = false; onCarryOver(h) })
-                            }
-                        }
-                    }
-                }
 
                 // Last, and the only destructive thing here: whatever this
                 // conversation's harness declares. The adapter owns the ids and
