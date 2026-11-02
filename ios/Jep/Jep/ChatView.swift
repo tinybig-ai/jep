@@ -16,6 +16,7 @@ struct ChatView: View {
     @State private var sheet: ChatSheet?
     @State private var deleteOpen = false
     @State private var sendHowOpen = false
+    @State private var expanded = false
     @State private var photos: [PhotosPickerItem] = []
     @State private var photosOpen = false
     @State private var filesOpen = false
@@ -45,6 +46,9 @@ struct ChatView: View {
             chat.loadHarnessSettings(quiet: true)
         }
         .sheet(item: $sheet) { s in sheetView(s) }
+        .fullScreenCover(isPresented: $expanded) {
+            FullComposer(chat: chat) { mode in send(mode) }
+        }
         .sheet(item: openFile(image: false)) { f in
             FileReaderView(file: f.file, chat: chat)
         }
@@ -311,6 +315,12 @@ struct ChatView: View {
                 .padding(.vertical, 10)
                 .glassCard(20)
                 .accessibilityLabel("composer")
+            if draftLines(st.draft) >= 4 {
+                Button { expanded = true } label: {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 14, weight: .semibold)).frame(width: 40, height: 40).glass(Circle())
+                }
+                .accessibilityLabel("expand the composer")
+            }
             if (st.sending || st.live != nil) && !hasText {
                 Button { chat.stop() } label: {
                     Image(systemName: "stop.fill").frame(width: 40, height: 40).glass(Circle())
@@ -329,6 +339,11 @@ struct ChatView: View {
                 .accessibilityLabel("send")
             }
         }
+    }
+
+    /// how tall the draft is, roughly: a line per newline, and a long line wraps
+    private func draftLines(_ draft: String) -> Int {
+        draft.split(separator: "\n", omittingEmptySubsequences: false).reduce(0) { $0 + max(1, ($1.count + 34) / 35) }
     }
 
     private func send(_ mode: SendMode) {
@@ -539,5 +554,64 @@ struct FlowLayout: Layout {
             x += size.width + spacing
             line = max(line, size.height)
         }
+    }
+}
+
+/// A long draft, given the whole screen. The top says how much is written and
+/// shrinks it again; what the draft does (attach, send) stays at the bottom,
+/// where the main composer keeps it.
+struct FullComposer: View {
+    let chat: ChatStore
+    let send: (SendMode) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        let st = chat.state
+        let sendable = canSend(st.ask, st.askChoice) && (!st.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !st.attachments.isEmpty)
+        VStack(spacing: 0) {
+            HStack {
+                Button { dismiss() } label: { Image(systemName: "arrow.down.right.and.arrow.up.left").padding(10) }
+                    .accessibilityLabel("shrink the composer")
+                Text("\(st.draft.count) chars").jepFont(13).foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding(.horizontal, 8)
+            if !st.attachments.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack {
+                        ForEach(st.attachments, id: \.id) { a in
+                            HStack(spacing: 4) {
+                                Text(a.name).jepFont(13).lineLimit(1)
+                                Button { chat.removeAttachment(id: a.id) } label: { Image(systemName: "xmark.circle.fill") }
+                                    .accessibilityLabel("remove")
+                            }
+                            .padding(.horizontal, 10).padding(.vertical, 6).glassCapsule()
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                }
+            }
+            TextEditor(text: Binding(get: { chat.state.draft }, set: { chat.setDraft($0) }))
+                .focused($focused)
+                .scrollContentBackground(.hidden)
+                .padding(.horizontal, 12)
+                .accessibilityLabel("full composer")
+            HStack {
+                Spacer()
+                Button {
+                    send(.steer)
+                    dismiss()
+                } label: {
+                    Image(systemName: "arrow.up").font(.system(size: 17, weight: .bold)).frame(width: 26, height: 26)
+                }
+                .buttonBorderShape(.circle)
+                .glassProminentButton()
+                .disabled(!sendable)
+                .accessibilityLabel("send")
+            }
+            .padding(12)
+        }
+        .onAppear { focused = true }
     }
 }

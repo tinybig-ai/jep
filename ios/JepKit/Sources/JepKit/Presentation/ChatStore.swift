@@ -558,6 +558,29 @@ public final class ChatStore {
         }
     }
 
+    /// Content shared into jep: upload its files, then send through the ordinary
+    /// path so it lands as a real first message.
+    public func sendShared(_ shared: SharedContent) {
+        let text = shared.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if text.isEmpty && shared.files.isEmpty { return }
+        Task {
+            var dropped = 0
+            var made: [Attachment] = []
+            for f in shared.files {
+                do {
+                    let id = try await repo.attach(sessionId: sessionId, filename: f.name, bytes: f.data)
+                    made.append(Attachment(id: id, name: f.name, localURL: nil, mimeType: f.mime))
+                } catch { dropped += 1 }
+            }
+            if dropped > 0 {
+                update { $0.notice = dropped == shared.files.count ? "couldn't attach the shared files" : "couldn't attach \(dropped) of the shared files" }
+            }
+            // the files ride with this one send, not in the composer afterwards
+            update { $0.attachments = made }
+            _ = send(text)
+        }
+    }
+
     public func removeAttachment(id: String) {
         update { $0.attachments.removeAll { $0.id == id } }
     }

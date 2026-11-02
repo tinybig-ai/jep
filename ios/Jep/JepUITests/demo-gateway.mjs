@@ -168,7 +168,8 @@ http.createServer(async (req, res) => {
   try { body = JSON.parse(raw || "{}") } catch {}
   // a slow first reply, so the tour can see what the app shows while it waits
   if (path === "/prompt") {
-    await new Promise(r => setTimeout(r, 6000))
+    // only the tour's own conversation is slow; a new one answers at once, so a test is not left waiting on an animation
+    if (body.id === "s2") await new Promise(r => setTimeout(r, 6000))
     res.writeHead(200, { "content-type": "application/json" })
     const t = Date.now()
     const reply = { id: `r${t}`, role: "assistant", time: t, parts: [{ kind: "text", text: "On it." }] }

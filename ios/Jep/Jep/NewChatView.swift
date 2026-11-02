@@ -9,6 +9,15 @@ struct NewChatView: View {
     var body: some View {
         let st = store.newChat
         Form {
+            if let shared = st.shared {
+                Section("Sharing") {
+                    if let text = shared.text, !text.isEmpty { Text(text).jepFont(14).lineLimit(4) }
+                    ForEach(Array(shared.files.enumerated()), id: \.offset) { _, f in
+                        Label(f.name, systemImage: "doc").jepFont(14)
+                    }
+                    Text("Pick where it goes. It becomes the first message.").jepFont(12).foregroundStyle(.secondary)
+                }
+            }
             Section {
                 TextField("Title (optional)", text: Binding(get: { st.title }, set: { store.setNewTitle($0) }))
             }

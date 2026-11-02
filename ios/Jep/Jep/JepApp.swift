@@ -37,6 +37,8 @@ struct JepApp: App {
                 BackgroundWatch.shared.stop()
                 if store.paired { store.refresh() }
                 Push.sync(store)
+                // something shared in through the share sheet while jep was closed
+                if store.paired, let shared = ShareGroup.pending() { store.offerShared(shared) }
             case .background:
                 if store.prefs.backgroundStreaming && store.paired { BackgroundWatch.shared.start(store) }
             default:
@@ -63,16 +65,21 @@ struct RootView: View {
             }
         }
         .animation(.default, value: store.paired)
+        // a cold start (or a fresh pairing) with something already shared: the scene
+        // phase only reports changes, so it would never see this
+        .onChange(of: store.paired, initial: true) { _, paired in
+            if paired, let shared = ShareGroup.pending() { store.offerShared(shared) }
+        }
     }
 
     private var chatShown: Binding<Bool> {
-        Binding(get: { if case .chat = store.screen { true } else { false } }, set: { if !$0 { store.back() } })
+        Binding(get: { if case .chat = store.screen { true } else { false } }, set: { if !$0, case .chat = store.screen { store.back() } })
     }
     private var newChatShown: Binding<Bool> {
-        Binding(get: { store.screen == .newChat }, set: { if !$0 { store.closeNewChat() } })
+        Binding(get: { store.screen == .newChat }, set: { if !$0, store.screen == .newChat { store.closeNewChat() } })
     }
     private var settingsShown: Binding<Bool> {
-        Binding(get: { store.screen == .settings }, set: { if !$0 { store.back() } })
+        Binding(get: { store.screen == .settings }, set: { if !$0, store.screen == .settings { store.back() } })
     }
 }
 
@@ -98,6 +105,7 @@ struct ChatHost: View {
         if chat?.sessionId == id { return }
         chat?.close()
         chat = store.makeChatStore(sessionId: id, title: title, workspace: workspace, harness: harness)
+        if let shared = store.consumeShared(id) { chat?.sendShared(shared) }
     }
 }
 
@@ -119,5 +127,22 @@ enum DeepLink {
         default:
             return
         }
+    }
+}
+
+/// the folder the share extension leaves what was shared in
+enum ShareGroup {
+    static var dir: URL? { FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.dev.jep.client") }
+
+    /// what the extension left, taken once
+    static func pending() -> SharedContent? {
+        #if DEBUG
+        // a UI test has no share sheet to drive: a launch argument stands in for the inbox
+        if let text = UserDefaults.standard.string(forKey: "uitest_share_text") {
+            UserDefaults.standard.removeObject(forKey: "uitest_share_text")
+            return SharedContent(text: text)
+        }
+        #endif
+        return dir.flatMap { ShareInbox.take(from: $0) }
     }
 }

@@ -122,3 +122,123 @@ final class GroupingTests: XCTestCase {
         XCTAssertTrue(project.waitForExistence(timeout: 5))
     }
 }
+
+/// Shared in from another app: the form holds the content, a destination is picked,
+/// and the content goes out as the new conversation's first message.
+///
+/// Named to run before ScreenTour: the tour leaves the simulator's app in a state where
+/// the app never reports idle after Create, and this test would wait on it for minutes.
+final class ASharedContentTests: XCTestCase {
+    func testSharedTextBecomesTheFirstMessage() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-app_theme", "LIGHT", "-uitest_share_text", "look at this build log"]
+        app.launch()
+        let address = app.textFields["gateway address"]
+        if address.waitForExistence(timeout: 8) {
+            func fill(_ field: XCUIElement, _ text: String) {
+                field.tap()
+                let old = (field.value as? String) ?? ""
+                if !old.isEmpty && old != field.placeholderValue {
+                    field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: old.count))
+                }
+                field.typeText(text)
+            }
+            fill(address, "127.0.0.1:8931")
+            fill(app.textFields["pairing code"], "123456")
+            app.buttons["Connect"].firstMatch.tap()
+        }
+        XCTAssertTrue(app.staticTexts["look at this build log"].waitForExistence(timeout: 30), "the new-conversation form shows what is being shared")
+        let create = app.buttons["Create"].firstMatch
+        XCTAssertTrue(create.waitForExistence(timeout: 5))
+        create.tap()
+        // the demo gateway answers /prompt slowly; the message shows at once as the person's own
+        XCTAssertTrue(app.staticTexts["look at this build log"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.buttons["chat menu"].firstMatch.waitForExistence(timeout: 10), "a conversation opened")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+    }
+}
+
+final class PlainCreateTests: XCTestCase {
+    func testCreateOpensTheConversation() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-app_theme", "LIGHT"]
+        app.launch()
+        let address = app.textFields["gateway address"]
+        if address.waitForExistence(timeout: 8) {
+            func fill(_ field: XCUIElement, _ text: String) {
+                field.tap()
+                let old = (field.value as? String) ?? ""
+                if !old.isEmpty && old != field.placeholderValue {
+                    field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: old.count))
+                }
+                field.typeText(text)
+            }
+            fill(address, "127.0.0.1:8931")
+            fill(app.textFields["pairing code"], "123456")
+            app.buttons["Connect"].firstMatch.tap()
+        }
+        XCTAssertTrue(app.buttons["New conversation"].firstMatch.waitForExistence(timeout: 30))
+        app.buttons["New conversation"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["Create"].firstMatch.waitForExistence(timeout: 10))
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Quick conversation'")).firstMatch.tap()
+        app.buttons["Create"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["chat menu"].firstMatch.waitForExistence(timeout: 15), "creating opens the conversation")
+    }
+}
+
+/// A long draft offers the whole screen to write in, and what is written there is the draft.
+final class ExpandTests: XCTestCase {
+    func testALongDraftCanBeExpanded() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-app_theme", "LIGHT"]
+        app.launch()
+        let address = app.textFields["gateway address"]
+        if address.waitForExistence(timeout: 8) {
+            func fill(_ field: XCUIElement, _ text: String) {
+                field.tap()
+                let old = (field.value as? String) ?? ""
+                if !old.isEmpty && old != field.placeholderValue {
+                    field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: old.count))
+                }
+                field.typeText(text)
+            }
+            fill(address, "127.0.0.1:8931")
+            fill(app.textFields["pairing code"], "123456")
+            app.buttons["Connect"].firstMatch.tap()
+        }
+        let row = app.staticTexts["Fix flaky login test"].firstMatch
+        // an earlier test may have left the app inside a conversation: back to the list
+        for _ in 0..<3 where !row.waitForExistence(timeout: 5) {
+            let back = app.navigationBars.buttons.element(boundBy: 0)
+            if back.exists { back.tap() }
+        }
+        XCTAssertTrue(row.waitForExistence(timeout: 30))
+        row.tap()
+        let composer = app.textViews["composer"].firstMatch.exists ? app.textViews["composer"].firstMatch : app.textFields["composer"].firstMatch
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        // a draft is kept per conversation: start from an empty one
+        composer.tap()
+        let kept = (composer.value as? String) ?? ""
+        if !kept.isEmpty && kept != "Message the agent" {
+            composer.press(forDuration: 1.2)
+            if app.menuItems["Select All"].waitForExistence(timeout: 3) {
+                app.menuItems["Select All"].tap()
+                composer.typeText(XCUIKeyboardKey.delete.rawValue)
+            }
+        }
+        XCTAssertFalse(app.buttons["expand the composer"].exists, "a short draft has nothing to expand")
+        composer.typeText("one\ntwo\nthree\nfour\nfive")
+        let expand = app.buttons["expand the composer"].firstMatch
+        XCTAssertTrue(expand.waitForExistence(timeout: 5), "five lines is worth the whole screen")
+        expand.tap()
+        XCTAssertTrue(app.textViews["full composer"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["23 chars"].exists)
+        app.buttons["shrink the composer"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["expand the composer"].waitForExistence(timeout: 5))
+        composer.press(forDuration: 1.2)
+        if app.menuItems["Select All"].waitForExistence(timeout: 3) {
+            app.menuItems["Select All"].tap()
+            composer.typeText(XCUIKeyboardKey.delete.rawValue)
+        }
+    }
+}

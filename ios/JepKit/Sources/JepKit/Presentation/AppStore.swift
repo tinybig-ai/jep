@@ -29,6 +29,8 @@ public struct NewChatState: Equatable, Sendable {
     public var loadingBrowse = false
     public var creating = false
     public var error: String?
+    /// content shared in from another app, waiting for its destination
+    public var shared: SharedContent?
     public init(workspaces: [Workspace] = []) { self.workspaces = workspaces }
     public var target: String? { pod ? "pod" : path ?? workspace }
 }
@@ -433,6 +435,41 @@ public final class AppStore {
 
     public func openProject(_ dir: String?) { openProject = dir }
 
+    // Shared in from another app: open the new-conversation form with the content
+    // held and only its destination to pick. The send goes through the chat the
+    // form creates, so a share is a first message, not a side channel.
+    public private(set) var pendingShared: (id: String, content: SharedContent)?
+
+    public func offerShared(_ content: SharedContent) {
+        guard !content.isEmpty, paired else { return }
+        let recent = workspaces.filter { !$0.pod }.first
+        newChat = NewChatState(workspaces: workspaces)
+        newChat.shared = content
+        if let recent { newChat.workspace = recent.name; newChat.harness = recent.harness } else { newChat.pod = true }
+        screen = .newChat
+        let r = repo ?? connect()
+        Task {
+            if let h = try? await r.harnesses() {
+                let selected = newChat.harness ?? h.defaultId
+                newChat.harnesses = h.ids
+                newChat.harness = selected
+                newChat.defaultHarness = h.defaultId
+                if let selected { loadNewHarnessOptions(r, selected) }
+            }
+            if let w = try? await r.workspaces() {
+                workspaces = w
+                newChat.workspaces = w
+            }
+        }
+    }
+
+    /// the share waiting for this conversation, handed over once
+    public func consumeShared(_ sessionId: String) -> SharedContent? {
+        guard let p = pendingShared, p.id == sessionId else { return nil }
+        pendingShared = nil
+        return p.content
+    }
+
     public func openNewChat() {
         let r = repo ?? connect()
         newChat = NewChatState(workspaces: workspaces)
@@ -583,6 +620,7 @@ public final class AppStore {
             do {
                 let title = st.title.trimmingCharacters(in: .whitespaces)
                 let s = try await r.newSession(title: title.isEmpty ? nil : title, workspace: st.workspace, path: st.path, harness: st.harness, pod: st.pod, harnessSettings: st.harnessSettings, carryover: nil)
+                if let c = st.shared { pendingShared = (s.id, c) }
                 refresh()
                 open(s)
             } catch {

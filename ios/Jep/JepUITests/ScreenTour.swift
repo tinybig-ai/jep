@@ -51,14 +51,26 @@ final class ScreenTour: XCTestCase {
         let address = app.textFields["gateway address"]
         if address.waitForExistence(timeout: 8) {
             shot("01-pair")
-            address.tap()
-            address.typeText("127.0.0.1:8931")
-            app.textFields["pairing code"].tap()
-            app.textFields["pairing code"].typeText("123456")
+            // the form keeps what an earlier run typed: clear it before typing over it
+            func fill(_ field: XCUIElement, _ text: String) {
+                field.tap()
+                let old = (field.value as? String) ?? ""
+                if !old.isEmpty && old != field.placeholderValue {
+                    field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: old.count))
+                }
+                field.typeText(text)
+            }
+            fill(address, "127.0.0.1:8931")
+            fill(app.textFields["pairing code"], "123456")
             shot("02-pair-filled")
             tap(button("Connect"))
         }
 
+        // an earlier test may have left the app inside a conversation: back to the list
+        for _ in 0..<3 where !app.staticTexts["Fix flaky login test"].waitForExistence(timeout: 5) {
+            let back = app.navigationBars.buttons.element(boundBy: 0)
+            if back.exists { back.tap() }
+        }
         XCTAssertTrue(app.staticTexts["Fix flaky login test"].waitForExistence(timeout: 30))
         shot("03-sessions")
 
