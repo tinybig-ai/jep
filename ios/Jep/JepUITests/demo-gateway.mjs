@@ -80,6 +80,8 @@ const routes = {
     { harness: "claude", id: "ext1", title: "Refactor billing webhooks", directory: "~/code/billing", updated: now - 5 * 3600_000 },
     { harness: "codex", id: "ext2", title: "Migrate to pnpm", directory: "~/code/web", updated: now - 2 * 86400_000 },
   ] }),
+  // a new conversation: a carried-over one says where it came from, so a test can see the request arrived whole
+  "/new": (b) => ({ session: session("n1", b.carryover ? `Carried to ${b.harness} from ${b.carryover} in ${b.workspace}` : "New chat", b.workspace ?? "api", b.harness ?? "opencode", 0) }),
   "/workspaces": () => ({ items: [
     { name: "api", harness: "opencode", dir: "~/code/api" },
     { name: "web", harness: "claude", dir: "~/code/web" },
