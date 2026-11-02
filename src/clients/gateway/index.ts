@@ -7,7 +7,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { chmod, mkdir, open, readdir, readFile, realpath, stat, unlink, writeFile } from "node:fs/promises"
-import { homedir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path"
 import type { HarnessAdapter, HarnessMark, HarnessSettingSpec, SessionImport, Terminal, TurnHost } from "../../core/ports.ts"
@@ -19,6 +19,7 @@ import { LIVENESS, type LivenessConfig } from "../../core/liveness.ts"
 import { isRepo, repoStatus } from "../../core/git.ts"
 import { listSkills, defaultSkillDirs, writeSkillModelInvocation } from "../../core/skills.ts"
 import type { AskRequest, DomainEvent, Message, Part } from "../../core/types.ts"
+import { renderCarryover } from "../../core/carryover.ts"
 import { usageOf } from "../../core/usage.ts"
 import { attachedPaths, readLoopMarker, readNoticeMarker, stripInjectedContext, transcriptText } from "../../core/transcript.ts"
 import {
@@ -769,6 +770,19 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   }
   // uploads land in <dataHome>/attachments, remembered by id for the next prompt
   const attachments = new Map<string, { path: string; name: string; sessionID: string }>()
+  // Carryover: write a conversation out as a markdown file in the temp dir.
+  // A new conversation started "with carryover" holds the file's path here until
+  // its first prompt, which carries the file as an attachment.
+  const pendingCarryover = new Map<string, string>()
+  const writeCarryover = async (from: string, source: HarnessAdapter): Promise<{ path: string; messages: number }> => {
+    const rows = await source.messages(from)
+    const title = (await source.listSessions().catch(() => [])).find((x) => x.id === from)?.title
+    const dir = join(tmpdir(), "jep-carryover")
+    await mkdir(dir, { recursive: true, mode: 0o700 })
+    const file = join(dir, `${from.replace(/[^\w.-]/g, "_").slice(0, 60)}-${Date.now().toString(36)}.md`)
+    await writeFile(file, renderCarryover(rows, { title, harness: source.id, workspace: source.workspace }), { mode: 0o600 })
+    return { path: file, messages: rows.length }
+  }
   const attachmentRoot = join(deps.dataHome, "attachments")
 
   // fan-out: one push feed per device, none of them ever addressable by token
@@ -1360,8 +1374,17 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         if (!mcp.ok) return json(res, 400, { error: mcp.error })
         if (hasMcp(mcp.value) && picked.adapter.takesMcp !== true)
           return json(res, 400, { error: `${picked.adapter.id} cannot take MCP servers for one conversation` })
+        // carry another conversation over: its whole transcript, as a file the new agent is handed
+        const carrySource = str("carryover")
+        let carried: { path: string; messages: number } | undefined
+        if (carrySource) {
+          const source = await ensureListed(carrySource)
+          if (!source) return json(res, 404, { error: "no such conversation to carry over" })
+          carried = await writeCarryover(carrySource, source)
+        }
         const s = await picked.adapter.createSession(title || undefined)
         sessionAdapters.set(s.id, picked.adapter)
+        if (carried) pendingCarryover.set(s.id, carried.path)
         if (settingSpecs.length) {
           harnessSettings.set(s.id, valuesForSettings(settingSpecs, requestedSettings))
           await saveHarnessSettings(deps.dataHome, harnessSettings)
@@ -1370,7 +1393,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           conversationMcp.set(s.id, mcp.value)
           await saveConversationMcp(deps.dataHome, conversationMcp)
         }
-        return json(res, 200, { session: { ...s, adapter: picked.name, harness: picked.adapter.id, pod: isPod(picked.adapter.workspace, deps.dataHome) } })
+        return json(res, 200, { session: { ...s, adapter: picked.name, harness: picked.adapter.id, pod: isPod(picked.adapter.workspace, deps.dataHome) }, ...(carried ? { carryover: carried } : {}) })
       }
 
       // ── importing a session from the same harness's other store ─────────
@@ -1815,6 +1838,10 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         return json(res, 200, { ok: true, model: ref || null })
       }
 
+      if (path === "/carryover") {
+        return json(res, 200, await writeCarryover(id, adapter))
+      }
+
       if (path === "/history") {
         const limit = typeof b.limit === "number" ? Math.max(0, Math.floor(b.limit)) : 0
         const before = typeof b.before === "number" ? b.before : 0
@@ -1866,6 +1893,11 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       if (path === "/prompt") {
         const files: string[] = Array.isArray(b.files) ? b.files.filter((f): f is string => typeof f === "string") : []
         const filePaths = files.map((fid) => attachments.get(fid)?.path).filter((p): p is string => Boolean(p))
+        const carryFile = pendingCarryover.get(id)
+        if (carryFile) {
+          pendingCarryover.delete(id)
+          filePaths.unshift(carryFile)
+        }
         // an attachment with no words is a valid prompt: the harness still needs
         // something to read, so fill it in here as well. The Android app sends
         // its own copy of this line so its optimistic row agrees; the Telegram

@@ -455,6 +455,8 @@ document.write('<link rel="stylesheet" href="/v2.css">'
     <h3>Conversation</h3>
     <div class="row">
       <button type="button" id="compact" hidden>Compact context</button>
+      <select id="carryHarness" title="Harness to carry this conversation to"></select>
+      <button type="button" id="carry" title="Start a new conversation on that harness, given this one's whole transcript as a file">Carry over</button>
       <button type="button" id="archive">Archive</button>
       <button type="button" id="delete" class="danger">Delete</button>
     </div>
@@ -766,6 +768,7 @@ function renameInline(s, title) {
 async function loadWorkspaces() {
   const [{ items }, { harnesses, default: fallback, marks }] = await Promise.all([call("/workspaces"), call("/harnesses")])
   harnessMarks = marks || {}
+  $("carryHarness").replaceChildren(...harnesses.map((h) => { const o = el("option", "", h); o.value = h; return o }))
   renderSessions()
   const dirs = new Map(items.filter((w) => !w.pod).map((w) => [w.dir, w.name]))
   // a folder picked with Other last time is offered by name from then on
@@ -2358,6 +2361,20 @@ $("renameForm").onsubmit = async (e) => {
     $("title").textContent = title
     await loadSessions()
   } catch (err) { fail(err) }
+}
+// Carry over: a new conversation in the same folder, on the chosen harness,
+// handed this one's whole transcript (the gateway writes it to a temp file and
+// attaches it to the first prompt). Prefers a harness other than this one.
+$("carry").onclick = async () => {
+  const s = sessions.find((x) => x.id === current)
+  const harness = $("carryHarness").value
+  if (!s || !harness) return
+  $("carry").disabled = true
+  try {
+    const { session } = await call("/new", { workspace: s.adapter, harness, carryover: s.id })
+    await loadSessions()
+    location.hash = encodeURIComponent(session.id)
+  } catch (err) { fail(err) } finally { $("carry").disabled = false }
 }
 $("compact").onclick = async () => {
   $("compact").disabled = true

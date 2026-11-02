@@ -2135,3 +2135,21 @@ test("a watch's wake-up comes back as a boundary, never as the person's message"
     await g.close()
   }
 })
+
+test("/carryover writes the whole conversation to a temp markdown file", async () => {
+  const a = stallable()
+  const { base, headers, g } = await startWith(a)
+  try {
+    const r = await fetch(`${base}/carryover`, { method: "POST", headers, body: JSON.stringify({ id: "s1" }) })
+    assert.equal(r.status, 200)
+    const j = (await r.json()) as { path: string; messages: number }
+    assert.equal(j.messages, 1)
+    assert.ok(j.path.startsWith(tmpdir()) && j.path.endsWith(".md"))
+    const text = readFileSync(j.path, "utf8")
+    assert.match(text, /Carryover from an earlier conversation/)
+    assert.match(text, /## User/)
+    assert.match(text, /\nhi\n/)
+  } finally {
+    await g.close()
+  }
+})
