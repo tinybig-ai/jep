@@ -1288,9 +1288,7 @@ private fun SettingsSheet(
                 // Only what can be changed. Which workspace and harness the chat
                 // runs in is fixed, and the header under the title already says
                 // it; a row here that did nothing when tapped was noise.
-                SectionLabel("MODEL")
-                ModelDropdown(state.models) { vm.setModel(it) }
-                SectionLabel("AGENT", top = 12.dp)
+                SectionLabel("AGENT")
                 SettingRow("Default", selected = state.agent == null, subtitle = null, onPick = { vm.setAgent(null) }, leading = { SettingIcon(Icons.Filled.Star) })
                 state.agents.forEach { a ->
                     SettingRow(a.label, selected = state.agent == a.id, subtitle = a.detail, onPick = { vm.setAgent(a.id) }, leading = { SettingIcon(Icons.Filled.Build) })
@@ -1337,7 +1335,7 @@ private fun SettingsSheet(
 // carries an icon (an image icon for a vision model), and the context limit
 // rides along.
 @Composable
-private fun ModelDropdown(choices: ModelChoices?, onPick: (String?) -> Unit) {
+private fun ModelDropdown(choices: ModelChoices?, compact: Boolean = false, onPick: (String?) -> Unit) {
     var open by remember { mutableStateOf(false) }
     val current = choices?.current
     val label = when {
@@ -1348,12 +1346,13 @@ private fun ModelDropdown(choices: ModelChoices?, onPick: (String?) -> Unit) {
     }
     Box {
         Surface(
-            Modifier.fillMaxWidth().clickable(enabled = choices != null) { open = true },
-            color = MaterialTheme.colorScheme.surfaceContainer,
-            shape = RoundedCornerShape(Radius.card),
+            (if (compact) Modifier else Modifier.fillMaxWidth()).clickable(enabled = choices != null) { open = true },
+            color = if (compact) Color.Transparent else MaterialTheme.colorScheme.surfaceContainer,
+            shape = if (compact) RoundedCornerShape(50) else RoundedCornerShape(Radius.card),
         ) {
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                (if (compact) Modifier else Modifier.fillMaxWidth())
+                    .padding(horizontal = if (compact) 8.dp else 14.dp, vertical = if (compact) 6.dp else 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 // a model id can be far longer than the row. maxLines alone would
@@ -1361,8 +1360,8 @@ private fun ModelDropdown(choices: ModelChoices?, onPick: (String?) -> Unit) {
                 // "there is more", and the full id is one tap away in the list.
                 Text(
                     label,
-                    Modifier.weight(1f),
-                    fontSize = 15.sp,
+                    if (compact) Modifier.weight(1f, fill = false) else Modifier.weight(1f),
+                    fontSize = if (compact) 13.sp else 15.sp,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -3889,6 +3888,10 @@ private fun Composer(
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                // The model, where the message is written: it was a trip into
+                // Settings for the thing changed most often. Takes the room the
+                // buttons leave, and ellipsizes when a long id needs more.
+                Box(Modifier.weight(1f)) { ModelDropdown(state.models, compact = true) { vm.setModel(it) } }
                 // Stop leads while it is there: the only button that ends work
                 // rather than shaping the draft, so it sits apart from the rest.
                 if (busy) {
