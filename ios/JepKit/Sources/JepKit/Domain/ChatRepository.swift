@@ -8,7 +8,10 @@ public struct HistoryBatch: Equatable, Sendable {
     public var asks: [AskEntry]
     /// what the daemon holds behind the running turn, people's messages only, in its order
     public var waiting: [Waiting]
-    public init(messages: [ChatMessage], hasMore: Bool, asks: [AskEntry] = [], waiting: [Waiting] = []) {
+    /// the conversation's loop (running or last finished), or nil
+    public var loop: LoopInfo?
+    public init(messages: [ChatMessage], hasMore: Bool, asks: [AskEntry] = [], waiting: [Waiting] = [], loop: LoopInfo? = nil) {
+        self.loop = loop
         self.messages = messages
         self.hasMore = hasMore
         self.asks = asks
@@ -134,6 +137,11 @@ public protocol ChatRepository: AnyObject, Sendable {
     func queueCancel(sessionId: String, clientID: String) async throws -> Bool
     func queueEdit(sessionId: String, clientID: String, text: String) async throws -> Bool
     func queueForce(sessionId: String, clientID: String) async throws -> Bool
+    /// start a loop; false when the gateway refused (one is already running, say)
+    func loopStart(sessionId: String, goal: String, max: Int?, verify: String?, until: String?) async throws -> Bool
+    func loopStop(sessionId: String) async throws -> Bool
+    /// forget a finished loop
+    func loopClear(sessionId: String) async throws -> Bool
     func queueMove(sessionId: String, clientID: String, to: Int) async throws -> Bool
     func stop(sessionId: String) async throws -> Bool
     func compact(sessionId: String) async throws -> Bool
@@ -242,4 +250,25 @@ public final class NoAttention: Attention {
     public func chatOpened(sessionId: String) {}
     public func chatClosed(sessionId: String) {}
     public func seen(sessionId: String) {}
+}
+
+/// A loop keeps a conversation going by itself until a check says it is done: a
+/// verify command exits 0, the reply holds `until`, or `max` turns have run.
+public struct LoopInfo: Equatable, Sendable {
+    public var goal: String
+    public var max: Int
+    public var verify: String?
+    public var until: String?
+    /// turns completed; the goal turn is 1
+    public var iteration: Int
+    /// running, done, exhausted, stopped or failed
+    public var status: String
+    public var error: String?
+    /// the verify command's last exit code, when it ran and failed
+    public var verifyCode: Int?
+    public var running: Bool { status == "running" }
+    public init(goal: String, max: Int, verify: String? = nil, until: String? = nil, iteration: Int, status: String, error: String? = nil, verifyCode: Int? = nil) {
+        self.goal = goal; self.max = max; self.verify = verify; self.until = until
+        self.iteration = iteration; self.status = status; self.error = error; self.verifyCode = verifyCode
+    }
 }

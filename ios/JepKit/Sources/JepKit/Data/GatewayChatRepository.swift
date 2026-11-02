@@ -249,6 +249,9 @@ public final class GatewayChatRepository: ChatRepository, @unchecked Sendable {
             waiting: res.queue.compactMap { q in
                 guard !q.notice, let id = q.clientID, !id.isEmpty else { return nil }
                 return Waiting(id: id, text: q.text, steer: q.steer)
+            },
+            loop: res.loop.map {
+                LoopInfo(goal: $0.spec.goal, max: $0.spec.max, verify: $0.spec.verify, until: $0.spec.until, iteration: $0.iteration, status: $0.status, error: $0.error, verifyCode: $0.lastVerify.flatMap { $0.ok ? nil : $0.code })
             }
         )
         if let key, let etag = res.etag { lock.withLock { lastPage[key] = (etag, batch) } }
@@ -286,6 +289,15 @@ public final class GatewayChatRepository: ChatRepository, @unchecked Sendable {
     public func queueCancel(sessionId: String, clientID: String) async throws -> Bool { try await ok("/queue/cancel", ["id": sessionId, "clientID": clientID]) }
     public func queueEdit(sessionId: String, clientID: String, text: String) async throws -> Bool { try await ok("/queue/edit", ["id": sessionId, "clientID": clientID, "text": text]) }
     public func queueForce(sessionId: String, clientID: String) async throws -> Bool { try await ok("/queue/force", ["id": sessionId, "clientID": clientID]) }
+    public func loopStart(sessionId: String, goal: String, max: Int?, verify: String?, until: String?) async throws -> Bool {
+        try await ok("/loop", [
+            "id": sessionId, "goal": goal, "max": max,
+            "verify": (verify ?? "").isEmpty ? nil : verify,
+            "until": (until ?? "").isEmpty ? nil : until,
+        ])
+    }
+    public func loopStop(sessionId: String) async throws -> Bool { try await ok("/loop/stop", ["id": sessionId]) }
+    public func loopClear(sessionId: String) async throws -> Bool { try await ok("/loop/clear", ["id": sessionId]) }
     public func queueMove(sessionId: String, clientID: String, to: Int) async throws -> Bool { try await ok("/queue/move", ["id": sessionId, "clientID": clientID, "to": to]) }
     public func seen(sessionId: String, at: Int64) async throws -> Bool { try await ok("/seen", ["id": sessionId, "at": at]) }
     public func rename(sessionId: String, title: String) async throws -> Bool { try await ok("/rename", ["id": sessionId, "title": title]) }

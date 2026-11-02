@@ -4,7 +4,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 enum ChatSheet: String, Identifiable {
-    case model, agent, settings, usage, diff, git, subagents, rename, terminal
+    case model, agent, settings, usage, diff, git, subagents, rename, terminal, loop
     var id: String { rawValue }
 }
 
@@ -178,6 +178,7 @@ struct ChatView: View {
                         }
                     }
                 }
+                Button("Loop", systemImage: "repeat") { sheet = .loop }
                 Button("Usage", systemImage: "chart.bar") { sheet = .usage }
                 Button("Changes", systemImage: "plusminus") { sheet = .diff }
                 Button("Git", systemImage: "arrow.triangle.branch") { sheet = .git }
@@ -224,6 +225,7 @@ struct ChatView: View {
     @ViewBuilder
     private func bottom(_ st: ChatState) -> some View {
         VStack(spacing: 8) {
+            if let loop = st.loop { LoopBar(loop: loop, stop: { chat.stopLoop() }, clear: { chat.clearLoop() }) }
             ForEach(Array(st.queued.enumerated()), id: \.element.id) { index, q in
                 HStack(spacing: 8) {
                     Image(systemName: q.mode == .afterReply ? "clock" : "arrow.turn.down.right").foregroundStyle(.secondary)
@@ -385,6 +387,7 @@ struct ChatView: View {
         switch s {
         case .model: ModelSheet(chat: chat)
         case .agent: AgentSheet(chat: chat)
+        case .loop: LoopSheet(chat: chat)
         case .settings: ChatSettingsSheet(chat: chat)
         case .usage: UsageSheet(chat: chat)
         case .diff: DiffSheet(chat: chat)
@@ -443,8 +446,8 @@ struct RowView: View {
         case .compaction:
             Divider().overlay(Text("compaction complete").jepFont(11).foregroundStyle(.secondary).padding(.horizontal, 8).background(.background))
                 .padding(.vertical, 8)
-        case .autoContinue:
-            Label("continued automatically", systemImage: "arrow.forward.circle").jepFont(11).foregroundStyle(.secondary).frame(maxWidth: .infinity)
+        case .autoContinue(let m):
+            Label(loopLabel(m), systemImage: "arrow.forward.circle").jepFont(11).foregroundStyle(.secondary).frame(maxWidth: .infinity)
         }
     }
 }
@@ -613,5 +616,71 @@ struct FullComposer: View {
             .padding(12)
         }
         .onAppear { focused = true }
+    }
+}
+
+/// "loop 2/8" for a loop's turn, else the quiet note a fold leaves
+private func loopLabel(_ m: ChatMessage) -> String {
+    if case .loopTurn(let i, let max)? = m.parts.first { return "loop \(i)/\(max)" }
+    return "continued automatically"
+}
+
+/// A loop, over the composer while it runs and after it ends: where it is, what the goal is, and the one
+/// button that matters (Stop while it runs, Dismiss once it is over).
+struct LoopBar: View {
+    let loop: LoopInfo
+    let stop: () -> Void
+    let clear: () -> Void
+
+    var body: some View {
+        let turn = min(loop.max, loop.iteration + (loop.running ? 1 : 0))
+        let detail = [loop.goal, loop.verifyCode.map { "verify exit \($0)" }, loop.error].compactMap { $0 }.joined(separator: " · ")
+        HStack(spacing: 8) {
+            Text("Loop \(loop.status) \(turn)/\(loop.max)").jepFont(12, .semibold)
+            Text(detail).jepFont(12).foregroundStyle(.secondary).lineLimit(1)
+            Spacer(minLength: 0)
+            Button(loop.running ? "Stop" : "Dismiss") { loop.running ? stop() : clear() }.jepFont(13)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .glassCard(14)
+        .accessibilityIdentifier("loop-bar")
+    }
+}
+
+/// Start a loop: a goal, and how it knows it is done (a command, or words the reply must hold).
+struct LoopSheet: View {
+    let chat: ChatStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var goal = ""
+    @State private var verify = ""
+    @State private var until = ""
+    @State private var turns = "8"
+
+    var body: some View {
+        let running = chat.state.loop?.running == true
+        SheetFrame(title: "Loop") {
+            Form {
+                if running { Text("A loop is already running here. Stop it first.").foregroundStyle(.red).jepFont(13) }
+                Section("Goal: what done looks like") {
+                    TextField("Goal", text: $goal, axis: .vertical).lineLimit(2...5).accessibilityLabel("loop goal")
+                }
+                Section("Done when") {
+                    TextField("Verify command, e.g. npm test (optional)", text: $verify).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    TextField("Or: the reply must say… (optional)", text: $until)
+                }
+                Section("Turns, at most 50") {
+                    TextField("8", text: $turns).keyboardType(.numberPad)
+                }
+                Section {
+                    Button("Start") {
+                        chat.startLoop(goal: goal, max: Int(turns).map { min(50, max(1, $0)) }, verify: verify, until: until)
+                        dismiss()
+                    }
+                    .disabled(goal.trimmingCharacters(in: .whitespaces).isEmpty || running)
+                    .accessibilityLabel("start loop")
+                }
+            }
+        }
     }
 }

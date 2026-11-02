@@ -73,7 +73,8 @@ extension MessageDto {
             id: id,
             role: role == "user" ? .user : .assistant,
             time: time,
-            parts: parts.compactMap { $0.toDomain() },
+            // a loop's turn says nothing a person wrote: it is the boundary, whatever words the harness recorded
+            parts: loop.map { [.loopTurn(iteration: $0.iteration, max: $0.max)] } ?? parts.compactMap { $0.toDomain() },
             error: error?.message,
             model: model,
             cost: cost,

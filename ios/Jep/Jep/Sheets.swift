@@ -2,7 +2,7 @@ import JepKit
 import SwiftUI
 import WebKit
 
-private struct SheetFrame<Content: View>: View {
+struct SheetFrame<Content: View>: View {
     let title: String
     @ViewBuilder var content: Content
     @Environment(\.dismiss) private var dismiss

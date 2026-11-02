@@ -116,8 +116,10 @@ struct MessageDto: Decodable {
     var cost: Double?
     var tokens: TokensDto?
     var durationMs: Int64?
+    /// set on the turn a loop queued
+    var loop: LoopMarkDto?
 
-    enum K: String, CodingKey { case id, role, time, parts, error, model, cost, tokens, durationMs }
+    enum K: String, CodingKey { case id, role, time, parts, error, model, cost, tokens, durationMs, loop }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: K.self)
         id = try c.decode(String.self, forKey: .id)
@@ -129,7 +131,20 @@ struct MessageDto: Decodable {
         cost = c.o(.cost)
         tokens = c.o(.tokens)
         durationMs = c.o(.durationMs)
+        loop = try? c.decode(LoopMarkDto.self, forKey: .loop)
     }
+}
+
+struct LoopMarkDto: Decodable { var iteration: Int; var max: Int }
+
+struct LoopDto: Decodable {
+    struct Spec: Decodable { var goal: String; var max: Int; var verify: String?; var until: String? }
+    struct Verify: Decodable { var ok: Bool; var code: Int? }
+    var spec: Spec
+    var iteration: Int
+    var status: String
+    var error: String?
+    var lastVerify: Verify?
 }
 
 struct MessageRes: Decodable {
@@ -163,7 +178,9 @@ struct HistoryRes: Decodable {
     var unchanged: Bool
     /// what waits behind the running turn, in the daemon's order: its own account, from any device
     var queue: [QueueEntryDto]
-    enum K: String, CodingKey { case messages, hasMore, asks, etag, unchanged, queue }
+    /// this conversation's loop, or nil
+    var loop: LoopDto?
+    enum K: String, CodingKey { case messages, hasMore, asks, etag, unchanged, queue, loop }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: K.self)
         messages = c.v(.messages, [])
@@ -172,6 +189,7 @@ struct HistoryRes: Decodable {
         etag = c.o(.etag)
         unchanged = c.v(.unchanged, false)
         queue = (try? c.decode([QueueEntryDto].self, forKey: .queue)) ?? []
+        loop = try? c.decode(LoopDto.self, forKey: .loop)
     }
 }
 

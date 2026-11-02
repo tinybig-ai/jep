@@ -92,6 +92,8 @@ public struct ChatState: Equatable, Sendable {
     public var attachments: [Attachment] = []
     public var draft = ""
     public var queued: [Queued] = []
+    /// this conversation's loop, as the daemon reports it with the history
+    public var loop: LoopInfo?
     public var notice: String?
     public var hasMore = false
     public var loadingOlder = false
@@ -385,6 +387,7 @@ public final class ChatStore {
                     st.messages = batch.messages + optimistic
                     if liveRowIsSettled(prior.live?.messageId, batch.messages) { st.live = nil }
                     st.hasMore = batch.hasMore
+                    st.loop = batch.loop
                     st.loadingHistory = false
                     st = st.withServedAsks(batch.asks)
                     st.queued = reconcileQueued(
@@ -525,6 +528,29 @@ public final class ChatStore {
             st.queued.insert(item, at: to)
         }
         Task { _ = try? await repo.queueMove(sessionId: sessionId, clientID: id, to: to) }
+    }
+
+    /// Start a loop: the goal is the first turn, and the daemon keeps going until the check passes.
+    public func startLoop(goal: String, max: Int?, verify: String?, until: String?) {
+        let text = goal.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty { return }
+        Task {
+            let started = (try? await repo.loopStart(sessionId: sessionId, goal: text, max: max, verify: verify, until: until)) ?? false
+            if !started { update { $0.notice = "couldn't start the loop (is one already running?)" } }
+            refresh()
+        }
+    }
+
+    public func stopLoop() {
+        Task {
+            _ = try? await repo.loopStop(sessionId: sessionId)
+            refresh()
+        }
+    }
+
+    public func clearLoop() {
+        update { $0.loop = nil }
+        Task { _ = try? await repo.loopClear(sessionId: sessionId) }
     }
 
     public func cancelQueued(id: String) {

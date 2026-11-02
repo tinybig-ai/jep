@@ -300,6 +300,8 @@ public enum ChatPart: Equatable, Hashable, Sendable {
     case compaction
     /// the harness told the model to keep going after a fold; scaffolding, not the user's words
     case autoContinue
+    /// the turn a loop queued ("loop 2/8"): a boundary, not words anyone wrote
+    case loopTurn(iteration: Int, max: Int)
     case unsupported(String)
 
     public var toolCall: ToolCall? {

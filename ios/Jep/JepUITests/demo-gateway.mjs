@@ -3,6 +3,7 @@
 import http from "node:http"
 
 const port = Number(process.argv[2] ?? 8931)
+const loops = {}
 const now = Date.now()
 const min = 60_000
 
@@ -178,7 +179,17 @@ http.createServer(async (req, res) => {
     res.end(JSON.stringify({ message: reply }))
     return
   }
+  // loops, kept per conversation: the record /history reports
+  if (path === "/loop") {
+    loops[body.id] = { spec: { goal: body.goal, max: body.max ?? 8, verify: body.verify }, iteration: 1, status: "running" }
+    res.writeHead(200, { "content-type": "application/json" })
+    res.end(JSON.stringify({ loop: loops[body.id] }))
+    return
+  }
+  if (path === "/loop/stop" && loops[body.id]) loops[body.id].status = "stopped"
+  if (path === "/loop/clear") delete loops[body.id]
   const route = routes[path]
   res.writeHead(200, { "content-type": "application/json" })
-  res.end(JSON.stringify(route ? route(body) : { ok: true }))
+  const answer = route ? route(body) : { ok: true }
+  res.end(JSON.stringify(path === "/history" ? { ...answer, loop: loops[body.id] ?? null } : answer))
 }).listen(port, "127.0.0.1", () => console.log(`demo gateway on :${port}`))

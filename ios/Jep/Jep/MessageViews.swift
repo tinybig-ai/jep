@@ -129,7 +129,7 @@ struct PartView: View {
             }
         case .file(let f):
             FileView(file: f, chat: chat)
-        case .compaction, .autoContinue, .unsupported:
+        case .compaction, .autoContinue, .loopTurn, .unsupported:
             EmptyView()
         }
     }
