@@ -104,7 +104,8 @@ fun MessageDto.toDomain() = ChatMessage(
     id = id,
     role = if (role == "user") Role.USER else Role.ASSISTANT,
     time = time,
-    parts = parts.mapNotNull { it.toDomain() },
+    // a loop's turn says nothing a person wrote: it is the boundary, whatever words the harness recorded
+    parts = loop?.let { listOf(ChatPart.LoopTurn(it.iteration, it.max)) } ?: parts.mapNotNull { it.toDomain() },
     error = error?.message,
     model = model,
     cost = cost,

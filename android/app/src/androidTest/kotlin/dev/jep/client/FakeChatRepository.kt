@@ -154,6 +154,9 @@ class FakeChatRepository(
     override suspend fun queueEdit(sessionId: String, clientID: String, text: String) = true
     override suspend fun queueForce(sessionId: String, clientID: String) = true
     override suspend fun queueMove(sessionId: String, clientID: String, to: Int) = true
+    override suspend fun loopStart(sessionId: String, goal: String, max: Int?, verify: String?, until: String?) = true
+    override suspend fun loopStop(sessionId: String) = true
+    override suspend fun loopClear(sessionId: String) = true
     override suspend fun stop(sessionId: String) = true
 
     /** set true in a test that needs the in-chat Compact action */

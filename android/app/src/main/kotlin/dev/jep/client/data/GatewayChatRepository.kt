@@ -322,6 +322,9 @@ private val json = Json { ignoreUnknownKeys = true; isLenient = true }
                 res.hasMore,
                 res.asks.map { AskEntry(it.toDomain(), pending = it.state == "pending", choice = it.answer) },
                 res.queue.filter { !it.notice && !it.clientID.isNullOrEmpty() }.map { Waiting(it.clientID!!, it.text, it.steer) },
+                res.loop?.let {
+                    dev.jep.client.domain.repository.LoopInfo(it.spec.goal, it.spec.max, it.spec.verify, it.spec.until, it.iteration, it.status, it.error, it.lastVerify?.takeIf { v -> !v.ok }?.code)
+                },
             )
             if (key != null && res.etag != null) lastPage[key] = res.etag to batch
             batch
@@ -365,6 +368,22 @@ private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     override suspend fun queueForce(sessionId: String, clientID: String): Boolean =
         post("/queue/force", payload("id" to sessionId, "clientID" to clientID)).first in 200..299
+
+    override suspend fun loopStart(sessionId: String, goal: String, max: Int?, verify: String?, until: String?): Boolean =
+        post(
+            "/loop",
+            buildJsonObject {
+                put("id", sessionId)
+                put("goal", goal)
+                max?.let { put("max", it) }
+                verify?.takeIf { it.isNotBlank() }?.let { put("verify", it) }
+                until?.takeIf { it.isNotBlank() }?.let { put("until", it) }
+            }.toString(),
+        ).first in 200..299
+
+    override suspend fun loopStop(sessionId: String): Boolean = post("/loop/stop", payload("id" to sessionId)).first in 200..299
+
+    override suspend fun loopClear(sessionId: String): Boolean = post("/loop/clear", payload("id" to sessionId)).first in 200..299
 
     override suspend fun queueMove(sessionId: String, clientID: String, to: Int): Boolean =
         post("/queue/move", buildJsonObject { put("id", sessionId); put("clientID", clientID); put("to", to) }.toString()).first in 200..299

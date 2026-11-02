@@ -105,7 +105,31 @@ data class MessageDto(
     val tokens: TokensDto? = null,
     /** how long the reply took, when the harness recorded a completion time */
     val durationMs: Long? = null,
+    /** set on the turn a loop queued: "loop 2/8" is drawn as a boundary, never as a bubble */
+    val loop: LoopMarkDto? = null,
 )
+
+@Serializable
+data class LoopMarkDto(val iteration: Int = 0, val max: Int = 0)
+
+@Serializable
+data class LoopSpecDto(val goal: String = "", val max: Int = 0, val verify: String? = null, val until: String? = null)
+
+@Serializable
+data class LoopVerifyDto(val ok: Boolean = false, val code: Int? = null)
+
+/** the loop a conversation is running or last ran: the daemon's record, as `/history` reports it */
+@Serializable
+data class LoopDto(
+    val spec: LoopSpecDto = LoopSpecDto(),
+    val iteration: Int = 0,
+    val status: String = "running",
+    val error: String? = null,
+    val lastVerify: LoopVerifyDto? = null,
+)
+
+@Serializable
+data class LoopRes(val loop: LoopDto? = null)
 
 @Serializable
 data class MessageRes(val message: MessageDto? = null, val aborted: Boolean = false, val cancelled: Boolean = false)
@@ -128,6 +152,8 @@ data class HistoryRes(
     val unchanged: Boolean = false,
     /** what waits behind the running turn, in the daemon's order: its own account, from any device */
     val queue: List<QueueEntryDto> = emptyList(),
+    /** this conversation's loop, or null */
+    val loop: LoopDto? = null,
 )
 
 @Serializable

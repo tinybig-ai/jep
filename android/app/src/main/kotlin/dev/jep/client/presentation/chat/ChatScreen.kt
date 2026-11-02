@@ -124,6 +124,7 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Source
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Star
@@ -325,7 +326,7 @@ internal fun Row.anchor(): String = when (this) {
 /** A compaction marker is its own row; everything else renders as a message. */
 internal fun rowFor(m: ChatMessage, cards: Map<String, List<Row>> = emptyMap()): Row = when {
     m.parts.size == 1 && m.parts[0] is ChatPart.Compaction -> Row.Compaction(m)
-    m.parts.size == 1 && m.parts[0] is ChatPart.AutoContinue -> Row.AutoContinue(m)
+    m.parts.size == 1 && (m.parts[0] is ChatPart.AutoContinue || m.parts[0] is ChatPart.LoopTurn) -> Row.AutoContinue(m)
     else -> Row.Msg(m, cards)
 }
 
@@ -851,6 +852,7 @@ fun ChatScreen(
     var queuedCancelFor by remember { mutableStateOf<ChatViewModel.Queued?>(null) }
     var deleteOpen by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
+    var loopOpen by remember { mutableStateOf(false) }
     var usageOpen by remember { mutableStateOf(false) }
     var gitOpen by remember { mutableStateOf(false) }
     var infoMsg by remember { mutableStateOf<ChatMessage?>(null) }
@@ -903,6 +905,11 @@ fun ChatScreen(
                             text = { Text("Settings") },
                             leadingIcon = { Icon(Icons.Filled.Settings, null) },
                             onClick = { menu = false; settingsOpen = true },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Loop") },
+                            leadingIcon = { Icon(Icons.Filled.Refresh, null) },
+                            onClick = { menu = false; loopOpen = true },
                         )
                         if (carryHarnesses.isNotEmpty()) DropdownMenuItem(
                             text = { Text("Carry over") },
@@ -1181,6 +1188,7 @@ fun ChatScreen(
                 }
             }
         }
+        state.loop?.let { LoopBar(it, onStop = { vm.stopLoop() }, onClear = { vm.clearLoop() }) }
         Composer(
             vm,
             replyTo,
@@ -1240,6 +1248,11 @@ fun ChatScreen(
         "The session is removed from the machine — it can't be brought back from here.",
         onConfirm = { deleteOpen = false; vm.delete { if (it) onBack() } },
         onDismiss = { deleteOpen = false },
+    )
+    if (loopOpen) LoopDialog(
+        running = state.loop?.running == true,
+        onDismiss = { loopOpen = false },
+        onStart = { goal, max, verify, until -> loopOpen = false; vm.startLoop(goal, max, verify, until) },
     )
     if (settingsOpen) SettingsSheet(
         vm,
@@ -2191,6 +2204,7 @@ private fun fullTurnText(message: ChatMessage): String =
             is ChatPart.File -> "[file] ${p.name ?: p.path}"
             ChatPart.Compaction -> "[conversation compacted]"
             ChatPart.AutoContinue -> ""
+            is ChatPart.LoopTurn -> ""
             is ChatPart.Unsupported -> ""
         }
     }.trim()
@@ -2735,6 +2749,7 @@ private fun PartView(part: ChatPart, streaming: Boolean, onOpenLink: (String) ->
         is ChatPart.Quote -> QuoteBlock(part.text, MaterialTheme.colorScheme.onSurface)
         ChatPart.Compaction -> Unit // a divider row renders the message, not its parts
         ChatPart.AutoContinue -> Unit // the anchor row renders the quiet note, not a bubble
+        is ChatPart.LoopTurn -> Unit // likewise: a boundary row, not a bubble
         is ChatPart.Unsupported -> Unit
     }
 }
@@ -4178,7 +4193,7 @@ internal fun AutoContinueRow(m: ChatMessage) {
     ) {
         HorizontalDivider(Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant)
         Text(
-            "· auto-continued ·",
+            (m.parts.firstOrNull() as? ChatPart.LoopTurn)?.let { "· loop ${it.iteration}/${it.max} ·" } ?: "· auto-continued ·",
             Modifier.padding(horizontal = 12.dp),
             fontSize = 11.sp,
             color = MaterialTheme.colorScheme.outline,
@@ -4295,4 +4310,83 @@ private fun OlderPullIndicator(pull: OlderPull, modifier: Modifier = Modifier) {
             color = if (pull.armed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
+}
+
+/**
+ * A loop, over the composer while it runs and after it ends: where it is, what the goal is, and the one
+ * button that matters (Stop while it runs, Dismiss once it is over). One quiet line, not another bubble.
+ */
+@Composable
+private fun LoopBar(loop: dev.jep.client.domain.repository.LoopInfo, onStop: () -> Unit, onClear: () -> Unit) {
+    val turn = (loop.iteration + if (loop.running) 1 else 0).coerceAtMost(loop.max)
+    val detail = buildList {
+        add(loop.goal)
+        loop.verifyCode?.let { add("verify exit $it") }
+        loop.error?.let { add(it) }
+    }.joinToString(" · ")
+    Surface(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp).testTag("loop-bar"),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(Radius.card),
+    ) {
+        Row(Modifier.padding(start = 12.dp, end = 4.dp, top = 2.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Loop ${loop.status} $turn/${loop.max}",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                detail,
+                Modifier.weight(1f).padding(start = 8.dp),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            TextButton(onClick = if (loop.running) onStop else onClear) { Text(if (loop.running) "Stop" else "Dismiss") }
+        }
+    }
+}
+
+/** Start a loop: a goal, and how it knows it is done (a command, or words the reply must hold). */
+@Composable
+private fun LoopDialog(running: Boolean, onDismiss: () -> Unit, onStart: (String, Int?, String?, String?) -> Unit) {
+    var goal by remember { mutableStateOf("") }
+    var verify by remember { mutableStateOf("") }
+    var until by remember { mutableStateOf("") }
+    var turns by remember { mutableStateOf("8") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Loop") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (running) {
+                    Text("A loop is already running here. Stop it first.", color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+                }
+                androidx.compose.material3.OutlinedTextField(
+                    goal, { goal = it }, Modifier.fillMaxWidth().testTag("loop-goal"),
+                    label = { Text("Goal: what done looks like") }, minLines = 2, maxLines = 5,
+                )
+                androidx.compose.material3.OutlinedTextField(
+                    verify, { verify = it }, Modifier.fillMaxWidth(),
+                    label = { Text("Verify command, e.g. npm test (optional)") }, singleLine = true,
+                )
+                androidx.compose.material3.OutlinedTextField(
+                    until, { until = it }, Modifier.fillMaxWidth(),
+                    label = { Text("Or: the reply must say… (optional)") }, singleLine = true,
+                )
+                androidx.compose.material3.OutlinedTextField(
+                    turns, { turns = it.filter(Char::isDigit).take(2) }, Modifier.fillMaxWidth(),
+                    label = { Text("Turns, at most 50") }, singleLine = true,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = goal.isNotBlank() && !running,
+                onClick = { onStart(goal, turns.toIntOrNull()?.coerceIn(1, 50), verify, until) },
+            ) { Text("Start") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }

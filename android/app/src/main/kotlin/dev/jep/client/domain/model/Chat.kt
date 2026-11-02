@@ -188,6 +188,9 @@ sealed interface ChatPart {
      *  it is scaffolding, never the user's own words */
     data object AutoContinue : ChatPart
 
+    /** the turn a loop queued: "loop 2/8", drawn as a boundary (the instruction itself is jep's, not anyone's words) */
+    data class LoopTurn(val iteration: Int, val max: Int) : ChatPart
+
     data class Unsupported(val kind: String) : ChatPart
 }
 

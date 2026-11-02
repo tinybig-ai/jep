@@ -32,7 +32,29 @@ data class HistoryBatch(
     val asks: List<AskEntry> = emptyList(),
     /** what the daemon holds behind the running turn, people's messages only, in its order */
     val waiting: List<Waiting> = emptyList(),
+    /** the conversation's loop (running or last finished), or null */
+    val loop: LoopInfo? = null,
 )
+
+/**
+ * A loop keeps a conversation going by itself until a check says it is done:
+ * a verify command exits 0, or the reply holds `until`, or `max` turns have run.
+ */
+data class LoopInfo(
+    val goal: String,
+    val max: Int,
+    val verify: String?,
+    val until: String?,
+    /** turns completed; the goal turn is 1 */
+    val iteration: Int,
+    /** running, done, exhausted, stopped or failed */
+    val status: String,
+    val error: String?,
+    /** the verify command's last exit code, when it ran and failed */
+    val verifyCode: Int?,
+) {
+    val running: Boolean get() = status == "running"
+}
 
 /** a message the daemon is holding until the running turn ends */
 data class Waiting(val id: String, val text: String, val steer: Boolean)
@@ -201,6 +223,11 @@ interface ChatRepository {
     suspend fun queueForce(sessionId: String, clientID: String): Boolean
     /** move a queued prompt to position `to` in the daemon's line */
     suspend fun queueMove(sessionId: String, clientID: String, to: Int): Boolean
+    /** start a loop; null when the gateway refused (one is already running, say) */
+    suspend fun loopStart(sessionId: String, goal: String, max: Int?, verify: String?, until: String?): Boolean
+    suspend fun loopStop(sessionId: String): Boolean
+    /** forget a finished loop */
+    suspend fun loopClear(sessionId: String): Boolean
     suspend fun stop(sessionId: String): Boolean
     /** compress the conversation's context; false when the harness refused */
     suspend fun compact(sessionId: String): Boolean

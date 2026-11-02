@@ -148,6 +148,8 @@ class ChatViewModel(
          *  here all along — survived, which read as the app eating the message. */
         val draft: String = "",
         val queued: List<Queued> = emptyList(),
+        /** this conversation's loop, as the daemon reports it with the history */
+        val loop: dev.jep.client.domain.repository.LoopInfo? = null,
         val notice: String? = null,
         val hasMore: Boolean = false,
         val loadingOlder: Boolean = false,
@@ -514,6 +516,7 @@ class ChatViewModel(
                         // keeping it would strand a finished answer
                         live = if (liveRowIsSettled(st.live?.messageId, batch.messages)) null else st.live,
                         hasMore = batch.hasMore,
+                        loop = batch.loop,
                         loadingHistory = false,
                         // the gateway answered: whatever "reconnecting" meant,
                         // it is reachable again (the feed follows a moment later)
@@ -730,6 +733,29 @@ class ChatViewModel(
         val next = list.toMutableList().apply { add(to, removeAt(from)) }
         _state.update { it.copy(queued = next) }
         viewModelScope.launch { runCatching { repo.queueMove(sessionId, id, to) } }
+    }
+
+    /** Start a loop: the goal is the first turn, and the daemon keeps going until the check passes. */
+    fun startLoop(goal: String, max: Int?, verify: String?, until: String?) {
+        val text = goal.trim()
+        if (text.isEmpty()) return
+        viewModelScope.launch {
+            val ok = runCatching { repo.loopStart(sessionId, text, max, verify, until) }.getOrDefault(false)
+            if (!ok) _state.update { it.copy(notice = "couldn't start the loop (is one already running?)") }
+            refresh()
+        }
+    }
+
+    fun stopLoop() {
+        viewModelScope.launch {
+            runCatching { repo.loopStop(sessionId) }
+            refresh()
+        }
+    }
+
+    fun clearLoop() {
+        _state.update { it.copy(loop = null) }
+        viewModelScope.launch { runCatching { repo.loopClear(sessionId) } }
     }
 
     fun cancelQueued(id: String) {
