@@ -545,6 +545,7 @@ async function main() {
       dataHome: DATA_HOME,
       turns: gw.turns,
       restart: () => detach("restart", shutdown("restart")),
+      rename: (key, title) => gw.rename(key, title),
     })
     gwClose = async () => {
       continuity.close()

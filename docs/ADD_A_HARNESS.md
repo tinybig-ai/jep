@@ -203,7 +203,7 @@ the probe output pasted in. See [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## jep's own tools
 
-jep ships `jep-watch`, `jep-restart` and `jep-show` as shell commands, and the
+jep ships `jep-watch`, `jep-restart`, `jep-rename` and `jep-show` as shell commands, and the
 context header (`contextFor`) names them once per conversation. With
 `JEP_TOOLS=mcp` the same three are also offered as the `jep-tools` MCP server
 (`bin/jep-mcp.mjs`, `src/core/tools.ts`). A harness adds that server **beside**

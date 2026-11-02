@@ -22,6 +22,8 @@ export interface ContinuityOpts {
   turns: TurnHost
   /** restart the daemon, cleanly. Absent, `jep-restart` says it cannot. */
   restart?(): void
+  /** retitle a conversation. Absent, `jep-rename` says it cannot. */
+  rename?(key: string, title: string): Promise<void>
   /** how long after start the saved watches and cut-off turns are picked up
    * (default 2 s: the workspaces must be up first) */
   restoreAfterMs?: number
@@ -149,7 +151,18 @@ export async function startContinuity(opts: ContinuityOpts): Promise<{ close(): 
     }
   }
 
-  const control = await startControl(dataHome, { watch: watchRequest, restart: restartRequest })
+  // `jep-rename`: the agent titles its own conversation
+  const renameRequest = async (req: ControlRequest): Promise<ControlReply> => {
+    if (!opts.rename) return { ok: false, message: "this daemon cannot rename conversations" }
+    const title = typeof req.title === "string" ? req.title.replace(/\s+/g, " ").trim().slice(0, 120) : ""
+    if (!title) return { ok: false, message: "give a title" }
+    const owner = await turns.resolve(typeof req.session === "string" ? req.session : undefined, typeof req.cwd === "string" ? req.cwd : undefined)
+    if (typeof owner === "string") return { ok: false, message: owner }
+    await opts.rename(owner.key, title)
+    return { ok: true, message: `renamed to "${title}"` }
+  }
+
+  const control = await startControl(dataHome, { watch: watchRequest, restart: restartRequest, rename: renameRequest })
 
   // ─── pick up what the last run left ─────────────────────────────────
   // Watches that were waiting, and turns a restart or a crash cut off. After a

@@ -51,6 +51,7 @@ test("jep-mcp lists exactly the tools tools.ts names, and reaches the daemon lik
   const control = await startControl(home, {
     watch: async (req) => (seen.push(req), { ok: true, message: "watching" }),
     restart: (req) => (seen.push(req), { ok: true, message: "restart queued" }),
+    rename: async (req) => (seen.push(req), { ok: true, message: "renamed" }),
   })
   const s = await server(home, ["--session", "jep-sess"])
   t.after(() => {
@@ -70,9 +71,15 @@ test("jep-mcp lists exactly the tools tools.ts names, and reaches the daemon lik
   assert.equal(seen[0].session, "jep-sess")
   assert.equal(seen[0].every_seconds, 5)
 
+  const renamed = await s.call("tools/call", { name: "jep_rename", arguments: { title: "Fix login" } })
+  assert.equal(renamed.result.content[0].text, "renamed")
+  assert.equal(seen.at(-1).op, "rename")
+  assert.equal(seen.at(-1).title, "Fix login")
+  assert.equal(seen.at(-1).session, "jep-sess")
+
   const restart = await s.call("tools/call", { name: "jep_restart", arguments: {} })
   assert.equal(restart.result.content[0].text, "restart queued")
-  assert.equal(seen[1].op, "restart")
+  assert.equal(seen.at(-1).op, "restart")
 
   assert.equal((await s.call("tools/call", { name: "jep_watch", arguments: {} })).result.isError, true)
   assert.equal((await s.call("nope")).error.code, -32601)

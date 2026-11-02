@@ -37,6 +37,11 @@ const TOOLS = [
     inputSchema: { type: "object", properties: { wait_minutes: { type: "number" } } },
   },
   {
+    name: "jep_rename",
+    description: "Give this conversation a new title, short and about the work.",
+    inputSchema: { type: "object", properties: { title: { type: "string" } }, required: ["title"] },
+  },
+  {
     name: "jep_show",
     description: "Show image files to the person in their chat.",
     inputSchema: { type: "object", properties: { paths: { type: "array", items: { type: "string" } } }, required: ["paths"] },
@@ -60,6 +65,11 @@ async function call(name, args = {}) {
   }
   if (name === "jep_restart") {
     const r = await ask({ op: "restart", wait_minutes: Number(args.wait_minutes) || undefined, session: SESSION, cwd: process.cwd() })
+    return text(r.message, !r.ok)
+  }
+  if (name === "jep_rename") {
+    if (typeof args.title !== "string" || !args.title.trim()) return text("title is required", true)
+    const r = await ask({ op: "rename", title: args.title, session: SESSION, cwd: process.cwd() })
     return text(r.message, !r.ok)
   }
   if (name === "jep_show") {

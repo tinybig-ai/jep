@@ -10,7 +10,9 @@ OPTIONAL. jep-tg boots and runs without it.
 One process hosts both adapters (`src/app/tg.ts` composition root). The gateway is
 `src/clients/gateway/index.ts: startGateway(deps)`, enabled when `JEP_GW_PORT` is set, bound
 on 0.0.0.0 so a phone reaches it over Tailscale or the LAN (`JEP_GW_BIND` narrows
-it to one interface, e.g. your Tailscale IP or `127.0.0.1`). No TLS: the
+it to one interface, e.g. your Tailscale IP or `127.0.0.1`). If `tailscale serve` already holds
+the port, the bind on 0.0.0.0 gets EADDRINUSE and the gateway falls back to `127.0.0.1` with a
+log line; set `JEP_GW_BIND=127.0.0.1` to make that the choice. No TLS: the
 transport rides inside the network's own encryption (WireGuard), like SSH.
 
 Tokens live in `<DATA_HOME>/gateway-tokens.json`; the pairing code prints once

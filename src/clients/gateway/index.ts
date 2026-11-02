@@ -98,6 +98,8 @@ export interface GatewayHandle {
   lastActivity(): number
   /** the turns, as the daemon's own services see them (watches, restart) */
   turns: TurnHost
+  /** give a conversation a new title, as the person's own rename would (`jep-rename`) */
+  rename(id: string, title: string): Promise<void>
 }
 
 const TOKEN_FILE = "gateway-tokens.json"
@@ -770,6 +772,19 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   }
   // uploads land in <dataHome>/attachments, remembered by id for the next prompt
   const attachments = new Map<string, { path: string; name: string; sessionID: string }>()
+  // The overlay is what jep's clients show, so the rename lands even when the
+  // harness is down. Where the harness also keeps a title (opencode), tell it,
+  // so its own TUI and anything else reading the session agree.
+  const renameConversation = async (id: string, name: string): Promise<void> => {
+    titles.set(id, name)
+    await saveTitles(deps.dataHome, titles)
+    const owner = sessionAdapters.get(id) ?? (await ensureListed(id))
+    if (owner?.renameSession) {
+      await owner.renameSession(id, name).catch((err) => {
+        console.error(`[gw] ${owner.id} rename failed: ${(err as Error)?.message ?? err}`)
+      })
+    }
+  }
   // Carryover: write a conversation out as a markdown file in the temp dir.
   // A new conversation started "with carryover" holds the file's path here until
   // its first prompt, which carries the file as an attachment.
@@ -1566,17 +1581,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       if (path === "/rename") {
         const name = str("title")
         if (!name) return json(res, 400, { error: "title required" })
-        titles.set(id, name)
-        await saveTitles(deps.dataHome, titles)
-        // The overlay is what jep's clients show, so the rename lands even when
-        // the harness is down. Where the harness also keeps a title (opencode),
-        // tell it, so its own TUI and anything else reading the session agree.
-        const owner = sessionAdapters.get(id) ?? (await ensureListed(id))
-        if (owner?.renameSession) {
-          await owner.renameSession(id, name).catch((err) => {
-            console.error(`[gw] ${owner.id} rename failed: ${(err as Error)?.message ?? err}`)
-          })
-        }
+        await renameConversation(id, name)
         return json(res, 200, { ok: true })
       }
 
@@ -2018,7 +2023,28 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   // a request that throws past its own handling is a log line, not a crash
   const server = createServer((req, res) => detach(`gateway ${req.method ?? "?"} ${req.url ?? ""}`, handle(req, res)))
 
-  await new Promise<void>((resolve) => server.listen(deps.port, deps.host ?? "0.0.0.0", resolve))
+  // `tailscale serve --https=<port>` holds that port on the tailnet address, so a bind on
+  // 0.0.0.0 gets EADDRINUSE. That used to throw out of the whole daemon and crash-loop it,
+  // taking Telegram down with the gateway. Loopback is all the serve proxy needs, so fall
+  // back to it, loudly, rather than die. An explicit host (JEP_GW_BIND) is honoured as given.
+  const listen = (host: string) =>
+    new Promise<void>((resolve, reject) => {
+      server.once("error", reject)
+      server.listen(deps.port, host, () => {
+        server.off("error", reject)
+        resolve()
+      })
+    })
+  const wanted = deps.host ?? "0.0.0.0"
+  try {
+    await listen(wanted)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== "EADDRINUSE" || wanted === "127.0.0.1") throw err
+    console.error(
+      `[gw] ${wanted}:${deps.port} is taken (usually tailscale serve on the same port); binding 127.0.0.1 instead. Set JEP_GW_BIND=127.0.0.1 to silence this.`,
+    )
+    await listen("127.0.0.1")
+  }
   const bound = (server.address() as { port: number }).port
   listening = bound
   console.error(`[gw] listening on :${bound}  ·  pairing code: ${pairCode}`)
@@ -2029,6 +2055,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     pairingAdmin,
     lastActivity: () => lastActivity,
     turns: engine,
+    rename: renameConversation,
     close: async () => {
       engine.close()
       clearInterval(pumpTimer)
