@@ -38,6 +38,7 @@ public struct Prefs: Equatable, Sendable {
     public var textSize: TextSize
     public var terminalEnabled: Bool
     public var backgroundStreaming: Bool
+    public var groupByProject = false
 }
 
 /// how long the undo affordance stays up after an archive
@@ -78,6 +79,8 @@ public final class AppStore {
     /// each harness's brand mark, as the daemon sends it; loaded once
     public private(set) var harnessMarks: [String: HarnessMark] = [:]
     public private(set) var newChat = NewChatState()
+    /// which project is open (its directory), when the list is grouped
+    public private(set) var openProject: String?
     public var notice: String?
     public private(set) var paired = false
     public private(set) var undo: [SessionSummary] = []
@@ -100,7 +103,7 @@ public final class AppStore {
         self.attention = attention
         self.factory = factory
         self.refreshDelayNs = refreshDelayMs * 1_000_000
-        self.prefs = Prefs(theme: settings.theme, textSize: settings.textSize, terminalEnabled: settings.terminalEnabled, backgroundStreaming: settings.backgroundStreaming)
+        self.prefs = Prefs(theme: settings.theme, textSize: settings.textSize, terminalEnabled: settings.terminalEnabled, backgroundStreaming: settings.backgroundStreaming, groupByProject: settings.groupByProject)
         self.gateway = pairing.baseUrl
         if pairing.isPaired {
             paired = true
@@ -138,6 +141,12 @@ public final class AppStore {
     public func setTextSize(_ s: TextSize) {
         settings.setTextSize(s)
         prefs.textSize = s
+    }
+
+    public func setGroupByProject(_ on: Bool) {
+        settings.setGroupByProject(on)
+        prefs.groupByProject = on
+        if !on { openProject = nil }
     }
 
     public func setBackgroundStreaming(_ on: Bool) {
@@ -422,9 +431,19 @@ public final class AppStore {
 
     // MARK: new conversation
 
+    public func openProject(_ dir: String?) { openProject = dir }
+
     public func openNewChat() {
         let r = repo ?? connect()
         newChat = NewChatState(workspaces: workspaces)
+        // Inside a project folder, "New conversation" means here: the folder it
+        // was opened from is already picked (a served workspace by name, with
+        // its harness; an unserved directory as a path; "Pods" as a pod).
+        if let inside = openProject {
+            if inside == podsProject { newChat.pod = true }
+            else if let w = workspaces.first(where: { $0.dir == inside }) { newChat.workspace = w.name; newChat.harness = w.harness }
+            else { newChat.path = inside }
+        }
         screen = .newChat
         Task {
             if let h = try? await r.harnesses() {

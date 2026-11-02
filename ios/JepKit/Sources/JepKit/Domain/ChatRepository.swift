@@ -134,6 +134,7 @@ public protocol ChatRepository: AnyObject, Sendable {
     func queueCancel(sessionId: String, clientID: String) async throws -> Bool
     func queueEdit(sessionId: String, clientID: String, text: String) async throws -> Bool
     func queueForce(sessionId: String, clientID: String) async throws -> Bool
+    func queueMove(sessionId: String, clientID: String, to: Int) async throws -> Bool
     func stop(sessionId: String) async throws -> Bool
     func compact(sessionId: String) async throws -> Bool
     /// a file part's bytes (images, attachments), fetched with the pairing token

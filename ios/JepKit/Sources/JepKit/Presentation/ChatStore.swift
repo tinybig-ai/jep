@@ -516,6 +516,17 @@ public final class ChatStore {
         Task { _ = try? await repo.queueEdit(sessionId: sessionId, clientID: id, text: body) }
     }
 
+    /// put a waiting prompt at index `to` of the line; the daemon's line is the order that counts
+    public func moveQueued(id: String, to: Int) {
+        let list = state.queued
+        guard let from = list.firstIndex(where: { $0.id == id }), to >= 0, to < list.count, from != to else { return }
+        update { st in
+            let item = st.queued.remove(at: from)
+            st.queued.insert(item, at: to)
+        }
+        Task { _ = try? await repo.queueMove(sessionId: sessionId, clientID: id, to: to) }
+    }
+
     public func cancelQueued(id: String) {
         update { $0.queued.removeAll { $0.id == id } }
         Task { _ = try? await repo.queueCancel(sessionId: sessionId, clientID: id) }

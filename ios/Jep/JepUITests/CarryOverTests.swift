@@ -90,3 +90,35 @@ final class GalleryTests: XCTestCase {
         app.navigationBars.buttons.element(boundBy: 0).tap()
     }
 }
+
+/// Grouped by project: the list shows folders, a folder opens to its conversations.
+final class GroupingTests: XCTestCase {
+    func testProjectsOpenToTheirConversations() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-app_theme", "LIGHT", "-app_group_by_project", "true"]
+        app.launch()
+        let address = app.textFields["gateway address"]
+        if address.waitForExistence(timeout: 8) {
+            func fill(_ field: XCUIElement, _ text: String) {
+                field.tap()
+                let old = (field.value as? String) ?? ""
+                if !old.isEmpty && old != field.placeholderValue {
+                    field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: old.count))
+                }
+                field.typeText(text)
+            }
+            fill(address, "127.0.0.1:8931")
+            fill(app.textFields["pairing code"], "123456")
+            app.buttons["Connect"].firstMatch.tap()
+        }
+        // the demo has "docs" with two conversations: release notes and the charts
+        let project = app.buttons.matching(NSPredicate(format: "label CONTAINS 'docs' AND label CONTAINS '2 conversations'")).firstMatch
+        XCTAssertTrue(project.waitForExistence(timeout: 30), "a project row says how many conversations it holds")
+        XCTAssertFalse(app.staticTexts["Write release notes for 0.4"].exists, "the conversations are one level down")
+        project.tap()
+        XCTAssertTrue(app.staticTexts["Write release notes for 0.4"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Chart the build times"].exists)
+        app.buttons["back to projects"].firstMatch.tap()
+        XCTAssertTrue(project.waitForExistence(timeout: 5))
+    }
+}

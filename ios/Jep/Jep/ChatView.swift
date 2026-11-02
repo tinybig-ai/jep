@@ -220,7 +220,7 @@ struct ChatView: View {
     @ViewBuilder
     private func bottom(_ st: ChatState) -> some View {
         VStack(spacing: 8) {
-            ForEach(st.queued, id: \.id) { q in
+            ForEach(Array(st.queued.enumerated()), id: \.element.id) { index, q in
                 HStack(spacing: 8) {
                     Image(systemName: q.mode == .afterReply ? "clock" : "arrow.turn.down.right").foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 1) {
@@ -231,6 +231,8 @@ struct ChatView: View {
                     Menu {
                         Button("Edit", systemImage: "pencil") { editText = q.text; editing = q }
                         Button("Send now", systemImage: "bolt") { chat.forceSendQueued(id: q.id) }
+                        if index > 0 { Button("Move up", systemImage: "arrow.up") { chat.moveQueued(id: q.id, to: index - 1) } }
+                        if index < st.queued.count - 1 { Button("Move down", systemImage: "arrow.down") { chat.moveQueued(id: q.id, to: index + 1) } }
                         Button("Cancel it", systemImage: "xmark", role: .destructive) { chat.cancelQueued(id: q.id) }
                     } label: {
                         Image(systemName: "ellipsis").padding(6)

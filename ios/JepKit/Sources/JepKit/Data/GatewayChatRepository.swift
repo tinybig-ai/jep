@@ -286,6 +286,7 @@ public final class GatewayChatRepository: ChatRepository, @unchecked Sendable {
     public func queueCancel(sessionId: String, clientID: String) async throws -> Bool { try await ok("/queue/cancel", ["id": sessionId, "clientID": clientID]) }
     public func queueEdit(sessionId: String, clientID: String, text: String) async throws -> Bool { try await ok("/queue/edit", ["id": sessionId, "clientID": clientID, "text": text]) }
     public func queueForce(sessionId: String, clientID: String) async throws -> Bool { try await ok("/queue/force", ["id": sessionId, "clientID": clientID]) }
+    public func queueMove(sessionId: String, clientID: String, to: Int) async throws -> Bool { try await ok("/queue/move", ["id": sessionId, "clientID": clientID, "to": to]) }
     public func seen(sessionId: String, at: Int64) async throws -> Bool { try await ok("/seen", ["id": sessionId, "at": at]) }
     public func rename(sessionId: String, title: String) async throws -> Bool { try await ok("/rename", ["id": sessionId, "title": title]) }
     public func delete(sessionId: String) async throws -> Bool { try await ok("/delete", ["id": sessionId]) }

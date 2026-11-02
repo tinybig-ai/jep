@@ -58,6 +58,16 @@ struct SettingsView: View {
                     )
                 }
             }
+            Section("Conversations") {
+                Toggle(isOn: Binding(get: { store.prefs.groupByProject }, set: { store.setGroupByProject($0) })) {
+                    row(
+                        "Group conversations by project",
+                        store.prefs.groupByProject
+                            ? "the list shows one folder per row; open one for its conversations"
+                            : "off: every conversation in one newest-first list"
+                    )
+                }
+            }
             Section("Connection") {
                 LabeledContent("Gateway", value: store.gateway ?? "—")
                 Button("Change gateway") { gatewayOpen = true }

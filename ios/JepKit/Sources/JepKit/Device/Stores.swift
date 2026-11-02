@@ -123,6 +123,10 @@ public final class AppSettings {
     /// whether finished turns notify while the app is in the background
     public var backgroundStreaming: Bool { prefs.string("app_background_streaming") != "false" }
 
+    /// the list shows one folder per row; open one for its conversations
+    public var groupByProject: Bool { prefs.string("app_group_by_project") == "true" }
+    public func setGroupByProject(_ on: Bool) { prefs.set("app_group_by_project", on ? "true" : "false") }
+
     public func setTheme(_ m: ThemeMode) { prefs.set("app_theme", m.rawValue) }
     public func setTextSize(_ s: TextSize) { prefs.set("app_text_size", s.rawValue) }
     public func setTerminalEnabled(_ on: Bool) { prefs.set("app_terminal_enabled", on ? "true" : "false") }

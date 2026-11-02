@@ -15,9 +15,32 @@ struct SessionsView: View {
         }
     }
 
+    private var grouped: Bool { store.prefs.groupByProject }
+    private var searching: Bool { !query.trimmingCharacters(in: .whitespaces).isEmpty }
+
+    /// what the list shows: inside an open project, that project's conversations
+    private var rows: [SessionSummary] {
+        guard grouped, let dir = store.openProject else { return shown }
+        return shown.filter { projectDir($0) == dir }
+    }
+
     var body: some View {
         List {
-            ForEach(shown) { s in
+            if grouped && store.openProject == nil && !searching {
+                ForEach(groupedProjects(store.sessions), id: \.dir) { project in
+                    Button { store.openProject(project.dir) } label: {
+                        ProjectRow(
+                            name: projectName(project.dir, project.sessions),
+                            count: project.sessions.count,
+                            unread: project.sessions.contains { store.unread.contains($0.id) },
+                            active: project.sessions.contains(where: \.active),
+                            pinned: project.sessions.contains(where: \.pinned)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            } else {
+            ForEach(rows) { s in
                 SessionRow(session: s, unread: store.unread.contains(s.id), selected: store.selection.contains(s.id))
                     .contentShape(Rectangle())
                     .onTapGesture {
@@ -35,6 +58,7 @@ struct SessionsView: View {
                         }
                     }
             }
+            }
         }
         .listStyle(.plain)
         .overlay {
@@ -44,7 +68,7 @@ struct SessionsView: View {
         }
         .searchable(text: $query)
         .refreshable { await store.refresh()?.value }
-        .navigationTitle(store.selection.isEmpty ? "Jep" : "\(store.selection.count) selected")
+        .navigationTitle(store.selection.isEmpty ? title : "\(store.selection.count) selected")
         .toolbar { toolbar }
         .safeAreaInset(edge: .bottom) { bottomBar }
         .sheet(isPresented: $archivedOpen) { ArchivedSheet() }
@@ -54,8 +78,20 @@ struct SessionsView: View {
         }
     }
 
+    /// inside a project the title says where you are
+    private var title: String {
+        guard grouped, let dir = store.openProject else { return "Jep" }
+        return projectName(dir, store.sessions.filter { projectDir($0) == dir })
+    }
+
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
+        if grouped, store.openProject != nil, store.selection.isEmpty {
+            ToolbarItem(placement: .topBarLeading) {
+                Button { store.openProject(nil) } label: { Image(systemName: "chevron.left") }
+                    .accessibilityLabel("back to projects")
+            }
+        }
         if store.selection.isEmpty {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
@@ -236,5 +272,34 @@ struct ImportSheet: View {
             }
         }
         .onAppear { store.loadImportable() }
+    }
+}
+
+/// One row per project in the grouped view: the folder, how many conversations
+/// are in it, and the same live and unread marks a conversation row carries,
+/// rolled up so the project says whether anything in it needs you.
+struct ProjectRow: View {
+    let name: String
+    let count: Int
+    let unread: Bool
+    let active: Bool
+    let pinned: Bool
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "folder").frame(width: 34, height: 34).background(.quaternary, in: Circle())
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 5) {
+                    if pinned { Image(systemName: "pin.fill").font(.caption2).foregroundStyle(.tint) }
+                    Text(name).jepFont(16, unread ? .semibold : .regular).lineLimit(1)
+                }
+                Text(count == 1 ? "1 conversation" : "\(count) conversations").jepFont(13, design: .monospaced).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            if active { LiveDot() } else if unread { Circle().fill(.tint).frame(width: 8, height: 8) }
+            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
     }
 }
