@@ -137,6 +137,9 @@ export interface TelegramApi {
   sendChatAction(params: { chatID: number; action: string }): Promise<void>
   answerCallbackQuery(params: { id: string; text?: string }): Promise<void>
   setMyCommands(commands: TgBotCommand[]): Promise<void>
+  /** the button beside the message box: opens `webAppUrl` as a Telegram Mini App, or the plain
+   *  commands menu when none. Without a chat it is the default for every chat with the bot. */
+  setChatMenuButton(webAppUrl?: string, text?: string): Promise<void>
   /** download a message's file (photo/document) as raw bytes */
   getFileContent(fileID: string): Promise<Buffer>
   sendPhoto(params: { chatID: number; filePath: string; caption?: string }): Promise<{ message_id: number }>
@@ -376,6 +379,11 @@ export function createTelegramApi(token: string): TelegramApi {
     },
     setMyCommands(commands) {
       return call<void>("setMyCommands", { commands })
+    },
+    setChatMenuButton(webAppUrl, text = "jep") {
+      return call<void>("setChatMenuButton", {
+        menu_button: webAppUrl ? { type: "web_app", text, web_app: { url: webAppUrl } } : { type: "commands" },
+      })
     },
     async getFileContent(fileID) {
       const { file_path } = await call<{ file_path: string }>("getFile", { file_id: fileID })

@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
 import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync } from "node:fs"
 import { readdir } from "node:fs/promises"
 import { join, sep } from "node:path"
@@ -189,6 +191,9 @@ async function buildMockApi(): Promise<MockApi> {
     },
     async answerCallbackQuery(params) {
       calls.push({ method: "answerCallbackQuery", text: params.text })
+    },
+    async setChatMenuButton(webAppUrl) {
+      calls.push({ method: "setChatMenuButton", text: webAppUrl ?? "commands" })
     },
     async setMyCommands(commands) {
       calls.push({ method: "setMyCommands", text: `n=${commands.length}: ${commands.map((c) => "/" + c.command).join(" ")}` })
@@ -597,6 +602,27 @@ async function main() {
   // be up: the machine has often just woken, which is what kills the long poll
   // an hour at a time. A blip here used to leave the slash-command menu stale
   // until the next restart, so retry a few times before giving up.
+  // The web app, inside Telegram: the menu button opens the gateway's own page
+  // as a Mini App. Telegram needs HTTPS; the tailnet address `tailscale serve`
+  // gives the gateway port is that, and opens on a phone that is on the tailnet.
+  // JEP_WEBAPP_URL overrides it ("off" leaves the plain commands menu).
+  if (process.env.JEP_GW_PORT || process.env.JEP_WEBAPP_URL) {
+    detach("register web app button", (async () => {
+      const set = process.env.JEP_WEBAPP_URL
+      const url = set === "off" ? undefined : set || (await tailnetUrl(Number(process.env.JEP_GW_PORT)))
+      if (!url && set !== "off") return
+      for (let attempt = 1; attempt <= 5; attempt++) {
+        try {
+          await tg.setChatMenuButton(url)
+          console.error(`menu button: ${url ?? "commands"}`)
+          return
+        } catch (err) {
+          console.error(`setChatMenuButton failed (attempt ${attempt}/5):`, (err as Error).message)
+          await sleep(Math.min(1_000 * 2 ** (attempt - 1), 30_000))
+        }
+      }
+    })())
+  }
   detach("register bot commands", (async () => {
     for (let attempt = 1; attempt <= 5; attempt++) {
       try {
@@ -650,3 +676,17 @@ main().catch((err) => {
   console.error("jep-tg failed:", err)
   process.exit(1)
 })
+
+/** https://<this machine's tailnet name>:<port>, when Tailscale is up and serves that port over HTTPS */
+async function tailnetUrl(port: number): Promise<string | undefined> {
+  try {
+    const run = promisify(execFile)
+    const { stdout: status } = await run("tailscale", ["status", "--json"], { timeout: 5_000 })
+    const dns = String(JSON.parse(status)?.Self?.DNSName ?? "").replace(/\.$/, "")
+    if (!dns) return undefined
+    const { stdout: serving } = await run("tailscale", ["serve", "status"], { timeout: 5_000 })
+    return serving.includes(`https://${dns}:${port}`) ? `https://${dns}:${port}` : undefined
+  } catch {
+    return undefined
+  }
+}

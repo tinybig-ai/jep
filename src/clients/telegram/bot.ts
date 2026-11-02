@@ -809,6 +809,7 @@ export class TelegramBot {
     return {
       getUpdates: (p) => tg.getUpdates(p),
       setMyCommands: (c) => tg.setMyCommands(c),
+      setChatMenuButton: (u, t) => tg.setChatMenuButton(u, t),
       sendChatAction: (p) => tg.sendChatAction(p),
       answerCallbackQuery: (p) => tg.answerCallbackQuery(p),
       deleteMessage: (p) => tg.deleteMessage(p),

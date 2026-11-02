@@ -129,6 +129,13 @@ npm start
 > transcript cannot be read, it stops the message and says to run `claude -c`.
 > `JEP_NO_CLAUDE_HOOK=1` skips it.
 
+> **Telegram Mini App.** With `JEP_GW_PORT` set and the gateway served over
+> HTTPS by Tailscale (`tailscale serve --bg --https=<port> http://127.0.0.1:<port>`),
+> the bot sets its menu button to open the web app inside Telegram, on any phone
+> that is on your tailnet. `JEP_WEBAPP_URL` sets another address, or `off` for the
+> plain commands menu.
+
+
 > On Linux, `sh scripts/install-linux.sh` installs it as a **systemd user
 > service** that restarts on a crash and, with `loginctl enable-linger`, comes
 > back after a reboot. Logs: `journalctl --user -u jep-tg -f`. CI boots the
