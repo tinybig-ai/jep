@@ -10,7 +10,7 @@ import { chmod, mkdir, open, readdir, readFile, realpath, stat, unlink, writeFil
 import { homedir, tmpdir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path"
-import type { HarnessAdapter, HarnessMark, HarnessSettingSpec, SessionImport, Terminal, TurnHost } from "../../core/ports.ts"
+import type { ChatDirectory, ChatInfo, HarnessAdapter, HarnessMark, HarnessSettingSpec, SessionImport, Terminal, TurnHost } from "../../core/ports.ts"
 import { newPairCode, type PairingAdmin } from "../../core/pairing.ts"
 import { describeAsk } from "../../core/asks.ts"
 import { hasMcp, parseConversationMcp, type ConversationMcp } from "../../core/mcp.ts"
@@ -100,6 +100,8 @@ export interface GatewayHandle {
   turns: TurnHost
   /** give a conversation a new title, as the person's own rename would (`jep-rename`) */
   rename(id: string, title: string): Promise<void>
+  /** the conversations, readable by one agent with the person's yes (`jep-read`) */
+  chats: ChatDirectory
 }
 
 const TOKEN_FILE = "gateway-tokens.json"
@@ -784,6 +786,57 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         console.error(`[gw] ${owner.id} rename failed: ${(err as Error)?.message ?? err}`)
       })
     }
+  }
+  // A card the daemon itself raises (an agent asks to read another conversation), not a harness. It
+  // is an ask like any other to every client: recorded, broadcast, answered through /respond. What
+  // differs is who hears the answer: a waiting promise here, not an adapter.
+  const daemonAsks = new Map<string, (optionID: string | null) => void>()
+  const askPerson: ChatDirectory["askPerson"] = (key, ask, waitMs) =>
+    new Promise((resolve) => {
+      const id = `jep-ask-${randomBytes(6).toString("hex")}`
+      const request: AskRequest = { id, sessionID: key, title: ask.title, detail: ask.detail, options: ask.options, kind: "permission" }
+      let timer: ReturnType<typeof setTimeout> | null = null
+      const finish = (optionID: string | null): void => {
+        if (!daemonAsks.delete(id)) return
+        if (timer) clearTimeout(timer)
+        closeAsk(id)
+        settleAsk(id, optionID ? "answered" : "closed", optionID ?? undefined)
+        broadcast({ type: "ask.resolved", sessionID: key, askID: id } as DomainEvent)
+        engine.touch(key)
+        resolve(optionID)
+      }
+      daemonAsks.set(id, finish)
+      askSessions.set(id, key)
+      openAsks(key).add(id)
+      recordAsk(request)
+      broadcast({ type: "ask.requested", ask: { ...request, display: describeAsk(request) } } as DomainEvent)
+      console.error(`[ask] surfaced ${id} (${ask.title})`)
+      timer = setTimeout(() => finish(null), waitMs)
+      timer.unref()
+    })
+  const chatDirectory: ChatDirectory = {
+    async list() {
+      const out: ChatInfo[] = []
+      for (const { adapter } of deps.adapters()) {
+        for (const s of await adapter.listSessions().catch(() => [])) {
+          if (archived.has(s.id)) continue
+          sessionAdapters.set(s.id, adapter)
+          out.push({ id: s.id, title: titles.get(s.id) ?? s.title, harness: adapter.id, workspace: adapter.workspace, updatedAt: s.updatedAt })
+        }
+      }
+      return out
+    },
+    async read(id, last) {
+      const owner = await ensureListed(id)
+      if (!owner) return null
+      const rows = last > 0 ? await owner.messages(id, { limit: last }) : await owner.messages(id)
+      const mine = (await owner.listSessions().catch(() => [])).find((s) => s.id === id)
+      return {
+        info: { id, title: titles.get(id) ?? mine?.title ?? "", harness: owner.id, workspace: owner.workspace, updatedAt: mine?.updatedAt ?? 0 },
+        messages: rows.map(cleanForDisplay),
+      }
+    },
+    askPerson,
   }
   // Carryover: write a conversation out as a markdown file in the temp dir.
   // A new conversation started "with carryover" holds the file's path here until
@@ -1511,6 +1564,12 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const askID = str("askID")
         const optionID = str("optionID")
         if (!askID || !optionID) return json(res, 400, { error: "askID and optionID required" })
+        const daemonAsk = daemonAsks.get(askID)
+        if (daemonAsk) {
+          daemonAsk(optionID)
+          console.error(`[ask] respond askID=${askID} option=${optionID} -> ok (daemon)`)
+          return json(res, 200, { ok: true })
+        }
         const sid = askSessions.get(askID) ?? str("id") ?? ""
         if (!sid) {
           console.error(`[ask] respond askID=${askID} option=${optionID} -> no session for this ask`)
@@ -1538,6 +1597,11 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       if (path === "/reject") {
         const askID = str("askID")
         if (!askID) return json(res, 400, { error: "askID required" })
+        const daemonAsk = daemonAsks.get(askID)
+        if (daemonAsk) {
+          daemonAsk("reject")
+          return json(res, 200, { ok: true })
+        }
         const sid = askSessions.get(askID) ?? str("id") ?? ""
         if (!sid) return json(res, 404, { error: "unknown ask" })
         const owner = await ensureListed(sid)
@@ -2056,6 +2120,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     lastActivity: () => lastActivity,
     turns: engine,
     rename: renameConversation,
+    chats: chatDirectory,
     close: async () => {
       engine.close()
       clearInterval(pumpTimer)

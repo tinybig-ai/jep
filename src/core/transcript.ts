@@ -14,6 +14,7 @@ export const JEP_CONTEXT = [
   "  jep-watch   -- wait for a condition (e.g., a test to pass, a file to appear)",
   "  jep-restart -- queue a daemon restart (waits for all turns to end, then restarts)",
   "  jep-rename  -- give this conversation a new title",
+  "  jep-read    -- read another conversation (the person is asked first; --list shows them)",
   "  jep-show    -- display an image file in the phone (path or URL)",
   "Run them as shell commands. They find the conversation from the working directory.",
 ].join("\n")

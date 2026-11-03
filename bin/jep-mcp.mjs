@@ -42,6 +42,12 @@ const TOOLS = [
     inputSchema: { type: "object", properties: { title: { type: "string" } }, required: ["title"] },
   },
   {
+    name: "jep_read",
+    description:
+      "Read another jep conversation. The person is asked first; you wait for the answer. Pass list=true to see the conversations, or target (an id, the start of an id, or part of a title) and optionally last (newest N messages).",
+    inputSchema: { type: "object", properties: { target: { type: "string" }, last: { type: "number" }, list: { type: "boolean" } } },
+  },
+  {
     name: "jep_show",
     description: "Show image files to the person in their chat.",
     inputSchema: { type: "object", properties: { paths: { type: "array", items: { type: "string" } } }, required: ["paths"] },
@@ -65,6 +71,11 @@ async function call(name, args = {}) {
   }
   if (name === "jep_restart") {
     const r = await ask({ op: "restart", wait_minutes: Number(args.wait_minutes) || undefined, session: SESSION, cwd: process.cwd() })
+    return text(r.message, !r.ok)
+  }
+  if (name === "jep_read") {
+    if (args.list !== true && (typeof args.target !== "string" || !args.target.trim())) return text("target is required (or list=true)", true)
+    const r = await ask({ op: "read", list: args.list === true || undefined, target: args.target ?? "", last: Number(args.last) || undefined, session: SESSION, cwd: process.cwd() })
     return text(r.message, !r.ok)
   }
   if (name === "jep_rename") {

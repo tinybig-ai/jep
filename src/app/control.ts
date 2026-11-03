@@ -13,7 +13,7 @@ export interface ControlReply {
   message: string
 }
 
-/** one request: `op` names what is asked ("restart", "rename"; absent means a watch) */
+/** one request: `op` names what is asked ("restart", "rename", "read"; absent means a watch) */
 export interface ControlRequest {
   op?: unknown
   // a watch (core/watches.ts) and where it comes from
@@ -25,6 +25,10 @@ export interface ControlRequest {
   cwd?: unknown
   // a rename: the new title
   title?: unknown
+  // a read of another conversation (`jep-read`): which one, how much, or just the list
+  target?: unknown
+  last?: unknown
+  list?: unknown
   // a restart (core/restarts.ts)
   wait_minutes?: unknown
 }
@@ -33,6 +37,7 @@ export interface ControlHandlers {
   watch(req: ControlRequest): Promise<ControlReply>
   restart(req: ControlRequest): ControlReply
   rename(req: ControlRequest): Promise<ControlReply>
+  read(req: ControlRequest): Promise<ControlReply>
 }
 
 export const CONTROL_SOCKET = "control.sock"
@@ -53,6 +58,7 @@ export async function startControl(dataHome: string, handlers: ControlHandlers):
         return reply({ ok: false, message: "unreadable request" })
       }
       if (req.op === "restart") return reply(handlers.restart(req))
+      if (req.op === "read") return void detach("control read", handlers.read(req).then(reply))
       if (req.op === "rename") return void detach("control rename", handlers.rename(req).then(reply))
       detach("control request", handlers.watch(req).then(reply))
     })

@@ -61,6 +61,17 @@ bubble, and `/history` hides the instruction itself.
   restarts. It never resumes by itself; the record stays so a client can say
   what happened. `/loop/clear` forgets a finished loop.
 
+## One agent reading another conversation
+
+`jep-read CONVERSATION [--last N]` (and the `jep_read` MCP tool) lets an agent read a different
+conversation. It always asks first: the daemon raises an ordinary ask card in the *asking*
+conversation, naming both ("Read another conversation?": Allow once, Always allow this one, Deny),
+and the command waits up to ten minutes. The card is answered through `/respond` like any other and
+is recorded with `/history`. Deny, no answer, or a conversation that is gone read nothing. "Always"
+is remembered for that pair of conversations in `<DATA_HOME>/chat-grants.json`. `jep-read --list`
+names the conversations and needs no yes. What comes back is a read-only transcript, headed with
+whose it is, and tool output is cut short.
+
 ## Commands (JSON POSTs)
 
 | route | body | returns |

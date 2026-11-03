@@ -74,6 +74,29 @@ export interface TurnHost {
   closing(): boolean
 }
 
+/** One conversation, as another may be told of it (`jep-read --list`) */
+export interface ChatInfo {
+  id: string
+  title: string
+  harness: string
+  workspace: string
+  updatedAt: number
+}
+
+/**
+ * What the daemon's own services need to let one agent read another's conversation: the list, the
+ * messages, and a way to put a question to the person. The gateway implements it; nothing here
+ * knows how it is asked.
+ */
+export interface ChatDirectory {
+  list(): Promise<ChatInfo[]>
+  /** the newest `last` messages (0 = all) with the conversation's own title; null when it is gone */
+  read(id: string, last: number): Promise<{ info: ChatInfo; messages: import("./types.ts").Message[] } | null>
+  /** put a choice to the person inside conversation `key`, and wait: the chosen option id, or null when
+   *  nobody answered in time or the card was stood down */
+  askPerson(key: string, ask: { title: string; detail: string; options: { id: string; label: string; style?: "success" | "danger" }[] }, waitMs: number): Promise<string | null>
+}
+
 export interface TurnListener {
   /** `resume`: this turn is itself a pick-up of one a restart cut off */
   started?(key: string, resume: boolean): void

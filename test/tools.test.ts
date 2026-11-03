@@ -52,6 +52,7 @@ test("jep-mcp lists exactly the tools tools.ts names, and reaches the daemon lik
     watch: async (req) => (seen.push(req), { ok: true, message: "watching" }),
     restart: (req) => (seen.push(req), { ok: true, message: "restart queued" }),
     rename: async (req) => (seen.push(req), { ok: true, message: "renamed" }),
+    read: async (req) => (seen.push(req), { ok: true, message: "read" }),
   })
   const s = await server(home, ["--session", "jep-sess"])
   t.after(() => {
