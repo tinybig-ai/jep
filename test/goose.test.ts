@@ -1,5 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { existsSync, readFileSync } from "node:fs"
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -33,6 +34,15 @@ if (args[0] === "session" && args[1] === "export") {
   const s = db[value("--name")]
   console.log(JSON.stringify(s ? { provider_name: "openrouter", conversation: s } : {}))
   process.exit(s ? 0 : 1)
+}
+if (args[0] === "run" && (value("-t") ?? "").includes("STUCK")) {
+  // a goose waiting on a tool that will not end: it ignores SIGTERM, and so does the tool it started
+  const { spawn } = await import("node:child_process")
+  process.on("SIGTERM", () => {})
+  const tool = spawn("sh", ["-c", "trap '' TERM; sleep 600"], { stdio: "ignore" })
+  writeFileSync(store + ".pids", JSON.stringify({ goose: process.pid, tool: tool.pid }))
+  setInterval(() => {}, 1000)
+  await new Promise(() => {})
 }
 if (args[0] === "run") {
   const name = value("--name")
@@ -215,4 +225,31 @@ test("a listing that fails does not make a running conversation look new", async
   } finally {
     await rm(store + ".fail", { force: true })
   }
+})
+
+test("stop ends a goose that ignores SIGTERM, tool and all, within seconds", { timeout: 20_000 }, async () => {
+  const workspace = await mkdtemp(path.join(home, "workspace-"))
+  const adapter = await startGooseAdapter(workspace)
+  const session = await adapter.createSession("t")
+  const turn = adapter.prompt(session.id, "STUCK").then(() => "finished", (e) => (e as Error).name)
+  const pidsFile = store + ".pids"
+  for (let i = 0; i < 100 && !existsSync(pidsFile); i++) await new Promise((r) => setTimeout(r, 50))
+  const { goose, tool } = JSON.parse(readFileSync(pidsFile, "utf8")) as { goose: number; tool: number }
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+  assert.ok(alive(goose) && alive(tool))
+  const t0 = Date.now()
+  assert.equal(await adapter.abort(session.id), true)
+  assert.equal(await turn, "TurnAbortedError")
+  assert.ok(Date.now() - t0 < 8_000, `stopped in ${Date.now() - t0} ms`)
+  await new Promise((r) => setTimeout(r, 300))
+  assert.ok(!alive(goose), "goose is gone")
+  assert.ok(!alive(tool), "so is the tool it was waiting on")
+  await rm(pidsFile, { force: true })
 })
