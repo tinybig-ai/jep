@@ -857,6 +857,7 @@ async function open(id) {
   current = id === "new" ? null : id
   $("start").hidden = id !== "new"
   $("scroll").hidden = id === "new"
+  fillTries = 0
   messages = []; asks = []; etag = null; hasMore = false; loadingOlder = false; live = new Map(); pendingText = []; queue = []
   loop = null; renderLoop()
   $("input").value = (current && remembered(draftKey(current))) || ""
@@ -908,6 +909,22 @@ async function readHistory() {
   const seen = new Set(messages.flatMap((m) => [m.id, ...m.parts.map((p) => p.id)]))
   for (const [pid, l] of live) if (seen.has(pid) || seen.has(l.messageID)) live.delete(pid)
   render()
+  fillScreen()
+}
+
+// A page counts messages, but a long turn's hundreds of steps fold into ONE block, so a page can
+// hold a single visible line and a "Load older" button under a screen of nothing. Reading goes on
+// until the log fills the screen. It gives up after a few pages (the button is still there), so a
+// conversation that is all work cannot pull its whole record in one go.
+let fillTries = 0
+async function fillScreen() {
+  const id = current
+  while (id === current && hasMore && !loadingOlder && fillTries < 8) {
+    const scroller = $("scroll")
+    if (scroller.hidden || scroller.scrollHeight > scroller.clientHeight + 120) return
+    fillTries++
+    if (!(await loadOlder())) return
+  }
 }
 
 async function loadOlder() {
