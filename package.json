@@ -31,7 +31,8 @@
     "jep-watch": "bin/jep-watch.mjs",
     "jep-show": "bin/jep-show.mjs",
     "jep-restart": "bin/jep-restart.mjs",
-    "jep-rename": "bin/jep-rename.mjs"
+    "jep-rename": "bin/jep-rename.mjs",
+    "jep-read": "bin/jep-read.mjs"
   },
   "engines": {
     "node": ">=22.6.0"

@@ -546,6 +546,7 @@ async function main() {
       turns: gw.turns,
       restart: () => detach("restart", shutdown("restart")),
       rename: (key, title) => gw.rename(key, title),
+      chats: gw.chats,
     })
     gwClose = async () => {
       continuity.close()

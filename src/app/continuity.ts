@@ -1,6 +1,8 @@
 import { readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import type { HarnessAdapter, TurnHost } from "../core/ports.ts"
+import type { ChatDirectory, HarnessAdapter, TurnHost } from "../core/ports.ts"
+import { addGrant, hasGrant, parseGrants, pickChat, serializeGrants } from "../core/chatgrants.ts"
+import { renderForRead } from "../core/carryover.ts"
 import { detach } from "../core/detach.ts"
 import { parseJournal, parseSavedWatches, restartWaitMs, RESUME_TEXT, toResume } from "../core/restarts.ts"
 import { lookAtWatch, parseWatch, watchText, WATCH_MAX_PER_SESSION, type WatchOutcome, type WatchSpec } from "../core/watches.ts"
@@ -24,6 +26,10 @@ export interface ContinuityOpts {
   restart?(): void
   /** retitle a conversation. Absent, `jep-rename` says it cannot. */
   rename?(key: string, title: string): Promise<void>
+  /** the conversations an agent may be allowed to read (`jep-read`). Absent, `jep-read` says it cannot. */
+  chats?: ChatDirectory
+  /** how long a read waits for the person (default 10 min) */
+  readWaitMs?: number
   /** how long after start the saved watches and cut-off turns are picked up
    * (default 2 s: the workspaces must be up first) */
   restoreAfterMs?: number
@@ -162,7 +168,68 @@ export async function startContinuity(opts: ContinuityOpts): Promise<{ close(): 
     return { ok: true, message: `renamed to "${title}"` }
   }
 
-  const control = await startControl(dataHome, { watch: watchRequest, restart: restartRequest, rename: renameRequest })
+  // ─── read another conversation ──────────────────────────────────────
+  // `jep-read` lets an agent look at a different conversation, but only with the person's yes: a
+  // card in the asking conversation names both and waits. "Always" is remembered for that pair.
+  const grantsFile = join(dataHome, "chat-grants.json")
+  const grants = (() => {
+    try {
+      return parseGrants(readFileSync(grantsFile, "utf8"))
+    } catch {
+      return parseGrants("")
+    }
+  })()
+  const saveGrants = (): void => {
+    try {
+      writeFileSync(grantsFile, serializeGrants(grants))
+    } catch (err) {
+      console.error(`[read] could not save grants: ${(err as Error)?.message ?? err}`)
+    }
+  }
+  const readRequest = async (req: ControlRequest): Promise<ControlReply> => {
+    const dir = opts.chats
+    if (!dir) return { ok: false, message: "this daemon cannot share conversations" }
+    const all = await dir.list()
+    if (req.list === true) {
+      const rows = [...all].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 40)
+      return { ok: true, message: rows.map((c) => `${c.id}  ${c.harness}  ${c.title.slice(0, 60)}`).join("\n") || "no conversations" }
+    }
+    const asker = await turns.resolve(typeof req.session === "string" ? req.session : undefined, typeof req.cwd === "string" ? req.cwd : undefined)
+    if (typeof asker === "string") return { ok: false, message: asker }
+    const picked = pickChat(all, typeof req.target === "string" ? req.target : "")
+    if (!picked.ok) return { ok: false, message: picked.message }
+    const target = picked.chat
+    if (target.id === asker.key) return { ok: false, message: "that is this conversation" }
+    const last = typeof req.last === "number" && req.last > 0 ? Math.min(500, Math.floor(req.last)) : 40
+    if (!hasGrant(grants, asker.key, target.id)) {
+      const mine = all.find((c) => c.id === asker.key)
+      const answer = await dir.askPerson(
+        asker.key,
+        {
+          title: "Read another conversation?",
+          detail: `${mine ? `"${mine.title.slice(0, 60)}"` : "This conversation"} wants to read "${target.title.slice(0, 60)}" (${target.harness}, ${target.workspace.split("/").pop() ?? ""}).`,
+          options: [
+            { id: "allow", label: "Allow once", style: "success" },
+            { id: "always", label: "Always allow this one" },
+            { id: "reject", label: "Deny", style: "danger" },
+          ],
+        },
+        opts.readWaitMs ?? 10 * 60_000,
+      )
+      if (answer === null) return { ok: false, message: "nobody answered the request to read that conversation; it was not read" }
+      if (answer === "reject") return { ok: false, message: "the person said no: that conversation was not shared" }
+      if (answer === "always") {
+        addGrant(grants, asker.key, target.id)
+        saveGrants()
+      }
+    }
+    const got = await dir.read(target.id, last)
+    if (!got) return { ok: false, message: "that conversation is gone" }
+    console.error(`[read] ${asker.key} read ${target.id} (last ${last})`)
+    return { ok: true, message: renderForRead(got.messages, { title: got.info.title, harness: got.info.harness, workspace: got.info.workspace, last }) }
+  }
+
+  const control = await startControl(dataHome, { watch: watchRequest, restart: restartRequest, rename: renameRequest, read: readRequest })
 
   // ─── pick up what the last run left ─────────────────────────────────
   // Watches that were waiting, and turns a restart or a crash cut off. After a
