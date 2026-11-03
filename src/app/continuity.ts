@@ -1,7 +1,8 @@
 import { readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { ChatDirectory, HarnessAdapter, TurnHost } from "../core/ports.ts"
-import { addGrant, hasGrant, parseGrants, pickChat, serializeGrants } from "../core/chatgrants.ts"
+import { addGrant, hasGrant, parseGrants, pickChat, serializeGrants, tellAllowed } from "../core/chatgrants.ts"
+import { guestText } from "../core/transcript.ts"
 import { renderForRead } from "../core/carryover.ts"
 import { detach } from "../core/detach.ts"
 import { parseJournal, parseSavedWatches, restartWaitMs, RESUME_TEXT, toResume } from "../core/restarts.ts"
@@ -229,7 +230,54 @@ export async function startContinuity(opts: ContinuityOpts): Promise<{ close(): 
     return { ok: true, message: renderForRead(got.messages, { title: got.info.title, harness: got.info.harness, workspace: got.info.workspace, last }) }
   }
 
-  const control = await startControl(dataHome, { watch: watchRequest, restart: restartRequest, rename: renameRequest, read: readRequest })
+  // `jep-tell`: one conversation sends another a message, as a turn in it. The person says yes the first
+  // time for each pair (and "always" is remembered), and the pair is held to a few messages an hour.
+  const tellLog = new Map<string, number[]>()
+  const tellRequest = async (req: ControlRequest): Promise<ControlReply> => {
+    const dir = opts.chats
+    if (!dir) return { ok: false, message: "this daemon cannot send messages between conversations" }
+    const message = typeof req.message === "string" ? req.message.trim() : ""
+    if (!message) return { ok: false, message: "give the message to send" }
+    if (message.length > 8000) return { ok: false, message: "that message is too long (8000 characters at most)" }
+    const asker = await turns.resolve(typeof req.session === "string" ? req.session : undefined, typeof req.cwd === "string" ? req.cwd : undefined)
+    if (typeof asker === "string") return { ok: false, message: asker }
+    const all = await dir.list()
+    const picked = pickChat(all, typeof req.target === "string" ? req.target : "")
+    if (!picked.ok) return { ok: false, message: picked.message }
+    const target = picked.chat
+    if (target.id === asker.key) return { ok: false, message: "that is this conversation" }
+    const mine = all.find((c) => c.id === asker.key)
+    if (!hasGrant(grants, asker.key, target.id, "tell")) {
+      const answer = await dir.askPerson(
+        asker.key,
+        {
+          title: "Message another conversation?",
+          detail: `${mine ? `"${mine.title.slice(0, 60)}"` : "This conversation"} wants to send "${target.title.slice(0, 60)}" (${target.harness}) a message: ${message.slice(0, 200)}${message.length > 200 ? "…" : ""}`,
+          options: [
+            { id: "allow", label: "Allow once", style: "success" },
+            { id: "always", label: "Always allow messages to it" },
+            { id: "reject", label: "Deny", style: "danger" },
+          ],
+        },
+        opts.readWaitMs ?? 10 * 60_000,
+      )
+      if (answer === null) return { ok: false, message: "nobody answered the request to send that message; it was not sent" }
+      if (answer === "reject") return { ok: false, message: "the person said no: the message was not sent" }
+      if (answer === "always") {
+        addGrant(grants, asker.key, target.id, "tell")
+        saveGrants()
+      }
+    }
+    if (!tellAllowed(tellLog, asker.key, target.id, Date.now())) {
+      return { ok: false, message: "too many messages to that conversation this hour; the person can see them, so wait or ask them" }
+    }
+    // jep's own turn in the receiver: it runs alone, after whatever is running, never merged with the person's words
+    turns.enqueue(target.id, guestText({ id: asker.key, title: mine?.title ?? "", harness: mine?.harness ?? "" }, message), { notice: true })
+    console.error(`[tell] ${asker.key} -> ${target.id}`)
+    return { ok: true, message: `sent to "${target.title.slice(0, 60)}". It reads it when its current turn ends. Do not wait for a reply: if it answers, that arrives as a message to you.` }
+  }
+
+  const control = await startControl(dataHome, { watch: watchRequest, restart: restartRequest, rename: renameRequest, read: readRequest, tell: tellRequest })
 
   // ─── pick up what the last run left ─────────────────────────────────
   // Watches that were waiting, and turns a restart or a crash cut off. After a

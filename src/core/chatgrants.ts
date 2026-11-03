@@ -4,13 +4,36 @@
 
 export type Grants = Set<string>
 
-const key = (reader: string, target: string): string => `${reader}→${target}`
+/** what a grant lets one conversation do to another: read it, or send it messages */
+export type GrantAction = "read" | "tell"
 
-export const hasGrant = (grants: Grants, reader: string, target: string): boolean => grants.has(key(reader, target))
+// reads keep the original key, so a grants file written before `tell` existed still means what it did
+const key = (reader: string, target: string, action: GrantAction = "read"): string => `${action === "tell" ? "tell:" : ""}${reader}→${target}`
 
-export const addGrant = (grants: Grants, reader: string, target: string): void => void grants.add(key(reader, target))
+export const hasGrant = (grants: Grants, reader: string, target: string, action: GrantAction = "read"): boolean => grants.has(key(reader, target, action))
 
-export const revokeGrant = (grants: Grants, reader: string, target: string): void => void grants.delete(key(reader, target))
+export const addGrant = (grants: Grants, reader: string, target: string, action: GrantAction = "read"): void => void grants.add(key(reader, target, action))
+
+export const revokeGrant = (grants: Grants, reader: string, target: string, action: GrantAction = "read"): void => void grants.delete(key(reader, target, action))
+
+/** messages one conversation may send another in an hour, however often it has been allowed */
+export const TELL_PER_HOUR = 12
+
+/**
+ * A sliding hour per sender and receiver. Returns whether one more message may go now, and records it
+ * when it may. An agent told "reply with jep-tell" can answer an agent told the same, so this is the
+ * stop on two of them keeping each other busy while nobody watches.
+ */
+export const tellAllowed = (log: Map<string, number[]>, reader: string, target: string, now: number, max = TELL_PER_HOUR): boolean => {
+  const k = `${reader}→${target}`
+  const recent = (log.get(k) ?? []).filter((t) => now - t < 3_600_000)
+  if (recent.length >= max) {
+    log.set(k, recent)
+    return false
+  }
+  log.set(k, [...recent, now])
+  return true
+}
 
 export const parseGrants = (raw: string): Grants => {
   try {

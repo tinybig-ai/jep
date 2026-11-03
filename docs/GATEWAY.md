@@ -72,6 +72,15 @@ is remembered for that pair of conversations in `<DATA_HOME>/chat-grants.json`. 
 names the conversations and needs no yes. What comes back is a read-only transcript, headed with
 whose it is, and tool output is cut short.
 
+`jep-tell CONVERSATION MESSAGE...` (and `jep_tell`) goes the other way: it sends another conversation a
+message, as a turn in it. The first time for each pair a card in the *sending* conversation asks
+(Allow once, Always allow messages to it, Deny); "always" is kept in `chat-grants.json` and is separate
+from the read grant. A pair is held to 12 messages an hour. The message waits behind whatever the
+receiver is doing (`queue` lists it as a notice with `noticeKind: "guest"`) and runs alone. In
+`/history` it is a user-role message with `from: {id, title, harness}`: draw a card naming that
+conversation, not the person's bubble. The command does not wait for a reply; if the receiver
+answers, it does so with `jep-tell` and the answer arrives as a message.
+
 ## Commands (JSON POSTs)
 
 | route | body | returns |

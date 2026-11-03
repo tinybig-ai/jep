@@ -135,3 +135,66 @@ test("a card nobody answers closes itself and the read is refused", { timeout: 1
     await g.close()
   }
 })
+
+test("a tell asks once, delivers the sender's words as a turn in the receiver, and says whose they are", { timeout: 20_000 }, async () => {
+  const a = stallable({ hold: () => false })
+  const dataHome = mkdtempSync(join(tmpdir(), "tell-"))
+  const g = await startGateway({ adapters: () => [{ name: "fake-ws", adapter: { ...a.adapter, workspace: tmpdir() } }], dataHome, port: 0, pairCode: "TESTCODE", pairLimit: 100 })
+  const asked: string[] = []
+  const answers = ["always"]
+  const chats: ChatDirectory = {
+    async list() {
+      return [info("s1", "The sender"), info("other", "The receiver")]
+    },
+    async read() {
+      return null
+    },
+    async askPerson(_key, ask) {
+      asked.push(ask.detail)
+      return answers.shift() ?? null
+    },
+  }
+  // "other" is not a conversation the fake adapter serves, so deliver into s1's turn host by pointing the receiver at it
+  const turnsSeen: { key: string; text: string }[] = []
+  // a proxy that binds the class's methods: a spread or an Object.create would lose its private fields
+  const turns = new Proxy(g.turns, {
+    get: (target, prop) => {
+      if (prop === "enqueue") return (key: string, text: string) => void turnsSeen.push({ key, text })
+      const value = Reflect.get(target, prop, target)
+      return typeof value === "function" ? value.bind(target) : value
+    },
+  })
+  const c = await startContinuity({ dataHome, turns, chats })
+  try {
+    const first = await control(dataHome, { op: "tell", target: "receiver", message: "the build is done", session: "s1" })
+    assert.equal(first.ok, true, first.message)
+    assert.match(asked[0]!, /"The sender" wants to send "The receiver" \(goose\) a message: the build is done/)
+    assert.equal(turnsSeen[0]!.key, "other")
+    assert.match(turnsSeen[0]!.text, /jep:from/)
+    assert.match(turnsSeen[0]!.text, /the build is done$/)
+    // always: the second goes straight through
+    const second = await control(dataHome, { op: "tell", target: "receiver", message: "and again", session: "s1" })
+    assert.equal(second.ok, true)
+    assert.equal(asked.length, 1)
+    assert.equal(turnsSeen.length, 2)
+    // refusals
+    assert.equal((await control(dataHome, { op: "tell", target: "receiver", message: "  ", session: "s1" })).ok, false)
+    assert.match((await control(dataHome, { op: "tell", target: "sender", message: "hi", session: "s1" })).message, /this conversation/)
+  } finally {
+    c.close()
+    await g.close()
+  }
+})
+
+test("a tell nobody allows is not sent", { timeout: 20_000 }, async () => {
+  const t = await boot(["reject", null])
+  try {
+    const no = await control(t.dataHome, { op: "tell", target: "render", message: "hello", session: "s1" })
+    assert.equal(no.ok, false)
+    assert.match(no.message, /said no/)
+    const silent = await control(t.dataHome, { op: "tell", target: "render", message: "hello", session: "s1" })
+    assert.match(silent.message, /nobody answered/)
+  } finally {
+    await t.close()
+  }
+})

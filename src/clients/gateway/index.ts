@@ -21,7 +21,7 @@ import { listSkills, defaultSkillDirs, writeSkillModelInvocation } from "../../c
 import type { AskRequest, DomainEvent, Message, Part } from "../../core/types.ts"
 import { renderCarryover } from "../../core/carryover.ts"
 import { usageOf } from "../../core/usage.ts"
-import { attachedPaths, readLoopMarker, readNoticeMarker, stripInjectedContext, transcriptText } from "../../core/transcript.ts"
+import { attachedPaths, readGuest, readLoopMarker, readNoticeMarker, stripInjectedContext, transcriptText } from "../../core/transcript.ts"
 import {
   LOOP_DEFAULT_TURNS,
   LOOP_MAX_TURNS,
@@ -204,6 +204,7 @@ function cleanForDisplay(m: Message): Message {
   // back, it reads as if the person typed jep's scaffolding.
   let loop: Message["loop"]
   let notice: Message["notice"]
+  let from: Message["from"]
   const parts: Part[] = []
   for (const p of m.parts) {
     if (p.kind !== "text") {
@@ -223,10 +224,12 @@ function cleanForDisplay(m: Message): Message {
       notice = woke
       continue
     }
+    const guest = readGuest(bare)
+    if (guest) from = guest.from
     const text = transcriptText(p.text)
     if (text.trim()) parts.push({ ...p, text })
   }
-  return { ...m, parts: [...parts, ...files], ...(loop ? { loop } : {}), ...(notice ? { notice } : {}) }
+  return { ...m, parts: [...parts, ...files], ...(loop ? { loop } : {}), ...(notice ? { notice } : {}), ...(from ? { from } : {}) }
 }
 
 // A pod: a conversation that needs a harness but no folder of its own. The

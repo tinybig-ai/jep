@@ -1,5 +1,5 @@
 import type { ConversationMcp } from "./mcp.ts"
-import { readNoticeMarker } from "./transcript.ts"
+import { readGuest, readNoticeMarker } from "./transcript.ts"
 import type { HarnessAdapter, TurnHost, TurnListener } from "./ports.ts"
 import type { DomainEvent, HarnessError, Message } from "./types.ts"
 import { eventSession, isAborted } from "./types.ts"
@@ -178,7 +178,7 @@ export class TurnEngine implements TurnHost {
   /** what waits behind the running turn, as a client draws it */
   queueOf(id: string): Array<{ clientID: string | null; text: string; steer: boolean; notice: boolean; noticeKind?: string }> {
     return (this.turnOf(id)?.waiting ?? []).map((p) => {
-      const kind = p.notice === true ? readNoticeMarker(p.text)?.kind : undefined
+      const kind = p.notice === true ? (readNoticeMarker(p.text)?.kind ?? (readGuest(p.text) ? "guest" : undefined)) : undefined
       return { clientID: p.clientID ?? null, text: p.text, steer: p.steer, notice: p.notice === true, ...(kind ? { noticeKind: kind } : {}) }
     })
   }

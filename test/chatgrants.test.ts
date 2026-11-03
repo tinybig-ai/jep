@@ -51,3 +51,40 @@ test("a read says whose conversation it is and how much of it is shown", () => {
   assert.ok(!out.includes("first"), "only the newest two")
   assert.ok(out.includes("second") && out.includes("third"))
 })
+
+import { guestText, readGuest, transcriptText, isScaffold } from "../src/core/transcript.ts"
+import { tellAllowed } from "../src/core/chatgrants.ts"
+
+test("a message from another conversation carries its sender, and its words stay readable", () => {
+  const text = guestText({ id: "goose://b", title: 'Map "render" blank', harness: "goose" }, "the build is done")
+  const got = readGuest(text)
+  assert.equal(got?.from.id, "goose://b")
+  assert.equal(got?.from.harness, "goose")
+  assert.equal(got?.body, "the build is done")
+  // the model reads who it is from and that it is not the person
+  assert.match(text, /not from the person/)
+  assert.match(text, /jep-tell/)
+  // a client shows the words; unlike a loop step they are not scaffolding to hide
+  assert.equal(transcriptText(text), "the build is done")
+  assert.equal(isScaffold(text), false)
+  assert.equal(readGuest("plain words"), null)
+  assert.equal(readGuest("<!-- jep:from not-json!! -->\nx"), null)
+})
+
+test("a grant to read is not a grant to tell, and a file from before tell still reads", () => {
+  const g = parseGrants('["claude://a→goose://b"]')
+  assert.ok(hasGrant(g, "claude://a", "goose://b"))
+  assert.ok(!hasGrant(g, "claude://a", "goose://b", "tell"))
+  addGrant(g, "claude://a", "goose://b", "tell")
+  assert.ok(hasGrant(g, "claude://a", "goose://b", "tell"))
+  revokeGrant(g, "claude://a", "goose://b", "tell")
+  assert.ok(hasGrant(g, "claude://a", "goose://b"), "revoking tell leaves read")
+})
+
+test("a pair gets a few messages an hour, then waits", () => {
+  const log = new Map<string, number[]>()
+  for (let i = 0; i < 3; i++) assert.ok(tellAllowed(log, "a", "b", 1000 + i, 3))
+  assert.ok(!tellAllowed(log, "a", "b", 2000, 3), "the fourth is held")
+  assert.ok(tellAllowed(log, "b", "a", 2000, 3), "the other direction has its own count")
+  assert.ok(tellAllowed(log, "a", "b", 1000 + 3_600_001, 3), "an hour later it may again")
+})
