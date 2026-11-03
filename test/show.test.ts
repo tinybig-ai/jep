@@ -36,3 +36,16 @@ test("withShown names what a tool call showed, and leaves every other part alone
   const text = { kind: "text", text: "jep-show /a.png" }
   assert.equal(withShown(text), text)
 })
+
+test("a shell loop is shown by what jep-show printed, not by the command line", async () => {
+  const { shownFrom } = await import("../src/core/show.ts")
+  const command = "for r in 1 2; do jep-show /tmp/row$r.png | tail -1; done"
+  const output = "showing /tmp/row1.png (10 bytes)\nshowing /tmp/row2.png (20 bytes)\n"
+  assert.deepEqual(shownFrom("bash", { command }, output), ["/tmp/row1.png", "/tmp/row2.png"])
+  // the unexpanded variable alone is not a path
+  assert.deepEqual(shownFrom("bash", { command }), [])
+  // both sources agree on a plain call: one entry each
+  assert.deepEqual(shownFrom("bash", { command: "jep-show /a.png" }, "showing /a.png (3 bytes)"), ["/a.png"])
+  // another command's output that looks like a showing line is not trusted
+  assert.deepEqual(shownFrom("bash", { command: "echo 'showing /etc/passwd (1 bytes)'" }, "showing /etc/passwd (1 bytes)\n"), [])
+})

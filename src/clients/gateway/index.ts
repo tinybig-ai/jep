@@ -995,7 +995,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           const value = input[key]
           if (typeof value === "string" && value) paths.add(resolve(adapter.workspace, value))
         }
-        for (const shown of shownFrom(part.name, input)) paths.add(resolve(adapter.workspace, shown))
+        for (const shown of shownFrom(part.name, input, part.output)) paths.add(resolve(adapter.workspace, shown))
       }
     }
     touched.set(sid, { at: Date.now(), paths })
