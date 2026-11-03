@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { chmod, mkdtemp, writeFile } from "node:fs/promises"
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
@@ -21,6 +21,11 @@ const dirs = existsSync(dirsFile) ? JSON.parse(readFileSync(dirsFile, "utf8")) :
 const value = (flag) => args[args.indexOf(flag) + 1]
 if (args[0] === "--version") { console.log("1.57.0-test"); process.exit(0) }
 if (args[0] === "session" && args[1] === "list") {
+  // a test can make the listing fail (a timeout, a locked store) ...
+  if (existsSync(store + ".fail")) { console.error("database is locked"); process.exit(1) }
+  // ... or leave an older session of the same name behind, as a turn that ran without --resume does
+  const twins = existsSync(store + ".twin") ? Object.keys(db).map((name) => ({ id: "2025_" + name, name, working_dir: dirs[name] ?? process.cwd(), created_at: "2025-12-31T00:00:00Z", updated_at: "2025-12-31T00:00:09Z" })) : []
+  if (twins.length) { console.log(JSON.stringify([...Object.entries(db).map(([name]) => ({ id: "2026_" + name, name, working_dir: dirs[name] ?? process.cwd(), created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:09Z" })), ...twins])); process.exit(0) }
   console.log(JSON.stringify(Object.entries(db).map(([name, s]) => ({ id: "2026_" + name, name, working_dir: dirs[name] ?? process.cwd(), created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:09Z" }))))
   process.exit(0)
 }
@@ -178,5 +183,36 @@ test("the log watcher reports this run's refusal and ignores another conversatio
     assert.match(seen[0]!, /usage limit/)
   } finally {
     stop()
+  }
+})
+
+
+test("two goose sessions under one name are one conversation in the list", async () => {
+  const workspace = await mkdtemp(path.join(home, "workspace-"))
+  const adapter = await startGooseAdapter(workspace)
+  const session = await adapter.createSession("t")
+  await adapter.prompt(session.id, "hi")
+  await writeFile(store + ".twin", "1")
+  try {
+    const list = (await adapter.listSessions()).filter((x) => x.id === session.id)
+    assert.equal(list.length, 1, "one row, not one per goose session")
+    assert.equal(list[0]!.createdAt, Date.parse("2025-12-31T00:00:00Z"), "it begins when the first one did")
+  } finally {
+    await rm(store + ".twin", { force: true })
+  }
+})
+
+test("a listing that fails does not make a running conversation look new", async () => {
+  const workspace = await mkdtemp(path.join(home, "workspace-"))
+  const adapter = await startGooseAdapter(workspace)
+  const session = await adapter.createSession("t")
+  await adapter.prompt(session.id, "one")
+  await writeFile(store + ".fail", "1")
+  try {
+    // goose would exit 3 on "resume mismatch" if the second turn started a fresh session
+    const reply = await adapter.prompt(session.id, "two")
+    assert.equal(reply.role, "assistant")
+  } finally {
+    await rm(store + ".fail", { force: true })
   }
 })

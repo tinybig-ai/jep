@@ -51,6 +51,11 @@ export class GooseAdapter implements HarnessAdapter {
   readonly endpoint: string
 
   #pending = new Map<string, { title: string; createdAt: number }>()
+  /** conversations goose is known to hold: a turn has run in them, or a listing showed them. A listing that
+   *  fails says nothing about what exists, so a turn must not start a second session of the same name. */
+  #known = new Set<string>()
+  /** whether the last listing worked: an empty answer from a failed list is not an empty folder */
+  #listOk = true
   // conversations that already got jep's context header (see contextFor)
   #briefed = new Set<string>()
   #running = new Map<string, ChildProcess>()
@@ -98,6 +103,7 @@ export class GooseAdapter implements HarnessAdapter {
   async #rows(fresh = false): Promise<GooseListed[]> {
     if (!fresh && this.#listed && Date.now() - this.#listed.at < LIST_TTL_MS) return this.#listed.rows
     let rows: GooseListed[] = []
+    this.#listOk = true
     try {
       const parsed = JSON.parse(await run(["session", "list", "--format", "json", "-w", this.workspace], 20_000))
       // goose's -w matches by prefix, so the adapter for ~/code also got every session of
@@ -112,7 +118,9 @@ export class GooseAdapter implements HarnessAdapter {
         )
     } catch {
       rows = []
+      this.#listOk = false
     }
+    for (const r of rows) if (r.name?.startsWith(NAME_PREFIX)) this.#known.add(r.name.slice(NAME_PREFIX.length))
     this.#listed = { at: Date.now(), rows }
     return rows
   }
@@ -120,9 +128,15 @@ export class GooseAdapter implements HarnessAdapter {
   async listSessions(): Promise<SessionSummary[]> {
     const rows = await this.#rows()
     const out: SessionSummary[] = []
-    for (const row of rows) {
+    // goose can hold several sessions under one name (a turn that ran without --resume started a new one);
+    // they are one conversation here: the newest speaks for it, the oldest start is its beginning
+    const byName = new Map<string, GooseListed[]>()
+    for (const row of rows) byName.set(row.name!, [...(byName.get(row.name!) ?? []), row])
+    for (const same of byName.values()) {
+      const stamp = (r: GooseListed) => Date.parse(r.updated_at ?? "") || Date.parse(r.created_at ?? "") || 0
+      const row = same.reduce((a, b) => (stamp(b) >= stamp(a) ? b : a))
       const native = row.name!.slice(NAME_PREFIX.length)
-      const createdAt = Date.parse(row.created_at ?? "") || Date.now()
+      const createdAt = Math.min(...same.map((r) => Date.parse(r.created_at ?? "") || Date.now()))
       const first = this.#titles.get(native) ?? this.#pending.get(native)?.title ?? clip(transcriptText(row.last_message_snippet ?? ""))
       out.push({
         id: toInternalId(native),
@@ -196,7 +210,8 @@ export class GooseAdapter implements HarnessAdapter {
     // jep's header goes first, once per conversation (see contextFor)
     body = `${contextFor(text, this.#briefed, native, opts?.brief)}${body}`
     const row = (await this.#rows(true)).find((r) => r.name === gooseName(native))
-    const exists = row !== undefined
+    // a failed listing proves nothing: trust what this daemon has seen, or a second session of the same name is born
+    const exists = row !== undefined || this.#known.has(native)
     const args = ["run", "--name", gooseName(native), ...(exists ? ["--resume"] : [])]
     // Extensions are only handed over when the session is being created: goose
     // stores them in the session, and being handed a name it already has is a
@@ -274,6 +289,7 @@ export class GooseAdapter implements HarnessAdapter {
           if (this.#aborting.has(native) || opts?.signal?.aborted) return reject(new TurnAbortedError())
           if (buf.trim()) consume(`${buf}\n`)
           if (code !== 0 && !failure) failure = { name: "GooseError", message: stderr.trim().slice(-500) || `goose exited ${code}` }
+          if (code === 0) this.#known.add(native) // goose holds it now
           resolve()
         })
       })
