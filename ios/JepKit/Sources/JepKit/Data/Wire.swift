@@ -120,8 +120,10 @@ struct MessageDto: Decodable {
     var loop: LoopMarkDto?
     /// another conversation sent this (`jep-tell`)
     var from: GuestFromDto?
+    /// jep woke itself (a watch is done, a restart cut the turn off)
+    var notice: NoticeDto?
 
-    enum K: String, CodingKey { case id, role, time, parts, error, model, cost, tokens, durationMs, loop, from }
+    enum K: String, CodingKey { case id, role, time, parts, error, model, cost, tokens, durationMs, loop, from, notice }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: K.self)
         id = try c.decode(String.self, forKey: .id)
@@ -135,7 +137,13 @@ struct MessageDto: Decodable {
         durationMs = c.o(.durationMs)
         loop = try? c.decode(LoopMarkDto.self, forKey: .loop)
         from = try? c.decode(GuestFromDto.self, forKey: .from)
+        notice = try? c.decode(NoticeDto.self, forKey: .notice)
     }
+}
+
+struct NoticeDto: Decodable {
+    var kind: String
+    var minutes: Int?
 }
 
 struct GuestFromDto: Decodable {

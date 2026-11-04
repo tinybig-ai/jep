@@ -29,6 +29,7 @@ final class GuestTests: XCTestCase {
         row.tap()
         XCTAssertTrue(app.staticTexts["from Map render blank · goose"].waitForExistence(timeout: 10), "the card names the conversation it came from")
         XCTAssertTrue(app.staticTexts["the build is done, rerun the shot"].exists)
+        XCTAssertTrue(app.staticTexts["jep · restarted, picking the work back up"].exists, "a restart note is a quiet divider, not an empty message")
         app.navigationBars.buttons.element(boundBy: 0).tap()
     }
 }

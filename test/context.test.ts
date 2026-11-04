@@ -119,3 +119,21 @@ test("a compaction re-briefs the next turn, once", async () => {
     await new Promise<void>((r) => server.close(() => r()))
   }
 })
+
+test("jep's own messages are still read as jep's after the context header comes back", async () => {
+  const { JEP_CONTEXT, JEP_CONTEXT_FOOTER, noticeMarker, loopMarker, guestText, readNoticeMarker, readLoopMarker, readGuest, isScaffold, transcriptText, stripInjectedContext } = await import("../src/core/transcript.ts")
+  const withHeader = (body: string) => `${JEP_CONTEXT}\n\n${JEP_CONTEXT_FOOTER}\n\n${body}`
+  // a restart note, a watch's wake-up, and a loop step all begin with a marker
+  for (const body of [`${noticeMarker("resumed")}\nThe jep daemon restarted.`, `${noticeMarker("done")}\nthe watch is done`, `${loopMarker(2, 8)}\nkeep going`]) {
+    assert.equal(isScaffold(withHeader(body)), true, body.slice(0, 30))
+    assert.equal(transcriptText(withHeader(body)), "", "the words are for the model, not the reader")
+  }
+  assert.deepEqual(readNoticeMarker(stripInjectedContext(withHeader(`${noticeMarker("resumed")}\nx`))), { kind: "resumed" })
+  assert.deepEqual(readLoopMarker(stripInjectedContext(withHeader(`${loopMarker(3, 8)}\nx`))), { iteration: 3, max: 8 })
+  // a message from another conversation keeps its words and its sender
+  const guest = withHeader(guestText({ id: "goose://b", title: "Map", harness: "goose" }, "hello there"))
+  assert.equal(readGuest(stripInjectedContext(guest))?.from.id, "goose://b")
+  assert.equal(transcriptText(guest), "hello there")
+  // a person's own words after the header lose only the blank lines in front of them
+  assert.equal(transcriptText(withHeader("  fix the login")), "fix the login")
+})

@@ -45,9 +45,13 @@ export const contextFor = (text: string, briefed: Set<string>, key: string, brie
   return `${JEP_CONTEXT}\n\n${JEP_CONTEXT_FOOTER}\n\n`
 }
 
+// The blank lines the header leaves ahead of the message go with it. A marker (a loop step, a watch's
+// wake-up, a restart note, a message from another conversation) must be the first thing in the text to be
+// read, and after a restart the header comes back on the next prompt: with those lines left in, every
+// one of them failed to read and was drawn as something the person typed.
 export const stripInjectedContext = (text: string): string => {
   const i = text.indexOf(JEP_CONTEXT_FOOTER)
-  return i === -1 ? text : text.slice(i + JEP_CONTEXT_FOOTER.length)
+  return i === -1 ? text : text.slice(i + JEP_CONTEXT_FOOTER.length).replace(/^\s+/, "")
 }
 
 // An attachment has no flag in a print-mode CLI, so naming the paths in the

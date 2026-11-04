@@ -326,7 +326,7 @@ internal fun Row.anchor(): String = when (this) {
 /** A compaction marker is its own row; everything else renders as a message. */
 internal fun rowFor(m: ChatMessage, cards: Map<String, List<Row>> = emptyMap()): Row = when {
     m.parts.size == 1 && m.parts[0] is ChatPart.Compaction -> Row.Compaction(m)
-    m.parts.size == 1 && (m.parts[0] is ChatPart.AutoContinue || m.parts[0] is ChatPart.LoopTurn) -> Row.AutoContinue(m)
+    m.parts.size == 1 && (m.parts[0] is ChatPart.AutoContinue || m.parts[0] is ChatPart.LoopTurn || m.parts[0] is ChatPart.NoticeTurn) -> Row.AutoContinue(m)
     else -> Row.Msg(m, cards)
 }
 
@@ -2205,6 +2205,7 @@ private fun fullTurnText(message: ChatMessage): String =
             ChatPart.Compaction -> "[conversation compacted]"
             ChatPart.AutoContinue -> ""
             is ChatPart.LoopTurn -> ""
+            is ChatPart.NoticeTurn -> ""
             is ChatPart.Unsupported -> ""
         }
     }.trim()
@@ -2752,6 +2753,7 @@ private fun PartView(part: ChatPart, streaming: Boolean, onOpenLink: (String) ->
         ChatPart.Compaction -> Unit // a divider row renders the message, not its parts
         ChatPart.AutoContinue -> Unit // the anchor row renders the quiet note, not a bubble
         is ChatPart.LoopTurn -> Unit // likewise: a boundary row, not a bubble
+        is ChatPart.NoticeTurn -> Unit
         is ChatPart.Unsupported -> Unit
     }
 }
@@ -4195,7 +4197,15 @@ internal fun AutoContinueRow(m: ChatMessage) {
     ) {
         HorizontalDivider(Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant)
         Text(
-            (m.parts.firstOrNull() as? ChatPart.LoopTurn)?.let { "· loop ${it.iteration}/${it.max} ·" } ?: "· auto-continued ·",
+            when (val part = m.parts.firstOrNull()) {
+                is ChatPart.LoopTurn -> "· loop ${part.iteration}/${part.max} ·"
+                is ChatPart.NoticeTurn -> when (part.kind) {
+                    "resumed" -> "· jep · restarted, picking the work back up ·"
+                    "timeout" -> "· jep · stopped watching after ${part.minutes ?: 60} min ·"
+                    else -> "· jep · the watch is done ·"
+                }
+                else -> "· auto-continued ·"
+            },
             Modifier.padding(horizontal = 12.dp),
             fontSize = 11.sp,
             color = MaterialTheme.colorScheme.outline,

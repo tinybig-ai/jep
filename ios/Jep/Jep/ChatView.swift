@@ -622,6 +622,13 @@ struct FullComposer: View {
 /// "loop 2/8" for a loop's turn, else the quiet note a fold leaves
 private func loopLabel(_ m: ChatMessage) -> String {
     if case .loopTurn(let i, let max)? = m.parts.first { return "loop \(i)/\(max)" }
+    if case .noticeTurn(let kind, let minutes)? = m.parts.first {
+        switch kind {
+        case "resumed": return "jep · restarted, picking the work back up"
+        case "timeout": return "jep · stopped watching after \(minutes ?? 60) min"
+        default: return "jep · the watch is done"
+        }
+    }
     return "continued automatically"
 }
 

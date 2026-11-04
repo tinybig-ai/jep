@@ -191,6 +191,9 @@ sealed interface ChatPart {
     /** the turn a loop queued: "loop 2/8", drawn as a boundary (the instruction itself is jep's, not anyone's words) */
     data class LoopTurn(val iteration: Int, val max: Int) : ChatPart
 
+    /** jep's own wake-up: a watch finished or timed out, or a restart cut the turn off. A quiet divider. */
+    data class NoticeTurn(val kind: String, val minutes: Int?) : ChatPart
+
     data class Unsupported(val kind: String) : ChatPart
 }
 

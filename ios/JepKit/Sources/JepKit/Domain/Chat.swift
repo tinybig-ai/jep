@@ -302,6 +302,8 @@ public enum ChatPart: Equatable, Hashable, Sendable {
     case autoContinue
     /// the turn a loop queued ("loop 2/8"): a boundary, not words anyone wrote
     case loopTurn(iteration: Int, max: Int)
+    /// jep's own wake-up: a watch finished or timed out, or a restart cut the turn off. A quiet divider.
+    case noticeTurn(kind: String, minutes: Int?)
     case unsupported(String)
 
     public var toolCall: ToolCall? {

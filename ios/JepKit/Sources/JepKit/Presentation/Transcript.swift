@@ -32,6 +32,7 @@ public func rowFor(_ m: ChatMessage, cards: [String: [Row]] = [:]) -> Row {
     if m.parts.count == 1, m.parts[0] == .compaction { return .compaction(m) }
     if m.parts.count == 1, m.parts[0] == .autoContinue { return .autoContinue(m) }
     if m.parts.count == 1, case .loopTurn = m.parts[0] { return .autoContinue(m) }
+    if m.parts.count == 1, case .noticeTurn = m.parts[0] { return .autoContinue(m) }
     return .msg(m, cards: cards)
 }
 
@@ -476,7 +477,7 @@ public func fullTurnText(_ m: ChatMessage) -> String {
             return s
         case .file(let f): return "[file] " + (f.name ?? f.path)
         case .compaction: return "[conversation compacted]"
-        case .autoContinue, .loopTurn, .unsupported: return ""
+        case .autoContinue, .loopTurn, .noticeTurn, .unsupported: return ""
         }
     }.joined(separator: "\n\n").trimmingCharacters(in: .whitespacesAndNewlines)
 }

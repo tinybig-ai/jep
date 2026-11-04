@@ -109,7 +109,12 @@ data class MessageDto(
     val loop: LoopMarkDto? = null,
     /** another conversation sent this (`jep-tell`) */
     val from: GuestFromDto? = null,
+    /** jep woke itself (a watch is done, a restart cut the turn off): a boundary, never the person's words */
+    val notice: NoticeDto? = null,
 )
+
+@Serializable
+data class NoticeDto(val kind: String = "", val minutes: Int? = null)
 
 @Serializable
 data class GuestFromDto(val id: String = "", val title: String = "", val harness: String = "")
