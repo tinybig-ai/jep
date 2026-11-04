@@ -1873,12 +1873,13 @@ test("/git reads the workspace through core/git, and says so when there is no re
     assert.equal(v.isRepository, true)
     assert.equal(v.branch, "main")
     assert.equal(v.changedFiles, 1, "the new file counts, as it does on Telegram's /git")
+    assert.deepEqual(v.files, [{ path: "new.txt", code: "?", staged: false, additions: v.files[0].additions, deletions: 0 }], "the web column names the changed files")
     assert.equal(v.commits.length, 1)
     assert.equal(v.head.subject, "first commit")
     assert.equal(v.head.shortHash, v.head.hash)
     assert.ok(v.head.time > 1_700_000_000, "seconds, as the phone expects")
     where = plain
-    assert.deepEqual(await view(), { isRepository: false, branch: null, head: null, changedFiles: 0, commits: [] })
+    assert.deepEqual(await view(), { isRepository: false, branch: null, head: null, changedFiles: 0, files: [], commits: [] })
   } finally {
     await g.close()
   }
