@@ -79,7 +79,8 @@ extension MessageDto {
             model: model,
             cost: cost,
             tokens: tokens?.toDomain(),
-            durationMs: durationMs
+            durationMs: durationMs,
+            from: from.map { GuestFrom(id: $0.id, title: $0.title, harness: $0.harness) }
         )
     }
 }

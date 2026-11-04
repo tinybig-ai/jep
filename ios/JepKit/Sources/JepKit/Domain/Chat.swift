@@ -328,8 +328,11 @@ public struct ChatMessage: Equatable, Hashable, Identifiable, Sendable {
     public var tokens: TokenUsage?
     /// how long the reply took, when the harness recorded a completion time
     public var durationMs: Int64?
+    /// another conversation sent this (`jep-tell`): drawn as a card naming it, not the person's bubble
+    public var from: GuestFrom?
 
-    public init(id: String, role: Role, time: Int64, parts: [ChatPart], error: String? = nil, undelivered: Bool = false, model: String? = nil, cost: Double? = nil, tokens: TokenUsage? = nil, durationMs: Int64? = nil) {
+    public init(id: String, role: Role, time: Int64, parts: [ChatPart], error: String? = nil, undelivered: Bool = false, model: String? = nil, cost: Double? = nil, tokens: TokenUsage? = nil, durationMs: Int64? = nil, from: GuestFrom? = nil) {
+        self.from = from
         self.id = id
         self.role = role
         self.time = time
@@ -341,6 +344,13 @@ public struct ChatMessage: Equatable, Hashable, Identifiable, Sendable {
         self.tokens = tokens
         self.durationMs = durationMs
     }
+}
+
+public struct GuestFrom: Equatable, Hashable, Sendable {
+    public var id: String
+    public var title: String
+    public var harness: String
+    public init(id: String, title: String, harness: String) { self.id = id; self.title = title; self.harness = harness }
 }
 
 public struct AskOption: Equatable, Hashable, Sendable, Identifiable {

@@ -2242,7 +2242,9 @@ private fun MessageRow(
             .combinedClickable(onClick = {}, onLongClick = { menu = true }),
     ) {
         when (message.role) {
-            Role.USER -> UserBubble(message) { onRetrySend(message.id) }
+            Role.USER ->
+                if (message.from != null) GuestCard(message, onInfo, cards, cardView)
+                else UserBubble(message) { onRetrySend(message.id) }
             Role.ASSISTANT -> AssistantBody(message, onInfo, responding, showActions, cards, cardView)
             else -> Unit
         }
@@ -4389,4 +4391,33 @@ private fun LoopDialog(running: Boolean, onDismiss: () -> Unit, onStart: (String
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+/**
+ * What another conversation sent (`jep-tell`): a card naming its sender, with the accent bar down its
+ * edge. It is drawn like an agent's words, since the person did not type them; the name says who did.
+ */
+@Composable
+private fun GuestCard(message: ChatMessage, onInfo: (ChatMessage) -> Unit, cards: Map<String, List<Row>>, cardView: @Composable (Row) -> Unit) {
+    val from = message.from ?: return
+    Surface(
+        Modifier.fillMaxWidth().testTag("guest-card"),
+        color = Color.Transparent,
+        shape = RoundedCornerShape(Radius.card),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Row(Modifier.height(androidx.compose.foundation.layout.IntrinsicSize.Min)) {
+            Box(Modifier.width(3.dp).fillMaxHeight().background(MaterialTheme.colorScheme.primary))
+            Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                Text(
+                    "from ${from.title.ifBlank { "another conversation" }}" + if (from.harness.isNotBlank()) " · ${from.harness}" else "",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                AssistantBody(message, onInfo, false, false, cards, cardView)
+            }
+        }
+    }
 }

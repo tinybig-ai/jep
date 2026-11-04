@@ -212,7 +212,11 @@ data class ChatMessage(
     val tokens: TokenUsage? = null,
     /** how long the reply took, when the harness recorded a completion time */
     val durationMs: Long? = null,
+    /** another conversation sent this (`jep-tell`): drawn as a card naming it, not the person's bubble */
+    val from: GuestFrom? = null,
 )
+
+data class GuestFrom(val id: String, val title: String, val harness: String)
 
 data class AskOption(val id: String, val label: String, val danger: Boolean = false)
 

@@ -107,7 +107,12 @@ data class MessageDto(
     val durationMs: Long? = null,
     /** set on the turn a loop queued: "loop 2/8" is drawn as a boundary, never as a bubble */
     val loop: LoopMarkDto? = null,
+    /** another conversation sent this (`jep-tell`) */
+    val from: GuestFromDto? = null,
 )
+
+@Serializable
+data class GuestFromDto(val id: String = "", val title: String = "", val harness: String = "")
 
 @Serializable
 data class LoopMarkDto(val iteration: Int = 0, val max: Int = 0)

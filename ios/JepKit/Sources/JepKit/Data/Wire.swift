@@ -118,8 +118,10 @@ struct MessageDto: Decodable {
     var durationMs: Int64?
     /// set on the turn a loop queued
     var loop: LoopMarkDto?
+    /// another conversation sent this (`jep-tell`)
+    var from: GuestFromDto?
 
-    enum K: String, CodingKey { case id, role, time, parts, error, model, cost, tokens, durationMs, loop }
+    enum K: String, CodingKey { case id, role, time, parts, error, model, cost, tokens, durationMs, loop, from }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: K.self)
         id = try c.decode(String.self, forKey: .id)
@@ -132,7 +134,14 @@ struct MessageDto: Decodable {
         tokens = c.o(.tokens)
         durationMs = c.o(.durationMs)
         loop = try? c.decode(LoopMarkDto.self, forKey: .loop)
+        from = try? c.decode(GuestFromDto.self, forKey: .from)
     }
+}
+
+struct GuestFromDto: Decodable {
+    var id: String
+    var title: String
+    var harness: String
 }
 
 struct LoopMarkDto: Decodable { var iteration: Int; var max: Int }

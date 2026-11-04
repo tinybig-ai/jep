@@ -111,6 +111,7 @@ fun MessageDto.toDomain() = ChatMessage(
     cost = cost,
     tokens = tokens?.toDomain(),
     durationMs = durationMs,
+    from = from?.let { dev.jep.client.domain.model.GuestFrom(it.id, it.title, it.harness) },
 )
 
 fun AskDto.toDomain() = Ask(

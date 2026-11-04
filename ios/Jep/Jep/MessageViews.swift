@@ -11,7 +11,7 @@ struct MessageRow: View {
 
     var body: some View {
         Group {
-            if message.role == .user { user } else { assistant }
+            if message.role == .user, let from = message.from { guest(from) } else if message.role == .user { user } else { assistant }
         }
         .offset(x: drag)
         .gesture(
@@ -37,6 +37,23 @@ struct MessageRow: View {
         if let q = quoteOf(message) {
             Button("Reply", systemImage: "arrowshape.turn.up.left") { onQuote(q) }
         }
+    }
+
+    /// What another conversation sent (`jep-tell`): a card naming its sender, with the accent bar down its
+    /// edge. Drawn like an agent's words, since the person did not type them.
+    private func guest(_ from: GuestFrom) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            Rectangle().fill(Color.accentColor).frame(width: 3)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("from \(from.title.isEmpty ? "another conversation" : from.title)" + (from.harness.isEmpty ? "" : " · \(from.harness)"))
+                    .jepFont(12).foregroundStyle(.secondary).lineLimit(1)
+                assistant
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+        }
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(.quaternary))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .accessibilityIdentifier("guest-card")
     }
 
     private var user: some View {
