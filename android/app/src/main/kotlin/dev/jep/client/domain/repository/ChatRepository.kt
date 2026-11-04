@@ -34,6 +34,8 @@ data class HistoryBatch(
     val waiting: List<Waiting> = emptyList(),
     /** the conversation's loop (running or last finished), or null */
     val loop: LoopInfo? = null,
+    /** a turn is in flight for this conversation, by the daemon's account (a loop, Telegram, another phone) */
+    val busy: Boolean = false,
 )
 
 /**

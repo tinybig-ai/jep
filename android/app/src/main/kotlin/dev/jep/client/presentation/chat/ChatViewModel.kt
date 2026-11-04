@@ -150,6 +150,8 @@ class ChatViewModel(
         val queued: List<Queued> = emptyList(),
         /** this conversation's loop, as the daemon reports it with the history */
         val loop: dev.jep.client.domain.repository.LoopInfo? = null,
+        /** the daemon says a turn is in flight (a loop, Telegram, another phone), whether or not this device started it */
+        val running: Boolean = false,
         val notice: String? = null,
         val hasMore: Boolean = false,
         val loadingOlder: Boolean = false,
@@ -176,7 +178,11 @@ class ChatViewModel(
         /** loaded on demand for the Settings panel */
         val skills: SkillSet? = null,
         val mcp: List<McpServer>? = null,
-    )
+    ) {
+        /** a turn is in flight for this conversation: one this device sent, one it is streaming, or one the
+         *  daemon reports (a loop's next step, Telegram, another phone). The spinner and Stop follow this. */
+        val working: Boolean get() = sending || live != null || running
+    }
 
     /**
      * A card belongs to the turn that raised it. When that turn ends — stopped,
@@ -291,7 +297,7 @@ class ChatViewModel(
                 // follow the turn from history whether this device started it or
                 // not: `sending` only tracks our own prompts, and a turn begun
                 // elsewhere (Telegram, another phone) must grow on screen too
-                if (_state.value.sending || _state.value.live != null) refresh()
+                if (_state.value.working) refresh()
             }
         }
     }
@@ -517,6 +523,7 @@ class ChatViewModel(
                         live = if (liveRowIsSettled(st.live?.messageId, batch.messages)) null else st.live,
                         hasMore = batch.hasMore,
                         loop = batch.loop,
+                        running = batch.busy,
                         loadingHistory = false,
                         // the gateway answered: whatever "reconnecting" meant,
                         // it is reachable again (the feed follows a moment later)
@@ -603,7 +610,7 @@ class ChatViewModel(
         // here from elsewhere (Telegram, another phone). Sent directly into
         // the latter, the message lost the mode it was given and wiped the
         // reply on screen
-        if (_state.value.sending || _state.value.live != null) {
+        if (_state.value.working) {
             enqueue(body, files, mode, quote)
             return
         }

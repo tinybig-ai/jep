@@ -321,10 +321,11 @@ private val json = Json { ignoreUnknownKeys = true; isLenient = true }
                 res.messages.map { it.toDomain() },
                 res.hasMore,
                 res.asks.map { AskEntry(it.toDomain(), pending = it.state == "pending", choice = it.answer) },
-                res.queue.filter { !it.notice && !it.clientID.isNullOrEmpty() }.map { Waiting(it.clientID!!, it.text, it.steer) },
+                res.queue.filter { !it.notice && it.loop == null && !it.clientID.isNullOrEmpty() }.map { Waiting(it.clientID!!, it.text, it.steer) },
                 res.loop?.let {
                     dev.jep.client.domain.repository.LoopInfo(it.spec.goal, it.spec.max, it.spec.verify, it.spec.until, it.iteration, it.status, it.error, it.lastVerify?.takeIf { v -> !v.ok }?.code)
                 },
+                res.busy,
             )
             if (key != null && res.etag != null) lastPage[key] = res.etag to batch
             batch

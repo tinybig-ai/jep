@@ -10,7 +10,10 @@ public struct HistoryBatch: Equatable, Sendable {
     public var waiting: [Waiting]
     /// the conversation's loop (running or last finished), or nil
     public var loop: LoopInfo?
-    public init(messages: [ChatMessage], hasMore: Bool, asks: [AskEntry] = [], waiting: [Waiting] = [], loop: LoopInfo? = nil) {
+    /// a turn is in flight by the daemon's account (a loop, Telegram, another phone)
+    public var busy: Bool
+    public init(messages: [ChatMessage], hasMore: Bool, asks: [AskEntry] = [], waiting: [Waiting] = [], loop: LoopInfo? = nil, busy: Bool = false) {
+        self.busy = busy
         self.loop = loop
         self.messages = messages
         self.hasMore = hasMore

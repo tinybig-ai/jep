@@ -1002,13 +1002,14 @@ function render(follow = true) {
     // waiting in the daemon's line from another device: shown the same way
     // jep's own notes wait in that line too, but they are not the person's
     // words: they are drawn as the boundary they will become, further down
-    ...queue.filter((q) => !q.notice && !pendingText.some((p) => p.clientID && p.clientID === q.clientID)).map((q) => ({ role: "user", parts: [{ kind: "text", text: q.text }], queued: q })),
+    ...queue.filter((q) => !q.notice && !q.loop && !pendingText.some((p) => p.clientID && p.clientID === q.clientID)).map((q) => ({ role: "user", parts: [{ kind: "text", text: q.text }], queued: q })),
   ]
   nodes.push(...transcript(all))
   for (const a of asks) nodes.push(askNode(a))
   if (busy() && !asks.length) nodes.push(el("div", "spin", "working"))
   nodes.push(...transcript(waiting))
-  for (const q of queue) if (q.notice) nodes.push(dividerNode(q.noticeKind === "resumed" ? "· jep · restarted, waiting its turn ·" : q.noticeKind === "guest" ? "· a message from another conversation, waiting its turn ·" : "· jep · a watch is done, waiting its turn ·", true))
+  for (const q of queue) if (q.loop) nodes.push(dividerNode(`loop ${q.loop.iteration}/${q.loop.max}, waiting its turn`, true))
+  else if (q.notice) nodes.push(dividerNode(q.noticeKind === "resumed" ? "· jep · restarted, waiting its turn ·" : q.noticeKind === "guest" ? "· a message from another conversation, waiting its turn ·" : "· jep · a watch is done, waiting its turn ·", true))
   // A box that scrolls on its own (a turn's work, a tool's output) is a new
   // box after every redraw, and a new box starts at the top: whoever was
   // reading deep inside one was thrown back to its beginning every few

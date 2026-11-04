@@ -164,6 +164,8 @@ data class HistoryRes(
     val queue: List<QueueEntryDto> = emptyList(),
     /** this conversation's loop, or null */
     val loop: LoopDto? = null,
+    /** the daemon's own account: a turn is running, settling or waiting, whoever started it */
+    val busy: Boolean = false,
 )
 
 @Serializable
@@ -173,6 +175,8 @@ data class QueueEntryDto(
     val steer: Boolean = true,
     /** jep's own note (a watch or a restart), not something a person queued */
     val notice: Boolean = false,
+    /** a loop's next step: jep's too */
+    val loop: LoopMarkDto? = null,
 )
 
 @Serializable

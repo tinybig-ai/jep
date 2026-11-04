@@ -74,7 +74,7 @@ struct ChatView: View {
                         RowView(row: row, chat: chat, liveId: st.live?.messageId, onQuote: setQuote)
                             .id(row.id)
                     }
-                    if (st.sending || st.live != nil) && (st.ask == nil || askIsSpent(st.ask, st.askChoice)) {
+                    if st.working && (st.ask == nil || askIsSpent(st.ask, st.askChoice)) {
                         Label {
                             Text("responding…").jepFont(12).foregroundStyle(.secondary)
                         } icon: {
@@ -142,7 +142,7 @@ struct ChatView: View {
             if let i = served.firstIndex(where: { $0.id == live.id }) { rendered[i] = live } else { rendered.append(live) }
         }
         let raw = transcriptRows(rendered.reversed(), ask: st.ask, askAt: st.askAt, liveMessageId: st.live?.messageId, askAfter: st.askAfter, past: st.pastAsks)
-        let busy = st.sending || st.live != nil
+        let busy = st.working
         let hold = busy ? raw.first(where: { if case .msg = $0 { true } else { false } })?.id : nil
         let rows = groupWorkRuns(raw, hold: hold)
         return rows.reversed()
@@ -323,7 +323,7 @@ struct ChatView: View {
                 }
                 .accessibilityLabel("expand the composer")
             }
-            if (st.sending || st.live != nil) && !hasText {
+            if st.working && !hasText {
                 Button { chat.stop() } label: {
                     Image(systemName: "stop.fill").frame(width: 40, height: 40).glass(Circle())
                 }

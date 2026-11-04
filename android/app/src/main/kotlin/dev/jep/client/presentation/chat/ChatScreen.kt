@@ -648,7 +648,7 @@ fun ChatScreen(
     // answer (opencode emits one per step: the tool call, then the text). Only
     // the message that ENDS a turn carries the info/copy row — otherwise the
     // buttons appear at every intermediate step.
-    val busy = state.sending || state.live != null
+    val busy = state.working
     val actionIds = remember(rendered, busy) {
         val ids = mutableSetOf<String>()
         // `rendered` is newest first: what follows a message is the one
@@ -678,7 +678,7 @@ fun ChatScreen(
     val liveMessageId = state.live?.messageId
     val rows = remember(ordered, ask, state.askAt, liveMessageId, state.askAfter, state.pastAsks, state.sending) {
         val raw = transcriptRows(ordered, ask, state.askAt, liveMessageId, state.askAfter, state.pastAsks)
-        val hold = if (state.sending || state.live != null) raw.firstOrNull { it is Row.Msg }?.key else null
+        val hold = if (state.working) raw.firstOrNull { it is Row.Msg }?.key else null
         groupWorkRuns(raw, hold)
     }
     val displayRows = remember(rows) { rows.asReversed() }
@@ -1053,12 +1053,12 @@ fun ChatScreen(
                         }
                     }
                 }
-                val busy = state.sending || state.live != null
+                val busy = state.working
                 items(displayRows.size, key = { displayRows[it].key }) { i ->
                   // opening a thinking block is the reader choosing to read, not to follow the end
                   CompositionLocalProvider(LocalStopFollowing provides { followLatest = false }) {
                     when (val row = displayRows[i]) {
-                        is Row.Work -> WorkRow(row.parts, row.durationMs)
+                        is Row.Work -> WorkRow(row.parts, row.durationMs, active = busy && !askPending && i == displayRows.lastIndex)
                         is Row.Pending -> AskBar(row.ask, vm, spent = askAnswered, choiceId = state.askChoice)
                         is Row.PastAsk -> AskBar(row.entry.ask, vm, spent = true, choiceId = row.entry.choice)
                         is Row.Compaction -> CompactionRow(row.m)
@@ -2579,6 +2579,8 @@ private fun WorkRow(parts: List<ChatPart>, durationMs: Long? = null, active: Boo
             Modifier.fillMaxWidth().padding(horizontal = RowInset).clickable { open = !open },
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // a run still going says so: without it a long stretch of work reads as nothing happening
+            if (anyRunning) Spinner(Modifier.padding(end = 8.dp))
             Text(
                 workTitle(parts, durationMs, anyRunning),
                 style = MaterialTheme.typography.labelMedium,
@@ -3777,7 +3779,7 @@ private fun Composer(
     // Stop shows whenever a turn is active for this conversation — this client's,
     // or one started elsewhere (Telegram, a steer). Safe now that a tap on Send
     // while busy queues instead of stopping.
-    val busy = state.sending || state.live != null
+    val busy = state.working
     // A card standing open holds the send button. Answering in words is allowed,
     // but it is said out loud by tapping "Something else" first, so a message can
     // never disappear into a queue behind the question that is waiting for you.
