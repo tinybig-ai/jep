@@ -57,9 +57,17 @@ bubble, and `/history` hides the instruction itself.
 - Without either, the loop runs `max` turns (default 8, at most 50).
 - The verifier runs in the conversation's workspace, outside the model: an
   agent never grades its own work.
-- It stops on a failed turn, on `/stop`, on `/loop/stop`, or when the daemon
-  restarts. It never resumes by itself; the record stays so a client can say
-  what happened. `/loop/clear` forgets a finished loop.
+- It stops on a failed turn (after a few retries for a provider hiccup or a
+  stalled tool), on `/stop`, or on `/loop/stop`. A daemon restart does not stop
+  it: a restart is jep's own doing, so a loop that was running resumes once the
+  workspaces are up, with the same goal and count, and the agent is told its
+  last turn was cut off. One whose conversation is gone ends and says so. The
+  record stays so a client can say what happened. `/loop/clear` forgets a
+  finished loop.
+- A tool that never returns no longer ends the turn (and the loop with it): the
+  watchdog kills that one tool, up to three times a turn, and the agent sees it
+  fail and carries on. Harnesses that start tools as child processes (goose,
+  claude, codex) support this.
 
 ## One agent reading another conversation
 

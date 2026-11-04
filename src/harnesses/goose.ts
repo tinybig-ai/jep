@@ -1,5 +1,6 @@
 import { realpathSync, statSync } from "node:fs"
-import { spawn, execFile, execFileSync, type ChildProcess } from "node:child_process"
+import { spawn, execFile, type ChildProcess } from "node:child_process"
+import { killStuckTools, stopTree } from "../core/proctree.ts"
 import { readFileSync } from "node:fs"
 import { readdir, readFile } from "node:fs/promises"
 import os from "node:os"
@@ -21,65 +22,6 @@ import { TurnAbortedError } from "../core/types.ts"
  * Goose names its sessions itself, so jep hands it a name of its own
  * (`jep-<uuid>`) and finds the conversation again by that name.
  */
-/** how long a stopped goose gets to leave on SIGTERM before everything under it is killed outright */
-const STOP_GRACE_MS = 3_000
-
-/** every process under `pid`, deepest first: the tools goose started (a shell, and what the shell started) */
-function descendants(pid: number): number[] {
-  let table = ""
-  try {
-    table = execFileSync("ps", ["-axo", "pid=,ppid="], { encoding: "utf8", timeout: 3_000 })
-  } catch {
-    return []
-  }
-  const kids = new Map<number, number[]>()
-  for (const line of table.split("\n")) {
-    const [c, p] = line.trim().split(/\s+/).map(Number)
-    if (c && p) kids.set(p, [...(kids.get(p) ?? []), c])
-  }
-  const out: number[] = []
-  const walk = (n: number) => {
-    for (const c of kids.get(n) ?? []) {
-      walk(c)
-      out.push(c)
-    }
-  }
-  walk(pid)
-  return out
-}
-
-/**
- * Stop a goose run now. A polite SIGTERM is not enough: goose waits for the tool it is running (a stuck
- * render, a build that never ends) before it will leave, so a stop could sit for minutes. goose and
- * everything it started get SIGTERM at once (a tool left alive would let goose carry on to its next
- * step), and whatever is still there after a short grace is killed outright.
- */
-function stopTree(child: ChildProcess): void {
-  const pid = child.pid
-  if (!pid) return
-  const tree = descendants(pid)
-  child.kill("SIGTERM")
-  for (const p of tree) {
-    try {
-      process.kill(p, "SIGTERM")
-    } catch {
-      // already gone
-    }
-  }
-  const timer = setTimeout(() => {
-    for (const p of [...descendants(pid), ...tree]) {
-      try {
-        process.kill(p, "SIGKILL")
-      } catch {
-        // already gone
-      }
-    }
-    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL")
-  }, STOP_GRACE_MS)
-  timer.unref()
-  child.once("close", () => clearTimeout(timer))
-}
-
 const GOOSE_BIN = process.env.JEP_GOOSE_BIN ?? "goose"
 const GOOSE_CONFIG = process.env.JEP_GOOSE_CONFIG ?? path.join(os.homedir(), ".config", "goose", "config.yaml")
 // provider keys goose reads from the environment (KEY=value lines, mode 0600),
@@ -383,6 +325,11 @@ export class GooseAdapter implements HarnessAdapter {
     this.#aborting.add(native)
     stopTree(child)
     return true
+  }
+
+  /** a tool goose started has been silent for `sinceMs`: kill it, so goose sees it fail and goes on */
+  async unwedge(sessionID: string, sinceMs: number): Promise<boolean> {
+    return killStuckTools(this.#running.get(toNativeId(sessionID)), sinceMs)
   }
 
   async respondAsk(_sessionID: string, _askID: string, _optionID: string): Promise<boolean> {

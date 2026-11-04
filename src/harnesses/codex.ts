@@ -1,4 +1,5 @@
 import { readCodexMcp, writeCodexMcpEnabled, mcpPaths } from "./mcpconfig.ts"
+import { killStuckTools, stopTree } from "../core/proctree.ts"
 import type { McpServer } from "../core/types.ts"
 import { spawn, execFile, type ChildProcess } from "node:child_process"
 import { DatabaseSync } from "node:sqlite"
@@ -635,8 +636,13 @@ export class CodexAdapter implements HarnessAdapter {
     const native = this.#real(sessionID)
     const child = this.#running.get(native)
     if (!child) return false
-    child.kill("SIGTERM")
+    stopTree(child)
     return true
+  }
+
+  /** a tool codex started has been silent for `sinceMs`: kill it, so codex sees it fail and goes on */
+  async unwedge(sessionID: string, sinceMs: number): Promise<boolean> {
+    return killStuckTools(this.#running.get(this.#real(sessionID)), sinceMs)
   }
 
   // `codex exec` decides with a sandbox policy instead of asking: its flags go

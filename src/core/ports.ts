@@ -66,6 +66,8 @@ export interface TurnHost {
    * merging with a person's waiting words, and clients draw it as a boundary
    * rather than as something they said */
   enqueue(key: string, text: string, opts?: { resume?: boolean; notice?: boolean }): void
+  /** after a restart: pick up every loop that was running; the conversations resumed. Absent, loops end with the restart. */
+  resumeLoops?(): Promise<string[]>
   /** conversations with a turn running, settling or waiting */
   busy(): number
   /** told as turns begin and end */
@@ -165,6 +167,12 @@ export interface HarnessAdapter {
    * it too. Absent or false leaves the overlay as the only name. */
   renameSession?(sessionID: string, title: string): Promise<boolean>
   abort(sessionID: string): Promise<boolean>
+  /**
+   * A tool this harness started has shown no sign of life for `sinceMs` and the watchdog is about to give
+   * up on the turn: end that one tool, not the turn, so the harness sees it fail and carries on. True when
+   * something was killed. Absent, the turn is ended as before.
+   */
+  unwedge?(sessionID: string, sinceMs: number): Promise<boolean>
   /** answer a pending ask with one of its own option ids. False when the ask
    * is unknown or already answered — it may have timed out in the harness, or
    * been answered from somewhere else. */

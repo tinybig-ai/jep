@@ -295,7 +295,11 @@ export async function startContinuity(opts: ContinuityOpts): Promise<{ close(): 
       const refused = startWatch(w.key, adapter, w.spec, w.startedAt)
       if (refused) console.error(`[watch] not restored (${w.key}): ${refused}`)
     }
+    // loops first: a loop's cut-off turn is its own to resume (with the goal and the count), so the plain
+    // "carry on" note below would be a second turn beside it
+    const looped = new Set(await (turns.resumeLoops?.() ?? Promise.resolve([])))
     for (const key of leftover) {
+      if (looped.has(key)) continue
       if (!(await turns.find(key))) {
         journal.delete(key)
         console.error(`[restart] cannot pick up ${key}: the conversation is gone`)

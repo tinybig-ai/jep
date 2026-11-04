@@ -532,6 +532,7 @@ async function main() {
         console.error(`[ws] restarted ${old.adapter.id} for ${dir} (import)`)
       },
       dataHome: DATA_HOME,
+      resumesLoops: true,
       port: Number(process.env.JEP_GW_PORT),
       host: process.env.JEP_GW_BIND || undefined,
       pairCode: process.env.JEP_GW_PAIR_CODE,

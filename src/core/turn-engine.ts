@@ -75,6 +75,9 @@ export type TurnEnd =
   /** nothing came back at all for a whole ceiling */
   | { kind: "stall"; elapsedMs: number; tool?: string }
 
+/** stuck tools freed per turn before the turn itself is given up on */
+const UNWEDGE_MAX = 3
+
 export type TurnState = {
   running: PendingTurn | null
   waiting: PendingTurn[]
@@ -97,6 +100,8 @@ export type TurnState = {
   settled?: () => void
   /** the running turn is being ended to let a waiting prompt in */
   handover?: boolean
+  /** stuck tools the watchdog has killed to keep this turn going */
+  unwedged?: number
 }
 
 /** what the engine needs of the rest of the daemon */
@@ -390,6 +395,20 @@ export class TurnEngine implements TurnHost {
         config: this.#liveness,
       })
       if (!v.stalled) continue
+      // A tool that never returns holds the turn, and ending the turn throws away everything the agent was
+      // doing (and ends a loop it was in). Kill the stuck tool first: the agent sees it fail and carries on.
+      // A few times only, so a turn that wedges every tool it starts is still ended.
+      if (adapter?.unwedge && (st.unwedged ?? 0) < UNWEDGE_MAX && v.tool) {
+        const since = Date.now() - st.lastActivity
+        st.unwedged = (st.unwedged ?? 0) + 1
+        detach(`unwedge ${id}`, (async () => {
+          const killed = await adapter.unwedge!(id, since).catch(() => false)
+          console.error(`[watchdog] ${v.tool} silent ${Math.round(since / 1000)}s: ${killed ? "killed it, the turn goes on" : "nothing to kill"} (try ${st.unwedged}/${UNWEDGE_MAX}, gateway session ${id})`)
+          if (killed) st.lastActivity = Date.now()
+          else st.unwedged = UNWEDGE_MAX // nothing to free: end the turn the usual way on the next tick
+        })())
+        continue
+      }
       console.error(
         `[watchdog] turn stalled ${Math.round(v.elapsedMs / 1000)}s (ceiling ${Math.round(v.ceilingMs / 1000)}s, tools=${st.runningTools.size}${v.wedgedMs !== undefined ? `, ${v.tool} wedged ${Math.round(v.wedgedMs / 60_000)}m` : ""}, gateway session ${id})`,
       )
@@ -520,6 +539,39 @@ export class TurnEngine implements TurnHost {
     this.#putLoop(loop)
     this.#state(loop.sessionID).waiting.push(first)
     this.#run(loop.sessionID)
+  }
+
+  /**
+   * After a daemon restart: every loop that was running carries on. A restart is jep's own doing (a
+   * deploy, a fix), not the person's word to stop, and a loop that died with it left the goal unfinished
+   * with nobody told. The turn it cut off did not complete, so the next one is the same turn again, and
+   * the agent is told what happened. A loop whose conversation is gone ends, and says so.
+   * @returns the conversations whose loop was picked up
+   */
+  async resumeLoops(): Promise<string[]> {
+    const resumed: string[] = []
+    for (const [key, loop] of [...this.loops]) {
+      if (loop.status !== "running") continue
+      if (!(await this.#env.find(key))) {
+        this.stopLoop(key, "failed", "the conversation is gone")
+        continue
+      }
+      loop.updatedAt = Date.now()
+      delete loop.error
+      this.#putLoop(loop)
+      this.#state(key).waiting.push({
+        text: continuationText(loop, loop.lastVerify, true),
+        filePaths: [],
+        steer: false,
+        loop: true,
+        clientID: `loop-resume-${Date.now().toString(36)}`,
+        resolve: () => {},
+      })
+      console.error(`[loop] resuming after a restart: turn ${loop.iteration + 1}/${loop.spec.max} (gateway session ${key})`)
+      this.#run(key)
+      resumed.push(key)
+    }
+    return resumed
   }
 
   /** the person stops a loop; only the loop's own running turn is cut short */
@@ -710,6 +762,7 @@ export class TurnEngine implements TurnHost {
     st.idleSeen = false
     st.handover = false
     st.runningTools.clear()
+    st.unwedged = 0
     st.lastActivity = Date.now()
     const ac = new AbortController()
     st.signal = ac

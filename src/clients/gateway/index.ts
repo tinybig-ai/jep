@@ -71,6 +71,8 @@ export interface GatewayDeps {
   port: number
   /** interface to listen on; every interface when omitted */
   host?: string
+  /** the daemon resumes loops after a restart (continuity does), so the gateway leaves running ones alone */
+  resumesLoops?: boolean
   /** pinned pairing code; generated fresh per boot when omitted */
   pairCode?: string
   /** attempts per address per minute before the pair gate slams shut; a
@@ -399,17 +401,17 @@ const saveHarnessSettings = async (dataHome: string, settings: Map<string, Sessi
   await writeFile(join(dataHome, HARNESS_SETTINGS_FILE), JSON.stringify(Object.fromEntries(settings), null, 1))
 }
 
-// The loops this daemon is driving, keyed by canonical session id. A loop does
-// not resume itself after a restart: the turn queue did not survive either, and
-// a daemon that picked up mid-loop would spend tokens with nobody watching. The
-// record stays so the client can say what happened.
-async function loadLoops(dataHome: string): Promise<Map<string, LoopState>> {
+// The loops this daemon is driving, keyed by canonical session id. A loop that was running when the
+// daemon went down carries on: the daemon's continuity service resumes it once the workspaces are up
+// (`resumesLoops`), because a restart is jep's own doing and not the person's word to stop. A daemon
+// with no such service ends them here, and the record says what happened.
+async function loadLoops(dataHome: string, keepRunning = false): Promise<Map<string, LoopState>> {
   try {
     const raw = JSON.parse(await readFile(join(dataHome, LOOPS_FILE), "utf8")) as Record<string, LoopState>
     const loops = new Map<string, LoopState>()
     for (const [sessionID, value] of Object.entries(raw)) {
       if (!value || typeof value !== "object" || !value.spec) continue
-      if (value.status === "running") {
+      if (value.status === "running" && !keepRunning) {
         value.status = "stopped"
         value.error = "the daemon restarted"
         value.updatedAt = Date.now()
@@ -674,19 +676,21 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   const agents = await loadAgents(deps.dataHome)
   const harnessSettings = await loadHarnessSettings(deps.dataHome)
   const conversationMcp = await loadConversationMcp(deps.dataHome)
-  const loops = await loadLoops(deps.dataHome)
-  // A loop the previous daemon was driving has no driver now. Left "running"
-  // it reads as alive forever and blocks a restart with 409; say what happened
-  // instead, so the goal can be started again in one move.
-  let staleLoops = false
-  for (const loop of loops.values()) {
-    if (loop.status !== "running") continue
-    loop.status = "stopped"
-    loop.error = "jep restarted while the loop was running; start it again to continue"
-    loop.updatedAt = Date.now()
-    staleLoops = true
+  const loops = await loadLoops(deps.dataHome, deps.resumesLoops === true)
+  // A loop the previous daemon was driving stays "running": the daemon's continuity service resumes it
+  // once the workspaces are up (TurnHost.resumeLoops), the way it picks up a turn a restart cut off.
+  // A daemon with no such service would leave it reading as alive forever, so that one ends them.
+  if (!deps.resumesLoops) {
+    let staleLoops = false
+    for (const loop of loops.values()) {
+      if (loop.status !== "running") continue
+      loop.status = "stopped"
+      loop.error = "jep restarted while the loop was running; start it again to continue"
+      loop.updatedAt = Date.now()
+      staleLoops = true
+    }
+    if (staleLoops) await saveLoops(deps.dataHome, loops)
   }
-  if (staleLoops) await saveLoops(deps.dataHome, loops)
   // A session's settings, under the id the phone uses now. Claude names a new
   // conversation with a placeholder and learns its real id once the first turn
   // starts streaming; the phone moves to the real id right then, mid-turn,
