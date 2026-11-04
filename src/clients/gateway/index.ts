@@ -171,7 +171,7 @@ function raceTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
 // same core/git.ts the Telegram /git screen reads, so the two clients cannot
 // disagree about what changed. This file only decides what the phone is sent.
 async function gitView(workspace: string) {
-  if (!(await isRepo(workspace))) return { isRepository: false, branch: null, head: null, changedFiles: 0, commits: [] }
+  if (!(await isRepo(workspace))) return { isRepository: false, branch: null, head: null, changedFiles: 0, files: [], commits: [] }
   const s = await repoStatus(workspace, 30)
   const commits = s.commits.map((c) => ({ hash: c.hash, shortHash: c.hash, subject: c.subject, author: c.author, time: Math.floor(c.at / 1000) }))
   return {
@@ -179,6 +179,8 @@ async function gitView(workspace: string) {
     branch: s.detached ? "detached HEAD" : s.branch,
     head: commits[0] ?? null,
     changedFiles: s.files.length,
+    // which ones, for a client that shows them (the web app's side column): code is M/A/D/R/?/U, newest status first
+    files: s.files.slice(0, 60).map((f) => ({ path: f.path, code: f.code, staged: f.staged, additions: f.additions, deletions: f.deletions })),
     commits,
   }
 }
