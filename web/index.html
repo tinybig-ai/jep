@@ -203,7 +203,10 @@
   .queue-head { padding: 2px 8px 4px; color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
   .queued { display: flex; align-items: center; gap: 6px; padding: 3px 4px 3px 2px; border-radius: 6px; border-top: 2px solid transparent; border-bottom: 2px solid transparent; }
   .queued:hover { background: var(--bubble); }
-  .msg.queued-msg .body { opacity: .55; }
+  .msg.queued-msg .body { opacity: .55; cursor: pointer; }
+  #forceNow blockquote { margin: 10px 0 0; padding: 8px 12px; border-left: 3px solid var(--accent); background: var(--bubble); border-radius: 0 8px 8px 0; font-size: 14px; max-height: 8em; overflow: auto; white-space: pre-wrap; }
+  #forceNow .dim { color: var(--dim); margin: 6px 0 0; font-size: 14px; }
+  #forceNow button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   .msg.queued-msg.editing .body { opacity: .3; outline: 2px dashed currentColor; outline-offset: 2px; }
   .queued-actions, .msg-actions { display: none; position: absolute; right: 0; top: calc(100% + 1px); gap: 10px; }
   .msg.user:hover .queued-actions, .msg.user:hover .msg-actions, .queued-actions:focus-within, .msg-actions:focus-within { display: flex; }
@@ -448,6 +451,18 @@ document.write('<link rel="stylesheet" href="/v2.css">'
   <div class="head"><span class="grow">Details</span><button class="refresh" id="inspectorRefresh" type="button" title="Reload git changes">↻</button></div>
   <div class="body" id="inspectorBody"></div>
 </aside>
+
+<dialog id="forceNow">
+  <form method="dialog">
+    <h2>Send now?</h2>
+    <p id="forceNowText" class="dim"></p>
+    <blockquote id="forceNowQuote"></blockquote>
+    <div class="line" style="justify-content: flex-end; gap: 8px; margin-top: 14px">
+      <button value="cancel" id="forceNowNo">Keep waiting</button>
+      <button value="send" id="forceNowYes" class="primary">Send now</button>
+    </div>
+  </form>
+</dialog>
 
 <dialog id="settings">
   <h2>Conversation settings</h2>
@@ -1895,6 +1910,35 @@ function queuedMark(node, q) {
   cancel.onclick = () => { cancel.disabled = true; cancelQueued(q.clientID) }
   actions.append(edit, cancel)
   node.querySelector(".body").append(actions)
+  // clicking the waiting message itself offers to send it now; the two buttons keep their own meaning
+  const body = node.querySelector(".body")
+  body.title = "Click to send this now"
+  body.onclick = (e) => { if (!e.target.closest("button, a")) askSendNow(q) }
+}
+
+// A queued message waits for the running turn to end. Sending it now stops that turn so this one can
+// run, which loses what the agent was in the middle of, so it is asked first.
+async function askSendNow(q) {
+  const id = current
+  if (!q?.clientID || !id) return
+  const running = busy()
+  $("forceNowText").textContent = running
+    ? "This stops what the agent is doing right now and sends this message straight away."
+    : "Nothing is running, so this goes out straight away."
+  $("forceNowQuote").textContent = q.text.length > 600 ? q.text.slice(0, 600) + "…" : q.text
+  const dlg = $("forceNow")
+  dlg.returnValue = ""
+  dlg.onclose = async () => {
+    if (dlg.returnValue !== "send" || id !== current) return
+    // it leaves the line at once; the daemon's own account follows
+    queue = queue.filter((x) => x.clientID !== q.clientID)
+    pendingText = pendingText.filter((p) => p.clientID !== q.clientID)
+    render()
+    try { await call("/queue/force", { id, clientID: q.clientID }) } catch (err) { fail(err) }
+    if (id === current) { etag = null; readHistory().catch(() => {}) }
+  }
+  dlg.showModal()
+  $("forceNowYes").focus()
 }
 
 // Editing a queued message happens in the message box, which no redraw
