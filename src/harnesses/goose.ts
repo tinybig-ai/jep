@@ -6,7 +6,7 @@ import { readdir, readFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { randomUUID } from "node:crypto"
-import type { HarnessAdapter, ModelRef } from "../core/ports.ts"
+import type { HarnessAdapter, ModelCaps, ModelRef } from "../core/ports.ts"
 import type { DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionSummary } from "../core/types.ts"
 import { hasMcp, type ConversationMcp } from "../core/mcp.ts"
 import { MCP_SERVER_PATH, TOOLS_SERVER, toolsMode, wantsMcp } from "../core/tools.ts"
@@ -339,6 +339,35 @@ export class GooseAdapter implements HarnessAdapter {
 
   async rejectAsk(_sessionID: string, _askID: string): Promise<boolean> {
     return false
+  }
+
+  /**
+   * What each custom-provider model can take, from the provider's own file: `supports_vision` is goose's
+   * flag, and without it goose strips every image out of the request ("[image omitted: model does not
+   * support vision]") however capable the model behind a router alias is. The picker marks these models,
+   * so a person can tell which ones will actually see a picture.
+   */
+  async capabilities(): Promise<Map<string, ModelCaps>> {
+    const out = new Map<string, ModelCaps>()
+    const dir = path.join(path.dirname(GOOSE_CONFIG), "custom_providers")
+    let files: string[] = []
+    try {
+      files = (await readdir(dir)).filter((f) => f.endsWith(".json")).sort()
+    } catch {
+      return out
+    }
+    for (const file of files) {
+      try {
+        const def = JSON.parse(await readFile(path.join(dir, file), "utf8"))
+        for (const m of Array.isArray(def.models) ? def.models : []) {
+          if (!def.name || !m?.name) continue
+          out.set(`${def.name}/${m.name}`, { image: m.supports_vision === true, attachment: m.supports_vision === true, contextLimit: Number(m.context_limit) || 0 })
+        }
+      } catch {
+        // a provider file goose cannot read is not worth failing the picker for
+      }
+    }
+    return out
   }
 
   async models(): Promise<ModelRef[]> {

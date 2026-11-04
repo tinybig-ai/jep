@@ -284,3 +284,17 @@ test("a tool goose is stuck on can be killed, and goose finishes the turn", { ti
   assert.equal(await adapter.unwedge(session.id, 60_000), false, "nothing running now")
   await rm(file, { force: true })
 })
+
+test("the picker can tell which custom goose models take images, from the provider's own flag", async () => {
+  const { mkdir } = await import("node:fs/promises")
+  const dir = path.join(path.dirname(process.env.JEP_GOOSE_CONFIG!), "custom_providers")
+  await mkdir(dir, { recursive: true })
+  await writeFile(path.join(dir, "custom_free.json"), JSON.stringify({ name: "custom_free", models: [{ name: "plain" }, { name: "free:largest+vision", supports_vision: true, context_limit: 200000 }] }))
+  const workspace = await mkdtemp(path.join(home, "workspace-"))
+  const adapter = await startGooseAdapter(workspace)
+  const caps = await adapter.capabilities!()
+  assert.equal(caps.get("custom_free/plain")?.image, false)
+  assert.equal(caps.get("custom_free/free:largest+vision")?.image, true, "goose will pass pictures to this one")
+  assert.equal(caps.get("custom_free/free:largest+vision")?.contextLimit, 200000)
+  await rm(path.join(dir, "custom_free.json"))
+})
