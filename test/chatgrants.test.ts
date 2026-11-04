@@ -88,3 +88,11 @@ test("a pair gets a few messages an hour, then waits", () => {
   assert.ok(tellAllowed(log, "b", "a", 2000, 3), "the other direction has its own count")
   assert.ok(tellAllowed(log, "a", "b", 1000 + 3_600_001, 3), "an hour later it may again")
 })
+
+import { normalizePairCode } from "../src/core/pairing.ts"
+
+test("a pairing code typed the way a phone types it still pairs", () => {
+  assert.equal(normalizePairCode("g3a3d272f"), "G3A3D272F")
+  assert.equal(normalizePairCode("  G3A-3D2 72F\n"), "G3A3D272F")
+  assert.equal(normalizePairCode("G3A3D272F"), "G3A3D272F")
+})

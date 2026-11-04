@@ -11,7 +11,7 @@ import { homedir, tmpdir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path"
 import type { ChatDirectory, ChatInfo, HarnessAdapter, HarnessMark, HarnessSettingSpec, SessionImport, Terminal, TurnHost } from "../../core/ports.ts"
-import { newPairCode, type PairingAdmin } from "../../core/pairing.ts"
+import { newPairCode, normalizePairCode, type PairingAdmin } from "../../core/pairing.ts"
 import { describeAsk } from "../../core/asks.ts"
 import { hasMcp, parseConversationMcp, type ConversationMcp } from "../../core/mcp.ts"
 import { pushFor, UnregisteredToken, type PushNotifier } from "../../core/push.ts"
@@ -1113,7 +1113,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       if (path === "/pair" && req.method === "POST") {
         if (!pairRateOK(deps.pairLimit ?? 5, ip)) return json(res, 429, { error: "too many attempts, wait a minute" })
         const body = (await readBody(req)) as { code?: string } | undefined
-        if (typeof body?.code !== "string" || !same(body.code.trim(), pairCode)) {
+        if (typeof body?.code !== "string" || !same(normalizePairCode(body.code), pairCode)) {
           return json(res, 403, { error: "wrong pairing code" })
         }
         const token = randomBytes(24).toString("hex")

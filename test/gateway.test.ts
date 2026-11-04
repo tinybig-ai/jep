@@ -2197,3 +2197,17 @@ test("a tool that cannot be freed ends the turn the old way, and so does one tha
     await g.close()
   }
 })
+
+test("pairing accepts the code in lower case or with a space, and still refuses a wrong one", async () => {
+  const a = stallable()
+  const dataHome = mkdtempSync(join(tmpdir(), "pair-"))
+  const g = await startGateway({ adapters: () => [{ name: "fake-ws", adapter: a.adapter }], dataHome, port: 0, pairCode: "ABCD2345F", pairLimit: 100 })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const attempt = (code: string) => fetch(`${base}/pair`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code }) })
+    assert.equal((await attempt("abcd2345x")).status, 403, "a wrong code is wrong in any case")
+    assert.equal((await attempt("abcd 2345f")).status, 200, "lower case and a space are the same code")
+  } finally {
+    await g.close()
+  }
+})
