@@ -1291,8 +1291,8 @@ export class TelegramBot {
   async #onStopGeneration(stop: NonNullable<TgUpdate["stopped_message_generation"]>): Promise<void> {
     const realID = stop?.chat?.id
     if (realID == null) return
-    // the update names the topic when the draft was tapped in one
-    if (stop.message_thread_id) {
+    // the update names the topic when the draft was tapped in one (1 = General)
+    if (stop.message_thread_id && stop.message_thread_id !== 1) {
       await this.#stopTurn(this.#registerForumPeer(realID, stop.message_thread_id))
       return
     }
@@ -1349,8 +1349,12 @@ export class TelegramBot {
 
     // bot forum: a message inside a topic IS that conversation, so it is
     // readdressed to the topic's synthetic chat id before anything else reads
-    // it. A topic-less message (General) stays on the real chat.
-    const threadID = m.is_topic_message ? m.message_thread_id ?? undefined : undefined
+    // it. A topic-less message (General) stays on the real chat. The topic is
+    // named by message_thread_id alone — is_topic_message is reliably set in
+    // group forums, but private bot forums may only carry the thread id (the
+    // MTProto top_msg_id), which is exactly how the docs define topic
+    // membership. Thread 1 means General in group forums, so it never maps.
+    const threadID = m.message_thread_id && m.message_thread_id !== 1 ? m.message_thread_id : undefined
     const chatID = threadID !== undefined ? this.#registerForumPeer(realID, threadID) : realID
     const c = this.#chat(chatID)
 
@@ -1536,8 +1540,8 @@ export class TelegramBot {
     const realID = cq.message.chat.id
     if (!this.#pairing.isPaired(realID)) return this.#tg.answerCallbackQuery({ id: cq.id, text: "not paired" })
     // a callback raised on a message inside a topic belongs to that topic's
-    // chat state — readdress it like any message update
-    const threadID = cq.message.is_topic_message ? cq.message.message_thread_id ?? undefined : undefined
+    // chat state — readdress it like any message update (thread 1 = General)
+    const threadID = cq.message.message_thread_id && cq.message.message_thread_id !== 1 ? cq.message.message_thread_id : undefined
     const chatID = threadID !== undefined ? this.#registerForumPeer(realID, threadID) : realID
     await this.#onCallback({ ...cq, message: { ...cq.message, chat: { ...cq.message.chat, id: chatID } } })
   }
