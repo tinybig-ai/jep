@@ -625,6 +625,7 @@ private func loopLabel(_ m: ChatMessage) -> String {
     if case .noticeTurn(let kind, let minutes)? = m.parts.first {
         switch kind {
         case "resumed": return "jep · restarted, picking the work back up"
+        case "retry": return "jep · a tool call came out as text and did not run, asking again"
         case "timeout": return "jep · stopped watching after \(minutes ?? 60) min"
         default: return "jep · the watch is done"
         }

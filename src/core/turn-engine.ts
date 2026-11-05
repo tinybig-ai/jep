@@ -1,5 +1,6 @@
 import type { ConversationMcp } from "./mcp.ts"
-import { readGuest, readLoopMarker, readNoticeMarker, stripInjectedContext } from "./transcript.ts"
+import { noticeMarker, readGuest, readLoopMarker, readNoticeMarker, stripInjectedContext } from "./transcript.ts"
+import { malformedToolCall, MALFORMED_NOTE, MALFORMED_RETRY_MAX } from "./malformed.ts"
 import type { HarnessAdapter, TurnHost, TurnListener } from "./ports.ts"
 import type { DomainEvent, HarnessError, Message } from "./types.ts"
 import { eventSession, isAborted } from "./types.ts"
@@ -138,6 +139,8 @@ export class TurnEngine implements TurnHost {
   #liveness: LivenessConfig
   #turns = new Map<string, TurnState>()
   #watchdog: ReturnType<typeof setInterval>
+  /** consecutive turns per conversation that ended on a tool call written as text */
+  #malformed = new Map<string, number>()
 
   constructor(env: TurnEnv, opts: TurnEngineOpts) {
     this.#env = env
@@ -624,7 +627,7 @@ export class TurnEngine implements TurnHost {
   // about the goal. Retry the same turn after backoff instead of ending the
   // loop; the turn counter does not move, so the cap still means turns, not
   // attempts. Only repeated failure is a failure.
-  #retryLoop(key: string, reason: string): boolean {
+  #retryLoop(key: string, reason: string, note?: string): boolean {
     const loop = this.loops.get(key)
     if (!loop || loop.status !== "running") return false
     const attempts = loop.attempts ?? 0
@@ -640,7 +643,7 @@ export class TurnEngine implements TurnHost {
     const timer = setTimeout(() => {
       if (this.loops.get(key) !== loop || loop.status !== "running") return
       this.#state(key).waiting.push({
-        text: continuationText(loop, loop.lastVerify),
+        text: continuationText(loop, loop.lastVerify) + (note ? `\n\n${note}` : ""),
         filePaths: [],
         steer: false,
         loop: true,
@@ -786,6 +789,19 @@ export class TurnEngine implements TurnHost {
       })
       answer = message
       next.resolve({ status: 200, message })
+      // A tool call written out as text did not run, and the harness took the turn for finished. That is the
+      // model failing, not the agent deciding to stop: ask again (a loop retries the same turn, anything else
+      // gets one plain note), a few times, then leave it.
+      const key = this.turnKey(id)
+      if (malformedToolCall(message)) {
+        const done = this.#malformed.get(key) ?? 0
+        if (done < MALFORMED_RETRY_MAX) {
+          this.#malformed.set(key, done + 1)
+          console.error(`[turn] a tool call written as text ended the turn; asking again ${done + 1}/${MALFORMED_RETRY_MAX} (gateway session ${key})`)
+          if (next.loop) retried = this.#retryLoop(key, "a tool call written as text", MALFORMED_NOTE)
+          else this.enqueue(id, `${noticeMarker("retry")}\n${MALFORMED_NOTE}`, { notice: true })
+        }
+      } else this.#malformed.delete(key)
     } catch (err) {
       // An abort with a reason behind it is not a client stop: the watchdog or
       // the event stream ended this turn, and the reason is the whole point.

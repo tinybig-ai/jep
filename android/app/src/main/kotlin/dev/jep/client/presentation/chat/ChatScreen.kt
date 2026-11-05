@@ -4203,6 +4203,7 @@ internal fun AutoContinueRow(m: ChatMessage) {
                 is ChatPart.LoopTurn -> "· loop ${part.iteration}/${part.max} ·"
                 is ChatPart.NoticeTurn -> when (part.kind) {
                     "resumed" -> "· jep · restarted, picking the work back up ·"
+                    "retry" -> "· jep · a tool call came out as text and did not run, asking again ·"
                     "timeout" -> "· jep · stopped watching after ${part.minutes ?: 60} min ·"
                     else -> "· jep · the watch is done ·"
                 }
