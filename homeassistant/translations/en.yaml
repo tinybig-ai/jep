@@ -10,13 +10,16 @@ configuration:
     description: Serve the web client and native app clients (phone pairing, SSE). Works without Telegram.
   gateway_port:
     name: Gateway port
-    description: Port the gateway listens on; exposed to your network through Home Assistant.
+    description: Port the gateway listens on inside the app. Ingress uses 8099. The Network tab's host port stays empty unless a phone needs it.
   gateway_bind:
     name: Gateway bind address
     description: 'Empty = all interfaces. Set e.g. 127.0.0.1 to keep it container-local.'
   gateway_pair_code:
     name: Gateway pairing code
     description: Pin the code a client pairs with. Empty = a fresh, single-print code at every boot.
+  ingress_trust:
+    name: Trust Home Assistant ingress
+    description: On (default) the sidebar web client skips the pairing code, because Home Assistant already signed the user in. Turn off before publishing the host port.
   workspace_dir:
     name: Workspace folder
     description: 'The folder conversations start in. Throwaway pods live under the app data home, so nothing to manage.'

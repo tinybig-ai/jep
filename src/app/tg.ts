@@ -553,6 +553,7 @@ async function main() {
       port: Number(process.env.JEP_GW_PORT),
       host: process.env.JEP_GW_BIND || undefined,
       pairCode: process.env.JEP_GW_PAIR_CODE,
+      ingressTrust: process.env.JEP_GW_INGRESS_TRUST === "1",
     })
     console.error(`gateway: POST /pair {"code":…} on http://<tailscale-or-lan-ip>:${process.env.JEP_GW_PORT}`)
     gwPairingAdmin = gw.pairingAdmin

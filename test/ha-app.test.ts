@@ -81,8 +81,22 @@ test("forum topics: the switch reaches the daemon's env", async () => {
 })
 
 test("ingress is on, so HA can mount the web client without any open port", () => {
-  const cfg = JSON.parse(readFileSync(join(import.meta.dirname, "..", "homeassistant", "config.json"), "utf8")) as Record<string, unknown>
+  const cfg = JSON.parse(readFileSync(join(import.meta.dirname, "..", "homeassistant", "config.json"), "utf8")) as {
+    ingress: boolean
+    ingress_port: number
+    webui?: string
+    watchdog?: string
+    ports: Record<string, number | null>
+    options: { ingress_trust: boolean }
+    schema: { ingress_trust: string }
+  }
   assert.equal(cfg.ingress, true, "the Supervisor's ingress proxy is the /api/hassio_ingress/... route")
+  assert.equal(cfg.ingress_port, 8099)
+  assert.equal(cfg.ports["8099/tcp"], null, "an unpublished host port is what makes the ingress header unforgeable")
+  assert.equal(cfg.webui, undefined)
+  assert.equal(cfg.watchdog, undefined)
+  assert.equal(cfg.options.ingress_trust, true)
+  assert.equal(cfg.schema.ingress_trust, "bool")
   // the web client it proxies must have no site-absolute URLs: ingress mounts
   // the app under /api/hassio_ingress/<token>/ and does not rewrite paths
   const page = readFileSync(join(import.meta.dirname, "..", "web", "index.html"), "utf8")
@@ -90,6 +104,16 @@ test("ingress is on, so HA can mount the web client without any open port", () =
     const hit = ref.exec(page)?.[0] ?? null
     assert.equal(hit, null, `absolute URL in web/index.html breaks ingress: ${hit}`)
   }
+  assert.match(page, /trustedIngress/)
+})
+
+test("ingress trust reaches the daemon only when the option is on", async () => {
+  const on = sandbox({ telegram_token: "1:a", ingress_trust: true })
+  assert.equal((await boot(on)).status, 0)
+  assert.match(envFor(on), /export JEP_GW_INGRESS_TRUST=1/)
+  const off = sandbox({ telegram_token: "1:a", ingress_trust: false })
+  assert.equal((await boot(off)).status, 0)
+  assert.doesNotMatch(envFor(off), /JEP_GW_INGRESS_TRUST/)
 })
 
 test("gateway only: no token, no bot, the gateway port still set", async () => {

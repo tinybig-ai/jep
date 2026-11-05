@@ -2153,3 +2153,66 @@ test("/carryover writes the whole conversation to a temp markdown file", async (
     await g.close()
   }
 })
+
+test("ingress trust: the HA user header skips the pairing code", async () => {
+  const dataHome = mkdtempSync(join(tmpdir(), "gw-ing-"))
+  const g = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter: fakeAdapter() }],
+    dataHome,
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+    ingressTrust: true,
+  })
+  const base = `http://127.0.0.1:${g.port}`
+  const ha = { "x-remote-user-id": "ha-user" }
+  try {
+    const health = (await (await fetch(`${base}/health`, { headers: ha })).json()) as { trustedIngress?: boolean }
+    assert.equal(health.trustedIngress, true)
+    const bare = (await (await fetch(`${base}/health`)).json()) as { trustedIngress?: boolean }
+    assert.equal(bare.trustedIngress, false)
+    const blank = (await (await fetch(`${base}/health`, { headers: { "x-remote-user-id": "  " } })).json()) as { trustedIngress?: boolean }
+    assert.equal(blank.trustedIngress, false)
+    const refused = await fetch(`${base}/pair`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })
+    assert.equal(refused.status, 403)
+    const paired = await fetch(`${base}/pair`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...ha },
+      body: "{}",
+    })
+    assert.equal(paired.status, 200)
+    const body = (await paired.json()) as { token?: string; nextCode?: string }
+    assert.equal(typeof body.token, "string")
+    assert.equal(body.nextCode, undefined, "the ingress browser must not learn the phone code")
+    // the code was not spent, so a phone can still pair with it
+    const phone = await fetch(`${base}/pair`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: "TESTCODE" }),
+    })
+    assert.equal(phone.status, 200)
+    const open = await fetch(`${base}/devices`, { method: "POST", headers: ha })
+    assert.equal(open.status, 200)
+    const anon = await fetch(`${base}/devices`, { method: "POST" })
+    assert.equal(anon.status, 401)
+  } finally {
+    await g.close()
+  }
+
+  const closed = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter: fakeAdapter() }],
+    dataHome: mkdtempSync(join(tmpdir(), "gw-ing-")),
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+  })
+  try {
+    const forged = await fetch(`http://127.0.0.1:${closed.port}/devices`, {
+      method: "POST",
+      headers: { "x-remote-user-id": "ha-user" },
+    })
+    assert.equal(forged.status, 401, "without the flag the header is just a header")
+  } finally {
+    await closed.close()
+  }
+})

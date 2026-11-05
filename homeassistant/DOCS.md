@@ -20,13 +20,14 @@ Point the app store at this repository:
    The Supervisor finds the app by its `config.json`.
 2. Install **Jep**, set the options in the **Configuration** tab (below), then
    **Start**.
-3. Open the app's **Log** to find your pairing info:
+3. Open **Jep** in the sidebar. The web client is already signed in. A phone
+   on a published port still needs the pairing code from the app's **Log**.
 
 The repo is a valid repository URL thanks to the root `repository.json`
 (required by the Supervisor) — the app itself lives in the `homeassistant/`
 folder, which the Supervisor finds by its `config.json` at any depth.
    * Telegram prints `pairing code: XXXX-XXXX` until the first `/pair`.
-   * The gateway prints its own pairing code once at boot.
+   * The gateway prints its own pairing code once at boot (phones only).
 
 First start pulls the prebuilt image (your fork's GHCR packages); expect a
 short download, faster than building on a Pi. If the `image` key is removed,
@@ -35,21 +36,24 @@ starts are instant in both cases.
 
 ### Where the web client lives
 
-Three ways in, all behind the same gateway port inside the container:
+The gateway listens on `8099` inside the container. Nothing is published on
+the host until you ask.
 
-1. **Ingress (no ports, recommended).** The app runs with HA's own
-   `ingress: true`, so the web client is reachable from Home Assistant's UI —
-   the sidebar panel **Jep** (`panel_title`/`panel_icon`), or the app card's
-   **Open Web UI**. The browser URL is HA's own, e.g.
+1. **Ingress (no pairing, recommended).** `ingress: true` and `ingress_port:
+   8099`. Open the sidebar panel **Jep**. The browser URL is HA's own, e.g.
    `https://<your-ha>/api/hassio_ingress/<token>/…`, so anything already in
    front of HA (Nginx proxy add-on, Caddy, **cloudflared**) covers it with no
-   port forwarding and no extra TLS. This is also why the web client uses only
-   *relative* URLs: ingress mounts it under a jumbled `/api/hassio_ingress/…`
-   prefix and never rewrites paths.
-2. **Direct port behind a DNS name you control** — `ports` maps `8099` onto the
-   host, so `http://<ha-host>:8099/` works on the LAN; the same port is what
-   the **native phone app** pairs against. This is the one that needs port
-   forwarding/TLS on its own if it leaves your LAN.
+   port forwarding and no extra TLS. The web client uses only *relative*
+   URLs, because ingress mounts it under `/api/hassio_ingress/…` and never
+   rewrites paths. Home Assistant already authenticated the user and stamps
+   `X-Remote-User-Id` on the proxied request, so the page pairs itself
+   (`ingress_trust`, on by default). No code to type.
+2. **A phone, or a browser on the raw port.** On the app's **Network** tab,
+   set host port `8099`. Turn **Trust Home Assistant ingress** off first: with
+   the port published, anyone who can open it can send that header and skip
+   the pairing code. Then pair with the code from the log. This path needs
+   its own forwarding and TLS if it leaves the LAN. `gateway_port` must stay
+   `8099` or ingress stops matching `ingress_port`.
 
 ### Updating
 
@@ -73,9 +77,10 @@ fork either way.
 | `telegram_token` | password, empty | token from [@BotFather](https://t.me/BotFather). Empty = Telegram bot off. |
 | `telegram_forum` | list (`auto`/`off`), `auto` | with Threaded mode enabled for the bot in @BotFather, every conversation runs as its own **forum topic**: a message typed in General spawns a topic titled with the prompt, /new opens one, deleting the conversation deletes the topic. `auto` probes `createForumTopic` once and falls back to plain chat for 10 minutes when Telegram refuses. |
 | `gateway_enabled` | bool, `true` | run the gateway (web client, Android app client) |
-| `gateway_port` | port, `8099` | gateway port; exposed as an HA port |
+| `gateway_port` | port, `8099` | port inside the app. Ingress is fixed to this. The host port stays unmapped until the Network tab sets one |
 | `gateway_bind` | str, empty | what to bind: empty = all interfaces (default), `127.0.0.1` = container-local |
 | `gateway_pair_code` | str, empty | pin the gateway pairing code instead of a fresh one per boot |
+| `ingress_trust` | bool, `true` | sidebar web client skips pairing (`JEP_GW_INGRESS_TRUST=1`). Turn off before publishing the host port |
 | `workspace_dir` | str, `/data/jep/workspace` | the one served workspace every conversation starts from. Throwaway pods (`Add project → pod` in the client) live under the data home, so no folders to manage |
 | `browse_root` | str, `/data` | browser root when adding a folder from a client |
 | `model` | str, empty | default model, e.g. `openrouter/anthropic/claude-sonnet-4` |

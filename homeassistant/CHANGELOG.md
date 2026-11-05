@@ -1,5 +1,13 @@
 # Changelog — the HA app
 
+## 0.2.4
+
+The sidebar web client no longer asks for a pairing code. Home Assistant
+already signed the user in and stamps `X-Remote-User-Id`; with
+`ingress_trust` on (the default) that header is enough. The host port is
+unmapped so the header cannot be forged from the LAN. Publish `8099` on the
+Network tab only for a phone, and turn `ingress_trust` off first.
+
 ## 0.2.3
 
 **Ingress**: the web client is now reachable from Home Assistant itself

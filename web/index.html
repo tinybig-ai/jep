@@ -544,6 +544,36 @@ function unpair(message = "") {
   show()
 }
 
+// Home Assistant already authenticated the person. /health says so per request
+// (the Supervisor adds the header; a direct port does not). One silent /pair,
+// then the page is a normal paired client. A failure leaves the code form up.
+let autoPairing = false
+async function autoPair() {
+  if (token || autoPairing) return
+  autoPairing = true
+  let minted = false
+  try {
+    const res = await fetch("./health", { cache: "no-store" })
+    const data = await res.json().catch(() => ({}))
+    if (!data.trustedIngress) return
+    const paired = await fetch("./pair", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    })
+    const body = await paired.json().catch(() => ({}))
+    if (!paired.ok || typeof body.token !== "string") return
+    token = body.token
+    localStorage.setItem("jep.token", token)
+    minted = true
+  } catch {
+    // loadHealth already marks the gateway offline
+  } finally {
+    autoPairing = false
+  }
+  if (minted) show()
+}
+
 $("pair").onsubmit = async (e) => {
   e.preventDefault()
   const res = await fetch("./pair", {
@@ -2530,7 +2560,11 @@ function show() {
   document.querySelector("main").hidden = !token
   loadHealth()
   if (!healthTimer) healthTimer = setInterval(loadHealth, 15_000)
-  if (!token) return void feed?.close()
+  if (!token) {
+    feed?.close()
+    void autoPair()
+    return
+  }
   // the last list known, at once; the gateway's answer replaces it when it comes
   try { sessions = JSON.parse(localStorage.getItem("jep.sessions") || "[]") } catch { sessions = [] }
   renderSessions()

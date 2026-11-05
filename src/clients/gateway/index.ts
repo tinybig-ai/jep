@@ -73,6 +73,11 @@ export interface GatewayDeps {
   host?: string
   /** pinned pairing code; generated fresh per boot when omitted */
   pairCode?: string
+  /** Home Assistant ingress already authenticated this request. When set, a
+   * request carrying `X-Remote-User-Id` (stamped by the Supervisor, which
+   * strips any client-sent copy) may skip the pairing code. Safe only while
+   * the gateway's host port is unpublished: a published port can send the header. */
+  ingressTrust?: boolean
   /** attempts per address per minute before the pair gate slams shut; a
    * production default, loosened by tests that must pair repeatedly */
   pairLimit?: number
@@ -1012,6 +1017,16 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     return q && q.length > 0 ? q : null
   }
 
+  // The Supervisor sets this after authenticating the HA user. Empty or huge
+  // values are not an id. The flag is the opt-in; the header alone is nothing.
+  const ingressUser = (req: IncomingMessage): string | null => {
+    if (!deps.ingressTrust) return null
+    const raw = req.headers["x-remote-user-id"]
+    const value = (Array.isArray(raw) ? raw[0] : raw)?.trim() ?? ""
+    if (!value || value.length > 128) return null
+    return value
+  }
+
   const json = (res: ServerResponse, status: number, body: unknown): void => {
     res.writeHead(status, { "content-type": "application/json" })
     res.end(JSON.stringify(body))
@@ -1029,6 +1044,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           devices: tokens.size,
           pushConfigured: !!deps.push,
           uptimeMs: Date.now() - startedAt,
+          trustedIngress: !!ingressUser(req),
         })
       }
 
@@ -1052,27 +1068,33 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
 
       if (path === "/pair" && req.method === "POST") {
         if (!pairRateOK(deps.pairLimit ?? 5, ip)) return json(res, 429, { error: "too many attempts, wait a minute" })
+        const ingress = ingressUser(req)
         const body = (await readBody(req)) as { code?: string } | undefined
-        if (typeof body?.code !== "string" || !same(body.code.trim(), pairCode)) {
+        if (!ingress && (typeof body?.code !== "string" || !same(body.code.trim(), pairCode))) {
           return json(res, 403, { error: "wrong pairing code" })
         }
         const token = randomBytes(24).toString("hex")
         tokens.set(token, Date.now())
         await saveTokens(deps.dataHome, tokens)
-        spendPairCode("device paired")
-        // hand back the next code: the one just used is spent
-        return json(res, 200, { token, nextCode: pairCode })
+        // the header did not use the code, so the code stays valid for a phone
+        if (!ingress) spendPairCode("device paired")
+        // nextCode is the live secret; an ingress browser must not receive it
+        return json(res, 200, ingress ? { token } : { token, nextCode: pairCode })
       }
 
-      // everything below is token-gated
-      const token = tokenOf(req, url)
+      // everything below is token-gated. An ingress request with no (or a stale)
+      // token still proceeds as that HA user; the terminal stays locked because
+      // this stand-in is not in terminalTokens.
+      let token = tokenOf(req, url)
       const stamp = await tokenFileStamp(deps.dataHome)
       if (stamp !== tokensStamp) {
         tokens = await loadTokens(deps.dataHome)
         tokensStamp = stamp
         for (const t of [...terminalTokens]) if (!tokens.has(t)) terminalTokens.delete(t)
       }
-      if (!token || !tokens.has(token)) return json(res, 401, { error: "pair first" })
+      const ingress = ingressUser(req)
+      if (ingress && (!token || !tokens.has(token))) token = `ingress:${ingress}`
+      if (!token || (!tokens.has(token) && !ingress)) return json(res, 401, { error: "pair first" })
       deviceActivity.set(token, Date.now())
 
       if (path === "/stream" && req.method === "GET") {
@@ -2047,7 +2069,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   }
   const bound = (server.address() as { port: number }).port
   listening = bound
-  console.error(`[gw] listening on :${bound}  ·  pairing code: ${pairCode}`)
+  console.error(`[gw] listening on :${bound}  ·  pairing code: ${pairCode}${deps.ingressTrust ? "  ·  ingress trust on" : ""}`)
 
   return {
     pairCode,
