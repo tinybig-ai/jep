@@ -925,6 +925,17 @@ export class TelegramBot {
     return syn
   }
 
+  // the conversation this chat was already in, so a command can land there
+  // instead of in a topic Telegram just opened for the command itself
+  #latestTopic(realChatID: number): number | null {
+    let best: number | null = null
+    for (const [syn, peer] of this.#forumRegistry) {
+      if (peer.chatID !== realChatID) continue
+      if (best === null || syn > best) best = syn
+    }
+    return best
+  }
+
   #forumForget(chatID: number): void {
     const peer = this.#forumRegistry.get(chatID)
     if (!peer) return
@@ -1355,7 +1366,20 @@ export class TelegramBot {
     // MTProto top_msg_id), which is exactly how the docs define topic
     // membership. Thread 1 means General in group forums, so it never maps.
     const threadID = m.message_thread_id && m.message_thread_id !== 1 ? m.message_thread_id : undefined
-    const chatID = threadID !== undefined ? this.#registerForumPeer(realID, threadID) : realID
+    const head = text.split(/\s+/)[0] ?? ""
+    const slash = head.startsWith("/") ? (head.slice(1).split("@")[0] ?? "") : ""
+    const knownThread = threadID !== undefined && this.#forumIndex.has(`${realID}:${threadID}`)
+    // A command sent from the topic list makes Telegram open a topic for it.
+    // That topic is not a conversation. Drop it and run the command where the
+    // user already was. /new is the one command that is supposed to open one.
+    let chatID: number
+    if (threadID !== undefined && slash && slash !== "new" && !knownThread) {
+      await this.#tg.deleteForumTopic({ chatID: realID, threadID }).catch(logFail("forum drop command topic"))
+      console.error(`[forum] dropped topic ${threadID} opened by /${slash}`)
+      chatID = this.#latestTopic(realID) ?? realID
+    } else {
+      chatID = threadID !== undefined ? this.#registerForumPeer(realID, threadID) : realID
+    }
     const c = this.#chat(chatID)
 
     // a swipe-reply to a question prompt is the typed answer: the question's
@@ -1375,7 +1399,7 @@ export class TelegramBot {
       }
     }
 
-    console.error(`[tg] message from chat=${realID} thread=${threadID ?? "-"} (${m.chat.type}) from=${m.from?.username ?? m.from?.id ?? "?"}`)
+    console.error(`[tg] message from chat=${realID} thread=${threadID ?? "-"} as=${chatID} (${m.chat.type}) /${slash || "-"} from=${m.from?.username ?? m.from?.id ?? "?"}`)
     c.chatType = m.chat.type
     if (m.from?.id != null) c.lastUserID = m.from.id
     // A spoken prompt takes seconds to transcribe, which is far too long to
@@ -1394,7 +1418,7 @@ export class TelegramBot {
         return this.#say(chatID, "(nothing to cancel)")
       }
       if (c.awaiting) this.#clearAwaiting(c)
-      await this.#command(chatID, cmd.slice(1), rest.join(" "), m.message_id)
+      await this.#command(chatID, slash, rest.join(" "), m.message_id)
     } else if (c.awaiting) {
       await this.#resolveAwaiting(chatID, text, m.message_id)
     } else {
@@ -1901,7 +1925,8 @@ export class TelegramBot {
     // would be two conversations wearing one name — and starts a fresh one,
     // whose title the name typed (or the default) carries.
     let home = chatID
-    if (this.#isTopic(chatID)) {
+    const hasSession = Boolean(this.#chat(chatID).sessionID || this.#store.chatContext(chatID)?.sessionID)
+    if (this.#isTopic(chatID) && hasSession) {
       const peer = this.#peerOf(chatID)
       if (peer) {
         await this.#tg.deleteForumTopic({ chatID: peer.chatID, threadID: peer.threadID }).catch(logFail("forum delete"))
@@ -1912,7 +1937,7 @@ export class TelegramBot {
         // than keep the conversation addressed to a retired topic
         home = spawn ?? peer.chatID
       }
-    } else {
+    } else if (!this.#isTopic(chatID)) {
       const spawn = await this.#spawnTopic(chatID, title || "New conversation")
       if (spawn !== null) home = spawn
     }
