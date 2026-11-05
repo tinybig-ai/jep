@@ -1,5 +1,11 @@
 # Changelog — the HA app
 
+## 0.2.5
+
+0.2.4's image was built from upstream `tinybig-ai/jep`, so the sidebar still
+asked for a pairing code. The image now clones the repo CI is building.
+A configuration that has not saved `ingress_trust` yet still trusts ingress.
+
 ## 0.2.4
 
 The sidebar web client no longer asks for a pairing code. Home Assistant

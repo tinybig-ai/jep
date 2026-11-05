@@ -60,9 +60,9 @@ the host until you ask.
 CI (`.github/workflows/ha-app.yml`) builds and pushes the images for both
 architectures on every push that touches the app or its sources, tagged with
 `config.json`'s `version` and `latest` — so an update is: bump `version`,
-push, wait for CI, then reinstall/update the app in HA. The image re-clones
-the repo at build time (`JEP_REF` in the Dockerfile, default `main`), so the
-sources inside are whatever the branch holds.
+push, wait for CI, then reinstall/update the app in HA. The image clones
+the repo CI is building (`JEP_REPO`, default upstream) at `JEP_REF`, busting
+that layer with `JEP_SHA`, so a fork's image contains the fork's source.
 
 The app points at the fork's images by default (`image`:
 `ghcr.io/albertoxamin/{arch}-jep`, which must be public — see the package

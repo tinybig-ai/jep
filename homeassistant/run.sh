@@ -74,7 +74,8 @@ pairs = [
     ("JEP_GW_PORT", str(int(o.get("gateway_port", 8099))) if o.get("gateway_enabled") else ""),
     ("JEP_GW_BIND", o.get("gateway_bind")),
     ("JEP_GW_PAIR_CODE", o.get("gateway_pair_code")),
-    ("JEP_GW_INGRESS_TRUST", "1" if o.get("ingress_trust") else ""),
+    # missing key (an update that has not rewritten options.json yet) stays on
+    ("JEP_GW_INGRESS_TRUST", "1" if o.get("ingress_trust", True) else ""),
     ("JEP_WORKSPACES", o.get("workspace_dir")),
     ("JEP_BROWSE_ROOT", o.get("browse_root")),
     ("JEP_MODEL", o.get("model")),

@@ -59,6 +59,13 @@ jobs:
           context: ./homeassistant
           platforms: ${{ matrix.platform }}
           push: true
+          # The Dockerfile's default clone is upstream. This repo's image must
+          # contain this repo's source, or a fork ships a UI that never got
+          # the commit just pushed.
+          build-args: |
+            JEP_REPO=https://github.com/${{ github.repository }}
+            JEP_REF=${{ github.ref_name }}
+            JEP_SHA=${{ github.sha }}
           tags: |
             ghcr.io/${{ github.repository_owner }}/${{ matrix.supervisor_arch }}-jep:${{ steps.app.outputs.version }}
             ghcr.io/${{ github.repository_owner }}/${{ matrix.supervisor_arch }}-jep:latest

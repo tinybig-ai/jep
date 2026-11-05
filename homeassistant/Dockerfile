@@ -28,7 +28,13 @@ RUN curl -fsSL https://opencode.ai/install | bash \
 # scripts entirely.
 ARG JEP_REPO="https://github.com/tinybig-ai/jep"
 ARG JEP_REF="main"
+# CI passes the commit it is building. The clone below is otherwise a cached
+# layer: same repo URL, same branch name, yesterday's source.
+ARG JEP_SHA=""
+# $JEP_SHA is read here on purpose: Docker only drops the cached clone when
+# an ARG value changes and that ARG is used by this RUN.
 RUN git clone --depth 1 --branch "$JEP_REF" "$JEP_REPO" /app/jep \
+ && echo "$JEP_SHA" > /app/jep/.jep-sha \
  && cd /app/jep \
  && npm ci --omit=dev --ignore-scripts
 

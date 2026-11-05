@@ -107,6 +107,14 @@ test("ingress is on, so HA can mount the web client without any open port", () =
   assert.match(page, /trustedIngress/)
 })
 
+test("the published image clones this repo, not upstream", () => {
+  const wf = readFileSync(join(import.meta.dirname, "..", ".github", "workflows", "ha-app.yml"), "utf8")
+  const df = readFileSync(join(import.meta.dirname, "..", "homeassistant", "Dockerfile"), "utf8")
+  assert.match(wf, /JEP_REPO=https:\/\/github.com\/\$\{\{ github\.repository \}\}/)
+  assert.match(wf, /JEP_SHA=\$\{\{ github\.sha \}\}/)
+  assert.match(df, /ARG JEP_SHA/)
+})
+
 test("ingress trust reaches the daemon only when the option is on", async () => {
   const on = sandbox({ telegram_token: "1:a", ingress_trust: true })
   assert.equal((await boot(on)).status, 0)
@@ -114,6 +122,10 @@ test("ingress trust reaches the daemon only when the option is on", async () => 
   const off = sandbox({ telegram_token: "1:a", ingress_trust: false })
   assert.equal((await boot(off)).status, 0)
   assert.doesNotMatch(envFor(off), /JEP_GW_INGRESS_TRUST/)
+  // an update that has not rewritten options.json yet must not fall back to pairing
+  const unset = sandbox({ telegram_token: "1:a" })
+  assert.equal((await boot(unset)).status, 0)
+  assert.match(envFor(unset), /export JEP_GW_INGRESS_TRUST=1/)
 })
 
 test("gateway only: no token, no bot, the gateway port still set", async () => {
