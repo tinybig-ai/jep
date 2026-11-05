@@ -21,6 +21,10 @@ Point the app store at this repository:
 2. Install **Jep**, set the options in the **Configuration** tab (below), then
    **Start**.
 3. Open the app's **Log** to find your pairing info:
+
+The repo is a valid repository URL thanks to the root `repository.json`
+(required by the Supervisor) — the app itself lives in the `homeassistant/`
+folder, which the Supervisor finds by its `config.json` at any depth.
    * Telegram prints `pairing code: XXXX-XXXX` until the first `/pair`.
    * The gateway prints its own pairing code once at boot.
 
