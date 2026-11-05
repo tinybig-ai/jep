@@ -59,7 +59,8 @@ fork either way.
 | `gateway_pair_code` | str, empty | pin the gateway pairing code instead of a fresh one per boot |
 | `workspace_dir` | str, `/data/jep/workspace` | the one served workspace every conversation starts from. Throwaway pods (`Add project → pod` in the client) live under the data home, so no folders to manage |
 | `browse_root` | str, `/data` | browser root when adding a folder from a client |
-| `model` | str, empty | default model, e.g. `openai/gpt-5-mini` |
+| `model` | str, empty | default model, e.g. `openrouter/anthropic/claude-sonnet-4` |
+| `openrouter_api_key` | password, empty | your OpenRouter key; exported as `OPENROUTER_API_KEY`, which is all opencode needs to list and run OpenRouter models |
 | `opencode_auth` | password, empty | paste the contents of `~/.local/share/opencode/auth.json` from a machine where you ran `opencode auth login`. Empty + no free models = no pickable models |
 | `opencode_config` | password, empty | paste the contents of `~/.config/opencode/opencode.json` (providers, MCP servers…) |
 | `transcribe_cmd` | str, empty | command printed-transcript replacement for whisper; voice notes need this or a whisper venv |

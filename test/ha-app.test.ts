@@ -66,6 +66,13 @@ test("both clients on: the daemon's env and the pasted auth are in place", async
   assert.match(readFileSync(join(root, "data", "jep", "xdg", "opencode", "auth.json"), "utf8"), /"token"/)
 })
 
+test("the openrouter key rides through as opencode's own env", async () => {
+  const root = sandbox({ telegram_token: "1:a", openrouter_api_key: "sk-or-test" })
+  const r = await boot(root)
+  assert.equal(r.status, 0, r.out)
+  assert.match(envFor(root), /export OPENROUTER_API_KEY=sk-or-test/)
+})
+
 test("gateway only: no token, no bot, the gateway port still set", async () => {
   const root = sandbox({ telegram_token: "", gateway_enabled: true, gateway_port: 9000 })
   const r = await boot(root)

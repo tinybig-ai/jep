@@ -22,7 +22,10 @@ configuration:
     description: What the "Add project" browser can list, inside the container.
   model:
     name: Default model
-    description: 'Provider/model jep starts conversations on, e.g. openai/gpt-5-mini. Empty = harness default.'
+    description: 'Provider/model jep starts conversations on, e.g. openrouter/anthropic/claude-sonnet-4. Empty = harness default.'
+  openrouter_api_key:
+    name: OpenRouter API key
+    description: Your OpenRouter key; the daemon hands it to opencode as OPENROUTER_API_KEY. Leave empty if you don't use OpenRouter.
   opencode_auth:
     name: opencode auth.json
     description: Paste the contents of ~/.local/share/opencode/auth.json from a machine where you ran `opencode auth login`. Empty = free opencode models only.
