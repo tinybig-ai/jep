@@ -1,9 +1,11 @@
-# jep as a Home Assistant app. Built on-device by the Supervisor (this folder
-# has no `image` key) or by CI — see .github/workflows/ha-app.yml.
+# jep as a Home Assistant app. The fork publishes per-arch images to GHCR and
+# config.json points at them (`image`); CI — .github/workflows/ha-app.yml —
+# builds them. With the `image` key removed instead, the same Dockerfile is
+# built on the device by the Supervisor.
 #
 # The jep source itself is cloned at build time rather than vendored into the
 # app folder: one source of truth, and the fork stays active by rebuilding.
-# Bump `version` in config.json to make the Supervisor rebuild, or set
+# Bump `version` in config.json to make CI rebuild, or set
 # JEP_REPO / JEP_REF to build from your own fork and branch.
 FROM node:26-alpine
 

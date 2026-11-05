@@ -8,6 +8,7 @@
     "aarch64",
     "amd64"
   ],
+  "image": "ghcr.io/albertoxamin/{arch}-jep",
   "startup": "services",
   "boot": "auto",
   "tmpfs": true,

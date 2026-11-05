@@ -24,24 +24,25 @@ Point the app store at this repository:
    * Telegram prints `pairing code: XXXX-XXXX` until the first `/pair`.
    * The gateway prints its own pairing code once at boot.
 
-First start builds the container on your machine (Node 26 base + opencode +
-jep's sources); expect a few minutes on a Pi, under a minute on x86. Later
-starts are instant.
+First start pulls the prebuilt image (your fork's GHCR packages); expect a
+short download, faster than building on a Pi. If the `image` key is removed,
+the same Dockerfile is built on the device at install time instead. Later
+starts are instant in both cases.
 
 ### Updating
 
-The Supervisor rebuilds when `config.json`'s `version` changes, and **the
-image clones this repo at build time** (`JEP_REF`, default `main`). So to
-follow the fork actively: bump `version` (any change works), restart the app,
-and the latest sources are re-cloned. To pin or switch branches, edit
-`JEP_REF` in `homeassistant/Dockerfile` in your fork.
+CI (`.github/workflows/ha-app.yml`) builds and pushes the images for both
+architectures on every push that touches the app or its sources, tagged with
+`config.json`'s `version` and `latest` — so an update is: bump `version`,
+push, wait for CI, then reinstall/update the app in HA. The image re-clones
+the repo at build time (`JEP_REF` in the Dockerfile, default `main`), so the
+sources inside are whatever the branch holds.
 
-CI (`.github/workflows/ha-app.yml`) can also publish ready images; if you
-prefer pulls over builds, add an `image` key:
-
-```json
-"image": "ghcr.io/<owner>/{arch}-jep"
-```
+The app points at the fork's images by default (`image`:
+`ghcr.io/albertoxamin/{arch}-jep`, which must be public — see the package
+settings on github.com). Remove the `image` key to have the Supervisor build
+the same Dockerfile on your device instead; the workflow file comes with the
+fork either way.
 
 ## Options
 
