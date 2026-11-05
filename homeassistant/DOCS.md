@@ -53,6 +53,7 @@ fork either way.
 | Option | Type / default | Meaning |
 |---|---|---|
 | `telegram_token` | password, empty | token from [@BotFather](https://t.me/BotFather). Empty = Telegram bot off. |
+| `telegram_forum` | list (`auto`/`off`), `auto` | with Threaded mode enabled for the bot in @BotFather, every conversation runs as its own **forum topic**: a message typed in General spawns a topic titled with the prompt, /new opens one, deleting the conversation deletes the topic. `auto` probes `createForumTopic` once and falls back to plain chat for 10 minutes when Telegram refuses. |
 | `gateway_enabled` | bool, `true` | run the gateway (web client, Android app client) |
 | `gateway_port` | port, `8099` | gateway port; exposed as an HA port |
 | `gateway_bind` | str, empty | what to bind: empty = all interfaces (default), `127.0.0.1` = container-local |

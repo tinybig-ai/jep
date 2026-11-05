@@ -1,5 +1,11 @@
 # Changelog — the HA app
 
+## 0.2.2
+
+`telegram_forum` option → `JEP_TG_FORUM` (`auto`/`off`): with the bot's
+**Threaded mode** on in @BotFather, each conversation lives in its own forum
+topic — General messages spawn a topic, /new opens one, renames follow.
+
 ## 0.2.1
 
 `openrouter_api_key` option → `OPENROUTER_API_KEY` for opencode, the

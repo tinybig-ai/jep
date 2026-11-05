@@ -70,6 +70,7 @@ if ocfg:
 
 pairs = [
     ("JEP_TG_TOKEN", o.get("telegram_token")),
+    ("JEP_TG_FORUM", o.get("telegram_forum")),
     ("JEP_GW_PORT", str(int(o.get("gateway_port", 8099))) if o.get("gateway_enabled") else ""),
     ("JEP_GW_BIND", o.get("gateway_bind")),
     ("JEP_GW_PAIR_CODE", o.get("gateway_pair_code")),

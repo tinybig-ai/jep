@@ -127,6 +127,7 @@ async function buildMockApi(): Promise<MockApi> {
     .filter(Boolean)
     .map((l) => JSON.parse(l) as TgUpdate)
   let nextID = 1
+  let nextTopicID = 901
   const calls: CallRec[] = []
   return {
     async getUpdates(props) {
@@ -185,6 +186,23 @@ async function buildMockApi(): Promise<MockApi> {
     },
     async sendRichMessageDraft(params) {
       calls.push({ method: "sendRichMessageDraft", chatID: params.chatID, rich: { draft: params.draftID, ...(params.rich_message as Record<string, unknown>) }, text: `draft=${params.draftID}` })
+    },
+    async createForumTopic(params) {
+      // the call only ever succeeds when "Threaded mode" is on in @BotFather —
+      // fixtures assert this too: the classic replay must keep its plain-chat
+      // behaviour, the forum fixture turns the capability on explicitly
+      if (process.env.JEP_TG_MOCK_FORUM !== "1") throw new Error("telegram createForumTopic: TOPIC_CLOSED")
+      // own counter from 901: dumps read chat=/thread= pairs unambiguously and
+      // fixtures can name thread ids that actually match what was opened
+      const id = nextTopicID++
+      calls.push({ method: "createForumTopic", chatID: params.chatID, text: `title=${JSON.stringify(params.title)}` })
+      return { threadID: id }
+    },
+    async editForumTopic(params) {
+      calls.push({ method: "editForumTopic", chatID: params.chatID, messageID: params.threadID, text: params.name ? `name=${JSON.stringify(params.name)}` : "" })
+    },
+    async deleteForumTopic(params) {
+      calls.push({ method: "deleteForumTopic", chatID: params.chatID, messageID: params.threadID })
     },
     async sendChatAction(params) {
       calls.push({ method: "sendChatAction", chatID: params.chatID })

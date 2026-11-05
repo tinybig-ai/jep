@@ -2,6 +2,9 @@ configuration:
   telegram_token:
     name: Telegram bot token
     description: Token from @BotFather. Leave empty to run without Telegram.
+  telegram_forum:
+    name: Forum topics (Threaded mode)
+    description: 'auto: with "Threaded mode" enabled for this bot in @BotFather, each conversation becomes its own topic (messages in General spawn a topic). off: never try. Leave empty for auto.'
   gateway_enabled:
     name: Enable gateway
     description: Serve the web client and native app clients (phone pairing, SSE). Works without Telegram.

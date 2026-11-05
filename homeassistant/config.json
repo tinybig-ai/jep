@@ -1,6 +1,6 @@
 {
   "name": "Jep",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "slug": "jep",
   "description": "One interface for every coding agent: Telegram and web gateway clients for opencode",
   "url": "https://github.com/tinybig-ai/jep/tree/main/homeassistant",
@@ -33,6 +33,7 @@
   ],
   "options": {
     "telegram_token": "",
+    "telegram_forum": "auto",
     "gateway_enabled": true,
     "gateway_port": 8099,
     "gateway_bind": "",
@@ -56,6 +57,7 @@
   },
   "schema": {
     "telegram_token": "password",
+    "telegram_forum": "list(auto|off)?",
     "gateway_enabled": "bool",
     "gateway_port": "port",
     "gateway_bind": "str?",
