@@ -33,6 +33,24 @@ short download, faster than building on a Pi. If the `image` key is removed,
 the same Dockerfile is built on the device at install time instead. Later
 starts are instant in both cases.
 
+### Where the web client lives
+
+Three ways in, all behind the same gateway port inside the container:
+
+1. **Ingress (no ports, recommended).** The app runs with HA's own
+   `ingress: true`, so the web client is reachable from Home Assistant's UI —
+   the sidebar panel **Jep** (`panel_title`/`panel_icon`), or the app card's
+   **Open Web UI**. The browser URL is HA's own, e.g.
+   `https://<your-ha>/api/hassio_ingress/<token>/…`, so anything already in
+   front of HA (Nginx proxy add-on, Caddy, **cloudflared**) covers it with no
+   port forwarding and no extra TLS. This is also why the web client uses only
+   *relative* URLs: ingress mounts it under a jumbled `/api/hassio_ingress/…`
+   prefix and never rewrites paths.
+2. **Direct port behind a DNS name you control** — `ports` maps `8099` onto the
+   host, so `http://<ha-host>:8099/` works on the LAN; the same port is what
+   the **native phone app** pairs against. This is the one that needs port
+   forwarding/TLS on its own if it leaves your LAN.
+
 ### Updating
 
 CI (`.github/workflows/ha-app.yml`) builds and pushes the images for both

@@ -80,6 +80,18 @@ test("forum topics: the switch reaches the daemon's env", async () => {
   assert.match(envFor(root), /export JEP_TG_FORUM=off/)
 })
 
+test("ingress is on, so HA can mount the web client without any open port", () => {
+  const cfg = JSON.parse(readFileSync(join(import.meta.dirname, "..", "homeassistant", "config.json"), "utf8")) as Record<string, unknown>
+  assert.equal(cfg.ingress, true, "the Supervisor's ingress proxy is the /api/hassio_ingress/... route")
+  // the web client it proxies must have no site-absolute URLs: ingress mounts
+  // the app under /api/hassio_ingress/<token>/ and does not rewrite paths
+  const page = readFileSync(join(import.meta.dirname, "..", "web", "index.html"), "utf8")
+  for (const ref of [/src="\/[^"]/, /href="\/[^"]/, /fetch\("\/[^"]/, /EventSource\(`\//]) {
+    const hit = ref.exec(page)?.[0] ?? null
+    assert.equal(hit, null, `absolute URL in web/index.html breaks ingress: ${hit}`)
+  }
+})
+
 test("gateway only: no token, no bot, the gateway port still set", async () => {
   const root = sandbox({ telegram_token: "", gateway_enabled: true, gateway_port: 9000 })
   const r = await boot(root)

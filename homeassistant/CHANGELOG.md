@@ -1,5 +1,14 @@
 # Changelog — the HA app
 
+## 0.2.3
+
+**Ingress**: the web client is now reachable from Home Assistant itself
+(sidebar panel "Jep", or the card's **Open Web UI**) under
+`/api/hassio_ingress/…` — through HA's own URL, so reverse proxies or
+cloudflared in front of HA cover it with no extra port forwarding. The web
+client uses only relative URLs now, so it behaves no matter where HA mounts
+it. The direct port stays for native phone clients (`JEP_GW_PORT`).
+
 ## 0.2.2
 
 `telegram_forum` option → `JEP_TG_FORUM` (`auto`/`off`): with the bot's
