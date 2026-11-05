@@ -21,11 +21,14 @@ RUN curl -fsSL https://opencode.ai/install | bash \
  && mv /root/.opencode/bin/opencode /usr/local/bin/opencode
 
 # jep runs native TypeScript straight from the source tree (no build step).
+# The package's prepare script runs tsc (for npm publishing); the daemon needs
+# none of it, and --omit=dev wouldn't have tsc anyway — so skip lifecycle
+# scripts entirely.
 ARG JEP_REPO="https://github.com/tinybig-ai/jep"
 ARG JEP_REF="main"
 RUN git clone --depth 1 --branch "$JEP_REF" "$JEP_REPO" /app/jep \
  && cd /app/jep \
- && npm ci --omit=dev
+ && npm ci --omit=dev --ignore-scripts
 
 COPY run.sh /run.sh
 RUN chmod 755 /run.sh
