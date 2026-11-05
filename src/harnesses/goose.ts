@@ -482,7 +482,11 @@ export function watchGooseLog(since: number, conversation: string | undefined, o
       }
     }
   }
-  const timer = setInterval(() => void scan(), 3_000)
+  // eslint no-floating-promises has ignoreVoid: false, so `void scan()` inside
+  // the interval was an error; scan catches its own I/O failures already
+  const timer = setInterval(() => {
+    scan().catch(() => {})
+  }, 3_000)
   return () => {
     done = true
     clearInterval(timer)
