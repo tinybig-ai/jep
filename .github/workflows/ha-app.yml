@@ -1,0 +1,70 @@
+name: ha-app
+
+# Builds the Home Assistant app's container image for both supported
+# architectures and pushes it to GHCR, so a fork can ship pulls instead of
+# on-device builds. The app folder deliberately has no `image` key: without
+# it the Supervisor builds on the device from the same Dockerfile, which is
+# what the app does when installed straight from a repo URL.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "homeassistant/**"
+      - "src/**"
+      - "web/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/ha-app.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - { supervisor_arch: amd64, platform: linux/amd64 }
+          - { supervisor_arch: aarch64, platform: linux/arm64 }
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read the app version
+        id: app
+        run: echo "version=$(jq -r .version homeassistant/config.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU (arm64 build on an amd64 runner)
+        if: matrix.supervisor_arch == 'aarch64'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # image naming matches the `{arch}` placeholder the Supervisor accepts:
+      # ghcr.io/<owner>/{arch}-jep with per-arch tags
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./homeassistant
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/${{ matrix.supervisor_arch }}-jep:${{ steps.app.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/${{ matrix.supervisor_arch }}-jep:latest
+          labels: |
+            org.opencontainers.image.title=Jep
+            org.opencontainers.image.description=One interface for every coding agent: Telegram and gateway clients for opencode
+            org.opencontainers.image.version=${{ steps.app.outputs.version }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.licenses=MIT

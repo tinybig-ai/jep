@@ -141,6 +141,10 @@ npm start
 > back after a reboot. Logs: `journalctl --user -u jep-tg -f`. CI boots the
 > daemon on Debian in mock mode, and has systemd verify the unit, on every push.
 
+> On **Home Assistant**, `homeassistant/` ships the same daemon as an **app**:
+> add this repository to the app store and both clients are options. See
+> [homeassistant/DOCS.md](homeassistant/DOCS.md).
+
 ### 3. Pick a client
 
 jep runs as one daemon and reaches you through whatever client you prefer.

@@ -58,6 +58,13 @@ scripts/
   install.sh              // writes the plist, but proves a launchd job can read
                           // the checkout first (see section 5)
   jep-daemon.sh           // the plist's entry point: same probe at every launch
+homeassistant/
+  run.sh                  // the Home Assistant app's entry point: options.json →
+                          // the daemon's env (same surface as install-linux.sh),
+                          // then exec node; JEP_HA_DRY_RUN=1 prints and exits
+  Dockerfile              // node:26-alpine + opencode, clones the repo at build
+  config.json             // the Supervisor's app definition; both clients are
+                          // options (see homeassistant/DOCS.md)
 test/
   *.test.ts               // node --test, no framework. The pure modules get unit
                           // tests; core/git.ts also builds real repos in a temp

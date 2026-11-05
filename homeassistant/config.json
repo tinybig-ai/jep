@@ -1,0 +1,77 @@
+{
+  "name": "Jep",
+  "version": "0.2.0",
+  "slug": "jep",
+  "description": "One interface for every coding agent: Telegram and web gateway clients for opencode",
+  "url": "https://github.com/tinybig-ai/jep/tree/main/homeassistant",
+  "arch": [
+    "aarch64",
+    "amd64"
+  ],
+  "startup": "services",
+  "boot": "auto",
+  "tmpfs": true,
+  "apparmor": false,
+  "ports": {
+    "8099/tcp": 8099
+  },
+  "ports_description": {
+    "8099/tcp": "Gateway: web client, pairing and SSE"
+  },
+  "webui": "http://[HOST]:[PORT:8099]/",
+  "watchdog": "http://[HOST]:[PORT:8099]/health",
+  "map": [
+    {
+      "type": "app_config",
+      "read_only": false
+    },
+    {
+      "type": "share",
+      "read_only": false
+    }
+  ],
+  "options": {
+    "telegram_token": "",
+    "gateway_enabled": true,
+    "gateway_port": 8099,
+    "gateway_bind": "",
+    "gateway_pair_code": "",
+    "workspace_dir": "/data/jep/workspace",
+    "browse_root": "/data",
+    "model": "",
+    "opencode_auth": "",
+    "opencode_config": "",
+    "transcribe_cmd": "",
+    "transcribe_timeout": 300,
+    "whisper_dir": "",
+    "whisper_model": "",
+    "fcm_key": "",
+    "apns_key": "",
+    "apns_key_id": "",
+    "apns_team_id": "",
+    "apns_topic": "",
+    "apns_sandbox": false
+  },
+  "schema": {
+    "telegram_token": "password",
+    "gateway_enabled": "bool",
+    "gateway_port": "port",
+    "gateway_bind": "str?",
+    "gateway_pair_code": "str?",
+    "workspace_dir": "str",
+    "browse_root": "str",
+    "model": "str?",
+    "opencode_auth": "password?",
+    "opencode_config": "password?",
+    "transcribe_cmd": "str?",
+    "transcribe_timeout": "int(5,3600)?",
+    "whisper_dir": "str?",
+    "whisper_model": "str?",
+    "fcm_key": "password?",
+    "apns_key": "str?",
+    "apns_key_id": "str?",
+    "apns_team_id": "str?",
+    "apns_topic": "str?",
+    "apns_sandbox": "bool?"
+  }
+}
