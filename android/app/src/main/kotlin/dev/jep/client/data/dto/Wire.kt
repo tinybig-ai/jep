@@ -151,6 +151,9 @@ data class MkdirRes(val ok: Boolean = false, val path: String = "")
 data class NextCodeRes(val ok: Boolean = false, val nextCode: String? = null)
 
 @Serializable
+data class DevicesRes(val devices: List<JsonElement> = emptyList(), val pairCode: String? = null)
+
+@Serializable
 data class HistoryRes(
     val messages: List<MessageDto> = emptyList(),
     val hasMore: Boolean = false,

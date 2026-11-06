@@ -1176,7 +1176,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           const info = await stat(real ?? abs)
           if (!info.isFile() || info.size > FILE_MAX) return json(res, 404, { error: "no such file" })
           const body = await readFile(real ?? abs)
-          res.writeHead(200, { "content-type": mimeForPath(real ?? abs), "cache-control": "private, max-age=300" })
+          res.writeHead(200, { "content-type": mimeForPath(real ?? abs), "cache-control": "private, max-age=300", "content-disposition": `inline; filename="${basename(real ?? abs).replace(/"/g, "")}"` })
           return res.end(body)
         } catch {
           return json(res, 404, { error: "no such file" })
@@ -1214,7 +1214,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           lastSeen: deviceActivity.get(known) ?? pairedAt,
           current: known === token,
         }))
-        return json(res, 200, { devices })
+        return json(res, 200, { devices, pairCode })
       }
 
       if (path === "/devices/rename") {
@@ -1276,7 +1276,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
             // conversation cannot move between harnesses after it exists.
             // `active` = a turn is in flight for it right now (a reply streaming,
             // a tool running) — the phone shows a live mark on the row
-            items.push({ ...s, title: overridden ?? s.title, adapter: name, harness: adapter.id, active: engine.isActive(s.id), seenAt: seen.get(s.id) ?? 0, pinned: pinned.has(s.id), pod: isPod(adapter.workspace, deps.dataHome) })
+            items.push({ ...s, createdAt: Math.floor(s.createdAt), updatedAt: Math.floor(s.updatedAt), title: overridden ?? s.title, adapter: name, harness: adapter.id, active: engine.isActive(s.id), seenAt: seen.get(s.id) ?? 0, pinned: pinned.has(s.id), pod: isPod(adapter.workspace, deps.dataHome) })
           }
         }
         // pinned conversations first, then newest — pinning is the user saying

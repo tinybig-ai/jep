@@ -180,6 +180,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun openSettings() {
         _screen.value = Screen.Settings
         refreshTerminalAccess()
+        refreshPairCode()
+    }
+
+    fun refreshPairCode() {
+        val r = repo ?: return
+        viewModelScope.launch { runCatching { r.pairCode() } }
     }
 
     fun refreshTerminalAccess() {

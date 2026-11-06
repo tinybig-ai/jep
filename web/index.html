@@ -508,6 +508,7 @@ document.write('<link rel="stylesheet" href="/v2.css">'
   </section>
   <section>
     <h3>Devices</h3>
+    <div id="pairCode" hidden><span>Pairing code</span> <code id="pairCodeText"></code></div>
     <div id="devices"><span class="spin">Loading…</span></div>
   </section>
   <section>
@@ -2410,8 +2411,11 @@ function notificationButton() {
 }
 
 async function loadDevices() {
-  const { devices } = await call("/devices")
+  const { devices, pairCode } = await call("/devices")
   const root = $("devices")
+  const codeBox = $("pairCode")
+  if (pairCode) { codeBox.hidden = false; $("pairCodeText").textContent = pairCode }
+  else codeBox.hidden = true
   root.replaceChildren(...(devices.length ? devices.map((d) => {
     const row = el("div", "device")
     const info = el("div", "device-info")

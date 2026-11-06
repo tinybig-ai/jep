@@ -39,6 +39,7 @@ console.log(JSON.stringify({ type: "agent_end", messages: [answer] }))
 )
 await chmod(bin, 0o755)
 await writeFile(path.join(home, "models.json"), JSON.stringify({ providers: { "free-models": { models: [{ id: "auto", input: ["text"], contextWindow: 200000 }] } } }))
+await writeFile(path.join(home, "settings.json"), JSON.stringify({ defaultProvider: "free-models", defaultModel: "auto" }))
 
 process.env.JEP_PI_BIN = bin
 process.env.JEP_PI_AGENT_DIR = home

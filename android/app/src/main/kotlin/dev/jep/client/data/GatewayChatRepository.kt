@@ -14,6 +14,7 @@ import dev.jep.client.data.dto.ImportableRes
 import dev.jep.client.data.dto.McpRes
 import dev.jep.client.data.dto.MessageRes
 import dev.jep.client.data.dto.MkdirRes
+import dev.jep.client.data.dto.DevicesRes
 import dev.jep.client.data.dto.NextCodeRes
 import dev.jep.client.data.dto.ModelsRes
 import dev.jep.client.data.dto.SkillsRes
@@ -267,6 +268,16 @@ private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     override suspend fun terminalStatus(): TerminalAccess {
         val r = decode("/term", TermStatusRes.serializer(), "{}")
         return TerminalAccess(r.allowed, r.authorized)
+    }
+
+    override suspend fun pairCode(): String? {
+        val pairCode = runCatching {
+            val (code, text) = post("/devices")
+            if (code !in 200..299) return@runCatching null
+            runCatching { json.decodeFromString(DevicesRes.serializer(), text) }.getOrNull()?.pairCode
+        }.getOrNull()
+        onNextCode(pairCode)
+        return pairCode
     }
 
     override suspend fun unlockTerminal(code: String): Boolean {
