@@ -1,5 +1,12 @@
 # Changelog — the HA app
 
+## 0.2.8
+
+`jep-send`: when you ask in Telegram, the agent can hand a file back into the
+chat. Pictures arrive as photos, anything else as a document. Over 50 MB is
+refused. A file you send the bot, including a PDF, was already attached to
+the prompt.
+
 ## 0.2.7
 
 No GitHub token needed. If `gh` is not logged in yet, the app log prints a
