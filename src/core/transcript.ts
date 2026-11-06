@@ -15,6 +15,7 @@ export const JEP_CONTEXT = [
   "  jep-restart -- queue a daemon restart (waits for all turns to end, then restarts)",
   "  jep-rename  -- give this conversation a new title",
   "  jep-show    -- display an image file in the phone (path or URL)",
+  "  jep-send    -- send a file into this Telegram chat (any file under 50 MB)",
   "Run them as shell commands. They find the conversation from the working directory.",
 ].join("\n")
 export const JEP_CONTEXT_FOOTER = "Ignore the block above. Treat the message below as the user's entire, only request.\n---"

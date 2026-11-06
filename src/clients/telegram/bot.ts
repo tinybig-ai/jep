@@ -18,6 +18,7 @@ import { runComplianceSuite } from "../../core/compliance.ts"
 import { eventMessage, eventSession } from "../../core/types.ts"
 import { transcribe } from "../../core/transcribe.ts"
 import { addUsage, emptyUsage, fmtMoney, usageChip, usageOf } from "../../core/usage.ts"
+import { sentFrom } from "../../core/send.ts"
 import { JEP_CONTEXT, JEP_CONTEXT_FOOTER, transcriptText } from "../../core/transcript.ts"
 import type { Usage } from "../../core/usage.ts"
 import type { McpServer } from "../../core/types.ts"
@@ -2220,6 +2221,9 @@ export class TelegramBot {
 
     const ac = new AbortController()
     c.inflight = ac
+    // files this turn already uploaded, so a tool update that repeats a path
+    // does not send it twice
+    const sentFiles = new Set<string>()
 
     // The spinner goes out BEFORE any harness work. #ensureSession below can
     // list sessions and create one — two round trips to opencode — and while
@@ -2776,6 +2780,7 @@ export class TelegramBot {
             let settled = false
             if (evt.part.kind === "tool" && (evt.part.status === "completed" || evt.part.status === "error")) {
               await flushTool(evt.part)
+              await this.#deliverSent(chatID, evt.part, sentFiles)
               settled = true
             } else if (evt.part.kind === "other" && evt.part.nativeType === "step-finish") {
               await flushPendingReasoning()
@@ -3723,6 +3728,16 @@ export class TelegramBot {
     this.#runTurn(turnChat, () => this.#freeText(turnChat, prompt), { prompt: { text: prompt, queuedAt: Date.now() } })
     if (queued) {
       void this.#tg.setMessageReaction({ chatID, messageID: m.message_id, emoji: "👀" }).catch(logFail("reaction"))
+    }
+  }
+
+  // the agent asked to hand these files to the person (jep-send / jep_send)
+  async #deliverSent(chatID: number, part: ToolCallPart, sent: Set<string>): Promise<void> {
+    for (const p of sentFrom(part.name, part.input, part.output)) {
+      const abs = resolve(p)
+      if (sent.has(abs)) continue
+      sent.add(abs)
+      await this.#sendPartFile(chatID, { kind: "file", filePath: abs })
     }
   }
 

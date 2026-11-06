@@ -30,6 +30,7 @@
     "jep": "bin/jep.mjs",
     "jep-watch": "bin/jep-watch.mjs",
     "jep-show": "bin/jep-show.mjs",
+    "jep-send": "bin/jep-send.mjs",
     "jep-restart": "bin/jep-restart.mjs",
     "jep-rename": "bin/jep-rename.mjs"
   },
