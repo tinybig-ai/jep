@@ -1,5 +1,11 @@
 # Changelog — the HA app
 
+## 0.2.7
+
+No GitHub token needed. If `gh` is not logged in yet, the app log prints a
+one-time code and `https://github.com/login/device`. Enter the code in a
+browser and the start continues. The login is kept in the app data.
+
 ## 0.2.6
 
 The image includes the GitHub CLI. A `github_token` option (a personal access

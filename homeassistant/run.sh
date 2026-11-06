@@ -121,15 +121,66 @@ export XDG_DATA_HOME="$jep_data/xdg"
 export XDG_CONFIG_HOME="$app_config"
 export HOME="$jep_data/home"
 
-# gh and git, as the user the agent runs as. GH_TOKEN alone is enough for the
-# gh CLI; setup-git is what makes `git clone`/`git push` of https remotes use it.
-# HOME is the app data dir, so the login survives a restart of the container.
-if [ -n "${GH_TOKEN:-}" ] && [ -z "$dry" ]; then
-  command -v gh >/dev/null || die "github token is set but gh is not installed"
-  printf '%s\n' "$GH_TOKEN" | gh auth login --hostname github.com --with-token \
-    || die "gh auth login failed — the token needs the repo scope"
-  gh auth setup-git || die "gh auth setup-git failed"
-  say "gh: logged in"
+# gh and git, as the user the agent runs as. A pasted token logs in directly.
+# With none, and no login saved in the app data dir yet, gh prints a one-time
+# code and https://github.com/login/device. That is the whole pairing: the
+# code is in this log. HOME is the app data dir, so the login survives restarts.
+if [ -z "$dry" ] && command -v gh >/dev/null; then
+  if [ -n "${GH_TOKEN:-}" ]; then
+    printf '%s\n' "$GH_TOKEN" | gh auth login --hostname github.com --with-token \
+      || die "gh auth login failed — the token needs the repo scope"
+    gh auth setup-git || die "gh auth setup-git failed"
+    say "gh: logged in"
+  elif gh auth status --hostname github.com >/dev/null 2>&1; then
+    gh auth setup-git >/dev/null 2>&1 || true
+    say "gh: already logged in"
+  else
+    say "gh: not logged in. Open the link below and enter the one-time code."
+    python3 - <<'PY' || die "gh auth login did not finish"
+import os, pty, re, select, sys
+pid, fd = pty.fork()
+if pid == 0:
+    os.environ["TERM"] = "xterm"
+    os.environ["COLUMNS"] = "80"
+    os.environ["LINES"] = "24"
+    os.execvp("gh", [
+        "gh", "auth", "login",
+        "--hostname", "github.com",
+        "--git-protocol", "https",
+        "--skip-ssh-key",
+        "--web",
+    ])
+sent_y = sent_enter = False
+buf = b""
+plain = re.compile(rb"\x1b\[[0-9;?]*[A-Za-z]")
+while True:
+    ready, _, _ = select.select([fd], [], [], 0.5)
+    if not ready:
+        wpid, status = os.waitpid(pid, os.WNOHANG)
+        if wpid:
+            sys.exit(os.waitstatus_to_exitcode(status))
+        continue
+    try:
+        chunk = os.read(fd, 4096)
+    except OSError:
+        break
+    if not chunk:
+        break
+    if b"\x1b[6n" in chunk:
+        os.write(fd, b"\x1b[1;1R")
+    sys.stderr.buffer.write(plain.sub(b"", chunk))
+    sys.stderr.buffer.flush()
+    buf += chunk
+    if not sent_y and b"Authenticate Git" in buf:
+        os.write(fd, b"Y\n")
+        sent_y = True
+    if not sent_enter and b"Press Enter" in buf:
+        os.write(fd, b"\n")
+        sent_enter = True
+PY
+    gh auth setup-git || die "gh auth setup-git failed"
+    say "gh: logged in"
+  fi
 fi
 
 if [ -n "$dry" ]; then

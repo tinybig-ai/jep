@@ -329,7 +329,8 @@ const saveTitles = async (dataHome: string, titles: Map<string, string>): Promis
 // The model a conversation runs on is a client concern here too: the phone
 // picks one per session from Settings, and the gateway remembers it (persisted,
 // like the titles) so the choice survives the app closing and applies to the
-// next prompt. Default is no override — the harness's own model.
+// next prompt. A session with no pin of its own uses the last model chosen
+// for that harness, so a restart does not drop back to the harness default.
 async function loadModels(dataHome: string): Promise<Map<string, string>> {
   try {
     const raw = JSON.parse(await readFile(join(dataHome, MODELS_FILE), "utf8")) as Record<string, string>
@@ -343,6 +344,10 @@ const saveModels = async (dataHome: string, models: Map<string, string>): Promis
   await mkdir(dataHome, { recursive: true })
   await writeFile(join(dataHome, MODELS_FILE), JSON.stringify(Object.fromEntries(models), null, 1))
 }
+
+const lastModelKey = (harness: string): string => `last:${harness}`
+const modelRef = (models: Map<string, string>, sessionID: string, harness: string): string | undefined =>
+  models.get(sessionID) ?? models.get(lastModelKey(harness))
 
 // The primary agent (opencode's "build" / "plan") a conversation runs under,
 // remembered per session exactly like the model. Not a harness — a harness is
@@ -1693,9 +1698,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         // the window of the model this conversation actually runs on, which may
         // be one the picker does not list (an alias, a 1M variant, whatever the
         // CLI fell back to) — the status line's fill rate needs it either way
-        const running = models.get(id) ?? resolvedDefault
+        const running = modelRef(models, id, adapter.id) ?? resolvedDefault
         const contextLimit = (running && caps.get(running)?.contextLimit) || 0
-        return json(res, 200, { models: enriched, current: models.get(id) ?? null, default: resolvedDefault, contextLimit })
+        return json(res, 200, { models: enriched, current: modelRef(models, id, adapter.id) ?? null, default: resolvedDefault, contextLimit })
       }
 
       // the primary agents this harness offers, plus the conversation's choice.
@@ -1859,8 +1864,13 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       // applied to the next prompt — the choice outlives the app.
       if (path === "/setmodel") {
         const ref = str("model")
-        if (ref) models.set(id, ref)
-        else models.delete(id)
+        if (ref) {
+          models.set(id, ref)
+          models.set(lastModelKey(adapter.id), ref)
+        } else {
+          models.delete(id)
+          models.delete(lastModelKey(adapter.id))
+        }
         await saveModels(deps.dataHome, models)
         return json(res, 200, { ok: true, model: ref || null })
       }
@@ -1933,7 +1943,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         if (!asked && filePaths.length === 0) return json(res, 400, { error: "text required" })
         const text = asked || "see the attached file"
         // this conversation's chosen model, if the phone set one in Settings
-        const ref = models.get(id)
+        const ref = modelRef(models, id, adapter.id)
         const [providerID = "", modelID = ""] = ref ? ref.split("/") : []
         const model = providerID && modelID ? { providerID, modelID } : undefined
         const agent = agents.get(id)
@@ -1972,7 +1982,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const key = engine.turnKey(id)
         const existing = loops.get(key)
         if (existing?.status === "running") return json(res, 409, { error: "a loop is already running" })
-        const ref = models.get(id)
+        const ref = modelRef(models, id, adapter.id)
         const [providerID = "", modelID = ""] = ref ? ref.split("/") : []
         const loop: LoopState = {
           sessionID: key,

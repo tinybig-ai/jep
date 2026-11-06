@@ -75,6 +75,14 @@ test("a github token is handed to gh and never printed", async () => {
   assert.doesNotMatch(r.out, /ghp-test-token/)
 })
 
+test("startup logs a device code when no github token is saved", () => {
+  const sh = readFileSync(join(import.meta.dirname, "..", "homeassistant", "run.sh"), "utf8")
+  assert.match(sh, /gh auth status --hostname github.com/)
+  assert.match(sh, /gh auth login/)
+  assert.match(sh, /--web/)
+  assert.match(sh, /Press Enter/)
+})
+
 test("the openrouter key rides through as opencode's own env", async () => {
   const root = sandbox({ telegram_token: "1:a", openrouter_api_key: "sk-or-test" })
   const r = await boot(root)

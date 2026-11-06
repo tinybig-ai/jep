@@ -29,6 +29,9 @@ export interface StoreData {
   // opencode-go model into Codex asks it to run something it has never heard
   // of, and it fails the turn rather than ignoring it.
   models: Record<string, string>
+  // harness id -> model last chosen. A chat with no pin of its own uses this,
+  // so a new topic after a restart does not fall back to the harness default.
+  lastModel?: Record<string, string>
   // chat id -> how much agent verbosity (thinking / tool calls) to show
   verbosity?: Record<string, VerbositySettings>
   // chat id -> primary agent name (e.g. "build", "plan")
@@ -116,6 +119,9 @@ const indexKey = (dir: string, harness?: string | null): string => (harness ? `$
 export class ChatStore {
   #titles: Record<string, string>
   #models: Record<string, string>
+  // harness id -> the model last chosen on any chat. A new topic after a
+  // restart has no pin of its own; it still runs what was used last.
+  #lastModel: Record<string, string>
   #verbosity: Record<string, VerbositySettings>
   #agents: Record<string, string>
   #statusMsgs: Record<string, number>
@@ -134,6 +140,14 @@ export class ChatStore {
   constructor(d: StoreData, file: string | null) {
     this.#titles = d.titles ?? {}
     this.#models = migrateModelKeys(d.models ?? {})
+    this.#lastModel = d.lastModel ?? {}
+    // chats that already pinned a model, from before lastModel existed
+    if (Object.keys(this.#lastModel).length === 0) {
+      for (const [k, v] of Object.entries(this.#models)) {
+        const harness = k.slice(k.lastIndexOf(":") + 1)
+        if (harness) this.#lastModel[harness] = v
+      }
+    }
     // read the old "internals" key as a fallback, so the rename does not reset
     // a chat that had already tuned it
     this.#verbosity = d.verbosity ?? (d as { internals?: Record<string, VerbositySettings> }).internals ?? {}
@@ -164,7 +178,7 @@ export class ChatStore {
   }
 
   model(chatID: number, harness: string): string | null {
-    return this.#models[`${chatID}:${harness}`] ?? null
+    return this.#models[`${chatID}:${harness}`] ?? this.#lastModel[harness] ?? null
   }
 
   verbosity(chatID: number): VerbositySettings {
@@ -323,11 +337,13 @@ export class ChatStore {
 
   setModel(chatID: number, harness: string, model: string): void {
     this.#models[`${chatID}:${harness}`] = model
+    this.#lastModel[harness] = model
     this.#save()
   }
 
   clearModel(chatID: number, harness: string): void {
     delete this.#models[`${chatID}:${harness}`]
+    delete this.#lastModel[harness]
     this.#save()
   }
 
@@ -350,6 +366,7 @@ export class ChatStore {
         {
           titles: this.#titles,
           models: this.#models,
+          lastModel: this.#lastModel,
           verbosity: this.#verbosity,
           agents: this.#agents,
           statusMsgs: this.#statusMsgs,
