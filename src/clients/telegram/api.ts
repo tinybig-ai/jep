@@ -48,6 +48,11 @@ export interface TgMessage {
   ephemeral_message_id?: number
   /** present when the user swipe-replied — the message being pointed at */
   reply_to_message?: TgMessage
+  // bot forums: a message sent inside a topic names its thread. The "General"
+  // topic is the only one without it, which is how a topic-less message in
+  // General is told apart from "sent to the conversation".
+  is_topic_message?: boolean
+  message_thread_id?: number
 }
 
 export interface TgUpdate {
@@ -56,11 +61,11 @@ export interface TgUpdate {
   callback_query?: {
     id: string
     from?: TgUser
-    message?: { message_id: number; chat: { id: number } }
+    message?: { message_id: number; chat: { id: number }; is_topic_message?: boolean; message_thread_id?: number }
     data?: string
   }
   // the user tapped the native "stop" button on a draft (needs can_stop: true)
-  stopped_message_generation?: { chat: { id: number }; draft_id?: number }
+  stopped_message_generation?: { chat: { id: number }; draft_id?: number; message_thread_id?: number }
 }
 
 export interface InlineButton {
@@ -102,9 +107,13 @@ export type ParseMode = "HTML" | "MarkdownV2"
 
 export interface TelegramApi {
   getUpdates(props: { offset?: number; timeout?: number }): Promise<TgUpdate[]>
+  // bot forums: when a conversation is a topic, every send carries the topic's
+  // thread id alongside the chat id — the `chatID + threadID` pair is the
+  // actual address. Optional everywhere, so non-forum chats send as before.
   sendMessage(params: {
     chatID: number
     text: string
+    threadID?: number
     replyMarkup?: ReplyMarkup
     parseMode?: ParseMode
     ephemeralMessageParameters?: EphemeralParameters
@@ -114,16 +123,18 @@ export interface TelegramApi {
     chatID: number
     messageID: number
     text: string
+    threadID?: number
     replyMarkup?: ReplyMarkup | null
     parseMode?: ParseMode
   }): Promise<void>
   deleteMessage(params: { chatID: number; messageID: number }): Promise<void>
   /** react to a message with a single emoji (Bot API 7.0+) */
-  setMessageReaction(params: { chatID: number; messageID: number; emoji: string }): Promise<void>
-  pinChatMessage(params: { chatID: number; messageID: number; disableNotification?: boolean }): Promise<void>
-  unpinChatMessage(params: { chatID: number; messageID: number }): Promise<void>
+  setMessageReaction(params: { chatID: number; messageID: number; threadID?: number; emoji: string }): Promise<void>
+  pinChatMessage(params: { chatID: number; messageID: number; threadID?: number; disableNotification?: boolean }): Promise<void>
+  unpinChatMessage(params: { chatID: number; messageID: number; threadID?: number }): Promise<void>
   sendRichMessage(params: {
     chatID: number
+    threadID?: number
     rich_message: Record<string, unknown>
     ephemeralMessageParameters?: EphemeralParameters
     disableNotification?: boolean
@@ -131,10 +142,10 @@ export interface TelegramApi {
     files?: Array<{ name: string; filePath: string }>
   }): Promise<{ message_id: number; ephemeral_message_id?: number }>
   /** replace a rich message in place (editMessageText + rich_message, 10.1+) */
-  editRichMessage(params: { chatID: number; messageID: number; rich_message: Record<string, unknown> }): Promise<void>
+  editRichMessage(params: { chatID: number; messageID: number; threadID?: number; rich_message: Record<string, unknown> }): Promise<void>
   /** delete an ephemeral (group, single-receiver) message */
   deleteEphemeralMessage(params: { chatID: number; ephemeralMessageID: number }): Promise<void>
-  sendChatAction(params: { chatID: number; action: string }): Promise<void>
+  sendChatAction(params: { chatID: number; threadID?: number; action: string }): Promise<void>
   answerCallbackQuery(params: { id: string; text?: string }): Promise<void>
   setMyCommands(commands: TgBotCommand[]): Promise<void>
   /** the button beside the message box: opens `webAppUrl` as a Telegram Mini App, or the plain
@@ -142,12 +153,19 @@ export interface TelegramApi {
   setChatMenuButton(webAppUrl?: string, text?: string): Promise<void>
   /** download a message's file (photo/document) as raw bytes */
   getFileContent(fileID: string): Promise<Buffer>
-  sendPhoto(params: { chatID: number; filePath: string; caption?: string }): Promise<{ message_id: number }>
-  sendDocument(params: { chatID: number; filePath: string; caption?: string }): Promise<{ message_id: number }>
+  sendPhoto(params: { chatID: number; threadID?: number; filePath: string; caption?: string }): Promise<{ message_id: number }>
+  sendDocument(params: { chatID: number; threadID?: number; filePath: string; caption?: string }): Promise<{ message_id: number }>
   /** Bot API 9.4+: animated preview while the answer is being generated */
-  sendMessageDraft(params: { chatID: number; draftID: number; text?: string; canStop?: boolean; parseMode?: string }): Promise<void>
+  sendMessageDraft(params: { chatID: number; threadID?: number; draftID: number; text?: string; canStop?: boolean; parseMode?: string }): Promise<void>
   /** Bot API 10.1+: animated rich-message preview while the answer is being generated */
-  sendRichMessageDraft(params: { chatID: number; draftID: number; rich_message: Record<string, unknown>; canStop?: boolean }): Promise<void>
+  sendRichMessageDraft(params: { chatID: number; threadID?: number; draftID: number; rich_message: Record<string, unknown>; canStop?: boolean }): Promise<void>
+  /** bot forums: open a new topic. The returned id is the topic's thread id —
+   *  every later message to that conversation is addressed with it. */
+  createForumTopic(params: { chatID: number; title: string }): Promise<{ threadID: number }>
+  /** bot forums: rename a topic (conversation title sync) */
+  editForumTopic(params: { chatID: number; threadID: number; name?: string }): Promise<void>
+  /** bot forums: delete a topic and everything in it */
+  deleteForumTopic(params: { chatID: number; threadID: number }): Promise<void>
 }
 
 // A bare fetch() never times out. A request Telegram accepts but then never
@@ -258,9 +276,11 @@ export function createTelegramApi(token: string): TelegramApi {
     richMessage: Record<string, unknown>,
     files: Array<{ name: string; filePath: string }>,
     extra: Record<string, unknown>,
+    threadID?: number,
   ): Promise<{ message_id: number; ephemeral_message_id?: number }> {
     const form = new FormData()
     form.append("chat_id", String(chatID))
+    if (threadID) form.append("message_thread_id", String(threadID))
     form.append("rich_message", JSON.stringify(richMessage))
     for (const [k, v] of Object.entries(extra)) form.append(k, typeof v === "string" ? v : JSON.stringify(v))
     for (const f of files) {
@@ -277,13 +297,14 @@ export function createTelegramApi(token: string): TelegramApi {
     )
   }
 
-  async function sendMultipart(method: "sendPhoto" | "sendDocument", chatID: number, filePath: string, caption?: string) {
+  async function sendMultipart(method: "sendPhoto" | "sendDocument", chatID: number, filePath: string, caption?: string, threadID?: number) {
     const bytes = await readFile(filePath)
     const name = basename(filePath)
     const ext = name.slice(name.lastIndexOf(".")).toLowerCase()
     const mime = MIME_BY_EXT[ext] ?? "application/octet-stream"
     const form = new FormData()
     form.append("chat_id", String(chatID))
+    if (threadID) form.append("message_thread_id", String(threadID))
     form.append(method === "sendPhoto" ? "photo" : "document", new Blob([new Uint8Array(bytes)], { type: mime }), name)
     if (caption) form.append("caption", caption)
     return tgJson<{ message_id: number }>(url(method), { method: "POST", body: form }, method, FILE_TIMEOUT_MS)
@@ -307,6 +328,7 @@ export function createTelegramApi(token: string): TelegramApi {
     sendMessage(params) {
       return callWithFallback<{ message_id: number; ephemeral_message_id?: number }>("sendMessage", {
         chat_id: params.chatID,
+        ...(params.threadID ? { message_thread_id: params.threadID } : {}),
         text: params.text,
         ...(params.replyMarkup ? { reply_markup: serialMarkup(params.replyMarkup) } : {}),
         ...(params.parseMode ? { parse_mode: params.parseMode } : {}),
@@ -317,6 +339,7 @@ export function createTelegramApi(token: string): TelegramApi {
     editMessageText(params) {
       const body: Record<string, unknown> = {
         chat_id: params.chatID,
+        ...(params.threadID ? { message_thread_id: params.threadID } : {}),
         message_id: params.messageID,
         text: params.text,
       }
@@ -333,6 +356,7 @@ export function createTelegramApi(token: string): TelegramApi {
     setMessageReaction(params) {
       return call<void>("setMessageReaction", {
         chat_id: params.chatID,
+        ...(params.threadID ? { message_thread_id: params.threadID } : {}),
         message_id: params.messageID,
         reaction: [{ type: "emoji", emoji: params.emoji }],
       })
@@ -340,18 +364,24 @@ export function createTelegramApi(token: string): TelegramApi {
     pinChatMessage(params) {
       return call<void>("pinChatMessage", {
         chat_id: params.chatID,
+        ...(params.threadID ? { message_thread_id: params.threadID } : {}),
         message_id: params.messageID,
         ...(params.disableNotification ? { disable_notification: true } : {}),
       })
     },
     unpinChatMessage(params) {
-      return call<void>("unpinChatMessage", { chat_id: params.chatID, message_id: params.messageID })
+      return call<void>("unpinChatMessage", {
+        chat_id: params.chatID,
+        ...(params.threadID ? { message_thread_id: params.threadID } : {}),
+        message_id: params.messageID,
+      })
     },
     sendRichMessage(params) {
       const extra: Record<string, unknown> = {}
+      if (params.threadID) extra.message_thread_id = params.threadID
       if (params.ephemeralMessageParameters) extra.ephemeral_message_parameters = params.ephemeralMessageParameters
       if (params.disableNotification) extra.disable_notification = true
-      if (params.files?.length) return sendRichMultipart(params.chatID, params.rich_message, params.files, extra)
+      if (params.files?.length) return sendRichMultipart(params.chatID, params.rich_message, params.files, extra, params.threadID)
       return call<{ message_id: number; ephemeral_message_id?: number }>("sendRichMessage", {
         chat_id: params.chatID,
         rich_message: params.rich_message,
@@ -361,6 +391,7 @@ export function createTelegramApi(token: string): TelegramApi {
     editRichMessage(params) {
       return callWithFallback<void>("editMessageText", {
         chat_id: params.chatID,
+        ...(params.threadID ? { message_thread_id: params.threadID } : {}),
         message_id: params.messageID,
         rich_message: params.rich_message,
       }).catch((err) => {
@@ -372,7 +403,11 @@ export function createTelegramApi(token: string): TelegramApi {
       return call<void>("deleteEphemeralMessage", { chat_id: params.chatID, ephemeral_message_id: params.ephemeralMessageID })
     },
     sendChatAction(params) {
-      return call<void>("sendChatAction", { chat_id: params.chatID, action: params.action })
+      return call<void>("sendChatAction", {
+        chat_id: params.chatID,
+        ...(params.threadID ? { message_thread_id: params.threadID } : {}),
+        action: params.action,
+      })
     },
     answerCallbackQuery(params) {
       return call<void>("answerCallbackQuery", { callback_query_id: params.id, text: params.text })
@@ -400,14 +435,15 @@ export function createTelegramApi(token: string): TelegramApi {
       }
     },
     async sendPhoto(params) {
-      return sendMultipart("sendPhoto", params.chatID, params.filePath, params.caption)
+      return sendMultipart("sendPhoto", params.chatID, params.filePath, params.caption, params.threadID)
     },
     async sendDocument(params) {
-      return sendMultipart("sendDocument", params.chatID, params.filePath, params.caption)
+      return sendMultipart("sendDocument", params.chatID, params.filePath, params.caption, params.threadID)
     },
     sendMessageDraft(params) {
       return callWithFallback<void>("sendMessageDraft", {
         chat_id: params.chatID,
+        ...(params.threadID ? { message_thread_id: params.threadID } : {}),
         draft_id: params.draftID,
         ...(params.text !== undefined ? { text: params.text } : {}),
         ...(params.parseMode ? { parse_mode: params.parseMode } : {}),
@@ -417,9 +453,33 @@ export function createTelegramApi(token: string): TelegramApi {
     sendRichMessageDraft(params) {
       return call<void>("sendRichMessageDraft", {
         chat_id: params.chatID,
+        ...(params.threadID ? { message_thread_id: params.threadID } : {}),
         draft_id: params.draftID,
         rich_message: params.rich_message,
         ...(params.canStop ? { can_stop: true } : {}),
+      })
+    },
+    async createForumTopic(params) {
+      const m = await call<{ message_id: number; message_thread_id?: number }>("createForumTopic", {
+        chat_id: params.chatID,
+        title: params.title,
+      })
+      // the topic's id is the root service message; the Bot API names it both
+      // ways depending on version — message_thread_id when present, else the
+      // message id, which MTProto defines to be that same id
+      return { threadID: m.message_thread_id ?? m.message_id }
+    },
+    editForumTopic(params) {
+      return call<void>("editForumTopic", {
+        chat_id: params.chatID,
+        message_thread_id: params.threadID,
+        ...(params.name !== undefined ? { name: params.name } : {}),
+      })
+    },
+    deleteForumTopic(params) {
+      return call<void>("deleteForumTopic", {
+        chat_id: params.chatID,
+        message_thread_id: params.threadID,
       })
     },
   }

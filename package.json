@@ -30,6 +30,7 @@
     "jep": "bin/jep.mjs",
     "jep-watch": "bin/jep-watch.mjs",
     "jep-show": "bin/jep-show.mjs",
+    "jep-send": "bin/jep-send.mjs",
     "jep-restart": "bin/jep-restart.mjs",
     "jep-rename": "bin/jep-rename.mjs"
   },
@@ -50,6 +51,7 @@
     "start": "node --experimental-strip-types src/app/tg.ts",
     "tg": "node --experimental-strip-types src/app/tg.ts",
     "tg:mock": "JEP_HARNESS=${JEP_HARNESS:-echo} JEP_TG_PAIR_CODE=TESTCODE JEP_TG_MOCK=1 node --experimental-strip-types src/app/tg.ts < fixture/telegram-mock.jsonl",
+    "tg:mock:forum": "JEP_HARNESS=${JEP_HARNESS:-echo} JEP_TG_PAIR_CODE=TESTCODE JEP_TG_MOCK=1 JEP_TG_MOCK_FORUM=1 node --experimental-strip-types src/app/tg.ts < fixture/telegram-forum-mock.jsonl",
     "probe": "node --experimental-strip-types src/app/probe.ts",
     "probe:harness": "node --experimental-strip-types src/app/probe-harness.ts",
     "pair": "node --experimental-strip-types src/app/paircode.ts",

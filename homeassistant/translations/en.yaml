@@ -1,0 +1,73 @@
+configuration:
+  telegram_token:
+    name: Telegram bot token
+    description: Token from @BotFather. Leave empty to run without Telegram.
+  telegram_forum:
+    name: Forum topics (Threaded mode)
+    description: 'auto: with "Threaded mode" enabled for this bot in @BotFather, each conversation becomes its own topic (messages in General spawn a topic). off: never try. Leave empty for auto.'
+  gateway_enabled:
+    name: Enable gateway
+    description: Serve the web client and native app clients (phone pairing, SSE). Works without Telegram.
+  gateway_port:
+    name: Gateway port
+    description: Port the gateway listens on inside the app. Ingress uses 8099. The Network tab's host port stays empty unless a phone needs it.
+  gateway_bind:
+    name: Gateway bind address
+    description: 'Empty = all interfaces. Set e.g. 127.0.0.1 to keep it container-local.'
+  gateway_pair_code:
+    name: Gateway pairing code
+    description: Pin the code a client pairs with. Empty = a fresh, single-print code at every boot.
+  ingress_trust:
+    name: Trust Home Assistant ingress
+    description: On (default) the sidebar web client skips the pairing code, because Home Assistant already signed the user in. Turn off before publishing the host port.
+  workspace_dir:
+    name: Workspace folder
+    description: 'The folder conversations start in. Throwaway pods live under the app data home, so nothing to manage.'
+  browse_root:
+    name: Browse root
+    description: What the "Add project" browser can list, inside the container.
+  model:
+    name: Default model
+    description: 'Provider/model jep starts conversations on, e.g. openrouter/anthropic/claude-sonnet-4. Empty = harness default.'
+  openrouter_api_key:
+    name: OpenRouter API key
+    description: Your OpenRouter key; the daemon hands it to opencode as OPENROUTER_API_KEY. Leave empty if you don't use OpenRouter.
+  github_token:
+    name: GitHub token
+    description: A personal access token with the repo scope. Leave empty to log in from the app log instead: on start, gh prints a one-time code and https://github.com/login/device.
+  opencode_auth:
+    name: opencode auth.json
+    description: Paste the contents of ~/.local/share/opencode/auth.json from a machine where you ran `opencode auth login`. Empty = free opencode models only.
+  opencode_config:
+    name: opencode opencode.json
+    description: Paste the contents of ~/.config/opencode/opencode.json (providers, MCP servers, agent settings).
+  transcribe_cmd:
+    name: Transcription command
+    description: Command that reads a WAV on stdin and prints the transcript. Voice notes are off unless this or whisper_dir is set.
+  transcribe_timeout:
+    name: Transcription timeout
+    description: Seconds a transcription may run before jep gives up on it.
+  whisper_dir:
+    name: Whisper venv folder
+    description: Path to a ready whisper .venv (put it under the app's Configuration share, then use /config/...).
+  whisper_model:
+    name: Whisper model
+    description: Whisper model name, e.g. medium (the default when empty).
+  fcm_key:
+    name: FCM service account key
+    description: Contents of the service account key JSON for Android push notifications.
+  apns_key:
+    name: APNs key path
+    description: Path to the Apple push .p8 key inside the container (e.g. /config/AuthKey_XXXX.p8).
+  apns_key_id:
+    name: APNs key id
+    description: The 10-character key id from the Apple developer portal.
+  apns_team_id:
+    name: APNs team id
+    description: Your Apple developer team id.
+  apns_topic:
+    name: APNs topic
+    description: The bundle id of the app receiving push.
+  apns_sandbox:
+    name: APNs sandbox
+    description: Enable for TestFlight/development builds.

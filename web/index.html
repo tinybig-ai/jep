@@ -328,13 +328,16 @@
 // after the page's own script. There is one client, not a version to choose.
 document.documentElement.classList.add("v2")
 document.querySelector("meta[name=viewport]").content += ", viewport-fit=cover, interactive-widget=resizes-content"
-document.write('<link rel="stylesheet" href="/v2.css">'
+// href/src without a leading slash: the page must work as-is when Home
+// Assistant's ingress proxy mounts it under /api/hassio_ingress/<token>/ (no
+// rewriting happens there), which a relative base makes work at "/" too
+document.write('<link rel="stylesheet" href="v2.css">'
   + '<meta name="theme-color" content="#fcfbfa" media="(prefers-color-scheme: light)">'
   + '<meta name="theme-color" content="#111113" media="(prefers-color-scheme: dark)">')
 </script>
-<script src="/highlight.min.js" defer></script>
-<script src="/marked.js" defer></script>
-<script src="/purify.min.js" defer></script>
+<script src="highlight.min.js" defer></script>
+<script src="marked.js" defer></script>
+<script src="purify.min.js" defer></script>
 </head>
 <body>
 
@@ -500,7 +503,9 @@ function setHealth(kind, label, detail = label) {
 async function call(path, body = {}) {
   let res
   try {
-    res = await fetch(path, {
+    // relative, never site-absolute: under Home Assistant's ingress the page
+    // is mounted at /api/hassio_ingress/<token>/ and the prefix must ride along
+    res = await fetch("./" + path.replace(/^\/+/, ""), {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
       body: JSON.stringify(body),
@@ -522,7 +527,7 @@ async function call(path, body = {}) {
 
 async function loadHealth() {
   try {
-    const res = await fetch("/health", { cache: "no-store" })
+    const res = await fetch("./health", { cache: "no-store" })
     const data = await res.json().catch(() => ({}))
     if (!res.ok || !data.ok) throw new Error("gateway unavailable")
     if (token) setHealth("online", "Connected", `Gateway online · ${data.devices ?? 0} device${data.devices === 1 ? "" : "s"}${data.pushConfigured ? " · push enabled" : ""}`)
@@ -539,9 +544,39 @@ function unpair(message = "") {
   show()
 }
 
+// Home Assistant already authenticated the person. /health says so per request
+// (the Supervisor adds the header; a direct port does not). One silent /pair,
+// then the page is a normal paired client. A failure leaves the code form up.
+let autoPairing = false
+async function autoPair() {
+  if (token || autoPairing) return
+  autoPairing = true
+  let minted = false
+  try {
+    const res = await fetch("./health", { cache: "no-store" })
+    const data = await res.json().catch(() => ({}))
+    if (!data.trustedIngress) return
+    const paired = await fetch("./pair", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    })
+    const body = await paired.json().catch(() => ({}))
+    if (!paired.ok || typeof body.token !== "string") return
+    token = body.token
+    localStorage.setItem("jep.token", token)
+    minted = true
+  } catch {
+    // loadHealth already marks the gateway offline
+  } finally {
+    autoPairing = false
+  }
+  if (minted) show()
+}
+
 $("pair").onsubmit = async (e) => {
   e.preventDefault()
-  const res = await fetch("/pair", {
+  const res = await fetch("./pair", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ code: $("code").value.trim() }),
@@ -1336,7 +1371,7 @@ async function uploadAttachments(files) {
     list.push(item)
     renderAttachments()
     try {
-      const res = await fetch(`/attach?id=${encodeURIComponent(id)}&name=${encodeURIComponent(file.name)}`, {
+      const res = await fetch(`./attach?id=${encodeURIComponent(id)}&name=${encodeURIComponent(file.name)}`, {
         method: "POST",
         headers: { authorization: `Bearer ${token}`, "content-type": file.type || "application/octet-stream" },
         body: file,
@@ -1838,7 +1873,7 @@ let reread = null
 
 function follow() {
   feed?.close()
-  feed = new EventSource(`/stream?token=${token}`)
+  feed = new EventSource(`./stream?token=${token}`)
   feed.onmessage = (m) => {
     const evt = JSON.parse(m.data)
     if (evt.type === "ask.requested" && evt.ask?.sessionID !== current) notifyAsk(evt.ask)
@@ -2525,7 +2560,11 @@ function show() {
   document.querySelector("main").hidden = !token
   loadHealth()
   if (!healthTimer) healthTimer = setInterval(loadHealth, 15_000)
-  if (!token) return void feed?.close()
+  if (!token) {
+    feed?.close()
+    void autoPair()
+    return
+  }
   // the last list known, at once; the gateway's answer replaces it when it comes
   try { sessions = JSON.parse(localStorage.getItem("jep.sessions") || "[]") } catch { sessions = [] }
   renderSessions()
@@ -2546,6 +2585,6 @@ window.onhashchange = () => {
 setInterval(() => { if (token && !document.hidden) loadSessions().catch(() => {}) }, 60_000)
 show()
 </script>
-<script>document.write('<script src="/v2.js"><\/script>')</script>
+<script>document.write('<script src="v2.js"><\/script>')</script>
 </body>
 </html>

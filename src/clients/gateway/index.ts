@@ -73,6 +73,11 @@ export interface GatewayDeps {
   host?: string
   /** pinned pairing code; generated fresh per boot when omitted */
   pairCode?: string
+  /** Home Assistant ingress already authenticated this request. When set, a
+   * request carrying `X-Remote-User-Id` (stamped by the Supervisor, which
+   * strips any client-sent copy) may skip the pairing code. Safe only while
+   * the gateway's host port is unpublished: a published port can send the header. */
+  ingressTrust?: boolean
   /** attempts per address per minute before the pair gate slams shut; a
    * production default, loosened by tests that must pair repeatedly */
   pairLimit?: number
@@ -324,7 +329,8 @@ const saveTitles = async (dataHome: string, titles: Map<string, string>): Promis
 // The model a conversation runs on is a client concern here too: the phone
 // picks one per session from Settings, and the gateway remembers it (persisted,
 // like the titles) so the choice survives the app closing and applies to the
-// next prompt. Default is no override — the harness's own model.
+// next prompt. A session with no pin of its own uses the last model chosen
+// for that harness, so a restart does not drop back to the harness default.
 async function loadModels(dataHome: string): Promise<Map<string, string>> {
   try {
     const raw = JSON.parse(await readFile(join(dataHome, MODELS_FILE), "utf8")) as Record<string, string>
@@ -338,6 +344,10 @@ const saveModels = async (dataHome: string, models: Map<string, string>): Promis
   await mkdir(dataHome, { recursive: true })
   await writeFile(join(dataHome, MODELS_FILE), JSON.stringify(Object.fromEntries(models), null, 1))
 }
+
+const lastModelKey = (harness: string): string => `last:${harness}`
+const modelRef = (models: Map<string, string>, sessionID: string, harness: string): string | undefined =>
+  models.get(sessionID) ?? models.get(lastModelKey(harness))
 
 // The primary agent (opencode's "build" / "plan") a conversation runs under,
 // remembered per session exactly like the model. Not a harness — a harness is
@@ -1012,6 +1022,16 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     return q && q.length > 0 ? q : null
   }
 
+  // The Supervisor sets this after authenticating the HA user. Empty or huge
+  // values are not an id. The flag is the opt-in; the header alone is nothing.
+  const ingressUser = (req: IncomingMessage): string | null => {
+    if (!deps.ingressTrust) return null
+    const raw = req.headers["x-remote-user-id"]
+    const value = (Array.isArray(raw) ? raw[0] : raw)?.trim() ?? ""
+    if (!value || value.length > 128) return null
+    return value
+  }
+
   const json = (res: ServerResponse, status: number, body: unknown): void => {
     res.writeHead(status, { "content-type": "application/json" })
     res.end(JSON.stringify(body))
@@ -1029,6 +1049,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           devices: tokens.size,
           pushConfigured: !!deps.push,
           uptimeMs: Date.now() - startedAt,
+          trustedIngress: !!ingressUser(req),
         })
       }
 
@@ -1052,27 +1073,33 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
 
       if (path === "/pair" && req.method === "POST") {
         if (!pairRateOK(deps.pairLimit ?? 5, ip)) return json(res, 429, { error: "too many attempts, wait a minute" })
+        const ingress = ingressUser(req)
         const body = (await readBody(req)) as { code?: string } | undefined
-        if (typeof body?.code !== "string" || !same(body.code.trim(), pairCode)) {
+        if (!ingress && (typeof body?.code !== "string" || !same(body.code.trim(), pairCode))) {
           return json(res, 403, { error: "wrong pairing code" })
         }
         const token = randomBytes(24).toString("hex")
         tokens.set(token, Date.now())
         await saveTokens(deps.dataHome, tokens)
-        spendPairCode("device paired")
-        // hand back the next code: the one just used is spent
-        return json(res, 200, { token, nextCode: pairCode })
+        // the header did not use the code, so the code stays valid for a phone
+        if (!ingress) spendPairCode("device paired")
+        // nextCode is the live secret; an ingress browser must not receive it
+        return json(res, 200, ingress ? { token } : { token, nextCode: pairCode })
       }
 
-      // everything below is token-gated
-      const token = tokenOf(req, url)
+      // everything below is token-gated. An ingress request with no (or a stale)
+      // token still proceeds as that HA user; the terminal stays locked because
+      // this stand-in is not in terminalTokens.
+      let token = tokenOf(req, url)
       const stamp = await tokenFileStamp(deps.dataHome)
       if (stamp !== tokensStamp) {
         tokens = await loadTokens(deps.dataHome)
         tokensStamp = stamp
         for (const t of [...terminalTokens]) if (!tokens.has(t)) terminalTokens.delete(t)
       }
-      if (!token || !tokens.has(token)) return json(res, 401, { error: "pair first" })
+      const ingress = ingressUser(req)
+      if (ingress && (!token || !tokens.has(token))) token = `ingress:${ingress}`
+      if (!token || (!tokens.has(token) && !ingress)) return json(res, 401, { error: "pair first" })
       deviceActivity.set(token, Date.now())
 
       if (path === "/stream" && req.method === "GET") {
@@ -1671,9 +1698,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         // the window of the model this conversation actually runs on, which may
         // be one the picker does not list (an alias, a 1M variant, whatever the
         // CLI fell back to) — the status line's fill rate needs it either way
-        const running = models.get(id) ?? resolvedDefault
+        const running = modelRef(models, id, adapter.id) ?? resolvedDefault
         const contextLimit = (running && caps.get(running)?.contextLimit) || 0
-        return json(res, 200, { models: enriched, current: models.get(id) ?? null, default: resolvedDefault, contextLimit })
+        return json(res, 200, { models: enriched, current: modelRef(models, id, adapter.id) ?? null, default: resolvedDefault, contextLimit })
       }
 
       // the primary agents this harness offers, plus the conversation's choice.
@@ -1837,8 +1864,13 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       // applied to the next prompt — the choice outlives the app.
       if (path === "/setmodel") {
         const ref = str("model")
-        if (ref) models.set(id, ref)
-        else models.delete(id)
+        if (ref) {
+          models.set(id, ref)
+          models.set(lastModelKey(adapter.id), ref)
+        } else {
+          models.delete(id)
+          models.delete(lastModelKey(adapter.id))
+        }
         await saveModels(deps.dataHome, models)
         return json(res, 200, { ok: true, model: ref || null })
       }
@@ -1911,7 +1943,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         if (!asked && filePaths.length === 0) return json(res, 400, { error: "text required" })
         const text = asked || "see the attached file"
         // this conversation's chosen model, if the phone set one in Settings
-        const ref = models.get(id)
+        const ref = modelRef(models, id, adapter.id)
         const [providerID = "", modelID = ""] = ref ? ref.split("/") : []
         const model = providerID && modelID ? { providerID, modelID } : undefined
         const agent = agents.get(id)
@@ -1950,7 +1982,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const key = engine.turnKey(id)
         const existing = loops.get(key)
         if (existing?.status === "running") return json(res, 409, { error: "a loop is already running" })
-        const ref = models.get(id)
+        const ref = modelRef(models, id, adapter.id)
         const [providerID = "", modelID = ""] = ref ? ref.split("/") : []
         const loop: LoopState = {
           sessionID: key,
@@ -2047,7 +2079,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   }
   const bound = (server.address() as { port: number }).port
   listening = bound
-  console.error(`[gw] listening on :${bound}  ·  pairing code: ${pairCode}`)
+  console.error(`[gw] listening on :${bound}  ·  pairing code: ${pairCode}${deps.ingressTrust ? "  ·  ingress trust on" : ""}`)
 
   return {
     pairCode,

@@ -12,11 +12,12 @@ export interface VerbositySettings {
   layout: VerbosityLayout
 }
 
-// Minimal by default: an icon line for thinking and tools, then the answer.
-// Anyone who wants the collapsed per-step detail turns it up in Settings.
+// Telegram only. The answer streams; thinking and tool calls stay out of the
+// chat unless turned up in Settings. The web client draws those parts itself
+// and does not read this.
 export const DEFAULT_VERBOSITY: VerbositySettings = {
-  thinking: "collapsed",
-  tools: "collapsed",
+  thinking: "off",
+  tools: "off",
   layout: "minimal",
 }
 
@@ -28,6 +29,9 @@ export interface StoreData {
   // opencode-go model into Codex asks it to run something it has never heard
   // of, and it fails the turn rather than ignoring it.
   models: Record<string, string>
+  // harness id -> model last chosen. A chat with no pin of its own uses this,
+  // so a new topic after a restart does not fall back to the harness default.
+  lastModel?: Record<string, string>
   // chat id -> how much agent verbosity (thinking / tool calls) to show
   verbosity?: Record<string, VerbositySettings>
   // chat id -> primary agent name (e.g. "build", "plan")
@@ -67,6 +71,12 @@ export interface StoreData {
   // The counter lived only in memory, so every first turn after a restart
   // asked for draft 1 again and silently got no preview at all.
   draftSeq?: Record<string, number>
+  // bot forums: "synthetic topic id" -> the real peer it decodes to. Each topic
+  // of a private chat is presented to the bot as its own chat id, so every
+  // per-chat structure (state, queues, this store) keys on it unchanged. The
+  // map must outlive a restart, or the synthetic ids would reshuffle and the
+  // saved chatContexts would strand.
+  forumPeers?: Record<string, { chatID: number; threadID: number }>
 }
 
 /** a queued prompt, in the only form worth replaying: what to say, and when it was said */
@@ -109,6 +119,9 @@ const indexKey = (dir: string, harness?: string | null): string => (harness ? `$
 export class ChatStore {
   #titles: Record<string, string>
   #models: Record<string, string>
+  // harness id -> the model last chosen on any chat. A new topic after a
+  // restart has no pin of its own; it still runs what was used last.
+  #lastModel: Record<string, string>
   #verbosity: Record<string, VerbositySettings>
   #agents: Record<string, string>
   #statusMsgs: Record<string, number>
@@ -119,6 +132,7 @@ export class ChatStore {
   #draftSeq: Record<string, number>
   #pending: Record<string, PendingPrompt[]>
   #held: Record<string, HeldPrompt>
+  #forumPeers: Record<string, { chatID: number; threadID: number }>
   #file: string | null
 
   // takes the persisted shape as-is: this grew to seven positional args and
@@ -126,6 +140,14 @@ export class ChatStore {
   constructor(d: StoreData, file: string | null) {
     this.#titles = d.titles ?? {}
     this.#models = migrateModelKeys(d.models ?? {})
+    this.#lastModel = d.lastModel ?? {}
+    // chats that already pinned a model, from before lastModel existed
+    if (Object.keys(this.#lastModel).length === 0) {
+      for (const [k, v] of Object.entries(this.#models)) {
+        const harness = k.slice(k.lastIndexOf(":") + 1)
+        if (harness) this.#lastModel[harness] = v
+      }
+    }
     // read the old "internals" key as a fallback, so the rename does not reset
     // a chat that had already tuned it
     this.#verbosity = d.verbosity ?? (d as { internals?: Record<string, VerbositySettings> }).internals ?? {}
@@ -138,6 +160,7 @@ export class ChatStore {
     this.#draftSeq = d.draftSeq ?? {}
     this.#pending = d.pending ?? {}
     this.#held = d.held ?? {}
+    this.#forumPeers = d.forumPeers ?? {}
     this.#file = file
   }
 
@@ -155,7 +178,7 @@ export class ChatStore {
   }
 
   model(chatID: number, harness: string): string | null {
-    return this.#models[`${chatID}:${harness}`] ?? null
+    return this.#models[`${chatID}:${harness}`] ?? this.#lastModel[harness] ?? null
   }
 
   verbosity(chatID: number): VerbositySettings {
@@ -266,6 +289,31 @@ export class ChatStore {
     this.#save()
   }
 
+  /** bot forums: the real peer a synthetic topic id decodes to, or null */
+  forumPeer(chatID: number): { chatID: number; threadID: number } | null {
+    return this.#forumPeers[String(chatID)] ?? null
+  }
+
+  /** every remembered topic peer, for the boot-time decode layer */
+  allForumPeers(): Array<{ syn: number; chatID: number; threadID: number }> {
+    return Object.entries(this.#forumPeers).map(([syn, v]) => ({ syn: Number(syn), chatID: v.chatID, threadID: v.threadID }))
+  }
+
+  rememberForumPeer(syn: number, peer: { chatID: number; threadID: number }): void {
+    // the mapping is permanent once claimed (synthetic ids are monotonic and
+    // never reused), but the write happens anyway so a first allocation sticks
+    const prev = this.#forumPeers[String(syn)]
+    if (prev && prev.chatID === peer.chatID && prev.threadID === peer.threadID) return
+    this.#forumPeers[String(syn)] = peer
+    this.#save()
+  }
+
+  forgetForumPeer(syn: number): void {
+    if (String(syn) in this.#forumPeers === false) return
+    delete this.#forumPeers[String(syn)]
+    this.#save()
+  }
+
   /** last known sessions for a workspace dir, newest first */
   indexedSessions(dir: string, harness?: string | null): IndexedSession[] {
     return this.#sessionIndex[indexKey(dir, harness)] ?? []
@@ -289,11 +337,13 @@ export class ChatStore {
 
   setModel(chatID: number, harness: string, model: string): void {
     this.#models[`${chatID}:${harness}`] = model
+    this.#lastModel[harness] = model
     this.#save()
   }
 
   clearModel(chatID: number, harness: string): void {
     delete this.#models[`${chatID}:${harness}`]
+    delete this.#lastModel[harness]
     this.#save()
   }
 
@@ -316,6 +366,7 @@ export class ChatStore {
         {
           titles: this.#titles,
           models: this.#models,
+          lastModel: this.#lastModel,
           verbosity: this.#verbosity,
           agents: this.#agents,
           statusMsgs: this.#statusMsgs,
@@ -326,6 +377,7 @@ export class ChatStore {
           draftSeq: this.#draftSeq,
           pending: this.#pending,
           held: this.#held,
+          forumPeers: this.#forumPeers,
         },
         null,
         2,

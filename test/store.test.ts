@@ -35,12 +35,12 @@ test("queued prompts survive a restart, in order", () => {
   })
 })
 
-test("verbosity is minimal by default", () => {
+test("telegram shows the reply only, until verbosity is turned up", () => {
   withStore((file) => {
     const s = ChatStore.load(file).verbosity(7)
     assert.equal(s.layout, "minimal")
-    assert.equal(s.thinking, "collapsed")
-    assert.equal(s.tools, "collapsed")
+    assert.equal(s.thinking, "off")
+    assert.equal(s.tools, "off")
   })
 })
 
@@ -104,6 +104,7 @@ test("the rest of a chat's context still round-trips", () => {
     const b = ChatStore.load(file)
     assert.equal(b.title("ses_1"), "my thread")
     assert.equal(b.model(5, "opencode"), "zen/qwen")
+    assert.equal(b.model(9, "opencode"), "zen/qwen", "a chat with no pin still runs the last model")
     assert.deepEqual(b.chatContext(5), { dir: "/code/jep", sessionID: "ses_1", harness: "opencode" })
     assert.equal(b.indexedSessions("/code/jep", "opencode")[0]!.id, "ses_1")
   })

@@ -101,5 +101,27 @@ return to the default).
 - **Asks** (permission prompts, questions the model asks) arrive as buttons you
   tap; the safe answer is green, the destructive one red.
 
+## Forum topics (Threaded mode)
+
+With **"Threaded mode"** enabled for the bot in @BotFather, each conversation
+becomes its own **forum topic** in your private chat with the bot — the topic
+list is the conversation list, rendered by Telegram itself:
+
+- A message typed (or spoken) in **General** opens a topic titled with the
+  prompt's first words, and the conversation starts inside it.
+- Inside a topic, everything keys to that conversation: replies, the pinned
+  status chip, the streaming draft, ask buttons, /settings, the /queue — as the
+  conversation continues, so does the messaging.
+- **/new** in a topic closes it and opens a fresh one; from General it opens a
+  new topic outright. Renaming a conversation renames its topic; deleting the
+  conversation from inside its own topic deletes the topic too.
+- A conversation is pinned to one topic by design: opening the same one from a
+  second topic is refused, so a session never forks into two addresses.
+- Topics you create yourself in your own client are adopted: the first message
+  you send there starts the conversation and titles the topic.
+- An empty topic spawn (Telegram refuses, or Threaded mode is off) falls back
+  to plain-chat behaviour automatically, and is probed again after 10 minutes.
+  `JEP_TG_FORUM=off` never tries.
+
 The full surface, environment variables, and deploy ritual live in
 [docs/PROCESSES.md](../PROCESSES.md).
