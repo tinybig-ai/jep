@@ -278,7 +278,7 @@ test("a question ask is answered by its label, on the questions route", async ()
     let body = ""
     req.on("data", (c) => (body += c))
     req.on("end", () => {
-      posts.push({ path: url.pathname, body })
+      if (req.method === "POST") posts.push({ path: url.pathname, body })
       res.writeHead(200, { "content-type": "application/json" })
       res.end("{}")
     })
@@ -342,7 +342,7 @@ test("a multi-question ask keeps each question's own choices, and answers them t
     let body = ""
     req.on("data", (c) => (body += c))
     req.on("end", () => {
-      posts.push({ path: url.pathname, body })
+      if (req.method === "POST") posts.push({ path: url.pathname, body })
       res.writeHead(200, { "content-type": "application/json" })
       res.end("{}")
     })
@@ -412,7 +412,7 @@ test("an unanswered question leaves its slot empty without shifting the rest", a
     let body = ""
     req.on("data", (c) => (body += c))
     req.on("end", () => {
-      posts.push({ path: url.pathname, body })
+      if (req.method === "POST") posts.push({ path: url.pathname, body })
       res.writeHead(200, { "content-type": "application/json" })
       res.end("{}")
     })
@@ -494,6 +494,44 @@ test("an ask settled anywhere reaches the clients as ask.resolved", async () => 
   }
 })
 
+test("a pending permission with no event still reaches the client", async () => {
+  // OpenCode often parks the ask on GET /permission and never writes it to
+  // the event stream. Telegram only hears what events() yields.
+  const server = createServer((req, res) => {
+    const url = new URL(req.url ?? "/", "http://local")
+    if (url.pathname === "/permission") {
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify([{ id: "per_9", sessionID: "ses_a", permission: "bash", patterns: ["rm *"], metadata: { command: "rm -rf x" } }]))
+      return
+    }
+    if (url.pathname === "/question") {
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end("[]")
+      return
+    }
+    res.writeHead(200, { "content-type": "text/event-stream" })
+    res.write(`data: ${JSON.stringify({ type: "server.connected", properties: {} })}\n\n`)
+  })
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r))
+  const port = (server.address() as { port: number }).port
+  const adapter = new OpenCodeAdapter({} as any, WS, `http://127.0.0.1:${port}`)
+  const ac = new AbortController()
+  let ask: { title?: string; sessionID?: string; detail?: string } | undefined
+  try {
+    for await (const evt of adapter.events(ac.signal)) {
+      if (evt.type !== "ask.requested") continue
+      ask = evt.ask
+      break
+    }
+    assert.equal(ask?.title, "bash")
+    assert.equal(ask?.sessionID, "opencode://ses_a")
+    assert.match(ask?.detail ?? "", /rm -rf x/)
+  } finally {
+    ac.abort()
+    await new Promise<void>((r) => server.close(() => r()))
+  }
+})
+
 test("an answer that did not resolve is reported as a failure, not a success", async () => {
   // opencode 404s a permission id it does not know and drops it. Treating that
   // as "already handled" is what let a card read "answered" over a turn that was
@@ -554,7 +592,7 @@ test("standing a question ask down cancels it, so the turn can finish", async ()
     let body = ""
     req.on("data", (c) => (body += c))
     req.on("end", () => {
-      posts.push({ path: url.pathname, body })
+      if (req.method === "POST") posts.push({ path: url.pathname, body })
       res.writeHead(200, { "content-type": "application/json" })
       res.end("{}")
     })

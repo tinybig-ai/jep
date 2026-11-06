@@ -922,6 +922,30 @@ export class OpenCodeAdapter implements HarnessAdapter {
    * When the harness cannot be asked, assume the ask is gone: refusing to answer
    * on a network blip would be worse than the stale case this guards.
    */
+  // Permissions and questions that the event stream never delivered. The list
+  // endpoints are the source of truth; #toDomainEvent drops ones already shown.
+  async #pollAsks(): Promise<DomainEvent[]> {
+    const [permissions, questions] = await Promise.all([
+      this.#json<unknown[]>("/permission", { signal: AbortSignal.timeout(1_000) }).catch(() => [] as unknown[]),
+      this.#json<unknown[]>("/question", { signal: AbortSignal.timeout(1_000) }).catch(() => [] as unknown[]),
+    ])
+    const out: DomainEvent[] = []
+    const take = (type: string, rows: unknown[]) => {
+      for (const raw of rows) {
+        if (!raw || typeof raw !== "object") continue
+        const evt = this.#toDomainEvent({ data: JSON.stringify({ type, properties: raw }) })
+        if (evt) out.push(evt)
+      }
+    }
+    take("permission.asked", Array.isArray(permissions) ? permissions : [])
+    take("question.asked", (Array.isArray(questions) ? questions : []).filter((raw) => {
+      if (!raw || typeof raw !== "object") return false
+      const q = raw as { questions?: unknown; question?: unknown }
+      return Array.isArray(q.questions) || typeof q.question === "string"
+    }))
+    return out
+  }
+
   async #askStillPending(askID: string): Promise<boolean> {
     const [permissions, questions] = await Promise.all([
       this.#json<unknown[]>("/permission").catch(() => null),
@@ -1050,9 +1074,33 @@ export class OpenCodeAdapter implements HarnessAdapter {
     this.#eventReaders.add(reader)
     const decoder = new TextDecoder()
     let buffer = ""
+    // A permission or question is often absent from this stream (the serve
+    // process keeps it on GET /permission and GET /question). The poll runs
+    // beside the read, so a quiet list never holds the turn's events back.
+    let inflight: Promise<ReadableStreamReadResult<Uint8Array>> | null = null
+    const asks = (signal: AbortSignal) => this.#pollAsks().catch((err) => {
+      if (signal.aborted || (err as Error)?.name === "AbortError") return [] as DomainEvent[]
+      return [] as DomainEvent[]
+    })
+    let poll = asks(controller.signal)
     try {
-      while (true) {
-        const { done, value } = await reader.read()
+      while (!controller.signal.aborted) {
+        inflight ??= reader.read()
+        const raced = await Promise.race([
+          inflight.then((v) => ({ kind: "read" as const, v })),
+          poll.then((events) => ({ kind: "poll" as const, events })),
+        ])
+        if (controller.signal.aborted) break
+        if (raced.kind === "poll") {
+          for (const evt of raced.events) yield evt
+          poll = new Promise<DomainEvent[]>((resolve) => {
+            const timer = setTimeout(() => resolve(asks(controller.signal)), 1_000)
+            controller.signal.addEventListener("abort", () => { clearTimeout(timer); resolve([]) }, { once: true })
+          })
+          continue
+        }
+        inflight = null
+        const { done, value } = raced.v
         if (done) break
         buffer += decoder.decode(value, { stream: true })
         let idx: number
@@ -1080,8 +1128,15 @@ export class OpenCodeAdapter implements HarnessAdapter {
     } catch {
       return null
     }
-    const type = data?.type ?? frame.event ?? ""
-    const props = data?.properties ?? {}
+    const typeRaw = data?.type ?? frame.event ?? ""
+    // v1 events carry `properties`. Newer serves put the same object in `data`,
+    // and a permission can arrive as `permission.v2.asked` with action/resources.
+    let props: any = data?.properties ?? data?.data ?? {}
+    if (props && typeof props === "object") {
+      if (props.sessionID == null && props.session_id != null) props = { ...props, sessionID: props.session_id }
+      if (props.permission == null && props.action != null) props = { ...props, permission: props.action, patterns: props.patterns ?? props.resources ?? [] }
+    }
+    const type = typeRaw === "permission.v2.asked" ? "permission.asked" : typeRaw
     const rawSession = props.sessionID as string | undefined
     const sessionID = rawSession ? toInternalId(rawSession) : undefined
     const messageID = props.messageID as string | undefined
@@ -1179,6 +1234,9 @@ export class OpenCodeAdapter implements HarnessAdapter {
         })
         const askID = (props.id as string) ?? ""
         if (askID) {
+          if (this.#askedPermissions.has(askID)) return null
+          if (this.#askedPermissions.size > 2_000) this.#askedPermissions.clear()
+          this.#askedPermissions.add(askID)
           if (this.#questionLabels.size > 2_000) this.#questionLabels.clear()
           this.#questionLabels.set(askID, { count: grouped.length, labels })
         }

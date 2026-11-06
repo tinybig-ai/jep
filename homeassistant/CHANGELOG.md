@@ -1,5 +1,11 @@
 # Changelog — the HA app
 
+## 0.2.9
+
+Permission prompts reach Telegram even when OpenCode never puts them on the
+event stream. The app checks the pending permission list during a turn and
+sends the Allow once / Always / Deny buttons.
+
 ## 0.2.8
 
 `jep-send`: when you ask in Telegram, the agent can hand a file back into the
