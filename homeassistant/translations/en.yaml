@@ -32,6 +32,9 @@ configuration:
   openrouter_api_key:
     name: OpenRouter API key
     description: Your OpenRouter key; the daemon hands it to opencode as OPENROUTER_API_KEY. Leave empty if you don't use OpenRouter.
+  github_token:
+    name: GitHub token
+    description: A personal access token with the repo scope. On start the app runs gh auth login, so git and gh can reach your repositories. Leave empty to stay logged out.
   opencode_auth:
     name: opencode auth.json
     description: Paste the contents of ~/.local/share/opencode/auth.json from a machine where you ran `opencode auth login`. Empty = free opencode models only.

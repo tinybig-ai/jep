@@ -1,6 +1,6 @@
 {
   "name": "Jep",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "slug": "jep",
   "description": "One interface for every coding agent: Telegram and web gateway clients for opencode",
   "url": "https://github.com/tinybig-ai/jep/tree/main/homeassistant",
@@ -45,6 +45,7 @@
     "browse_root": "/data",
     "model": "",
     "openrouter_api_key": "",
+    "github_token": "",
     "opencode_auth": "",
     "opencode_config": "",
     "transcribe_cmd": "",
@@ -70,6 +71,7 @@
     "browse_root": "str",
     "model": "str?",
     "openrouter_api_key": "password?",
+    "github_token": "password?",
     "opencode_auth": "password?",
     "opencode_config": "password?",
     "transcribe_cmd": "str?",

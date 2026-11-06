@@ -85,6 +85,7 @@ fork either way.
 | `browse_root` | str, `/data` | browser root when adding a folder from a client |
 | `model` | str, empty | default model, e.g. `openrouter/anthropic/claude-sonnet-4` |
 | `openrouter_api_key` | password, empty | your OpenRouter key; exported as `OPENROUTER_API_KEY`, which is all opencode needs to list and run OpenRouter models |
+| `github_token` | password, empty | a GitHub personal access token with the `repo` scope. On start the app runs `gh auth login --with-token` and `gh auth setup-git`, so `gh` and `git` over https work inside the container. Empty = not logged in |
 | `opencode_auth` | password, empty | paste the contents of `~/.local/share/opencode/auth.json` from a machine where you ran `opencode auth login`. Empty + no free models = no pickable models |
 | `opencode_config` | password, empty | paste the contents of `~/.config/opencode/opencode.json` (providers, MCP servers…) |
 | `transcribe_cmd` | str, empty | command printed-transcript replacement for whisper; voice notes need this or a whisper venv |
@@ -106,7 +107,7 @@ jep's defaults; the daemon exposes them as `JEP_*` env vars, see
 | `/data/jep` — sessions, pairing, pods, gateway tokens | app data, private (included in HA backups) | everything jep owns |
 | `/share` | shared folder | pick as `workspace_dir` or `browse_root` for repos you edit in HA too |
 
-Secrets (`opencode_auth`, `opencode_config`, `telegram_token`, `fcm_key`) are
+Secrets (`opencode_auth`, `opencode_config`, `telegram_token`, `github_token`, `fcm_key`) are
 stored in Home Assistant's own app options and only ever written into the
 app's private storage or the container filesystem.
 

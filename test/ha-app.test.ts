@@ -66,6 +66,15 @@ test("both clients on: the daemon's env and the pasted auth are in place", async
   assert.match(readFileSync(join(root, "data", "jep", "xdg", "opencode", "auth.json"), "utf8"), /"token"/)
 })
 
+test("a github token is handed to gh and never printed", async () => {
+  const root = sandbox({ telegram_token: "1:a", github_token: "ghp-test-token" })
+  const r = await boot(root)
+  assert.equal(r.status, 0, r.out)
+  assert.match(envFor(root), /export GH_TOKEN=ghp-test-token/)
+  assert.match(r.out, /GH_TOKEN=<redacted>/)
+  assert.doesNotMatch(r.out, /ghp-test-token/)
+})
+
 test("the openrouter key rides through as opencode's own env", async () => {
   const root = sandbox({ telegram_token: "1:a", openrouter_api_key: "sk-or-test" })
   const r = await boot(root)

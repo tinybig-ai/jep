@@ -13,7 +13,7 @@ FROM node:26-alpine
 # feature. git: agents live in repositories. ffmpeg + python3: voice-note
 # transcription (whisper itself stays opt-in — see DOCS.md).
 RUN apk add --no-cache \
-    bash curl git tar tmux ffmpeg py3-pip tzdata ca-certificates
+    bash curl git github-cli tar tmux ffmpeg py3-pip tzdata ca-certificates
 
 # opencode CLI, official installer (picks the right per-arch/musl binary;
 # on this Alpine base that is the -musl build). Installer v1 keeps GitHub's

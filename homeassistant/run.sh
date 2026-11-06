@@ -80,6 +80,7 @@ pairs = [
     ("JEP_BROWSE_ROOT", o.get("browse_root")),
     ("JEP_MODEL", o.get("model")),
     ("OPENROUTER_API_KEY", o.get("openrouter_api_key")),
+    ("GH_TOKEN", o.get("github_token")),
     ("JEP_TRANSCRIBE_CMD", o.get("transcribe_cmd")),
     ("JEP_TRANSCRIBE_TIMEOUT", str(int(o.get("transcribe_timeout", 0))) if o.get("transcribe_timeout") else ""),
     ("JEP_WHISPER_DIR", o.get("whisper_dir")),
@@ -120,9 +121,21 @@ export XDG_DATA_HOME="$jep_data/xdg"
 export XDG_CONFIG_HOME="$app_config"
 export HOME="$jep_data/home"
 
+# gh and git, as the user the agent runs as. GH_TOKEN alone is enough for the
+# gh CLI; setup-git is what makes `git clone`/`git push` of https remotes use it.
+# HOME is the app data dir, so the login survives a restart of the container.
+if [ -n "${GH_TOKEN:-}" ] && [ -z "$dry" ]; then
+  command -v gh >/dev/null || die "github token is set but gh is not installed"
+  printf '%s\n' "$GH_TOKEN" | gh auth login --hostname github.com --with-token \
+    || die "gh auth login failed — the token needs the repo scope"
+  gh auth setup-git || die "gh auth setup-git failed"
+  say "gh: logged in"
+fi
+
 if [ -n "$dry" ]; then
   say "--- dry run: not starting the daemon"
-  env | grep '^JEP_' | sed 's/^JEP_TG_TOKEN=.*/JEP_TG_TOKEN=<redacted>/' || true
+  env | grep -E '^(JEP_|GH_TOKEN=)' \
+    | sed -e 's/^JEP_TG_TOKEN=.*/JEP_TG_TOKEN=<redacted>/' -e 's/^GH_TOKEN=.*/GH_TOKEN=<redacted>/' || true
   say "--- XDG_DATA_HOME=$XDG_DATA_HOME  XDG_CONFIG_HOME=$XDG_CONFIG_HOME  HOME=$HOME"
   say "--- auth.json: $([ -f "$XDG_DATA_HOME/opencode/auth.json" ] && echo written || echo none)"
   say "--- opencode.json: $([ -f "$XDG_CONFIG_HOME/opencode/opencode.json" ] && echo written || echo none)"

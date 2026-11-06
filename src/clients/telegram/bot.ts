@@ -631,7 +631,7 @@ function partsToMarkdown(parts: Part[], s: VerbositySettings): string {
 }
 
 const PRESETS: Record<"simple" | "minimal" | "detailed" | "debug", VerbositySettings> = {
-  simple: { thinking: "off", tools: "off", layout: "per-step" },
+  simple: { thinking: "off", tools: "off", layout: "minimal" },
   minimal: { thinking: "collapsed", tools: "collapsed", layout: "minimal" },
   detailed: { thinking: "collapsed", tools: "collapsed", layout: "per-step" },
   debug: { thinking: "expanded", tools: "expanded", layout: "per-section" },

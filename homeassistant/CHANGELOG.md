@@ -1,5 +1,11 @@
 # Changelog — the HA app
 
+## 0.2.6
+
+The image includes the GitHub CLI. A `github_token` option (a personal access
+token with the `repo` scope) is logged in at start with `gh auth login` and
+`gh auth setup-git`, so `gh` and `git` over https work in the container.
+
 ## 0.2.5
 
 0.2.4's image was built from upstream `tinybig-ai/jep`, so the sidebar still
