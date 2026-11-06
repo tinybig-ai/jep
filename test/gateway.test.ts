@@ -439,7 +439,10 @@ test("prompts waiting behind a turn run together as one turn", async () => {
       fetch(`${base}/prompt`, { method: "POST", headers, body: JSON.stringify({ id: "s1", text, steer: false }) })
     const first = post("first")
     await sleep(50)
+    // one at a time: two posts in flight can be read in either order, and the
+    // merged turn is the queue order, which would then fail this assertion
     const second = post("second")
+    await sleep(50)
     const third = post("third")
     await sleep(50)
     a.release("first")
