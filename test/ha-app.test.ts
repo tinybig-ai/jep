@@ -166,6 +166,23 @@ test("telegram only: gateway switch off means no JEP_GW_PORT", async () => {
   assert.doesNotMatch(envFor(root), /export JEP_GW_PORT/)
 })
 
+test("an existing non-default gateway port continues working for direct clients", async () => {
+  const root = sandbox({ gateway_enabled: true, gateway_port: 9000 })
+  const r = await boot(root)
+  assert.equal(r.status, 0, r.out)
+  assert.match(envFor(root), /export JEP_GW_PORT=9000/)
+  assert.match(r.out, /sidebar will be unavailable/)
+})
+
+test("the image source stays with the installed repository during an upgrade", () => {
+  const cfg = JSON.parse(readFileSync(join(import.meta.dirname, "..", "homeassistant", "config.json"), "utf8"))
+  const repository = JSON.parse(readFileSync(join(import.meta.dirname, "..", "repository.json"), "utf8"))
+  const owner = new URL(repository.url).pathname.split("/")[1]!.toLowerCase()
+  assert.equal(cfg.image, `ghcr.io/${owner}/{arch}-jep`)
+  assert.equal(cfg.slug, "jep")
+  assert.equal(cfg.options.workspace_dir, "/data/jep/workspace")
+})
+
 test("both clients off refuses to start", async () => {
   const root = sandbox({ telegram_token: "", gateway_enabled: false })
   const r = await boot(root)

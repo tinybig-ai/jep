@@ -104,7 +104,7 @@ PY
 source "$env_file"
 
 if [ -n "${JEP_GW_PORT:-}" ] && [ "$JEP_GW_PORT" != 8099 ]; then
-  die "gateway_port must be 8099 to match Home Assistant ingress"
+  say "gateway_port is $JEP_GW_PORT; Home Assistant ingress requires 8099, so the sidebar will be unavailable. Direct clients can still use the configured port."
 fi
 
 # chat needs at least one served workspace even in pod mode: /new-conversation

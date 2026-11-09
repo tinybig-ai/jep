@@ -2,9 +2,9 @@ name: ha-app
 
 # Builds the Home Assistant app's container image for both supported
 # architectures and pushes it to GHCR, so a fork can ship pulls instead of
-# on-device builds. The app folder deliberately has no `image` key: without
-# it the Supervisor builds on the device from the same Dockerfile, which is
-# what the app does when installed straight from a repo URL.
+# on-device builds. The image prefix in config.json must name the same owner.
+# When publishing this integration upstream, update that prefix and repository
+# metadata together; never silently switch existing fork users to local builds.
 on:
   push:
     branches: [main]
@@ -38,6 +38,11 @@ jobs:
         run: |
           echo "version=$(jq -r .version homeassistant/config.json)" >> "$GITHUB_OUTPUT"
           echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+          image=$(jq -r '.image // empty' homeassistant/config.json)
+          if [ -n "$image" ] && [ "$image" != "ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/{arch}-jep" ]; then
+            echo "::error::config.json image prefix must match this repository owner before publishing"
+            exit 1
+          fi
 
       - name: Set up QEMU (arm64 build on an amd64 runner)
         if: matrix.supervisor_arch == 'aarch64'

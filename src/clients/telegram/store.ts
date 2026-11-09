@@ -136,6 +136,13 @@ export class ChatStore {
   constructor(d: StoreData, file: string | null) {
     this.#titles = d.titles ?? {}
     this.#models = migrateModelKeys(d.models ?? {})
+    // Preserve the effective choice of existing chats from older releases,
+    // while new conversations stop inheriting another chat's paid model.
+    const legacy = (d as StoreData & { lastModel?: Record<string, string> }).lastModel
+    for (const [chat, context] of Object.entries(d.chatContext ?? {})) {
+      const harness = context.harness
+      if (harness && legacy?.[harness] && !this.#models[`${chat}:${harness}`]) this.#models[`${chat}:${harness}`] = legacy[harness]!
+    }
     // read the old "internals" key as a fallback, so the rename does not reset
     // a chat that had already tuned it
     this.#verbosity = d.verbosity ?? (d as { internals?: Record<string, VerbositySettings> }).internals ?? {}

@@ -1,10 +1,17 @@
 # Changelog — the HA app
 
+## 0.2.11
+
+Preserve the existing fork's prebuilt-image upgrade path. CI checks that the
+image registry matches its repository owner. Existing custom gateway ports
+continue to start, with a warning when ingress cannot use them. Existing
+Telegram conversations retain model choices inherited by earlier versions.
+
 ## 0.2.10
 
 Ingress identity is accepted only from the Supervisor. GitHub login is optional
 and no longer blocks startup. CI checks out the exact requested source commit;
-default installations build locally without depending on a contributor registry.
+builds can use an explicit source commit.
 Topic creation uses Telegram's API field, /new preserves history, draft IDs stay
 unique across topics and restarts, and Stop targets the draft it came from.
 Sent files are also available to web and native clients. Permission recovery

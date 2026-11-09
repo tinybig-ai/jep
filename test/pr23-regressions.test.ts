@@ -47,6 +47,24 @@ test("deleted topic addresses remain retired across restart and migration", () =
   assert.ok(store.allocateForumID() > first)
 })
 
+test("upgrade preserves inherited choices for existing chats without choosing for new chats", () => {
+  const file = join(mkdtempSync(join(tmpdir(), "model-upgrade-")), "store.json")
+  writeFileSync(file, JSON.stringify({
+    models: { "9000000002:opencode": "explicit/model" },
+    lastModel: { opencode: "inherited/model" },
+    chatContext: {
+      "9000000001": { dir: "/tmp", sessionID: "s1", harness: "opencode" },
+      "9000000002": { dir: "/tmp", sessionID: "s2", harness: "opencode" },
+    },
+  }))
+  const store = ChatStore.load(file)
+  assert.equal(store.model(9_000_000_001, "opencode"), "inherited/model")
+  assert.equal(store.model(9_000_000_002, "opencode"), "explicit/model")
+  assert.equal(store.model(9_000_000_003, "opencode"), null)
+  store.setTitle("s1", "save migration")
+  assert.equal(ChatStore.load(file).model(9_000_000_001, "opencode"), "inherited/model")
+})
+
 test("file delivery supports Codex, shell and MCP output, with stable shared file parts", () => {
   const output = "sending /tmp/a.pdf (4 bytes)\n"
   assert.deepEqual(sentFrom("command_execution", "jep-send /tmp/a.pdf", output), ["/tmp/a.pdf"])
