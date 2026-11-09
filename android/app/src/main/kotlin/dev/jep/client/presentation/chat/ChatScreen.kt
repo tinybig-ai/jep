@@ -326,7 +326,7 @@ internal fun Row.anchor(): String = when (this) {
 /** A compaction marker is its own row; everything else renders as a message. */
 internal fun rowFor(m: ChatMessage, cards: Map<String, List<Row>> = emptyMap()): Row = when {
     m.parts.size == 1 && m.parts[0] is ChatPart.Compaction -> Row.Compaction(m)
-    m.parts.size == 1 && (m.parts[0] is ChatPart.AutoContinue || m.parts[0] is ChatPart.LoopTurn) -> Row.AutoContinue(m)
+    m.parts.size == 1 && (m.parts[0] is ChatPart.AutoContinue || m.parts[0] is ChatPart.LoopTurn || m.parts[0] is ChatPart.NoticeTurn) -> Row.AutoContinue(m)
     else -> Row.Msg(m, cards)
 }
 
@@ -648,7 +648,7 @@ fun ChatScreen(
     // answer (opencode emits one per step: the tool call, then the text). Only
     // the message that ENDS a turn carries the info/copy row — otherwise the
     // buttons appear at every intermediate step.
-    val busy = state.sending || state.live != null
+    val busy = state.working
     val actionIds = remember(rendered, busy) {
         val ids = mutableSetOf<String>()
         // `rendered` is newest first: what follows a message is the one
@@ -678,7 +678,7 @@ fun ChatScreen(
     val liveMessageId = state.live?.messageId
     val rows = remember(ordered, ask, state.askAt, liveMessageId, state.askAfter, state.pastAsks, state.sending) {
         val raw = transcriptRows(ordered, ask, state.askAt, liveMessageId, state.askAfter, state.pastAsks)
-        val hold = if (state.sending || state.live != null) raw.firstOrNull { it is Row.Msg }?.key else null
+        val hold = if (state.working) raw.firstOrNull { it is Row.Msg }?.key else null
         groupWorkRuns(raw, hold)
     }
     val displayRows = remember(rows) { rows.asReversed() }
@@ -1053,12 +1053,12 @@ fun ChatScreen(
                         }
                     }
                 }
-                val busy = state.sending || state.live != null
+                val busy = state.working
                 items(displayRows.size, key = { displayRows[it].key }) { i ->
                   // opening a thinking block is the reader choosing to read, not to follow the end
                   CompositionLocalProvider(LocalStopFollowing provides { followLatest = false }) {
                     when (val row = displayRows[i]) {
-                        is Row.Work -> WorkRow(row.parts, row.durationMs)
+                        is Row.Work -> WorkRow(row.parts, row.durationMs, active = busy && !askPending && i == displayRows.lastIndex)
                         is Row.Pending -> AskBar(row.ask, vm, spent = askAnswered, choiceId = state.askChoice)
                         is Row.PastAsk -> AskBar(row.entry.ask, vm, spent = true, choiceId = row.entry.choice)
                         is Row.Compaction -> CompactionRow(row.m)
@@ -2205,6 +2205,7 @@ private fun fullTurnText(message: ChatMessage): String =
             ChatPart.Compaction -> "[conversation compacted]"
             ChatPart.AutoContinue -> ""
             is ChatPart.LoopTurn -> ""
+            is ChatPart.NoticeTurn -> ""
             is ChatPart.Unsupported -> ""
         }
     }.trim()
@@ -2242,7 +2243,9 @@ private fun MessageRow(
             .combinedClickable(onClick = {}, onLongClick = { menu = true }),
     ) {
         when (message.role) {
-            Role.USER -> UserBubble(message) { onRetrySend(message.id) }
+            Role.USER ->
+                if (message.from != null) GuestCard(message, onInfo, cards, cardView)
+                else UserBubble(message) { onRetrySend(message.id) }
             Role.ASSISTANT -> AssistantBody(message, onInfo, responding, showActions, cards, cardView)
             else -> Unit
         }
@@ -2576,6 +2579,8 @@ private fun WorkRow(parts: List<ChatPart>, durationMs: Long? = null, active: Boo
             Modifier.fillMaxWidth().padding(horizontal = RowInset).clickable { open = !open },
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // a run still going says so: without it a long stretch of work reads as nothing happening
+            if (anyRunning) Spinner(Modifier.padding(end = 8.dp))
             Text(
                 workTitle(parts, durationMs, anyRunning),
                 style = MaterialTheme.typography.labelMedium,
@@ -2750,6 +2755,7 @@ private fun PartView(part: ChatPart, streaming: Boolean, onOpenLink: (String) ->
         ChatPart.Compaction -> Unit // a divider row renders the message, not its parts
         ChatPart.AutoContinue -> Unit // the anchor row renders the quiet note, not a bubble
         is ChatPart.LoopTurn -> Unit // likewise: a boundary row, not a bubble
+        is ChatPart.NoticeTurn -> Unit
         is ChatPart.Unsupported -> Unit
     }
 }
@@ -3773,7 +3779,7 @@ private fun Composer(
     // Stop shows whenever a turn is active for this conversation — this client's,
     // or one started elsewhere (Telegram, a steer). Safe now that a tap on Send
     // while busy queues instead of stopping.
-    val busy = state.sending || state.live != null
+    val busy = state.working
     // A card standing open holds the send button. Answering in words is allowed,
     // but it is said out loud by tapping "Something else" first, so a message can
     // never disappear into a queue behind the question that is waiting for you.
@@ -4193,7 +4199,16 @@ internal fun AutoContinueRow(m: ChatMessage) {
     ) {
         HorizontalDivider(Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant)
         Text(
-            (m.parts.firstOrNull() as? ChatPart.LoopTurn)?.let { "· loop ${it.iteration}/${it.max} ·" } ?: "· auto-continued ·",
+            when (val part = m.parts.firstOrNull()) {
+                is ChatPart.LoopTurn -> "· loop ${part.iteration}/${part.max} ·"
+                is ChatPart.NoticeTurn -> when (part.kind) {
+                    "resumed" -> "· jep · restarted, picking the work back up ·"
+                    "retry" -> "· jep · a tool call came out as text and did not run, asking again ·"
+                    "timeout" -> "· jep · stopped watching after ${part.minutes ?: 60} min ·"
+                    else -> "· jep · the watch is done ·"
+                }
+                else -> "· auto-continued ·"
+            },
             Modifier.padding(horizontal = 12.dp),
             fontSize = 11.sp,
             color = MaterialTheme.colorScheme.outline,
@@ -4389,4 +4404,33 @@ private fun LoopDialog(running: Boolean, onDismiss: () -> Unit, onStart: (String
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+/**
+ * What another conversation sent (`jep-tell`): a card naming its sender, with the accent bar down its
+ * edge. It is drawn like an agent's words, since the person did not type them; the name says who did.
+ */
+@Composable
+private fun GuestCard(message: ChatMessage, onInfo: (ChatMessage) -> Unit, cards: Map<String, List<Row>>, cardView: @Composable (Row) -> Unit) {
+    val from = message.from ?: return
+    Surface(
+        Modifier.fillMaxWidth().testTag("guest-card"),
+        color = Color.Transparent,
+        shape = RoundedCornerShape(Radius.card),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Row(Modifier.height(androidx.compose.foundation.layout.IntrinsicSize.Min)) {
+            Box(Modifier.width(3.dp).fillMaxHeight().background(MaterialTheme.colorScheme.primary))
+            Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                Text(
+                    "from ${from.title.ifBlank { "another conversation" }}" + if (from.harness.isNotBlank()) " · ${from.harness}" else "",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                AssistantBody(message, onInfo, false, false, cards, cardView)
+            }
+        }
+    }
 }

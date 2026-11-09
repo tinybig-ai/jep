@@ -24,6 +24,13 @@ export interface PairingAdmin {
 // a pairing code a person types into a client: unambiguous letters and digits
 const ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
+/**
+ * What was typed, in the form codes are minted in: upper case, with no spaces or dashes. A phone keyboard
+ * types lower case, and a code read aloud or copied out of a chat arrives with a space or a dash in it;
+ * none of that should make the right code "wrong".
+ */
+export const normalizePairCode = (typed: string): string => typed.replace(/[\s-]+/g, "").toUpperCase()
+
 export function newPairCode(): string {
   const b = randomBytes(9)
   let out = ""

@@ -421,8 +421,10 @@ independently. HTML fallback uses `> ` blockquotes
 
 Sources, in priority order (merged, deduped, default always first):
 
-1. Default `localfree-models-proxy/auto` (the free proxy; engine picks):
-   `MODEL_REF` in `src/harnesses/opencode.ts`.
+1. The engine default (no `JEP_MODEL` pin; the harness's own configured model,
+   shown as `default`), unless `JEP_MODEL` is set — then that `provider/model`
+   leads the list. Pi behaves the same: `JEP_PI_PROVIDER`/`JEP_PI_MODEL` pin,
+   otherwise Pi's `settings.json` default and `models.json` are read as-is.
 2. Config providers + their `models` maps from
    `~/.config/opencode/opencode.json` (`providers.*.models`).
 3. Registry models from the **`opencode models` CLI** (provider lines

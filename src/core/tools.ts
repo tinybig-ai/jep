@@ -12,7 +12,7 @@ import { dirname, join } from "node:path"
 export type ToolsMode = "cli" | "mcp" | "off"
 
 export const TOOLS_SERVER = "jep-tools"
-export const TOOL_NAMES = ["jep_watch", "jep_restart", "jep_rename", "jep_show", "jep_send"] as const
+export const TOOL_NAMES = ["jep_watch", "jep_restart", "jep_rename", "jep_read", "jep_tell", "jep_show", "jep_send"] as const
 export const MCP_SERVER_PATH = join(dirname(dirname(dirname(fileURLToPath(import.meta.url)))), "bin", "jep-mcp.mjs")
 
 export function toolsMode(env: Record<string, string | undefined> = process.env): ToolsMode {

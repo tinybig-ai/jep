@@ -107,6 +107,8 @@ const routes = {
   ] }),
   "/history": (b) => b.id === "s5" ? { messages: [
     { id: "g1", role: "user", time: now - 5 * min, parts: [{ kind: "text", text: "show me the charts" }] },
+    { id: "nn", role: "user", time: now - 5 * min + 500, notice: { kind: "resumed" }, parts: [] },
+    { id: "gg", role: "user", time: now - 5 * min + 1000, from: { id: "goose://ee2fae32", title: "Map render blank", harness: "goose" }, parts: [{ kind: "text", text: "the build is done, rerun the shot" }] },
     { id: "g2", role: "assistant", time: now - 4 * min, parts: [{ ...tool("gt", "bash", "jep-show a.png b.png", { command: "jep-show /tmp/a.png /tmp/b.png" }, "showing"), shown: ["/tmp/a.png", "/tmp/b.png"] }] },
   ], hasMore: false, asks: [], etag: "e5" } : b.id === "s2" ? { messages: themeMessages, hasMore: false, asks: [], etag: "e2" } : { messages, hasMore: false, asks, etag: "e1" },
   "/models": () => ({

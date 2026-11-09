@@ -14,6 +14,7 @@ import dev.jep.client.data.dto.ImportableRes
 import dev.jep.client.data.dto.McpRes
 import dev.jep.client.data.dto.MessageRes
 import dev.jep.client.data.dto.MkdirRes
+import dev.jep.client.data.dto.DevicesRes
 import dev.jep.client.data.dto.NextCodeRes
 import dev.jep.client.data.dto.ModelsRes
 import dev.jep.client.data.dto.SkillsRes
@@ -269,6 +270,16 @@ private val json = Json { ignoreUnknownKeys = true; isLenient = true }
         return TerminalAccess(r.allowed, r.authorized)
     }
 
+    override suspend fun pairCode(): String? {
+        val pairCode = runCatching {
+            val (code, text) = post("/devices")
+            if (code !in 200..299) return@runCatching null
+            runCatching { json.decodeFromString(DevicesRes.serializer(), text) }.getOrNull()?.pairCode
+        }.getOrNull()
+        onNextCode(pairCode)
+        return pairCode
+    }
+
     override suspend fun unlockTerminal(code: String): Boolean {
         val (status, text) = post("/term/unlock", payload("code" to code))
         if (status in 200..299) {
@@ -321,10 +332,11 @@ private val json = Json { ignoreUnknownKeys = true; isLenient = true }
                 res.messages.map { it.toDomain() },
                 res.hasMore,
                 res.asks.map { AskEntry(it.toDomain(), pending = it.state == "pending", choice = it.answer) },
-                res.queue.filter { !it.notice && !it.clientID.isNullOrEmpty() }.map { Waiting(it.clientID!!, it.text, it.steer) },
+                res.queue.filter { !it.notice && it.loop == null && !it.clientID.isNullOrEmpty() }.map { Waiting(it.clientID!!, it.text, it.steer) },
                 res.loop?.let {
                     dev.jep.client.domain.repository.LoopInfo(it.spec.goal, it.spec.max, it.spec.verify, it.spec.until, it.iteration, it.status, it.error, it.lastVerify?.takeIf { v -> !v.ok }?.code)
                 },
+                res.busy,
             )
             if (key != null && res.etag != null) lastPage[key] = res.etag to batch
             batch

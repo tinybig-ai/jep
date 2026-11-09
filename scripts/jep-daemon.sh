@@ -26,6 +26,32 @@ probe_timeout="${JEP_PROBE_TIMEOUT:-5}"
 # plenty to find in a log.
 hold="${JEP_PROBE_BACKOFF:-300}"
 
+# Refuse to start beside another jep. Two daemons on one gateway port is how a
+# restart turned into an EADDRINUSE crash loop (and, with a full disk, a long
+# outage). Only a holder that is itself jep counts: tailscale serve may
+# legitimately hold the port, and the gateway already falls back to loopback
+# for that. A departing jep gets a grace period to release the port first.
+port="${JEP_GW_PORT:-8931}"
+grace="${JEP_PORT_GRACE:-20}"
+other_jep() {
+  for pid in $(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null); do
+    [ "$pid" = "$$" ] && continue
+    case "$(ps -o command= -p "$pid" 2>/dev/null)" in
+      *app/tg.ts*) echo "$pid"; return 0 ;;
+    esac
+  done
+  return 1
+}
+waited=0
+while holder=$(other_jep); do
+  if [ "$waited" -ge "$grace" ]; then
+    echo "jep: refusing to start: pid $holder (another jep) still holds :$port after ${grace}s. Stop it first (jep-restart), then launchd will retry." >&2
+    exit 75
+  fi
+  sleep 1
+  waited=$((waited + 1))
+done
+
 # the read that node itself would do first, in a process we are free to kill
 "$node" -e 'require("fs").readFileSync(process.argv[1] + "/package.json")' "$root" >/dev/null 2>&1 &
 probe=$!

@@ -18,8 +18,8 @@ import { TurnAbortedError } from "../core/types.ts"
  */
 const PI_BIN = process.env.JEP_PI_BIN ?? "pi"
 const PI_AGENT_DIR = process.env.JEP_PI_AGENT_DIR ?? process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent")
-const PI_PROVIDER = process.env.JEP_PI_PROVIDER ?? "free-models"
-const PI_MODEL = process.env.JEP_PI_MODEL ?? "auto"
+const PI_PROVIDER = process.env.JEP_PI_PROVIDER
+const PI_MODEL = process.env.JEP_PI_MODEL
 const HARNESS_NS = "pi"
 
 const toInternalId = (native: string) => `${HARNESS_NS}://${native}`
@@ -67,6 +67,10 @@ export class PiAdapter implements HarnessAdapter {
   readonly endpoint: string
 
   #sessionDir: string
+  #modelsCache: ModelRef[] = []
+  #modelsAt = 0
+  #capsCache = new Map<string, ModelCaps>()
+  #capsAt = 0
   // conversations that already got jep's context header (see contextFor)
   #briefed = new Set<string>()
   #pendingTitles = new Map<string, { title: string; createdAt: number }>()
@@ -192,7 +196,7 @@ export class PiAdapter implements HarnessAdapter {
     },
   ): Promise<Message> {
     const native = toNativeId(sessionID)
-    const model = opts?.model ?? { providerID: PI_PROVIDER, modelID: PI_MODEL }
+    const model = opts?.model ?? (PI_PROVIDER && PI_MODEL ? { providerID: PI_PROVIDER, modelID: PI_MODEL } : undefined)
     const prompt = `${contextFor(text, this.#briefed, native, opts?.brief)}${withQuoteText(text, opts?.quote)}`
     const args = [
       "--mode",
@@ -201,10 +205,7 @@ export class PiAdapter implements HarnessAdapter {
       this.#sessionDir,
       "--session-id",
       native,
-      "--provider",
-      model.providerID,
-      "--model",
-      model.modelID,
+      ...(model ? ["--provider", model.providerID, "--model", model.modelID] : []),
       "--approve",
       "--no-extensions",
       ...((opts?.filePaths ?? []).map((file) => `@${file}`)),
@@ -306,33 +307,58 @@ export class PiAdapter implements HarnessAdapter {
   }
 
   async models(): Promise<ModelRef[]> {
-    const configured = await readPiModels()
+    if (this.#modelsCache.length > 0 && Date.now() - this.#modelsAt < 60_000) return this.#modelsCache
     const models: ModelRef[] = []
+    for (const m of await listPiCliModels()) models.push(m)
+    const configured = await readPiModels()
     for (const [providerID, provider] of Object.entries(configured.providers ?? {})) {
       for (const model of provider.models ?? []) {
-        if (model.id) models.push({ providerID, modelID: model.id })
+        if (model.id && !models.some((m) => m.providerID === providerID && m.modelID === model.id)) {
+          models.push({ providerID, modelID: model.id })
+        }
       }
     }
-    return models.length ? models : [{ providerID: PI_PROVIDER, modelID: PI_MODEL }]
+    if (PI_PROVIDER && PI_MODEL && !models.some((m) => m.providerID === PI_PROVIDER && m.modelID === PI_MODEL)) {
+      models.push({ providerID: PI_PROVIDER, modelID: PI_MODEL })
+    }
+    this.#modelsCache = models
+    this.#modelsAt = Date.now()
+    return models
   }
 
   async defaultModel(): Promise<string | null> {
-    return `${PI_PROVIDER}/${PI_MODEL}`
+    if (PI_PROVIDER && PI_MODEL) return `${PI_PROVIDER}/${PI_MODEL}`
+    const settings = await readPiSettings()
+    const provider = settings.defaultProvider
+    const model = settings.defaultModel
+    return provider && model ? `${provider}/${model}` : null
   }
 
   async capabilities(): Promise<Map<string, ModelCaps>> {
-    const configured = await readPiModels()
+    if (this.#capsCache.size > 0 && Date.now() - this.#capsAt < 60_000) return this.#capsCache
     const out = new Map<string, ModelCaps>()
+    for (const m of await listPiCliModels()) {
+      out.set(`${m.providerID}/${m.modelID}`, {
+        image: m.image ?? false,
+        attachment: true,
+        contextLimit: m.contextLimit ?? 0,
+      })
+    }
+    const configured = await readPiModels()
     for (const [providerID, provider] of Object.entries(configured.providers ?? {})) {
       for (const model of provider.models ?? []) {
         if (!model.id) continue
-        out.set(`${providerID}/${model.id}`, {
+        const key = `${providerID}/${model.id}`
+        if (out.has(key)) continue
+        out.set(key, {
           image: model.input?.includes("image") ?? false,
           attachment: true,
           contextLimit: Number(model.contextWindow ?? 0),
         })
       }
     }
+    this.#capsCache = out
+    this.#capsAt = Date.now()
     return out
   }
 
@@ -403,7 +429,7 @@ function encodeWorkspace(workspace: string): string {
 
 async function fileTime(file: string): Promise<number> {
   try {
-    return (await stat(file)).mtimeMs
+    return Math.floor((await stat(file)).mtimeMs)
   } catch {
     return Date.now()
   }
@@ -590,6 +616,64 @@ function handlePiEvent(event: any, sessionID: string, emit: (event: DomainEvent)
 async function readPiModels(): Promise<PiModelsFile> {
   try {
     return JSON.parse(await readFile(path.join(PI_AGENT_DIR, "models.json"), "utf8")) as PiModelsFile
+  } catch {
+    return {}
+  }
+}
+
+interface PiCliModel extends ModelRef {
+  image?: boolean
+  contextLimit?: number
+}
+
+async function listPiCliModels(): Promise<PiCliModel[]> {
+  try {
+    const out = await new Promise<string>((resolve, reject) => {
+      execFile(PI_BIN, ["--list-models"], { timeout: 15_000, maxBuffer: 4 * 1024 * 1024, env: piEnv() }, (err, stdout) => (err ? reject(err) : resolve(stdout)))
+    })
+    const models: PiCliModel[] = []
+    for (const line of out.split("\n")) {
+      const trimmed = line.trim()
+      if (!trimmed || trimmed.startsWith("provider")) continue
+      const m = trimmed.match(/^([a-z0-9_-]+)\s+(\S+)\s+(\S+)\s+\S+\s+\S+\s+(yes|no)\s*$/i)
+      if (m) {
+        models.push({
+          providerID: m[1]!,
+          modelID: m[2]!,
+          contextLimit: parseContext(m[3]!),
+          image: m[4]!.toLowerCase() === "yes",
+        })
+        continue
+      }
+      const bare = trimmed.match(/^([a-z0-9_-]+)\s+(\S+)/i)
+      if (bare) models.push({ providerID: bare[1]!, modelID: bare[2]! })
+    }
+    return models
+  } catch (err) {
+    console.error(`[pi] \`pi --list-models\` failed, picker limited to models.json: ${(err as Error)?.message ?? err}`)
+    return []
+  }
+}
+
+function parseContext(token: string): number {
+  const m = token.match(/^([\d.]+)\s*([MK])?$/i)
+  if (!m) return 0
+  const n = Number(m[1] ?? 0)
+  if (!Number.isFinite(n)) return 0
+  const unit = (m[2] ?? "").toUpperCase()
+  if (unit === "M") return Math.round(n * 1_000_000)
+  if (unit === "K") return Math.round(n * 1_000)
+  return Math.round(n)
+}
+
+interface PiSettingsFile {
+  defaultProvider?: string
+  defaultModel?: string
+}
+
+async function readPiSettings(): Promise<PiSettingsFile> {
+  try {
+    return JSON.parse(await readFile(path.join(PI_AGENT_DIR, "settings.json"), "utf8")) as PiSettingsFile
   } catch {
     return {}
   }

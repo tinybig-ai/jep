@@ -74,12 +74,15 @@ extension MessageDto {
             role: role == "user" ? .user : .assistant,
             time: time,
             // a loop's turn says nothing a person wrote: it is the boundary, whatever words the harness recorded
-            parts: loop.map { [.loopTurn(iteration: $0.iteration, max: $0.max)] } ?? parts.compactMap { $0.toDomain() },
+            parts: loop.map { [.loopTurn(iteration: $0.iteration, max: $0.max)] }
+                ?? notice.map { [.noticeTurn(kind: $0.kind, minutes: $0.minutes)] }
+                ?? parts.compactMap { $0.toDomain() },
             error: error?.message,
             model: model,
             cost: cost,
             tokens: tokens?.toDomain(),
-            durationMs: durationMs
+            durationMs: durationMs,
+            from: from.map { GuestFrom(id: $0.id, title: $0.title, harness: $0.harness) }
         )
     }
 }

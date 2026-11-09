@@ -10,8 +10,8 @@ import { chmod, mkdir, open, readdir, readFile, realpath, stat, unlink, writeFil
 import { homedir, tmpdir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path"
-import type { HarnessAdapter, HarnessMark, HarnessSettingSpec, SessionImport, Terminal, TurnHost } from "../../core/ports.ts"
-import { newPairCode, type PairingAdmin } from "../../core/pairing.ts"
+import type { ChatDirectory, ChatInfo, HarnessAdapter, HarnessMark, HarnessSettingSpec, SessionImport, Terminal, TurnHost } from "../../core/ports.ts"
+import { newPairCode, normalizePairCode, type PairingAdmin } from "../../core/pairing.ts"
 import { describeAsk } from "../../core/asks.ts"
 import { hasMcp, parseConversationMcp, type ConversationMcp } from "../../core/mcp.ts"
 import { pushFor, UnregisteredToken, type PushNotifier } from "../../core/push.ts"
@@ -21,7 +21,7 @@ import { listSkills, defaultSkillDirs, writeSkillModelInvocation } from "../../c
 import type { AskRequest, DomainEvent, Message, Part } from "../../core/types.ts"
 import { renderCarryover } from "../../core/carryover.ts"
 import { usageOf } from "../../core/usage.ts"
-import { attachedPaths, readLoopMarker, readNoticeMarker, stripInjectedContext, transcriptText } from "../../core/transcript.ts"
+import { attachedPaths, readGuest, readLoopMarker, readNoticeMarker, stripInjectedContext, transcriptText } from "../../core/transcript.ts"
 import {
   LOOP_DEFAULT_TURNS,
   LOOP_MAX_TURNS,
@@ -73,6 +73,8 @@ export interface GatewayDeps {
   port: number
   /** interface to listen on; every interface when omitted */
   host?: string
+  /** the daemon resumes loops after a restart (continuity does), so the gateway leaves running ones alone */
+  resumesLoops?: boolean
   /** pinned pairing code; generated fresh per boot when omitted */
   pairCode?: string
   /** Home Assistant ingress already authenticated this request. When set, a
@@ -107,6 +109,8 @@ export interface GatewayHandle {
   turns: TurnHost
   /** give a conversation a new title, as the person's own rename would (`jep-rename`) */
   rename(id: string, title: string): Promise<void>
+  /** the conversations, readable by one agent with the person's yes (`jep-read`) */
+  chats: ChatDirectory
 }
 
 const TOKEN_FILE = "gateway-tokens.json"
@@ -174,7 +178,7 @@ function raceTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
 // same core/git.ts the Telegram /git screen reads, so the two clients cannot
 // disagree about what changed. This file only decides what the phone is sent.
 async function gitView(workspace: string) {
-  if (!(await isRepo(workspace))) return { isRepository: false, branch: null, head: null, changedFiles: 0, commits: [] }
+  if (!(await isRepo(workspace))) return { isRepository: false, branch: null, head: null, changedFiles: 0, files: [], commits: [] }
   const s = await repoStatus(workspace, 30)
   const commits = s.commits.map((c) => ({ hash: c.hash, shortHash: c.hash, subject: c.subject, author: c.author, time: Math.floor(c.at / 1000) }))
   return {
@@ -182,6 +186,8 @@ async function gitView(workspace: string) {
     branch: s.detached ? "detached HEAD" : s.branch,
     head: commits[0] ?? null,
     changedFiles: s.files.length,
+    // which ones, for a client that shows them (the web app's side column): code is M/A/D/R/?/U, newest status first
+    files: s.files.slice(0, 60).map((f) => ({ path: f.path, code: f.code, staged: f.staged, additions: f.additions, deletions: f.deletions })),
     commits,
   }
 }
@@ -209,6 +215,7 @@ function cleanForDisplay(m: Message): Message {
   // back, it reads as if the person typed jep's scaffolding.
   let loop: Message["loop"]
   let notice: Message["notice"]
+  let from: Message["from"]
   const parts: Part[] = []
   for (const p of m.parts) {
     if (p.kind !== "text") {
@@ -228,10 +235,12 @@ function cleanForDisplay(m: Message): Message {
       notice = woke
       continue
     }
+    const guest = readGuest(bare)
+    if (guest) from = guest.from
     const text = transcriptText(p.text)
     if (text.trim()) parts.push({ ...p, text })
   }
-  return { ...m, parts: [...parts, ...files], ...(loop ? { loop } : {}), ...(notice ? { notice } : {}) }
+  return { ...m, parts: [...parts, ...files], ...(loop ? { loop } : {}), ...(notice ? { notice } : {}), ...(from ? { from } : {}) }
 }
 
 // A pod: a conversation that needs a harness but no folder of its own. The
@@ -404,17 +413,17 @@ const saveHarnessSettings = async (dataHome: string, settings: Map<string, Sessi
   await writeFile(join(dataHome, HARNESS_SETTINGS_FILE), JSON.stringify(Object.fromEntries(settings), null, 1))
 }
 
-// The loops this daemon is driving, keyed by canonical session id. A loop does
-// not resume itself after a restart: the turn queue did not survive either, and
-// a daemon that picked up mid-loop would spend tokens with nobody watching. The
-// record stays so the client can say what happened.
-async function loadLoops(dataHome: string): Promise<Map<string, LoopState>> {
+// The loops this daemon is driving, keyed by canonical session id. A loop that was running when the
+// daemon went down carries on: the daemon's continuity service resumes it once the workspaces are up
+// (`resumesLoops`), because a restart is jep's own doing and not the person's word to stop. A daemon
+// with no such service ends them here, and the record says what happened.
+async function loadLoops(dataHome: string, keepRunning = false): Promise<Map<string, LoopState>> {
   try {
     const raw = JSON.parse(await readFile(join(dataHome, LOOPS_FILE), "utf8")) as Record<string, LoopState>
     const loops = new Map<string, LoopState>()
     for (const [sessionID, value] of Object.entries(raw)) {
       if (!value || typeof value !== "object" || !value.spec) continue
-      if (value.status === "running") {
+      if (value.status === "running" && !keepRunning) {
         value.status = "stopped"
         value.error = "the daemon restarted"
         value.updatedAt = Date.now()
@@ -679,19 +688,21 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   const agents = await loadAgents(deps.dataHome)
   const harnessSettings = await loadHarnessSettings(deps.dataHome)
   const conversationMcp = await loadConversationMcp(deps.dataHome)
-  const loops = await loadLoops(deps.dataHome)
-  // A loop the previous daemon was driving has no driver now. Left "running"
-  // it reads as alive forever and blocks a restart with 409; say what happened
-  // instead, so the goal can be started again in one move.
-  let staleLoops = false
-  for (const loop of loops.values()) {
-    if (loop.status !== "running") continue
-    loop.status = "stopped"
-    loop.error = "jep restarted while the loop was running; start it again to continue"
-    loop.updatedAt = Date.now()
-    staleLoops = true
+  const loops = await loadLoops(deps.dataHome, deps.resumesLoops === true)
+  // A loop the previous daemon was driving stays "running": the daemon's continuity service resumes it
+  // once the workspaces are up (TurnHost.resumeLoops), the way it picks up a turn a restart cut off.
+  // A daemon with no such service would leave it reading as alive forever, so that one ends them.
+  if (!deps.resumesLoops) {
+    let staleLoops = false
+    for (const loop of loops.values()) {
+      if (loop.status !== "running") continue
+      loop.status = "stopped"
+      loop.error = "jep restarted while the loop was running; start it again to continue"
+      loop.updatedAt = Date.now()
+      staleLoops = true
+    }
+    if (staleLoops) await saveLoops(deps.dataHome, loops)
   }
-  if (staleLoops) await saveLoops(deps.dataHome, loops)
   // A session's settings, under the id the phone uses now. Claude names a new
   // conversation with a placeholder and learns its real id once the first turn
   // starts streaming; the phone moves to the real id right then, mid-turn,
@@ -794,6 +805,57 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         console.error(`[gw] ${owner.id} rename failed: ${(err as Error)?.message ?? err}`)
       })
     }
+  }
+  // A card the daemon itself raises (an agent asks to read another conversation), not a harness. It
+  // is an ask like any other to every client: recorded, broadcast, answered through /respond. What
+  // differs is who hears the answer: a waiting promise here, not an adapter.
+  const daemonAsks = new Map<string, (optionID: string | null) => void>()
+  const askPerson: ChatDirectory["askPerson"] = (key, ask, waitMs) =>
+    new Promise((resolve) => {
+      const id = `jep-ask-${randomBytes(6).toString("hex")}`
+      const request: AskRequest = { id, sessionID: key, title: ask.title, detail: ask.detail, options: ask.options, kind: "permission" }
+      let timer: ReturnType<typeof setTimeout> | null = null
+      const finish = (optionID: string | null): void => {
+        if (!daemonAsks.delete(id)) return
+        if (timer) clearTimeout(timer)
+        closeAsk(id)
+        settleAsk(id, optionID ? "answered" : "closed", optionID ?? undefined)
+        broadcast({ type: "ask.resolved", sessionID: key, askID: id } as DomainEvent)
+        engine.touch(key)
+        resolve(optionID)
+      }
+      daemonAsks.set(id, finish)
+      askSessions.set(id, key)
+      openAsks(key).add(id)
+      recordAsk(request)
+      broadcast({ type: "ask.requested", ask: { ...request, display: describeAsk(request) } } as DomainEvent)
+      console.error(`[ask] surfaced ${id} (${ask.title})`)
+      timer = setTimeout(() => finish(null), waitMs)
+      timer.unref()
+    })
+  const chatDirectory: ChatDirectory = {
+    async list() {
+      const out: ChatInfo[] = []
+      for (const { adapter } of deps.adapters()) {
+        for (const s of await adapter.listSessions().catch(() => [])) {
+          if (archived.has(s.id)) continue
+          sessionAdapters.set(s.id, adapter)
+          out.push({ id: s.id, title: titles.get(s.id) ?? s.title, harness: adapter.id, workspace: adapter.workspace, updatedAt: s.updatedAt })
+        }
+      }
+      return out
+    },
+    async read(id, last) {
+      const owner = await ensureListed(id)
+      if (!owner) return null
+      const rows = last > 0 ? await owner.messages(id, { limit: last }) : await owner.messages(id)
+      const mine = (await owner.listSessions().catch(() => [])).find((s) => s.id === id)
+      return {
+        info: { id, title: titles.get(id) ?? mine?.title ?? "", harness: owner.id, workspace: owner.workspace, updatedAt: mine?.updatedAt ?? 0 },
+        messages: rows.map(cleanForDisplay),
+      }
+    },
+    askPerson,
   }
   // Carryover: write a conversation out as a markdown file in the temp dir.
   // A new conversation started "with carryover" holds the file's path here until
@@ -1079,7 +1141,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         if (!pairRateOK(deps.pairLimit ?? 5, ip)) return json(res, 429, { error: "too many attempts, wait a minute" })
         const ingress = ingressUser(req)
         const body = (await readBody(req)) as { code?: string } | undefined
-        if (!ingress && (typeof body?.code !== "string" || !same(body.code.trim(), pairCode))) {
+        if (!ingress && (typeof body?.code !== "string" || !same(normalizePairCode(body.code), pairCode))) {
           return json(res, 403, { error: "wrong pairing code" })
         }
         const token = randomBytes(24).toString("hex")
@@ -1145,7 +1207,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           const info = await stat(real ?? abs)
           if (!info.isFile() || info.size > FILE_MAX) return json(res, 404, { error: "no such file" })
           const body = await readFile(real ?? abs)
-          res.writeHead(200, { "content-type": mimeForPath(real ?? abs), "cache-control": "private, max-age=300" })
+          res.writeHead(200, { "content-type": mimeForPath(real ?? abs), "cache-control": "private, max-age=300", "content-disposition": `inline; filename="${basename(real ?? abs).replace(/"/g, "")}"` })
           return res.end(body)
         } catch {
           return json(res, 404, { error: "no such file" })
@@ -1183,7 +1245,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           lastSeen: deviceActivity.get(known) ?? pairedAt,
           current: known === token,
         }))
-        return json(res, 200, { devices })
+        return json(res, 200, { devices, pairCode })
       }
 
       if (path === "/devices/rename") {
@@ -1245,7 +1307,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
             // conversation cannot move between harnesses after it exists.
             // `active` = a turn is in flight for it right now (a reply streaming,
             // a tool running) — the phone shows a live mark on the row
-            items.push({ ...s, title: overridden ?? s.title, adapter: name, harness: adapter.id, active: engine.isActive(s.id), seenAt: seen.get(s.id) ?? 0, pinned: pinned.has(s.id), pod: isPod(adapter.workspace, deps.dataHome) })
+            items.push({ ...s, createdAt: Math.floor(s.createdAt), updatedAt: Math.floor(s.updatedAt), title: overridden ?? s.title, adapter: name, harness: adapter.id, active: engine.isActive(s.id), seenAt: seen.get(s.id) ?? 0, pinned: pinned.has(s.id), pod: isPod(adapter.workspace, deps.dataHome) })
           }
         }
         // pinned conversations first, then newest — pinning is the user saying
@@ -1542,6 +1604,12 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const askID = str("askID")
         const optionID = str("optionID")
         if (!askID || !optionID) return json(res, 400, { error: "askID and optionID required" })
+        const daemonAsk = daemonAsks.get(askID)
+        if (daemonAsk) {
+          daemonAsk(optionID)
+          console.error(`[ask] respond askID=${askID} option=${optionID} -> ok (daemon)`)
+          return json(res, 200, { ok: true })
+        }
         const sid = askSessions.get(askID) ?? str("id") ?? ""
         if (!sid) {
           console.error(`[ask] respond askID=${askID} option=${optionID} -> no session for this ask`)
@@ -1569,6 +1637,11 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       if (path === "/reject") {
         const askID = str("askID")
         if (!askID) return json(res, 400, { error: "askID required" })
+        const daemonAsk = daemonAsks.get(askID)
+        if (daemonAsk) {
+          daemonAsk("reject")
+          return json(res, 200, { ok: true })
+        }
         const sid = askSessions.get(askID) ?? str("id") ?? ""
         if (!sid) return json(res, 404, { error: "unknown ask" })
         const owner = await ensureListed(sid)
@@ -2090,6 +2163,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     lastActivity: () => lastActivity,
     turns: engine,
     rename: renameConversation,
+    chats: chatDirectory,
     close: async () => {
       engine.close()
       clearInterval(pumpTimer)

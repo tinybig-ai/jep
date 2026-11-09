@@ -94,6 +94,10 @@ public struct ChatState: Equatable, Sendable {
     public var queued: [Queued] = []
     /// this conversation's loop, as the daemon reports it with the history
     public var loop: LoopInfo?
+    /// the daemon says a turn is in flight (a loop, Telegram, another phone), whether or not this device started it
+    public var running = false
+    /// a turn is in flight: one this device sent, one it is streaming, or one the daemon reports. The spinner and Stop follow this.
+    public var working: Bool { sending || live != nil || running }
     public var notice: String?
     public var hasMore = false
     public var loadingOlder = false
@@ -250,7 +254,7 @@ public final class ChatStore {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: self?.pollNs ?? 1_200_000_000)
                 guard let self else { return }
-                if self.state.sending || self.state.live != nil { self.refresh() }
+                if self.state.working { self.refresh() }
             }
         })
     }
@@ -388,6 +392,7 @@ public final class ChatStore {
                     if liveRowIsSettled(prior.live?.messageId, batch.messages) { st.live = nil }
                     st.hasMore = batch.hasMore
                     st.loop = batch.loop
+                    st.running = batch.busy
                     st.loadingHistory = false
                     st = st.withServedAsks(batch.asks)
                     st.queued = reconcileQueued(

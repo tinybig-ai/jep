@@ -550,6 +550,7 @@ async function main() {
         console.error(`[ws] restarted ${old.adapter.id} for ${dir} (import)`)
       },
       dataHome: DATA_HOME,
+      resumesLoops: true,
       port: Number(process.env.JEP_GW_PORT),
       host: process.env.JEP_GW_BIND || undefined,
       pairCode: process.env.JEP_GW_PAIR_CODE,
@@ -565,6 +566,7 @@ async function main() {
       turns: gw.turns,
       restart: () => detach("restart", shutdown("restart")),
       rename: (key, title) => gw.rename(key, title),
+      chats: gw.chats,
     })
     gwClose = async () => {
       continuity.close()

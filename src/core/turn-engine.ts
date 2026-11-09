@@ -1,5 +1,6 @@
 import type { ConversationMcp } from "./mcp.ts"
-import { readNoticeMarker } from "./transcript.ts"
+import { noticeMarker, readGuest, readLoopMarker, readNoticeMarker, stripInjectedContext } from "./transcript.ts"
+import { malformedToolCall, MALFORMED_NOTE, MALFORMED_RETRY_MAX } from "./malformed.ts"
 import type { HarnessAdapter, TurnHost, TurnListener } from "./ports.ts"
 import type { DomainEvent, HarnessError, Message } from "./types.ts"
 import { eventSession, isAborted } from "./types.ts"
@@ -75,6 +76,9 @@ export type TurnEnd =
   /** nothing came back at all for a whole ceiling */
   | { kind: "stall"; elapsedMs: number; tool?: string }
 
+/** stuck tools freed per turn before the turn itself is given up on */
+const UNWEDGE_MAX = 3
+
 export type TurnState = {
   running: PendingTurn | null
   waiting: PendingTurn[]
@@ -97,6 +101,8 @@ export type TurnState = {
   settled?: () => void
   /** the running turn is being ended to let a waiting prompt in */
   handover?: boolean
+  /** stuck tools the watchdog has killed to keep this turn going */
+  unwedged?: number
 }
 
 /** what the engine needs of the rest of the daemon */
@@ -133,6 +139,8 @@ export class TurnEngine implements TurnHost {
   #liveness: LivenessConfig
   #turns = new Map<string, TurnState>()
   #watchdog: ReturnType<typeof setInterval>
+  /** consecutive turns per conversation that ended on a tool call written as text */
+  #malformed = new Map<string, number>()
 
   constructor(env: TurnEnv, opts: TurnEngineOpts) {
     this.#env = env
@@ -176,10 +184,12 @@ export class TurnEngine implements TurnHost {
     return st != null && (st.running != null || st.settling === true || st.waiting.length > 0)
   }
   /** what waits behind the running turn, as a client draws it */
-  queueOf(id: string): Array<{ clientID: string | null; text: string; steer: boolean; notice: boolean; noticeKind?: string }> {
+  queueOf(id: string): Array<{ clientID: string | null; text: string; steer: boolean; notice: boolean; noticeKind?: string; loop?: { iteration: number; max: number } }> {
     return (this.turnOf(id)?.waiting ?? []).map((p) => {
-      const kind = p.notice === true ? readNoticeMarker(p.text)?.kind : undefined
-      return { clientID: p.clientID ?? null, text: p.text, steer: p.steer, notice: p.notice === true, ...(kind ? { noticeKind: kind } : {}) }
+      const kind = p.notice === true ? (readNoticeMarker(p.text)?.kind ?? (readGuest(p.text) ? "guest" : undefined)) : undefined
+      // a loop's next step waits in the line like anything else, but it is jep's, not the person's: say so
+      const loop = p.loop === true ? readLoopMarker(stripInjectedContext(p.text)) : null
+      return { clientID: p.clientID ?? null, text: p.text, steer: p.steer, notice: p.notice === true, ...(kind ? { noticeKind: kind } : {}), ...(loop ? { loop } : {}) }
     })
   }
   /** the conversation did something (a person answered an ask): the watchdog's clock restarts */
@@ -388,6 +398,20 @@ export class TurnEngine implements TurnHost {
         config: this.#liveness,
       })
       if (!v.stalled) continue
+      // A tool that never returns holds the turn, and ending the turn throws away everything the agent was
+      // doing (and ends a loop it was in). Kill the stuck tool first: the agent sees it fail and carries on.
+      // A few times only, so a turn that wedges every tool it starts is still ended.
+      if (adapter?.unwedge && (st.unwedged ?? 0) < UNWEDGE_MAX && v.tool) {
+        const since = Date.now() - st.lastActivity
+        st.unwedged = (st.unwedged ?? 0) + 1
+        detach(`unwedge ${id}`, (async () => {
+          const killed = await adapter.unwedge!(id, since).catch(() => false)
+          console.error(`[watchdog] ${v.tool} silent ${Math.round(since / 1000)}s: ${killed ? "killed it, the turn goes on" : "nothing to kill"} (try ${st.unwedged}/${UNWEDGE_MAX}, gateway session ${id})`)
+          if (killed) st.lastActivity = Date.now()
+          else st.unwedged = UNWEDGE_MAX // nothing to free: end the turn the usual way on the next tick
+        })())
+        continue
+      }
       console.error(
         `[watchdog] turn stalled ${Math.round(v.elapsedMs / 1000)}s (ceiling ${Math.round(v.ceilingMs / 1000)}s, tools=${st.runningTools.size}${v.wedgedMs !== undefined ? `, ${v.tool} wedged ${Math.round(v.wedgedMs / 60_000)}m` : ""}, gateway session ${id})`,
       )
@@ -520,6 +544,39 @@ export class TurnEngine implements TurnHost {
     this.#run(loop.sessionID)
   }
 
+  /**
+   * After a daemon restart: every loop that was running carries on. A restart is jep's own doing (a
+   * deploy, a fix), not the person's word to stop, and a loop that died with it left the goal unfinished
+   * with nobody told. The turn it cut off did not complete, so the next one is the same turn again, and
+   * the agent is told what happened. A loop whose conversation is gone ends, and says so.
+   * @returns the conversations whose loop was picked up
+   */
+  async resumeLoops(): Promise<string[]> {
+    const resumed: string[] = []
+    for (const [key, loop] of [...this.loops]) {
+      if (loop.status !== "running") continue
+      if (!(await this.#env.find(key))) {
+        this.stopLoop(key, "failed", "the conversation is gone")
+        continue
+      }
+      loop.updatedAt = Date.now()
+      delete loop.error
+      this.#putLoop(loop)
+      this.#state(key).waiting.push({
+        text: continuationText(loop, loop.lastVerify, true),
+        filePaths: [],
+        steer: false,
+        loop: true,
+        clientID: `loop-resume-${Date.now().toString(36)}`,
+        resolve: () => {},
+      })
+      console.error(`[loop] resuming after a restart: turn ${loop.iteration + 1}/${loop.spec.max} (gateway session ${key})`)
+      this.#run(key)
+      resumed.push(key)
+    }
+    return resumed
+  }
+
   /** the person stops a loop; only the loop's own running turn is cut short */
   stopLoopByPerson(id: string): LoopState | null {
     const key = this.turnKey(id)
@@ -570,7 +627,7 @@ export class TurnEngine implements TurnHost {
   // about the goal. Retry the same turn after backoff instead of ending the
   // loop; the turn counter does not move, so the cap still means turns, not
   // attempts. Only repeated failure is a failure.
-  #retryLoop(key: string, reason: string): boolean {
+  #retryLoop(key: string, reason: string, note?: string): boolean {
     const loop = this.loops.get(key)
     if (!loop || loop.status !== "running") return false
     const attempts = loop.attempts ?? 0
@@ -586,7 +643,7 @@ export class TurnEngine implements TurnHost {
     const timer = setTimeout(() => {
       if (this.loops.get(key) !== loop || loop.status !== "running") return
       this.#state(key).waiting.push({
-        text: continuationText(loop, loop.lastVerify),
+        text: continuationText(loop, loop.lastVerify) + (note ? `\n\n${note}` : ""),
         filePaths: [],
         steer: false,
         loop: true,
@@ -708,6 +765,7 @@ export class TurnEngine implements TurnHost {
     st.idleSeen = false
     st.handover = false
     st.runningTools.clear()
+    st.unwedged = 0
     st.lastActivity = Date.now()
     const ac = new AbortController()
     st.signal = ac
@@ -731,6 +789,19 @@ export class TurnEngine implements TurnHost {
       })
       answer = message
       next.resolve({ status: 200, message })
+      // A tool call written out as text did not run, and the harness took the turn for finished. That is the
+      // model failing, not the agent deciding to stop: ask again (a loop retries the same turn, anything else
+      // gets one plain note), a few times, then leave it.
+      const key = this.turnKey(id)
+      if (malformedToolCall(message)) {
+        const done = this.#malformed.get(key) ?? 0
+        if (done < MALFORMED_RETRY_MAX) {
+          this.#malformed.set(key, done + 1)
+          console.error(`[turn] a tool call written as text ended the turn; asking again ${done + 1}/${MALFORMED_RETRY_MAX} (gateway session ${key})`)
+          if (next.loop) retried = this.#retryLoop(key, "a tool call written as text", MALFORMED_NOTE)
+          else this.enqueue(id, `${noticeMarker("retry")}\n${MALFORMED_NOTE}`, { notice: true })
+        }
+      } else this.#malformed.delete(key)
     } catch (err) {
       // An abort with a reason behind it is not a client stop: the watchdog or
       // the event stream ended this turn, and the reason is the whole point.

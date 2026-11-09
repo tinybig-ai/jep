@@ -14,7 +14,7 @@ import { join } from "node:path"
 async function startWith(
   a: ReturnType<typeof stallable>,
   workspace = a.adapter.workspace,
-  liveness?: { turnIdleMs?: number; toolIdleMs?: number; idleGraceMs?: number; settleMs?: number; tickMs?: number },
+  liveness?: { turnIdleMs?: number; toolIdleMs?: number; wildernessMs?: number; idleGraceMs?: number; settleMs?: number; tickMs?: number },
 ): Promise<{ base: string; headers: Record<string, string>; g: GatewayHandle; dataHome: string }> {
   const dataHome = mkdtempSync(join(tmpdir(), "gw-q-"))
   const g = await startGateway({
@@ -1876,12 +1876,13 @@ test("/git reads the workspace through core/git, and says so when there is no re
     assert.equal(v.isRepository, true)
     assert.equal(v.branch, "main")
     assert.equal(v.changedFiles, 1, "the new file counts, as it does on Telegram's /git")
+    assert.deepEqual(v.files, [{ path: "new.txt", code: "?", staged: false, additions: v.files[0].additions, deletions: 0 }], "the web column names the changed files")
     assert.equal(v.commits.length, 1)
     assert.equal(v.head.subject, "first commit")
     assert.equal(v.head.shortHash, v.head.hash)
     assert.ok(v.head.time > 1_700_000_000, "seconds, as the phone expects")
     where = plain
-    assert.deepEqual(await view(), { isRepository: false, branch: null, head: null, changedFiles: 0, commits: [] })
+    assert.deepEqual(await view(), { isRepository: false, branch: null, head: null, changedFiles: 0, files: [], commits: [] })
   } finally {
     await g.close()
   }
@@ -2217,5 +2218,63 @@ test("ingress trust: a forged HA header from a non-Supervisor peer cannot pair",
     assert.equal(forged.status, 401, "without the flag the header is just a header")
   } finally {
     await closed.close()
+  }
+})
+
+// A tool that never returns holds the turn. Ending the turn throws away what the agent was doing, so the
+// watchdog kills the stuck tool first and the turn carries on.
+const toolRunning = (startedAt = Date.now()) =>
+  ({ type: "part.updated", sessionID: "s1", messageID: "m1", partID: "t1", partType: "tool", part: { kind: "tool", id: "t1", name: "bash", input: {}, output: null, status: "running", startedAt } }) as DomainEvent
+
+test("a wedged tool is killed and the turn goes on, instead of the turn being abandoned", async () => {
+  const a = stallable()
+  const killed: number[] = []
+  a.adapter.unwedge = async (_id, sinceMs) => {
+    killed.push(sinceMs)
+    a.release("first") // the tool died, the agent saw an error and finished its work
+    return true
+  }
+  const { base, headers, g } = await startWith(a, a.adapter.workspace, { turnIdleMs: 60_000, toolIdleMs: 60_000, wildernessMs: 150, idleGraceMs: 40, tickMs: 20 })
+  try {
+    const first = fetch(`${base}/prompt`, { method: "POST", headers, body: JSON.stringify({ id: "s1", text: "first" }) })
+    await sleep(20)
+    a.feed(toolRunning())
+    const j = (await (await first).json()) as { message?: Message; error?: string }
+    assert.equal(textOf(j), "echo: first", `the turn finished its work: ${j.error ?? ""}`)
+    assert.equal(killed.length, 1)
+    assert.ok(killed[0]! >= 100, `told how long the tool had been silent (${killed[0]} ms)`)
+  } finally {
+    await g.close()
+  }
+})
+
+test("a tool that cannot be freed ends the turn the old way, and so does one that keeps wedging", async () => {
+  const a = stallable()
+  let tries = 0
+  a.adapter.unwedge = async () => (tries++, false) // nothing to kill
+  const { base, headers, g } = await startWith(a, a.adapter.workspace, { turnIdleMs: 60_000, toolIdleMs: 60_000, wildernessMs: 100, idleGraceMs: 40, tickMs: 20 })
+  try {
+    const first = fetch(`${base}/prompt`, { method: "POST", headers, body: JSON.stringify({ id: "s1", text: "first" }) })
+    await sleep(20)
+    a.feed(toolRunning())
+    const j = (await (await first).json()) as { error?: string }
+    assert.match(j.error ?? "", /no progress/, "nothing to kill: the turn is abandoned and says why")
+    assert.equal(tries, 1, "tried once, then stopped trying")
+  } finally {
+    await g.close()
+  }
+})
+
+test("pairing accepts the code in lower case or with a space, and still refuses a wrong one", async () => {
+  const a = stallable()
+  const dataHome = mkdtempSync(join(tmpdir(), "pair-"))
+  const g = await startGateway({ adapters: () => [{ name: "fake-ws", adapter: a.adapter }], dataHome, port: 0, pairCode: "ABCD2345F", pairLimit: 100 })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const attempt = (code: string) => fetch(`${base}/pair`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code }) })
+    assert.equal((await attempt("abcd2345x")).status, 403, "a wrong code is wrong in any case")
+    assert.equal((await attempt("abcd 2345f")).status, 200, "lower case and a space are the same code")
+  } finally {
+    await g.close()
   }
 })

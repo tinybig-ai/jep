@@ -1,4 +1,5 @@
 import { readClaudeMcp, writeClaudeProjectEnabled, mcpPaths } from "./mcpconfig.ts"
+import { killStuckTools, stopTree } from "../core/proctree.ts"
 import type { McpServer } from "../core/types.ts"
 import { spawn, execFile, type ChildProcess } from "node:child_process"
 import net from "node:net"
@@ -835,8 +836,16 @@ export class ClaudeAdapter implements HarnessAdapter {
   async abort(sessionID: string): Promise<boolean> {
     const children = this.#running.get(this.#real(sessionID))
     if (!children?.size) return false
-    for (const child of children) child.kill("SIGTERM")
+    for (const child of children) stopTree(child)
     return true
+  }
+
+  /** a tool claude started has been silent for `sinceMs`: kill it, so claude sees it fail and goes on */
+  async unwedge(sessionID: string, sinceMs: number): Promise<boolean> {
+    const children = this.#running.get(this.#real(sessionID))
+    let killed = false
+    for (const child of children ?? []) killed = killStuckTools(child, sinceMs) || killed
+    return killed
   }
 
   // The turn is parked inside a tool call, waiting on this. Anything other than

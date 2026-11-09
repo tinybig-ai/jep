@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto"
 import { readFileSync, writeFileSync } from "node:fs"
-import { newPairCode, type PairingAdmin, type PairingStatus } from "../../core/pairing.ts"
+import { newPairCode, normalizePairCode, type PairingAdmin, type PairingStatus } from "../../core/pairing.ts"
 
 export interface PairState {
   owner: number | null
@@ -96,7 +96,7 @@ export class Pairing implements PairingAdmin {
   }
 
   authorize(id: number, code: string): "bad" | "paired" | "owner" {
-    if (code.trim() !== this.#code) return "bad"
+    if (normalizePairCode(code) !== this.#code) return "bad"
     const becomingOwner = this.#owner === null
     if (becomingOwner) {
       this.#owner = id

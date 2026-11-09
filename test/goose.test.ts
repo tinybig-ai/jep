@@ -1,5 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { existsSync, readFileSync } from "node:fs"
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -33,6 +34,22 @@ if (args[0] === "session" && args[1] === "export") {
   const s = db[value("--name")]
   console.log(JSON.stringify(s ? { provider_name: "openrouter", conversation: s } : {}))
   process.exit(s ? 0 : 1)
+}
+if (args[0] === "run" && (value("-t") ?? "").includes("WEDGE")) {
+  // goose waiting on a tool that never returns; once the tool is killed it carries on and finishes the turn
+  const { spawn } = await import("node:child_process")
+  const tool = spawn("sh", ["-c", "sleep 600"], { stdio: "ignore" })
+  writeFileSync(store + ".wedge", String(tool.pid))
+  await new Promise((r) => tool.on("exit", r))
+}
+if (args[0] === "run" && (value("-t") ?? "").includes("STUCK")) {
+  // a goose waiting on a tool that will not end: it ignores SIGTERM, and so does the tool it started
+  const { spawn } = await import("node:child_process")
+  process.on("SIGTERM", () => {})
+  const tool = spawn("sh", ["-c", "trap '' TERM; sleep 600"], { stdio: "ignore" })
+  writeFileSync(store + ".pids", JSON.stringify({ goose: process.pid, tool: tool.pid }))
+  setInterval(() => {}, 1000)
+  await new Promise(() => {})
 }
 if (args[0] === "run") {
   const name = value("--name")
@@ -215,4 +232,69 @@ test("a listing that fails does not make a running conversation look new", async
   } finally {
     await rm(store + ".fail", { force: true })
   }
+})
+
+test("stop ends a goose that ignores SIGTERM, tool and all, within seconds", { timeout: 20_000 }, async () => {
+  const workspace = await mkdtemp(path.join(home, "workspace-"))
+  const adapter = await startGooseAdapter(workspace)
+  const session = await adapter.createSession("t")
+  const turn = adapter.prompt(session.id, "STUCK").then(() => "finished", (e) => (e as Error).name)
+  const pidsFile = store + ".pids"
+  for (let i = 0; i < 100 && !existsSync(pidsFile); i++) await new Promise((r) => setTimeout(r, 50))
+  const { goose, tool } = JSON.parse(readFileSync(pidsFile, "utf8")) as { goose: number; tool: number }
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+  assert.ok(alive(goose) && alive(tool))
+  const t0 = Date.now()
+  assert.equal(await adapter.abort(session.id), true)
+  assert.equal(await turn, "TurnAbortedError")
+  assert.ok(Date.now() - t0 < 8_000, `stopped in ${Date.now() - t0} ms`)
+  await new Promise((r) => setTimeout(r, 300))
+  assert.ok(!alive(goose), "goose is gone")
+  assert.ok(!alive(tool), "so is the tool it was waiting on")
+  await rm(pidsFile, { force: true })
+})
+
+test("a tool goose is stuck on can be killed, and goose finishes the turn", { timeout: 20_000 }, async () => {
+  const workspace = await mkdtemp(path.join(home, "workspace-"))
+  const adapter = await startGooseAdapter(workspace)
+  const session = await adapter.createSession("t")
+  const turn = adapter.prompt(session.id, "WEDGE").then((m) => m.role, (e) => (e as Error).name)
+  const file = store + ".wedge"
+  for (let i = 0; i < 100 && !existsSync(file); i++) await new Promise((r) => setTimeout(r, 50))
+  const tool = Number(readFileSync(file, "utf8"))
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+  assert.ok(alive(tool))
+  assert.equal(await adapter.unwedge(session.id, 60_000), true)
+  assert.equal(await turn, "assistant", "the turn was not abandoned: goose saw the tool fail and finished")
+  assert.ok(!alive(tool))
+  assert.equal(await adapter.unwedge(session.id, 60_000), false, "nothing running now")
+  await rm(file, { force: true })
+})
+
+test("the picker can tell which custom goose models take images, from the provider's own flag", async () => {
+  const { mkdir } = await import("node:fs/promises")
+  const dir = path.join(path.dirname(process.env.JEP_GOOSE_CONFIG!), "custom_providers")
+  await mkdir(dir, { recursive: true })
+  await writeFile(path.join(dir, "custom_free.json"), JSON.stringify({ name: "custom_free", models: [{ name: "plain" }, { name: "free:largest+vision", supports_vision: true, context_limit: 200000 }] }))
+  const workspace = await mkdtemp(path.join(home, "workspace-"))
+  const adapter = await startGooseAdapter(workspace)
+  const caps = await adapter.capabilities!()
+  assert.equal(caps.get("custom_free/plain")?.image, false)
+  assert.equal(caps.get("custom_free/free:largest+vision")?.image, true, "goose will pass pictures to this one")
+  assert.equal(caps.get("custom_free/free:largest+vision")?.contextLimit, 200000)
+  await rm(path.join(dir, "custom_free.json"))
 })

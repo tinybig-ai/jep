@@ -32,7 +32,9 @@
     "jep-show": "bin/jep-show.mjs",
     "jep-send": "bin/jep-send.mjs",
     "jep-restart": "bin/jep-restart.mjs",
-    "jep-rename": "bin/jep-rename.mjs"
+    "jep-rename": "bin/jep-rename.mjs",
+    "jep-read": "bin/jep-read.mjs",
+    "jep-tell": "bin/jep-tell.mjs"
   },
   "engines": {
     "node": ">=22.6.0"

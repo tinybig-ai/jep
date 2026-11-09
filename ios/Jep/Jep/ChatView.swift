@@ -74,7 +74,7 @@ struct ChatView: View {
                         RowView(row: row, chat: chat, liveId: st.live?.messageId, onQuote: setQuote)
                             .id(row.id)
                     }
-                    if (st.sending || st.live != nil) && (st.ask == nil || askIsSpent(st.ask, st.askChoice)) {
+                    if st.working && (st.ask == nil || askIsSpent(st.ask, st.askChoice)) {
                         Label {
                             Text("responding…").jepFont(12).foregroundStyle(.secondary)
                         } icon: {
@@ -142,7 +142,7 @@ struct ChatView: View {
             if let i = served.firstIndex(where: { $0.id == live.id }) { rendered[i] = live } else { rendered.append(live) }
         }
         let raw = transcriptRows(rendered.reversed(), ask: st.ask, askAt: st.askAt, liveMessageId: st.live?.messageId, askAfter: st.askAfter, past: st.pastAsks)
-        let busy = st.sending || st.live != nil
+        let busy = st.working
         let hold = busy ? raw.first(where: { if case .msg = $0 { true } else { false } })?.id : nil
         let rows = groupWorkRuns(raw, hold: hold)
         return rows.reversed()
@@ -323,7 +323,7 @@ struct ChatView: View {
                 }
                 .accessibilityLabel("expand the composer")
             }
-            if (st.sending || st.live != nil) && !hasText {
+            if st.working && !hasText {
                 Button { chat.stop() } label: {
                     Image(systemName: "stop.fill").frame(width: 40, height: 40).glass(Circle())
                 }
@@ -622,6 +622,14 @@ struct FullComposer: View {
 /// "loop 2/8" for a loop's turn, else the quiet note a fold leaves
 private func loopLabel(_ m: ChatMessage) -> String {
     if case .loopTurn(let i, let max)? = m.parts.first { return "loop \(i)/\(max)" }
+    if case .noticeTurn(let kind, let minutes)? = m.parts.first {
+        switch kind {
+        case "resumed": return "jep · restarted, picking the work back up"
+        case "retry": return "jep · a tool call came out as text and did not run, asking again"
+        case "timeout": return "jep · stopped watching after \(minutes ?? 60) min"
+        default: return "jep · the watch is done"
+        }
+    }
     return "continued automatically"
 }
 

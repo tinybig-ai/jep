@@ -57,9 +57,37 @@ bubble, and `/history` hides the instruction itself.
 - Without either, the loop runs `max` turns (default 8, at most 50).
 - The verifier runs in the conversation's workspace, outside the model: an
   agent never grades its own work.
-- It stops on a failed turn, on `/stop`, on `/loop/stop`, or when the daemon
-  restarts. It never resumes by itself; the record stays so a client can say
-  what happened. `/loop/clear` forgets a finished loop.
+- It stops on a failed turn (after a few retries for a provider hiccup or a
+  stalled tool), on `/stop`, or on `/loop/stop`. A daemon restart does not stop
+  it: a restart is jep's own doing, so a loop that was running resumes once the
+  workspaces are up, with the same goal and count, and the agent is told its
+  last turn was cut off. One whose conversation is gone ends and says so. The
+  record stays so a client can say what happened. `/loop/clear` forgets a
+  finished loop.
+- A tool that never returns no longer ends the turn (and the loop with it): the
+  watchdog kills that one tool, up to three times a turn, and the agent sees it
+  fail and carries on. Harnesses that start tools as child processes (goose,
+  claude, codex) support this.
+
+## One agent reading another conversation
+
+`jep-read CONVERSATION [--last N]` (and the `jep_read` MCP tool) lets an agent read a different
+conversation. It always asks first: the daemon raises an ordinary ask card in the *asking*
+conversation, naming both ("Read another conversation?": Allow once, Always allow this one, Deny),
+and the command waits up to ten minutes. The card is answered through `/respond` like any other and
+is recorded with `/history`. Deny, no answer, or a conversation that is gone read nothing. "Always"
+is remembered for that pair of conversations in `<DATA_HOME>/chat-grants.json`. `jep-read --list`
+names the conversations and needs no yes. What comes back is a read-only transcript, headed with
+whose it is, and tool output is cut short.
+
+`jep-tell CONVERSATION MESSAGE...` (and `jep_tell`) goes the other way: it sends another conversation a
+message, as a turn in it. The first time for each pair a card in the *sending* conversation asks
+(Allow once, Always allow messages to it, Deny); "always" is kept in `chat-grants.json` and is separate
+from the read grant. A pair is held to 12 messages an hour. The message waits behind whatever the
+receiver is doing (`queue` lists it as a notice with `noticeKind: "guest"`) and runs alone. In
+`/history` it is a user-role message with `from: {id, title, harness}`: draw a card naming that
+conversation, not the person's bubble. The command does not wait for a reply; if the receiver
+answers, it does so with `jep-tell` and the answer arrives as a message.
 
 ## Commands (JSON POSTs)
 
@@ -95,7 +123,7 @@ bubble, and `/history` hides the instruction itself.
 | `POST /setagent` | `{id,agent?}` | `{ok,agent}`: set or clear this conversation's primary agent; a harness that names its agents refuses one it doesn't offer (400 `unknown agent`), one that names none accepts the id and ignores it. Persisted in `<DATA_HOME>/gateway-agents.json`, applied to the next `/prompt` |
 | `POST /usage` | `{id}` | `{usage}`: tokens (in/out/thinking/cache) and reported cost summed over the conversation, plus turns and models (`core/usage.ts`) |
 | `POST /diff` | `{id}` | `{files[]}`: files this conversation changed (`{file,additions,deletions,status?}`) |
-| `POST /git` | `{id}` | `{isRepository,branch,head,changedFiles,commits[]}`: the conversation's workspace repo, read through `core/git.ts` like Telegram's /git: branch, changed files (untracked included), last 30 commits (`{hash,shortHash,subject,author,time}`, hash is the short one, time in seconds). The client supplies no command and no path |
+| `POST /git` | `{id}` | `{isRepository,branch,head,changedFiles,files[],commits[]}`: the conversation's workspace repo (`files` names up to 60 changed files as `{path,code,staged,additions,deletions}`, for the web app's details column), read through `core/git.ts` like Telegram's /git: branch, changed files (untracked included), last 30 commits (`{hash,shortHash,subject,author,time}`, hash is the short one, time in seconds). The client supplies no command and no path |
 | `POST /compact` | `{id}` | `{ok}`: compress the conversation's context (opencode's summarize, Claude Code's `/compact`). 501 when the harness has no such control, 409 when it refused (a turn in flight), 504 when the summarize ran out of time |
 | `POST /loop` | `{id,goal,max?,verify?,until?}` | `{loop}`: start a loop and queue the goal as its first turn. `max` is 1–50 (default 8); `verify` is a shell command whose exit 0 ends it; `until` is a substring the reply must contain. 409 when one is already running, 404 for an unknown session |
 | `POST /loop/stop` | `{id}` | `{loop}`: end future turns, drop what it queued, and abort its own running turn. A turn a person started is left to finish |

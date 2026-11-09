@@ -118,8 +118,12 @@ struct MessageDto: Decodable {
     var durationMs: Int64?
     /// set on the turn a loop queued
     var loop: LoopMarkDto?
+    /// another conversation sent this (`jep-tell`)
+    var from: GuestFromDto?
+    /// jep woke itself (a watch is done, a restart cut the turn off)
+    var notice: NoticeDto?
 
-    enum K: String, CodingKey { case id, role, time, parts, error, model, cost, tokens, durationMs, loop }
+    enum K: String, CodingKey { case id, role, time, parts, error, model, cost, tokens, durationMs, loop, from, notice }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: K.self)
         id = try c.decode(String.self, forKey: .id)
@@ -132,7 +136,20 @@ struct MessageDto: Decodable {
         tokens = c.o(.tokens)
         durationMs = c.o(.durationMs)
         loop = try? c.decode(LoopMarkDto.self, forKey: .loop)
+        from = try? c.decode(GuestFromDto.self, forKey: .from)
+        notice = try? c.decode(NoticeDto.self, forKey: .notice)
     }
+}
+
+struct NoticeDto: Decodable {
+    var kind: String
+    var minutes: Int?
+}
+
+struct GuestFromDto: Decodable {
+    var id: String
+    var title: String
+    var harness: String
 }
 
 struct LoopMarkDto: Decodable { var iteration: Int; var max: Int }
@@ -180,7 +197,9 @@ struct HistoryRes: Decodable {
     var queue: [QueueEntryDto]
     /// this conversation's loop, or nil
     var loop: LoopDto?
-    enum K: String, CodingKey { case messages, hasMore, asks, etag, unchanged, queue, loop }
+    /// the daemon's own account: a turn is in flight, whoever started it
+    var busy: Bool
+    enum K: String, CodingKey { case messages, hasMore, asks, etag, unchanged, queue, loop, busy }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: K.self)
         messages = c.v(.messages, [])
@@ -190,6 +209,7 @@ struct HistoryRes: Decodable {
         unchanged = c.v(.unchanged, false)
         queue = (try? c.decode([QueueEntryDto].self, forKey: .queue)) ?? []
         loop = try? c.decode(LoopDto.self, forKey: .loop)
+        busy = c.v(.busy, false)
     }
 }
 
@@ -199,13 +219,16 @@ struct QueueEntryDto: Decodable {
     var steer: Bool
     /// jep's own note (a watch or a restart), not something a person queued
     var notice: Bool
-    enum K: String, CodingKey { case clientID, text, steer, notice }
+    /// a loop's next step: jep's too
+    var loop: LoopMarkDto?
+    enum K: String, CodingKey { case clientID, text, steer, notice, loop }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: K.self)
         clientID = c.o(.clientID)
         text = c.v(.text, "")
         steer = c.v(.steer, true)
         notice = c.v(.notice, false)
+        loop = try? c.decode(LoopMarkDto.self, forKey: .loop)
     }
 }
 

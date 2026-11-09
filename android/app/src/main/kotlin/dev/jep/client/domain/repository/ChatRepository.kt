@@ -34,6 +34,8 @@ data class HistoryBatch(
     val waiting: List<Waiting> = emptyList(),
     /** the conversation's loop (running or last finished), or null */
     val loop: LoopInfo? = null,
+    /** a turn is in flight for this conversation, by the daemon's account (a loop, Telegram, another phone) */
+    val busy: Boolean = false,
 )
 
 /**
@@ -198,6 +200,8 @@ interface ChatRepository {
     suspend fun setMcp(sessionId: String, name: String, enabled: Boolean): Boolean
     /** whether this gateway offers a terminal, and whether this device may use it */
     suspend fun terminalStatus(): TerminalAccess
+    /** the fresh pairing code an already-paired device may read off, to log in elsewhere */
+    suspend fun pairCode(): String?
     /** prove the pairing code again, unlocking a shell for this device token */
     suspend fun unlockTerminal(code: String): Boolean
     /** drop that grant for this device token */

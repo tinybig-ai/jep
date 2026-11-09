@@ -191,6 +191,9 @@ sealed interface ChatPart {
     /** the turn a loop queued: "loop 2/8", drawn as a boundary (the instruction itself is jep's, not anyone's words) */
     data class LoopTurn(val iteration: Int, val max: Int) : ChatPart
 
+    /** jep's own wake-up: a watch finished or timed out, or a restart cut the turn off. A quiet divider. */
+    data class NoticeTurn(val kind: String, val minutes: Int?) : ChatPart
+
     data class Unsupported(val kind: String) : ChatPart
 }
 
@@ -212,7 +215,11 @@ data class ChatMessage(
     val tokens: TokenUsage? = null,
     /** how long the reply took, when the harness recorded a completion time */
     val durationMs: Long? = null,
+    /** another conversation sent this (`jep-tell`): drawn as a card naming it, not the person's bubble */
+    val from: GuestFrom? = null,
 )
+
+data class GuestFrom(val id: String, val title: String, val harness: String)
 
 data class AskOption(val id: String, val label: String, val danger: Boolean = false)
 

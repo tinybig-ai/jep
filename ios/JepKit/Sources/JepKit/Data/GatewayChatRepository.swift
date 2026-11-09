@@ -247,12 +247,13 @@ public final class GatewayChatRepository: ChatRepository, @unchecked Sendable {
             hasMore: res.hasMore,
             asks: res.asks.map { $0.toEntry() },
             waiting: res.queue.compactMap { q in
-                guard !q.notice, let id = q.clientID, !id.isEmpty else { return nil }
+                guard !q.notice, q.loop == nil, let id = q.clientID, !id.isEmpty else { return nil }
                 return Waiting(id: id, text: q.text, steer: q.steer)
             },
             loop: res.loop.map {
                 LoopInfo(goal: $0.spec.goal, max: $0.spec.max, verify: $0.spec.verify, until: $0.spec.until, iteration: $0.iteration, status: $0.status, error: $0.error, verifyCode: $0.lastVerify.flatMap { $0.ok ? nil : $0.code })
-            }
+            },
+            busy: res.busy
         )
         if let key, let etag = res.etag { lock.withLock { lastPage[key] = (etag, batch) } }
         return batch

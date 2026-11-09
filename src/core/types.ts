@@ -138,7 +138,9 @@ export interface Message {
   /** this turn was jep waking itself for a watch, not typed: the same boundary,
    * named by how the wait ended. Clients never show the words — they are an
    * instruction to the model, and shown back they read as the person's own. */
-  notice?: { kind: "done" | "timeout" | "resumed"; minutes?: number }
+  notice?: { kind: "done" | "timeout" | "resumed" | "retry"; minutes?: number }
+  /** another conversation sent this (`jep-tell`): clients draw a card naming it, not the person's bubble */
+  from?: { id: string; title: string; harness: string }
 }
 
 // one file's accumulated change within a session, as reported by the harness

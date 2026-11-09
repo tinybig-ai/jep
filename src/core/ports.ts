@@ -66,12 +66,37 @@ export interface TurnHost {
    * merging with a person's waiting words, and clients draw it as a boundary
    * rather than as something they said */
   enqueue(key: string, text: string, opts?: { resume?: boolean; notice?: boolean }): void
+  /** after a restart: pick up every loop that was running; the conversations resumed. Absent, loops end with the restart. */
+  resumeLoops?(): Promise<string[]>
   /** conversations with a turn running, settling or waiting */
   busy(): number
   /** told as turns begin and end */
   observe(listener: TurnListener): void
   /** true once the daemon is shutting down */
   closing(): boolean
+}
+
+/** One conversation, as another may be told of it (`jep-read --list`) */
+export interface ChatInfo {
+  id: string
+  title: string
+  harness: string
+  workspace: string
+  updatedAt: number
+}
+
+/**
+ * What the daemon's own services need to let one agent read another's conversation: the list, the
+ * messages, and a way to put a question to the person. The gateway implements it; nothing here
+ * knows how it is asked.
+ */
+export interface ChatDirectory {
+  list(): Promise<ChatInfo[]>
+  /** the newest `last` messages (0 = all) with the conversation's own title; null when it is gone */
+  read(id: string, last: number): Promise<{ info: ChatInfo; messages: import("./types.ts").Message[] } | null>
+  /** put a choice to the person inside conversation `key`, and wait: the chosen option id, or null when
+   *  nobody answered in time or the card was stood down */
+  askPerson(key: string, ask: { title: string; detail: string; options: { id: string; label: string; style?: "success" | "danger" }[] }, waitMs: number): Promise<string | null>
 }
 
 export interface TurnListener {
@@ -142,6 +167,12 @@ export interface HarnessAdapter {
    * it too. Absent or false leaves the overlay as the only name. */
   renameSession?(sessionID: string, title: string): Promise<boolean>
   abort(sessionID: string): Promise<boolean>
+  /**
+   * A tool this harness started has shown no sign of life for `sinceMs` and the watchdog is about to give
+   * up on the turn: end that one tool, not the turn, so the harness sees it fail and carries on. True when
+   * something was killed. Absent, the turn is ended as before.
+   */
+  unwedge?(sessionID: string, sinceMs: number): Promise<boolean>
   /** answer a pending ask with one of its own option ids. False when the ask
    * is unknown or already answered — it may have timed out in the harness, or
    * been answered from somewhere else. */

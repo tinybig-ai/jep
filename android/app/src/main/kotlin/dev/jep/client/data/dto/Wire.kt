@@ -107,7 +107,17 @@ data class MessageDto(
     val durationMs: Long? = null,
     /** set on the turn a loop queued: "loop 2/8" is drawn as a boundary, never as a bubble */
     val loop: LoopMarkDto? = null,
+    /** another conversation sent this (`jep-tell`) */
+    val from: GuestFromDto? = null,
+    /** jep woke itself (a watch is done, a restart cut the turn off): a boundary, never the person's words */
+    val notice: NoticeDto? = null,
 )
+
+@Serializable
+data class NoticeDto(val kind: String = "", val minutes: Int? = null)
+
+@Serializable
+data class GuestFromDto(val id: String = "", val title: String = "", val harness: String = "")
 
 @Serializable
 data class LoopMarkDto(val iteration: Int = 0, val max: Int = 0)
@@ -141,6 +151,9 @@ data class MkdirRes(val ok: Boolean = false, val path: String = "")
 data class NextCodeRes(val ok: Boolean = false, val nextCode: String? = null)
 
 @Serializable
+data class DevicesRes(val devices: List<JsonElement> = emptyList(), val pairCode: String? = null)
+
+@Serializable
 data class HistoryRes(
     val messages: List<MessageDto> = emptyList(),
     val hasMore: Boolean = false,
@@ -154,6 +167,8 @@ data class HistoryRes(
     val queue: List<QueueEntryDto> = emptyList(),
     /** this conversation's loop, or null */
     val loop: LoopDto? = null,
+    /** the daemon's own account: a turn is running, settling or waiting, whoever started it */
+    val busy: Boolean = false,
 )
 
 @Serializable
@@ -163,6 +178,8 @@ data class QueueEntryDto(
     val steer: Boolean = true,
     /** jep's own note (a watch or a restart), not something a person queued */
     val notice: Boolean = false,
+    /** a loop's next step: jep's too */
+    val loop: LoopMarkDto? = null,
 )
 
 @Serializable

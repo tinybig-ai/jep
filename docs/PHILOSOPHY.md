@@ -110,7 +110,8 @@ dump.
 
 ## 9. Defaults are free, choices are explicit
 
-- The default model is the free local proxy `localfree-models-proxy/auto`;
+- The default model is the harness's own configured default (opencode's engine
+  default, Pi's `settings.json`); set `JEP_MODEL` to pin a different one;
   nothing burns money unless a chat explicitly picks (and persists) a model.
 - Registry models (free zen `opencode/*`, paid `opencode-go/*`) are **listed**
   in the picker but never selected implicitly. Presence in the picker ≠ use.

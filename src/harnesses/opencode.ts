@@ -18,7 +18,7 @@ import { parseOpencodeLogError } from "./opencode-log.ts"
 import { detach } from "../core/detach.ts"
 import { setTimeout as pollDelay } from "node:timers/promises"
 const OPENCODE_BIN = process.env.OPENCODE_BIN ?? "opencode"
-const MODEL_REF = process.env.JEP_MODEL ?? "localfree-models-proxy/auto"
+const MODEL_REF = process.env.JEP_MODEL?.trim() ? process.env.JEP_MODEL.trim() : undefined
 const DEFAULT_TIMEOUT_MS = 180_000
 // Compacting runs a summarizing model turn, not a control call, so it needs a
 // budget in the same league as a prompt rather than #json's read-only ceiling.
@@ -436,10 +436,10 @@ export class OpenCodeAdapter implements HarnessAdapter {
     return this.#json("/global/health")
   }
 
-  // Unlike the CLI harnesses, nothing is left to the engine here: a prompt
-  // with no model picked is sent as MODEL_REF, so that is the answer.
+  // When the operator pins JEP_MODEL, a prompt with no model picked uses it;
+  // otherwise the engine picks its own default and the answer is null.
   async defaultModel(): Promise<string | null> {
-    return MODEL_REF
+    return MODEL_REF ?? null
   }
 
   async models(): Promise<ModelRef[]> {
@@ -447,8 +447,10 @@ export class OpenCodeAdapter implements HarnessAdapter {
     const refs: ModelRef[] = []
     // JEP_MODEL is "provider/model"; anything else is a misconfiguration, and
     // a half-parsed ref would surface as a model that silently never runs
-    const [defProvider = "", defModel = ""] = MODEL_REF.split("/")
-    refs.push({ providerID: defProvider, modelID: defModel })
+    if (MODEL_REF) {
+      const [defProvider = "", defModel = ""] = MODEL_REF.split("/")
+      if (defProvider && defModel) refs.push({ providerID: defProvider, modelID: defModel })
+    }
     const configProviders = new Set<string>()
     try {
       const cfgPath =
@@ -694,8 +696,13 @@ export class OpenCodeAdapter implements HarnessAdapter {
         : null
 
     try {
-      const [defaultProvider, defaultModel] = MODEL_REF.split("/")
-      const model = opts?.model ?? { providerID: defaultProvider, modelID: defaultModel }
+      const model = opts?.model ??
+        (MODEL_REF
+          ? (() => {
+              const [providerID = "", modelID = ""] = MODEL_REF.split("/")
+              return providerID && modelID ? { providerID, modelID } : undefined
+            })()
+          : undefined)
       const agent = resolveAgent(AGENTS, opts?.agent)
       const parts = [
         // a quote is a part of its own, tagged jep's, so it comes back as a
@@ -707,7 +714,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
       const res = await fetch(this.#url(`/session/${encodeURIComponent(toNativeId(sessionID))}/message`), {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ parts, model, ...(agent ? { agent } : {}) }),
+        body: JSON.stringify({ parts, ...(model ? { model } : {}), ...(agent ? { agent } : {}) }),
         signal: controller.signal,
         dispatcher: NO_TIMEOUT_AGENT,
       })
@@ -876,11 +883,11 @@ export class OpenCodeAdapter implements HarnessAdapter {
   // named (the same one prompts run under) because the summarizing turn runs on
   // it. Refuses while a turn is in flight — reported as false, not an error.
   async compact(sessionID: string): Promise<boolean> {
-    const [providerID, modelID] = MODEL_REF.split("/")
     try {
+      const [providerID = "", modelID = ""] = MODEL_REF ? MODEL_REF.split("/") : ["", ""]
       await this.#json(`/session/${encodeURIComponent(toNativeId(sessionID))}/summarize`, {
         method: "POST",
-        body: JSON.stringify({ providerID, modelID }),
+        body: JSON.stringify(providerID && modelID ? { providerID, modelID } : {}),
         // summarize runs a real model turn, so #json's 30s read-only ceiling cuts
         // it off mid-summary and reports the timeout as a refusal. Give it a
         // turn-sized budget of its own instead.

@@ -104,7 +104,7 @@ export function evaluateLoop(input: {
  * folds the history the goal first lived in; the verifier's failure is quoted
  * so the turn starts from evidence, not from the model's memory of it.
  */
-export function continuationText(state: LoopState, verify?: LoopVerify): string {
+export function continuationText(state: LoopState, verify?: LoopVerify, restarted = false): string {
   const { spec, iteration } = state
   const lines = [
     loopMarker(iteration, spec.max),
@@ -112,6 +112,12 @@ export function continuationText(state: LoopState, verify?: LoopVerify): string 
     "",
     `Goal: ${spec.goal}`,
   ]
+  if (restarted) {
+    lines.push(
+      "",
+      "The jep daemon restarted while the loop was running, so your last turn was cut off. Check what is already done and carry on from there. Do not restart the daemon yourself; if it needs another restart, run `jep-restart` and end your turn.",
+    )
+  }
   if (verify) {
     const exit = verify.code === null ? "" : ` (exit ${verify.code})`
     lines.push("", `The verifier \`${spec.verify}\` still fails${exit}:`, "```", verify.output || "(no output)", "```")

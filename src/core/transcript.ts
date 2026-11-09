@@ -14,6 +14,8 @@ export const JEP_CONTEXT = [
   "  jep-watch   -- wait for a condition (e.g., a test to pass, a file to appear)",
   "  jep-restart -- queue a daemon restart (waits for all turns to end, then restarts)",
   "  jep-rename  -- give this conversation a new title",
+  "  jep-read    -- read another conversation (the person is asked first; --list shows them)",
+  "  jep-tell    -- send another conversation a message (the person is asked first)",
   "  jep-show    -- display an image file in the phone (path or URL)",
   "  jep-send    -- send a file into this Telegram chat (any file under 50 MB)",
   "Run them as shell commands. They find the conversation from the working directory.",
@@ -44,9 +46,13 @@ export const contextFor = (text: string, briefed: Set<string>, key: string, brie
   return `${JEP_CONTEXT}\n\n${JEP_CONTEXT_FOOTER}\n\n`
 }
 
+// The blank lines the header leaves ahead of the message go with it. A marker (a loop step, a watch's
+// wake-up, a restart note, a message from another conversation) must be the first thing in the text to be
+// read, and after a restart the header comes back on the next prompt: with those lines left in, every
+// one of them failed to read and was drawn as something the person typed.
 export const stripInjectedContext = (text: string): string => {
   const i = text.indexOf(JEP_CONTEXT_FOOTER)
-  return i === -1 ? text : text.slice(i + JEP_CONTEXT_FOOTER.length)
+  return i === -1 ? text : text.slice(i + JEP_CONTEXT_FOOTER.length).replace(/^\s+/, "")
 }
 
 // An attachment has no flag in a print-mode CLI, so naming the paths in the
@@ -99,10 +105,10 @@ export const readLoopMarker = (text: string): { iteration: number; max: number }
 // client needs to name it — how the wait ended, and how long it was given — and
 // the body (the note, the check, its output) stays in the transcript for the
 // model, out of the bubble for the reader.
-const NOTICE_MARKER = /^<!-- jep:notice (done|timeout|resumed)(?: (\d{1,5}))? -->\n?/
+const NOTICE_MARKER = /^<!-- jep:notice (done|timeout|resumed|retry)(?: (\d{1,5}))? -->\n?/
 
-/** done/timeout: how a watch ended; resumed: a restart cut the turn off and jep picked it up */
-export type NoticeKind = "done" | "timeout" | "resumed"
+/** done/timeout: how a watch ended; resumed: a restart cut the turn off and jep picked it up; retry: the agent wrote a tool call as text, so jep asked again */
+export type NoticeKind = "done" | "timeout" | "resumed" | "retry"
 
 export const noticeMarker = (kind: NoticeKind, minutes?: number): string =>
   kind === "timeout" && minutes !== undefined ? `<!-- jep:notice ${kind} ${minutes} -->` : `<!-- jep:notice ${kind} -->`
@@ -111,6 +117,38 @@ export const readNoticeMarker = (text: string): { kind: NoticeKind; minutes?: nu
   const m = text.match(NOTICE_MARKER)
   if (!m) return null
   return { kind: m[1] as NoticeKind, ...(m[2] ? { minutes: Number(m[2]) } : {}) }
+}
+
+// A message another conversation sent (`jep-tell`). The words are real and meant to be read, so unlike
+// a loop step or a watch's wake-up they stay; what the marker adds is who they came from, so a client
+// draws a card naming that conversation instead of one of the person's own bubbles. The marker holds
+// the sender as base64url JSON, and a short line ahead of the words tells the model what this is, so
+// a client that has never heard of the marker still shows something readable.
+const FROM_MARKER = /^<!-- jep:from ([A-Za-z0-9_-]{1,2000}) -->\n?/
+const FROM_NOTE = /^\[A message from another conversation[^\n]*\]\n\n/
+
+export interface GuestFrom {
+  id: string
+  title: string
+  harness: string
+}
+
+export const guestText = (from: GuestFrom, body: string): string => {
+  const name = from.title.replace(/["\n\r\]]/g, " ").trim().slice(0, 60) || "untitled"
+  return `<!-- jep:from ${Buffer.from(JSON.stringify(from)).toString("base64url")} -->\n[A message from another conversation, "${name}" (${from.harness}). It is not from the person. If it needs an answer, reply with jep-tell.]\n\n${body}`
+}
+
+/** the sender and the words, when this text is a message from another conversation */
+export const readGuest = (text: string): { from: GuestFrom; body: string } | null => {
+  const m = text.match(FROM_MARKER)
+  if (!m) return null
+  try {
+    const from = JSON.parse(Buffer.from(m[1]!, "base64url").toString("utf8"))
+    if (typeof from?.id !== "string" || typeof from?.title !== "string") return null
+    return { from: { id: from.id, title: from.title, harness: String(from.harness ?? "") }, body: text.slice(m[0].length).replace(FROM_NOTE, "") }
+  } catch {
+    return null
+  }
 }
 
 /** is this whole message jep's own scaffolding (a loop's next step, a watch's
@@ -193,6 +231,8 @@ export const transcriptText = (raw: string): string => {
   // jep's own scaffolding is not anybody's words: the marker is the whole
   // message, and the client draws it as a boundary instead
   if (readLoopMarker(text) || readNoticeMarker(text)) return ""
+  const guest = readGuest(text)
+  if (guest) return dropBlocks(guest.body)
   const cmd = text.match(/<command-name>([^<]*)<\/command-name>/)
   if (cmd) {
     const args = text.match(/<command-args>([^<]*)<\/command-args>/)

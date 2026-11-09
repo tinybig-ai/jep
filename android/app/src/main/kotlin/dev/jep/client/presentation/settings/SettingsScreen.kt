@@ -199,6 +199,12 @@ fun SettingsScreen(
 
             item { SectionTitle("PAIRING", top = 18.dp) }
             item {
+                Column(Modifier.padding(horizontal = Spacing.gutter, vertical = 13.dp)) {
+                    Text("Pairing code — log in from another device with this", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(knownCode?.takeIf { it.isNotBlank() } ?: "…", fontSize = 18.sp, fontFamily = JepMono)
+                }
+            }
+            item {
                 Row(
                     Modifier.fillMaxWidth().clickable { forgetOpen = true }.padding(horizontal = Spacing.gutter, vertical = 13.dp),
                     verticalAlignment = Alignment.CenterVertically,
