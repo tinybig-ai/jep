@@ -65,8 +65,8 @@ bubble, and `/history` hides the instruction itself.
 
 | route | body | returns |
 |---|---|---|
-| `POST /pair` | `{code}` | `{token,nextCode}` (5 tries / 60 s). With `JEP_GW_INGRESS_TRUST=1` and a Supervisor-stamped `X-Remote-User-Id`, the code is skipped, the pairing code is not spent, and `nextCode` is omitted |
-| `GET /health` | (none) | `{ok,paired,devices,pushConfigured,uptimeMs,trustedIngress}` — `trustedIngress` is true only for that request's header, and only when ingress trust is on |
+| `POST /pair` | `{code}` | `{token,nextCode}` (5 tries / 60 s). With `JEP_GW_INGRESS_TRUST=1`, a socket peer of `172.30.32.2` (Supervisor), and `X-Remote-User-Id`, the code is skipped, the pairing code is not spent, and `nextCode` is omitted |
+| `GET /health` | (none) | `{ok,paired,devices,pushConfigured,uptimeMs,trustedIngress}` — `trustedIngress` requires the Supervisor's socket address, its identity header, and the ingress opt-in |
 | `POST /devices` | (none) | `{devices[]}`: paired device fingerprints, names, pairing/last-seen times, and whether each is the calling device |
 | `POST /devices/rename` | `{id,name}` | `{ok,id,name}`: rename one paired device |
 | `POST /devices/revoke` | `{id}` | `{ok,current}`: revoke one device token; `current` says whether the caller revoked itself |

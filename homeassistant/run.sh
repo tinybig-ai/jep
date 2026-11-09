@@ -13,6 +13,7 @@
 # by the local checks, never execs the daemon. All paths are parameterized
 # for the same reason; in the container none of the overrides are set.
 set -euo pipefail
+umask 077
 
 options_file="${JEP_OPTIONS_FILE:-/data/options.json}"
 jep_data="${JEP_DATA_DIR:-/data/jep}"
@@ -102,6 +103,10 @@ PY
 # shellcheck disable=SC1090
 source "$env_file"
 
+if [ -n "${JEP_GW_PORT:-}" ] && [ "$JEP_GW_PORT" != 8099 ]; then
+  die "gateway_port must be 8099 to match Home Assistant ingress"
+fi
+
 # chat needs at least one served workspace even in pod mode: /new-conversation
 # pods live under $JEP_DATA_HOME/pods, but the boot itself throws with zero
 # workspaces (src/app/tg.ts). The class of failure the daemon reports as
@@ -121,72 +126,24 @@ export XDG_DATA_HOME="$jep_data/xdg"
 export XDG_CONFIG_HOME="$app_config"
 export HOME="$jep_data/home"
 
-# gh and git, as the user the agent runs as. A pasted token logs in directly.
-# With none, and no login saved in the app data dir yet, gh prints a one-time
-# code and https://github.com/login/device. That is the whole pairing: the
-# code is in this log. HOME is the app data dir, so the login survives restarts.
+# GH_TOKEN is gh's supported non-interactive auth path. GitHub is optional:
+# without credentials the daemon still starts, and login can happen later.
 if [ -z "$dry" ] && command -v gh >/dev/null; then
   if [ -n "${GH_TOKEN:-}" ]; then
-    printf '%s\n' "$GH_TOKEN" | gh auth login --hostname github.com --with-token \
-      || die "gh auth login failed — the token needs the repo scope"
     gh auth setup-git || die "gh auth setup-git failed"
-    say "gh: logged in"
+    say "gh: using configured token"
   elif gh auth status --hostname github.com >/dev/null 2>&1; then
     gh auth setup-git >/dev/null 2>&1 || true
     say "gh: already logged in"
   else
-    say "gh: not logged in. Open the link below and enter the one-time code."
-    python3 - <<'PY' || die "gh auth login did not finish"
-import os, pty, re, select, sys
-pid, fd = pty.fork()
-if pid == 0:
-    os.environ["TERM"] = "xterm"
-    os.environ["COLUMNS"] = "80"
-    os.environ["LINES"] = "24"
-    os.execvp("gh", [
-        "gh", "auth", "login",
-        "--hostname", "github.com",
-        "--git-protocol", "https",
-        "--skip-ssh-key",
-        "--web",
-    ])
-sent_y = sent_enter = False
-buf = b""
-plain = re.compile(rb"\x1b\[[0-9;?]*[A-Za-z]")
-while True:
-    ready, _, _ = select.select([fd], [], [], 0.5)
-    if not ready:
-        wpid, status = os.waitpid(pid, os.WNOHANG)
-        if wpid:
-            sys.exit(os.waitstatus_to_exitcode(status))
-        continue
-    try:
-        chunk = os.read(fd, 4096)
-    except OSError:
-        break
-    if not chunk:
-        break
-    if b"\x1b[6n" in chunk:
-        os.write(fd, b"\x1b[1;1R")
-    sys.stderr.buffer.write(plain.sub(b"", chunk))
-    sys.stderr.buffer.flush()
-    buf += chunk
-    if not sent_y and b"Authenticate Git" in buf:
-        os.write(fd, b"Y\n")
-        sent_y = True
-    if not sent_enter and b"Press Enter" in buf:
-        os.write(fd, b"\n")
-        sent_enter = True
-PY
-    gh auth setup-git || die "gh auth setup-git failed"
-    say "gh: logged in"
+    say "gh: optional GitHub login is not configured; use gh auth login --web when needed"
   fi
 fi
 
 if [ -n "$dry" ]; then
   say "--- dry run: not starting the daemon"
   env | grep -E '^(JEP_|GH_TOKEN=)' \
-    | sed -e 's/^JEP_TG_TOKEN=.*/JEP_TG_TOKEN=<redacted>/' -e 's/^GH_TOKEN=.*/GH_TOKEN=<redacted>/' || true
+    | sed -e 's/^JEP_TG_TOKEN=.*/JEP_TG_TOKEN=<redacted>/' -e 's/^GH_TOKEN=.*/GH_TOKEN=<redacted>/' -e 's/^JEP_FCM_KEY=.*/JEP_FCM_KEY=<redacted>/' -e 's/^JEP_GW_PAIR_CODE=.*/JEP_GW_PAIR_CODE=<redacted>/' || true
   say "--- XDG_DATA_HOME=$XDG_DATA_HOME  XDG_CONFIG_HOME=$XDG_CONFIG_HOME  HOME=$HOME"
   say "--- auth.json: $([ -f "$XDG_DATA_HOME/opencode/auth.json" ] && echo written || echo none)"
   say "--- opencode.json: $([ -f "$XDG_CONFIG_HOME/opencode/opencode.json" ] && echo written || echo none)"

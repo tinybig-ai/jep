@@ -19,7 +19,7 @@ configuration:
     description: Pin the code a client pairs with. Empty = a fresh, single-print code at every boot.
   ingress_trust:
     name: Trust Home Assistant ingress
-    description: On (default) the sidebar web client skips the pairing code, because Home Assistant already signed the user in. Turn off before publishing the host port.
+    description: Trust the HA identity header only from the Supervisor. Sidebar access skips pairing; direct phone connections still require a code.
   workspace_dir:
     name: Workspace folder
     description: 'The folder conversations start in. Throwaway pods live under the app data home, so nothing to manage.'
@@ -34,7 +34,7 @@ configuration:
     description: Your OpenRouter key; the daemon hands it to opencode as OPENROUTER_API_KEY. Leave empty if you don't use OpenRouter.
   github_token:
     name: GitHub token
-    description: A personal access token with the repo scope. Leave empty to log in from the app log instead: on start, gh prints a one-time code and https://github.com/login/device.
+    description: Optional GitHub token supplied as GH_TOKEN. Leave empty to start without GitHub authentication; use gh auth login --web later when needed.
   opencode_auth:
     name: opencode auth.json
     description: Paste the contents of ~/.local/share/opencode/auth.json from a machine where you ran `opencode auth login`. Empty = free opencode models only.

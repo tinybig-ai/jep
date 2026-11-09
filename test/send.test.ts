@@ -18,8 +18,8 @@ test("a finished call sends only what jep-send said it sent", () => {
   assert.deepEqual(sentFrom("mcp__jep-tools__jep_send", { paths: ["/tmp/ok.txt", "/tmp/missing"] }, output), ["/tmp/ok.txt"])
 })
 
-test("before the command prints, the named paths are the ones to send", () => {
-  assert.deepEqual(sentFrom("bash", { command: "jep-send /tmp/a.txt" }), ["/tmp/a.txt"])
-  assert.deepEqual(sentFrom("jep_send", { paths: ["/tmp/a.txt", ""] }), ["/tmp/a.txt"])
+test("unconfirmed or refused paths never grant file delivery", () => {
+  assert.deepEqual(sentFrom("bash", { command: "jep-send /tmp/a.txt" }), [])
+  assert.deepEqual(sentFrom("jep_send", { paths: ["/tmp/a.txt", ""] }), [])
   assert.deepEqual(sentFrom("bash", { command: "ls" }), [])
 })

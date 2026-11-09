@@ -28,6 +28,8 @@ import {
   type LoopState,
 } from "../../core/loops.ts"
 import { shownFrom, withShown } from "../../core/show.ts"
+import { sentFrom, withSentFiles } from "../../core/send.ts"
+import { ingressIdentity } from "./ingress.ts"
 import { detach } from "../../core/detach.ts"
 import type { TurnLedger } from "../../core/ledger.ts"
 import { TurnEngine, type PendingTurn, type TurnResult } from "../../core/turn-engine.ts"
@@ -329,8 +331,7 @@ const saveTitles = async (dataHome: string, titles: Map<string, string>): Promis
 // The model a conversation runs on is a client concern here too: the phone
 // picks one per session from Settings, and the gateway remembers it (persisted,
 // like the titles) so the choice survives the app closing and applies to the
-// next prompt. A session with no pin of its own uses the last model chosen
-// for that harness, so a restart does not drop back to the harness default.
+// next prompt. A session with no pin uses its harness's configured default.
 async function loadModels(dataHome: string): Promise<Map<string, string>> {
   try {
     const raw = JSON.parse(await readFile(join(dataHome, MODELS_FILE), "utf8")) as Record<string, string>
@@ -345,9 +346,8 @@ const saveModels = async (dataHome: string, models: Map<string, string>): Promis
   await writeFile(join(dataHome, MODELS_FILE), JSON.stringify(Object.fromEntries(models), null, 1))
 }
 
-const lastModelKey = (harness: string): string => `last:${harness}`
-const modelRef = (models: Map<string, string>, sessionID: string, harness: string): string | undefined =>
-  models.get(sessionID) ?? models.get(lastModelKey(harness))
+const modelRef = (models: Map<string, string>, sessionID: string): string | undefined =>
+  models.get(sessionID)
 
 // The primary agent (opencode's "build" / "plan") a conversation runs under,
 // remembered per session exactly like the model. Not a harness — a harness is
@@ -933,6 +933,11 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           // the same for a picture the agent showed: say so as a field, not as a command line
           if (out.type === "part.updated" && out.part) out = { ...out, part: withShown(out.part) }
           broadcast(out)
+          if (out.type === "part.updated" && out.part) {
+            for (const part of withSentFiles([out.part]).slice(1)) {
+              broadcast({ ...out, partID: part.id!, partType: "file", part })
+            }
+          }
           detach("wake a waiting turn", wake(evt))
         }
       } catch {
@@ -999,6 +1004,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     const messages = await adapter.messages(sid, { limit: 200 }).catch(() => [] as Message[])
     for (const message of messages) {
       for (const part of message.parts) {
+        if (part.kind === "tool") {
+          for (const sent of sentFrom(part.name, part.input, part.output)) paths.add(resolve(adapter.workspace, sent))
+        }
         if (part.kind !== "tool" || !part.input || typeof part.input !== "object") continue
         const input = part.input as Record<string, unknown>
         for (const key of ["filePath", "file_path", "path"]) {
@@ -1025,11 +1033,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   // The Supervisor sets this after authenticating the HA user. Empty or huge
   // values are not an id. The flag is the opt-in; the header alone is nothing.
   const ingressUser = (req: IncomingMessage): string | null => {
-    if (!deps.ingressTrust) return null
-    const raw = req.headers["x-remote-user-id"]
-    const value = (Array.isArray(raw) ? raw[0] : raw)?.trim() ?? ""
-    if (!value || value.length > 128) return null
-    return value
+    return ingressIdentity(deps.ingressTrust === true, req.socket.remoteAddress, req.headers["x-remote-user-id"])
   }
 
   const json = (res: ServerResponse, status: number, body: unknown): void => {
@@ -1698,9 +1702,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         // the window of the model this conversation actually runs on, which may
         // be one the picker does not list (an alias, a 1M variant, whatever the
         // CLI fell back to) — the status line's fill rate needs it either way
-        const running = modelRef(models, id, adapter.id) ?? resolvedDefault
+        const running = modelRef(models, id) ?? resolvedDefault
         const contextLimit = (running && caps.get(running)?.contextLimit) || 0
-        return json(res, 200, { models: enriched, current: modelRef(models, id, adapter.id) ?? null, default: resolvedDefault, contextLimit })
+        return json(res, 200, { models: enriched, current: modelRef(models, id) ?? null, default: resolvedDefault, contextLimit })
       }
 
       // the primary agents this harness offers, plus the conversation's choice.
@@ -1866,10 +1870,8 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const ref = str("model")
         if (ref) {
           models.set(id, ref)
-          models.set(lastModelKey(adapter.id), ref)
         } else {
           models.delete(id)
-          models.delete(lastModelKey(adapter.id))
         }
         await saveModels(deps.dataHome, models)
         return json(res, 200, { ok: true, model: ref || null })
@@ -1898,7 +1900,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const hasMore = limit > 0 && window.length > limit
         const messages = (limit > 0 ? window.slice(-limit) : window)
           .map(cleanForDisplay)
-          .map((m) => ({ ...m, parts: m.parts.map(withShown) }))
+          .map((m) => ({ ...m, parts: withSentFiles(m.parts.map(withShown)) }))
           // a loop turn and a watch's notice have no words left after their
           // marker: keep them so the client can still draw the boundary
           .filter((m) => m.role !== "user" || m.parts.length > 0 || m.loop || m.notice)
@@ -1943,7 +1945,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         if (!asked && filePaths.length === 0) return json(res, 400, { error: "text required" })
         const text = asked || "see the attached file"
         // this conversation's chosen model, if the phone set one in Settings
-        const ref = modelRef(models, id, adapter.id)
+        const ref = modelRef(models, id)
         const [providerID = "", modelID = ""] = ref ? ref.split("/") : []
         const model = providerID && modelID ? { providerID, modelID } : undefined
         const agent = agents.get(id)
@@ -1982,7 +1984,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const key = engine.turnKey(id)
         const existing = loops.get(key)
         if (existing?.status === "running") return json(res, 409, { error: "a loop is already running" })
-        const ref = modelRef(models, id, adapter.id)
+        const ref = modelRef(models, id)
         const [providerID = "", modelID = ""] = ref ? ref.split("/") : []
         const loop: LoopState = {
           sessionID: key,

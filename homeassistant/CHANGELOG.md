@@ -1,5 +1,15 @@
 # Changelog — the HA app
 
+## 0.2.10
+
+Ingress identity is accepted only from the Supervisor. GitHub login is optional
+and no longer blocks startup. CI checks out the exact requested source commit;
+default installations build locally without depending on a contributor registry.
+Topic creation uses Telegram's API field, /new preserves history, draft IDs stay
+unique across topics and restarts, and Stop targets the draft it came from.
+Sent files are also available to web and native clients. Permission recovery
+polling now cleans up subscriptions and delivers asks to every event consumer.
+
 ## 0.2.9
 
 Permission prompts reach Telegram even when OpenCode never puts them on the

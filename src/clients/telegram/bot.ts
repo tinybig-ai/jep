@@ -1,4 +1,4 @@
-import { mkdir, readdir, writeFile } from "node:fs/promises"
+import { mkdir, readdir, writeFile, stat } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
@@ -263,7 +263,6 @@ const QUOTED_REPLY_CHARS = 2000
 // a single number; one decode layer (in #recording) turns the synthetic id
 // back into (real chat, message thread) on the wire. The base sits well above
 // any real Telegram chat id, so no real id can be mistaken for a topic.
-const TOPIC_BASE = 9_000_000_000
 // a topic-less free message should open a topic; when createForumTopic is
 // refused (feature off until the grace passes) the chat falls back to its
 // plain-chat behaviour for this long before probing again
@@ -848,25 +847,18 @@ export class TelegramBot {
       const peer = this.#peerOf(p.chatID)
       return peer ? { ...p, chatID: peer.chatID, threadID: peer.threadID } : (p as T & { threadID?: number })
     }
-    // draft ids are a per-chat registry inside Telegram: a topic's id space is
-    // moved aside so it can never collide with the plain chat's next draft
-    const decDraft = <T extends { chatID: number; draftID: number }>(p: T): T & { threadID?: number } => {
-      const out = dec(p)
-      if (p.chatID < TOPIC_BASE) return out
-      return { ...out, draftID: 1_000_000 + (p.chatID - TOPIC_BASE) }
-    }
     return {
       getUpdates: (p) => tg.getUpdates(p),
       setMyCommands: (c) => tg.setMyCommands(c),
       setChatMenuButton: (u, t) => tg.setChatMenuButton(u, t),
       sendChatAction: (p) => tg.sendChatAction(dec(p)),
       answerCallbackQuery: (p) => tg.answerCallbackQuery(p),
-      deleteMessage: (p) => tg.deleteMessage(p),
+      deleteMessage: (p) => tg.deleteMessage(dec(p)),
       setMessageReaction: (p) => tg.setMessageReaction(dec(p)),
       pinChatMessage: (p) => tg.pinChatMessage(dec(p)),
       unpinChatMessage: (p) => tg.unpinChatMessage(dec(p)),
       editRichMessage: (p) => tg.editRichMessage({ ...p, ...dec(p) }),
-      deleteEphemeralMessage: (p) => tg.deleteEphemeralMessage(p),
+      deleteEphemeralMessage: (p) => tg.deleteEphemeralMessage(dec(p)),
       sendRichMessage: async (p) => {
         const d = dec(p)
         console.error(`[send] sendRichMessage chat=${d.chatID}${d.threadID ? ` thread=${d.threadID}` : ""} at=${new Date().toISOString()}`)
@@ -874,9 +866,9 @@ export class TelegramBot {
         console.error(`[send] sendRichMessage -> msg=${r.message_id}`)
         return r
       },
-      sendMessageDraft: (p) => tg.sendMessageDraft(decDraft({ ...p, text: p.text !== undefined ? md(p.text) : undefined, parseMode: p.text !== undefined ? "HTML" : undefined })),
+      sendMessageDraft: (p) => tg.sendMessageDraft(dec({ ...p, text: p.text !== undefined ? md(p.text) : undefined, parseMode: p.text !== undefined ? "HTML" : undefined })),
       sendRichMessageDraft: (p) => {
-        const d = decDraft(p)
+        const d = dec(p)
         console.error(`[send] sendRichMessageDraft chat=${d.chatID}${d.threadID ? ` thread=${d.threadID}` : ""} draft=${d.draftID} at=${new Date().toISOString()}`)
         return tg.sendRichMessageDraft(d)
       },
@@ -901,10 +893,9 @@ export class TelegramBot {
 
   // ── bot forums ──
 
-  // is this chat id really a topic of a paired private chat? Real Telegram ids
-  // never reach TOPIC_BASE, so the range check is the whole answer
+  // Only registered addresses are topics; real Telegram ids may also be large.
   #isTopic(chatID: number): boolean {
-    return chatID >= TOPIC_BASE
+    return this.#forumRegistry.has(chatID)
   }
 
   // the real peer behind a topic id (null = an ordinary chat id)
@@ -917,9 +908,7 @@ export class TelegramBot {
     const key = `${realChatID}:${threadID}`
     const known = this.#forumIndex.get(key)
     if (known) return known
-    let top = TOPIC_BASE
-    for (const k of this.#forumRegistry.keys()) if (k > top) top = k
-    const syn = top + 1
+    const syn = this.#store.allocateForumID()
     this.#forumRegistry.set(syn, { chatID: realChatID, threadID })
     this.#forumIndex.set(key, syn)
     this.#store.rememberForumPeer(syn, { chatID: realChatID, threadID })
@@ -962,11 +951,21 @@ export class TelegramBot {
   // Open a topic on a real chat, hand its synthetic id back. null = no bot
   // forum here, or Telegram refused — every caller falls back to the plain
   // chat behaviour then, exactly as if forum support were off.
-  async #spawnTopic(realChatID: number, title: string): Promise<number | null> {
+  async #spawnTopic(realChatID: number, title: string, sourceChatID = realChatID): Promise<number | null> {
     if (!this.#forumFree(realChatID)) return null
     try {
       const t = await this.#tg.createForumTopic({ chatID: realChatID, title: title.slice(0, 40) || "New conversation" })
       const syn = this.#registerForumPeer(realChatID, t.threadID)
+      const source = this.#chat(sourceChatID)
+      const target = this.#chat(syn)
+      target.workspace = source.workspace
+      target.harness = source.harness
+      target.chatType = source.chatType
+      target.lastUserID = source.lastUserID
+      const harness = this.#activeWs(sourceChatID).adapter.id
+      const model = this.#store.model(sourceChatID, harness)
+      if (model) this.#store.setModel(syn, harness, model)
+      this.#rememberChat(syn)
       this.#forumOwn.add(syn)
       console.error(`[forum] chat ${realChatID}: topic ${t.threadID} opened as chat ${syn}`)
       return syn
@@ -1305,20 +1304,16 @@ export class TelegramBot {
     if (realID == null) return
     // the update names the topic when the draft was tapped in one (1 = General)
     if (stop.message_thread_id && stop.message_thread_id !== 1) {
-      await this.#stopTurn(this.#registerForumPeer(realID, stop.message_thread_id))
+      const syn = this.#forumIndex.get(`${realID}:${stop.message_thread_id}`)
+      if (syn !== undefined && (stop.draft_id === undefined || this.#chats.get(syn)?.draft === stop.draft_id)) await this.#stopTurn(syn)
       return
     }
-    // no thread in the update: pick the one topic of this chat with a turn
-    // actually running — the draft's topic in every sane situation, since
-    // Telegram does not stop a draft the user cannot see
-    const running = [...this.#chats.entries()].find(
-      ([syn, c]) => c.inflight && this.#forumRegistry.get(syn)?.chatID === realID,
+    // Without a thread, draft_id is the address. An ambiguous update must
+    // never stop an unrelated topic merely because it was first in the map.
+    const running = [...this.#chats.entries()].filter(
+      ([syn, c]) => c.inflight && (this.#peerOf(syn)?.chatID ?? syn) === realID && (stop.draft_id === undefined || c.draft === stop.draft_id),
     )
-    if (running) {
-      await this.#stopTurn(running[0])
-      return
-    }
-    await this.#stopTurn(realID)
+    if (running.length === 1) await this.#stopTurn(running[0]![0])
   }
 
   async #gatedMessage(m: TgMessage): Promise<void> {
@@ -1369,18 +1364,8 @@ export class TelegramBot {
     const threadID = m.message_thread_id && m.message_thread_id !== 1 ? m.message_thread_id : undefined
     const head = text.split(/\s+/)[0] ?? ""
     const slash = head.startsWith("/") ? (head.slice(1).split("@")[0] ?? "") : ""
-    const knownThread = threadID !== undefined && this.#forumIndex.has(`${realID}:${threadID}`)
-    // A command sent from the topic list makes Telegram open a topic for it.
-    // That topic is not a conversation. Drop it and run the command where the
-    // user already was. /new is the one command that is supposed to open one.
-    let chatID: number
-    if (threadID !== undefined && slash && slash !== "new" && !knownThread) {
-      await this.#tg.deleteForumTopic({ chatID: realID, threadID }).catch(logFail("forum drop command topic"))
-      console.error(`[forum] dropped topic ${threadID} opened by /${slash}`)
-      chatID = this.#latestTopic(realID) ?? realID
-    } else {
-      chatID = threadID !== undefined ? this.#registerForumPeer(realID, threadID) : realID
-    }
+    // Unknown topics may contain the person's own history. Adopt, never delete.
+    const chatID = threadID !== undefined ? this.#registerForumPeer(realID, threadID) : realID
     const c = this.#chat(chatID)
 
     // a swipe-reply to a question prompt is the typed answer: the question's
@@ -1920,30 +1905,23 @@ export class TelegramBot {
   // harness can now serve several workspaces, so that would have landed the
   // new conversation in whichever directory happened to match first.
   async #newConversation(chatID: number, replyId: number | null, title?: string): Promise<void> {
-    // bot forum: from here on a topic is what a conversation is. /new in an
-    // ordinary (paired) chat opens one; /new INSIDE a topic nudges the
-    // two-apart: it retires the topic — a second session under one topic
-    // would be two conversations wearing one name — and starts a fresh one,
-    // whose title the name typed (or the default) carries.
+    // /new preserves the previous conversation and its topic history.
+    const ws = this.#activeWs(chatID)
     let home = chatID
     const hasSession = Boolean(this.#chat(chatID).sessionID || this.#store.chatContext(chatID)?.sessionID)
     if (this.#isTopic(chatID) && hasSession) {
       const peer = this.#peerOf(chatID)
       if (peer) {
-        await this.#tg.deleteForumTopic({ chatID: peer.chatID, threadID: peer.threadID }).catch(logFail("forum delete"))
-        this.#forumForget(chatID)
-        const spawn = await this.#spawnTopic(peer.chatID, title || "New conversation")
-        // the only way the spawn fails is the probe window — but the delete
-        // just worked, so fall back to a plain conversation in General rather
-        // than keep the conversation addressed to a retired topic
-        home = spawn ?? peer.chatID
+        const spawn = await this.#spawnTopic(peer.chatID, title || "New conversation", chatID)
+        if (spawn === null) return this.#say(chatID, "Couldn't open a new topic. This conversation is unchanged; try /new again shortly.")
+        home = spawn
       }
     } else if (!this.#isTopic(chatID)) {
       const spawn = await this.#spawnTopic(chatID, title || "New conversation")
       if (spawn !== null) home = spawn
     }
     const c = this.#chat(home)
-    const ws = this.#activeWs(home)
+    c.workspace = ws.name
     c.harness = ws.adapter.id
     const s = await ws.adapter.createSession(title || "New conversation")
     c.sessionID = s.id
@@ -1953,7 +1931,7 @@ export class TelegramBot {
     c.page = 0
     this.#rememberChat(home)
     const text = title ? `💬 new conversation: ${title}` : "💬 new conversation"
-    if (replyId === null) await this.#tg.sendMessage({ chatID: home, text })
+    if (replyId === null || home !== chatID) await this.#tg.sendMessage({ chatID: home, text })
     else await this.#tg.editMessageText({ chatID: home, messageID: replyId, text, replyMarkup: null })
     void this.#updateStatus(home).catch(logFail("status"))
   }
@@ -2236,7 +2214,7 @@ export class TelegramBot {
     // persisted, so it keeps climbing across restarts — a draft id is consumed
     // once the real message lands, and reusing one is accepted by Telegram but
     // renders nothing at all
-    const draftID = this.#store.nextDraftID(chatID)
+    const draftID = this.#store.nextDraftID(this.#peerOf(chatID)?.chatID ?? chatID)
     c.draft = draftID
     let draftMode: "rich" | "text" | "none" = "none"
     // Whether this client takes rich messages. Unknown until something is
@@ -3745,8 +3723,13 @@ export class TelegramBot {
   async #sendPartFile(chatID: number, f: FilePart): Promise<void> {
     if (!f.filePath) return
     try {
-      if (IMAGE_RE.test(f.filePath)) await this.#tg.sendPhoto({ chatID, filePath: f.filePath })
-      else await this.#tg.sendDocument({ chatID, filePath: f.filePath })
+      const info = await stat(f.filePath)
+      if (!info.isFile() || info.size > 50 * 1024 * 1024) throw new Error("file must be no larger than 50 MB")
+      if (IMAGE_RE.test(f.filePath) && info.size <= 10 * 1024 * 1024) {
+        // Telegram also limits dimensions and aspect ratio. A photo refusal
+        // must still deliver the original as a document.
+        await this.#tg.sendPhoto({ chatID, filePath: f.filePath }).catch(() => this.#tg.sendDocument({ chatID, filePath: f.filePath }))
+      } else await this.#tg.sendDocument({ chatID, filePath: f.filePath })
     } catch (err) {
       await this.#tg.sendMessage({ chatID, text: `⚠️ couldn't send a produced file: ${(err as Error).message}` })
     }
@@ -4726,7 +4709,7 @@ export class TelegramBot {
         // bot forum: a conversation already lives in exactly one topic —
         // opening it elsewhere would fork it into two addresses
         const holder = [...this.#forumRegistry.keys()].find(
-          (syn) => syn !== chatID && this.#chats.get(syn)?.sessionID === row.id,
+          (syn) => syn !== chatID && (this.#chats.get(syn)?.sessionID ?? this.#store.chatContext(syn)?.sessionID) === row.id,
         )
         if (holder !== undefined) {
           return tg.answerCallbackQuery({ id: cq.id, text: "already open in its own topic — messages there" })
@@ -4785,7 +4768,7 @@ export class TelegramBot {
         const row = p.sessions[d.i]
         if (row) {
           const target = await this.#wsForRow(row)
-          await target.adapter.deleteSession(row.id)
+          if (!(await target.adapter.deleteSession(row.id))) return tg.answerCallbackQuery({ id: cq.id, text: "couldn't delete the conversation" })
           // bot forum: deleting the conversation this topic IS deletes the
           // topic with it — an empty topic named after a dead session would
           // only suggest something that no longer exists
@@ -4798,6 +4781,8 @@ export class TelegramBot {
             c.sessionID = null
             c.freshOnNext = false
             this.#rememberChat(chatID)
+            c.del = null
+            return tg.answerCallbackQuery({ id: cq.id, text: "deleted" })
           }
           if (c.sessionID === row.id && c.workspace === target.name) {
             // fall back to whatever's now the most recently active

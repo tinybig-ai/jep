@@ -23,7 +23,7 @@ function sandbox(options: Record<string, unknown>): string {
   return root
 }
 
-async function boot(root: string): Promise<{ status: number; out: string }> {
+async function boot(root: string, extra: Record<string, string> = {}): Promise<{ status: number; out: string }> {
   try {
     const { stdout, stderr } = await run(runsh, {
       env: {
@@ -34,6 +34,7 @@ async function boot(root: string): Promise<{ status: number; out: string }> {
         JEP_APP_CONFIG: join(root, "config"),
         JEP_SRC_DIR: join(root, "src"),
         JEP_HA_DRY_RUN: "1",
+        ...extra,
       },
     })
     return { status: 0, out: stdout + stderr }
@@ -75,12 +76,16 @@ test("a github token is handed to gh and never printed", async () => {
   assert.doesNotMatch(r.out, /ghp-test-token/)
 })
 
-test("startup logs a device code when no github token is saved", () => {
-  const sh = readFileSync(join(import.meta.dirname, "..", "homeassistant", "run.sh"), "utf8")
-  assert.match(sh, /gh auth status --hostname github.com/)
-  assert.match(sh, /gh auth login/)
-  assert.match(sh, /--web/)
-  assert.match(sh, /Press Enter/)
+test("optional GitHub login never blocks startup, with or without a token", async () => {
+  for (const token of ["", "test-token"]) {
+    const root = sandbox({ telegram_token: "1:a", github_token: token })
+    mkdirSync(join(root, "bin"))
+    writeFileSync(join(root, "bin", "gh"), '#!/bin/sh\ncase "$*" in\n  "auth status --hostname github.com") exit 1;;\n  "auth setup-git") exit 0;;\n  *) exit 99;;\nesac\n', { mode: 0o755 })
+    const r = await boot(root, { JEP_HA_DRY_RUN: "", PATH: `${join(root, "bin")}:${process.env.PATH}` })
+    assert.equal(r.status, 0, r.out)
+    assert.match(r.out, token ? /using configured token/ : /optional GitHub login/)
+    assert.doesNotMatch(r.out, /test-token/)
+  }
 })
 
 test("the openrouter key rides through as opencode's own env", async () => {
@@ -146,10 +151,10 @@ test("ingress trust reaches the daemon only when the option is on", async () => 
 })
 
 test("gateway only: no token, no bot, the gateway port still set", async () => {
-  const root = sandbox({ telegram_token: "", gateway_enabled: true, gateway_port: 9000 })
+  const root = sandbox({ telegram_token: "", gateway_enabled: true, gateway_port: 8099 })
   const r = await boot(root)
   assert.equal(r.status, 0, r.out)
-  assert.match(envFor(root), /export JEP_GW_PORT=9000/)
+  assert.match(envFor(root), /export JEP_GW_PORT=8099/)
   assert.doesNotMatch(envFor(root), /JEP_TG_TOKEN/)
 })
 

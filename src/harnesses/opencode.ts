@@ -16,6 +16,7 @@ import { quoteBlock, readQuoteBlock, contextFor } from "../core/transcript.ts"
 import { parseOptionIDs } from "../core/questions.ts"
 import { parseOpencodeLogError } from "./opencode-log.ts"
 import { detach } from "../core/detach.ts"
+import { setTimeout as pollDelay } from "node:timers/promises"
 const OPENCODE_BIN = process.env.OPENCODE_BIN ?? "opencode"
 const MODEL_REF = process.env.JEP_MODEL ?? "localfree-models-proxy/auto"
 const DEFAULT_TIMEOUT_MS = 180_000
@@ -924,16 +925,16 @@ export class OpenCodeAdapter implements HarnessAdapter {
    */
   // Permissions and questions that the event stream never delivered. The list
   // endpoints are the source of truth; #toDomainEvent drops ones already shown.
-  async #pollAsks(): Promise<DomainEvent[]> {
+  async #pollAsks(seen: Set<string>, signal: AbortSignal): Promise<DomainEvent[]> {
     const [permissions, questions] = await Promise.all([
-      this.#json<unknown[]>("/permission", { signal: AbortSignal.timeout(1_000) }).catch(() => [] as unknown[]),
-      this.#json<unknown[]>("/question", { signal: AbortSignal.timeout(1_000) }).catch(() => [] as unknown[]),
+      this.#json<unknown[]>("/permission", { signal: AbortSignal.any([signal, AbortSignal.timeout(1_000)]) }).catch(() => [] as unknown[]),
+      this.#json<unknown[]>("/question", { signal: AbortSignal.any([signal, AbortSignal.timeout(1_000)]) }).catch(() => [] as unknown[]),
     ])
     const out: DomainEvent[] = []
     const take = (type: string, rows: unknown[]) => {
       for (const raw of rows) {
         if (!raw || typeof raw !== "object") continue
-        const evt = this.#toDomainEvent({ data: JSON.stringify({ type, properties: raw }) })
+        const evt = this.#toDomainEvent({ data: JSON.stringify({ type, properties: raw }) }, seen)
         if (evt) out.push(evt)
       }
     }
@@ -1052,6 +1053,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
   async *events(signal?: AbortSignal): AsyncIterable<DomainEvent> {
     const controller = new AbortController()
     const onAbort = () => controller.abort()
+    if (signal?.aborted) return
     signal?.addEventListener("abort", onAbort, { once: true })
     let res: Awaited<ReturnType<typeof fetch>> | undefined
     // losing this subscription means no live streaming for the whole turn, so
@@ -1069,59 +1071,59 @@ export class OpenCodeAdapter implements HarnessAdapter {
         await new Promise((r) => setTimeout(r, EVENT_RETRIES[attempt]))
       }
     }
-    if (!res.body) return
+    if (!res.body) { signal?.removeEventListener("abort", onAbort); return }
     const reader = res.body.getReader()
     this.#eventReaders.add(reader)
     const decoder = new TextDecoder()
     let buffer = ""
-    // A permission or question is often absent from this stream (the serve
-    // process keeps it on GET /permission and GET /question). The poll runs
-    // beside the read, so a quiet list never holds the turn's events back.
-    let inflight: Promise<ReadableStreamReadResult<Uint8Array>> | null = null
-    const asks = (signal: AbortSignal) => this.#pollAsks().catch((err) => {
-      if (signal.aborted || (err as Error)?.name === "AbortError") return [] as DomainEvent[]
-      return [] as DomainEvent[]
-    })
-    let poll = asks(controller.signal)
-    try {
-      while (!controller.signal.aborted) {
-        inflight ??= reader.read()
-        const raced = await Promise.race([
-          inflight.then((v) => ({ kind: "read" as const, v })),
-          poll.then((events) => ({ kind: "poll" as const, events })),
-        ])
-        if (controller.signal.aborted) break
-        if (raced.kind === "poll") {
-          for (const evt of raced.events) yield evt
-          poll = new Promise<DomainEvent[]>((resolve) => {
-            const timer = setTimeout(() => resolve(asks(controller.signal)), 1_000)
-            controller.signal.addEventListener("abort", () => { clearTimeout(timer); resolve([]) }, { once: true })
-          })
-          continue
-        }
-        inflight = null
-        const { done, value } = raced.v
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        let idx: number
-        while ((idx = buffer.indexOf("\n\n")) >= 0) {
-          const raw = buffer.slice(0, idx)
-          buffer = buffer.slice(idx + 2)
-          for (const frame of parseSse(raw)) {
-            if (!frame.data) continue
-            const evt = this.#toDomainEvent(frame)
-            if (evt) yield evt
+    // Independent producers feed one queue. Neither repeated SSE chunks nor
+    // polling ticks attach accumulating Promise.race/abort listeners.
+    const seen = new Set<string>()
+    const queued: DomainEvent[] = []
+    let wake: (() => void) | undefined
+    let done = false
+    let failure: unknown
+    const notify = () => { const next = wake; wake = undefined; next?.() }
+    const accept = (evt: DomainEvent | null) => { if (evt) { queued.push(evt); notify() } }
+    const reading = (async () => {
+      try {
+        while (!controller.signal.aborted) {
+          const { done: ended, value } = await reader.read()
+          if (ended) break
+          buffer += decoder.decode(value, { stream: true })
+          let idx: number
+          while ((idx = buffer.indexOf("\n\n")) >= 0) {
+            const raw = buffer.slice(0, idx)
+            buffer = buffer.slice(idx + 2)
+            for (const frame of parseSse(raw)) if (frame.data) accept(this.#toDomainEvent(frame, seen))
           }
         }
+      } catch (err) { if (!controller.signal.aborted) failure = err }
+      finally { done = true; notify() }
+    })()
+    const polling = (async () => {
+      while (!done && !controller.signal.aborted) {
+        for (const evt of await this.#pollAsks(seen, controller.signal)) accept(evt)
+        await pollDelay(1_000, undefined, { signal: controller.signal })
       }
+    })().catch((err) => { if (!controller.signal.aborted) { failure = err; done = true; notify() } })
+    try {
+      while (!controller.signal.aborted && (!done || queued.length)) {
+        const evt = queued.shift()
+        if (evt) yield evt
+        else await new Promise<void>((resolve) => { wake = resolve })
+      }
+      if (failure) throw failure
     } finally {
+      controller.abort()
+      await reader.cancel().catch(() => {})
+      await Promise.allSettled([reading, polling])
       signal?.removeEventListener("abort", onAbort)
       this.#eventReaders.delete(reader)
-      controller.abort()
     }
   }
 
-  #toDomainEvent(frame: SseFrame): DomainEvent | null {
+  #toDomainEvent(frame: SseFrame, seen: Set<string>): DomainEvent | null {
     let data: any
     try {
       data = JSON.parse(frame.data ?? "")
@@ -1234,9 +1236,8 @@ export class OpenCodeAdapter implements HarnessAdapter {
         })
         const askID = (props.id as string) ?? ""
         if (askID) {
-          if (this.#askedPermissions.has(askID)) return null
-          if (this.#askedPermissions.size > 2_000) this.#askedPermissions.clear()
-          this.#askedPermissions.add(askID)
+          if (seen.has(`question:${askID}`)) return null
+          seen.add(`question:${askID}`)
           if (this.#questionLabels.size > 2_000) this.#questionLabels.clear()
           this.#questionLabels.set(askID, { count: grouped.length, labels })
         }
@@ -1262,13 +1263,14 @@ export class OpenCodeAdapter implements HarnessAdapter {
       case "permission.updated": {
         const permID = (props.id as string) ?? ""
         if (permID) {
-          if (this.#askedPermissions.has(permID)) return null
-          if (this.#askedPermissions.size > 2_000) this.#askedPermissions.clear()
-          this.#askedPermissions.add(permID)
+          if (seen.has(`permission:${permID}`)) return null
+          seen.add(`permission:${permID}`)
         }
         // permission prompts skipped for this turn: answered here, never shown.
         // Once per ask, since a re-emitted one stopped at the check above.
         if (permID && rawSession && this.#autoAllow.has(rawSession)) {
+          if (this.#askedPermissions.has(permID)) return null
+          this.#askedPermissions.add(permID)
           detach(`allow ${permID}`, this.respondAsk(sessionID ?? "", permID, "once").then((ok) => {
             if (!ok) console.error(`[ask] auto-allow ${permID} -> failed`)
           }))

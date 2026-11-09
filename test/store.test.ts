@@ -104,7 +104,7 @@ test("the rest of a chat's context still round-trips", () => {
     const b = ChatStore.load(file)
     assert.equal(b.title("ses_1"), "my thread")
     assert.equal(b.model(5, "opencode"), "zen/qwen")
-    assert.equal(b.model(9, "opencode"), "zen/qwen", "a chat with no pin still runs the last model")
+    assert.equal(b.model(9, "opencode"), null, "an unrelated chat keeps its own default model")
     assert.deepEqual(b.chatContext(5), { dir: "/code/jep", sessionID: "ses_1", harness: "opencode" })
     assert.equal(b.indexedSessions("/code/jep", "opencode")[0]!.id, "ses_1")
   })

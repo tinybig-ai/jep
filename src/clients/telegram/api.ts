@@ -378,12 +378,12 @@ export function createTelegramApi(token: string): TelegramApi {
     },
     sendRichMessage(params) {
       const extra: Record<string, unknown> = {}
-      if (params.threadID) extra.message_thread_id = params.threadID
       if (params.ephemeralMessageParameters) extra.ephemeral_message_parameters = params.ephemeralMessageParameters
       if (params.disableNotification) extra.disable_notification = true
       if (params.files?.length) return sendRichMultipart(params.chatID, params.rich_message, params.files, extra, params.threadID)
       return call<{ message_id: number; ephemeral_message_id?: number }>("sendRichMessage", {
         chat_id: params.chatID,
+        ...(params.threadID ? { message_thread_id: params.threadID } : {}),
         rich_message: params.rich_message,
         ...extra,
       })
@@ -460,14 +460,13 @@ export function createTelegramApi(token: string): TelegramApi {
       })
     },
     async createForumTopic(params) {
-      const m = await call<{ message_id: number; message_thread_id?: number }>("createForumTopic", {
+      const m = await call<{ message_thread_id: number }>("createForumTopic", {
         chat_id: params.chatID,
-        title: params.title,
+        name: params.title,
       })
-      // the topic's id is the root service message; the Bot API names it both
-      // ways depending on version — message_thread_id when present, else the
-      // message id, which MTProto defines to be that same id
-      return { threadID: m.message_thread_id ?? m.message_id }
+      // createForumTopic returns a ForumTopic, not a Message.
+      if (!Number.isSafeInteger(m.message_thread_id) || m.message_thread_id <= 0) throw new Error("Telegram returned an invalid topic id")
+      return { threadID: m.message_thread_id }
     },
     editForumTopic(params) {
       return call<void>("editForumTopic", {

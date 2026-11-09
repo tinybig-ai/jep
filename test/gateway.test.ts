@@ -2157,7 +2157,7 @@ test("/carryover writes the whole conversation to a temp markdown file", async (
   }
 })
 
-test("ingress trust: the HA user header skips the pairing code", async () => {
+test("ingress trust: a forged HA header from a non-Supervisor peer cannot pair", async () => {
   const dataHome = mkdtempSync(join(tmpdir(), "gw-ing-"))
   const g = await startGateway({
     adapters: () => [{ name: "fake-ws", adapter: fakeAdapter() }],
@@ -2171,7 +2171,7 @@ test("ingress trust: the HA user header skips the pairing code", async () => {
   const ha = { "x-remote-user-id": "ha-user" }
   try {
     const health = (await (await fetch(`${base}/health`, { headers: ha })).json()) as { trustedIngress?: boolean }
-    assert.equal(health.trustedIngress, true)
+    assert.equal(health.trustedIngress, false)
     const bare = (await (await fetch(`${base}/health`)).json()) as { trustedIngress?: boolean }
     assert.equal(bare.trustedIngress, false)
     const blank = (await (await fetch(`${base}/health`, { headers: { "x-remote-user-id": "  " } })).json()) as { trustedIngress?: boolean }
@@ -2183,9 +2183,9 @@ test("ingress trust: the HA user header skips the pairing code", async () => {
       headers: { "content-type": "application/json", ...ha },
       body: "{}",
     })
-    assert.equal(paired.status, 200)
+    assert.equal(paired.status, 403)
     const body = (await paired.json()) as { token?: string; nextCode?: string }
-    assert.equal(typeof body.token, "string")
+    assert.equal(body.token, undefined)
     assert.equal(body.nextCode, undefined, "the ingress browser must not learn the phone code")
     // the code was not spent, so a phone can still pair with it
     const phone = await fetch(`${base}/pair`, {
@@ -2195,7 +2195,7 @@ test("ingress trust: the HA user header skips the pairing code", async () => {
     })
     assert.equal(phone.status, 200)
     const open = await fetch(`${base}/devices`, { method: "POST", headers: ha })
-    assert.equal(open.status, 200)
+    assert.equal(open.status, 401)
     const anon = await fetch(`${base}/devices`, { method: "POST" })
     assert.equal(anon.status, 401)
   } finally {

@@ -29,10 +29,9 @@ folder, which the Supervisor finds by its `config.json` at any depth.
    * Telegram prints `pairing code: XXXX-XXXX` until the first `/pair`.
    * The gateway prints its own pairing code once at boot (phones only).
 
-First start pulls the prebuilt image (your fork's GHCR packages); expect a
-short download, faster than building on a Pi. If the `image` key is removed,
-the same Dockerfile is built on the device at install time instead. Later
-starts are instant in both cases.
+Installation builds the Dockerfile on the device by default. This keeps the
+upstream repository independent of a contributor's container registry. A
+maintainer can opt into prebuilt images as described below.
 
 ### Where the web client lives
 
@@ -46,12 +45,12 @@ the host until you ask.
    port forwarding and no extra TLS. The web client uses only *relative*
    URLs, because ingress mounts it under `/api/hassio_ingress/…` and never
    rewrites paths. Home Assistant already authenticated the user and stamps
-   `X-Remote-User-Id` on the proxied request, so the page pairs itself
-   (`ingress_trust`, on by default). No code to type.
+   `X-Remote-User-Id` on the proxied request. Jep accepts that identity only
+   from the Supervisor's socket address, `172.30.32.2`, with `ingress_trust`
+   enabled. Other containers and direct clients must use a pairing code.
 2. **A phone, or a browser on the raw port.** On the app's **Network** tab,
-   set host port `8099`. Turn **Trust Home Assistant ingress** off first: with
-   the port published, anyone who can open it can send that header and skip
-   the pairing code. Then pair with the code from the log. This path needs
+   set host port `8099`. Pair with the code from the log. Direct clients
+   cannot authenticate by sending an ingress identity header. This path needs
    its own forwarding and TLS if it leaves the LAN. `gateway_port` must stay
    `8099` or ingress stops matching `ingress_port`.
 
@@ -60,15 +59,15 @@ the host until you ask.
 CI (`.github/workflows/ha-app.yml`) builds and pushes the images for both
 architectures on every push that touches the app or its sources, tagged with
 `config.json`'s `version` and `latest` — so an update is: bump `version`,
-push, wait for CI, then reinstall/update the app in HA. The image clones
-the repo CI is building (`JEP_REPO`, default upstream) at `JEP_REF`, busting
-that layer with `JEP_SHA`, so a fork's image contains the fork's source.
+push, wait for CI, then reinstall/update the app in HA. CI builds the exact
+`JEP_SHA` commit from `JEP_REPO`, so a branch moving during the build cannot
+silently change the source. Local builds use `JEP_REF` when no SHA is supplied.
 
-The app points at the fork's images by default (`image`:
-`ghcr.io/albertoxamin/{arch}-jep`, which must be public — see the package
-settings on github.com). Remove the `image` key to have the Supervisor build
-the same Dockerfile on your device instead; the workflow file comes with the
-fork either way.
+To use prebuilt images, publish both architecture packages as public, then
+add `"image": "ghcr.io/<lowercase-owner>/{arch}-jep"` to `config.json` for that
+repository. Set `JEP_REPO` in the Dockerfile when distributing a fork for local
+builds. Keep the app version and registry tags in step. The workflow publishes
+packages under the repository owner's name; no contributor registry is required.
 
 ## Options
 
@@ -80,12 +79,12 @@ fork either way.
 | `gateway_port` | port, `8099` | port inside the app. Ingress is fixed to this. The host port stays unmapped until the Network tab sets one |
 | `gateway_bind` | str, empty | what to bind: empty = all interfaces (default), `127.0.0.1` = container-local |
 | `gateway_pair_code` | str, empty | pin the gateway pairing code instead of a fresh one per boot |
-| `ingress_trust` | bool, `true` | sidebar web client skips pairing (`JEP_GW_INGRESS_TRUST=1`). Turn off before publishing the host port |
+| `ingress_trust` | bool, `true` | trust the HA user header only from the Supervisor at `172.30.32.2`; direct connections still require pairing |
 | `workspace_dir` | str, `/data/jep/workspace` | the one served workspace every conversation starts from. Throwaway pods (`Add project → pod` in the client) live under the data home, so no folders to manage |
 | `browse_root` | str, `/data` | browser root when adding a folder from a client |
 | `model` | str, empty | default model, e.g. `openrouter/anthropic/claude-sonnet-4` |
 | `openrouter_api_key` | password, empty | your OpenRouter key; exported as `OPENROUTER_API_KEY`, which is all opencode needs to list and run OpenRouter models |
-| `github_token` | password, empty | optional personal access token with the `repo` scope. Empty: on start the log prints a one-time code and `https://github.com/login/device`. Enter the code there and the app continues, logged in. A token skips that and runs `gh auth login --with-token` |
+| `github_token` | password, empty | optional GitHub token, supplied through `GH_TOKEN`. GitHub login never blocks startup. For interactive login later, run `gh auth login --web` from the app's shell or an agent when requested |
 | `opencode_auth` | password, empty | paste the contents of `~/.local/share/opencode/auth.json` from a machine where you ran `opencode auth login`. Empty + no free models = no pickable models |
 | `opencode_config` | password, empty | paste the contents of `~/.config/opencode/opencode.json` (providers, MCP servers…) |
 | `transcribe_cmd` | str, empty | command printed-transcript replacement for whisper; voice notes need this or a whisper venv |

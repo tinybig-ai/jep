@@ -13,6 +13,43 @@ import { OpenCodeAdapter, mergeSessionRows } from "../src/harnesses/opencode.ts"
 
 const WS = "/Users/me/jep"
 
+test("permission recovery reaches two independent event consumers", async () => {
+  const server = createServer((req, res) => {
+    const route = new URL(req.url ?? "/", "http://local").pathname
+    if (route === "/permission" || route === "/question") {
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify(route === "/permission"
+        ? [{ id: "per_1", sessionID: "ses_a", permission: "bash", patterns: [] }]
+        : [{ id: "q_1", sessionID: "ses_a", questions: [{ question: "Which?", options: [{ label: "A" }] }] }]))
+      return
+    }
+    res.writeHead(200, { "content-type": "text/event-stream" })
+    res.write('data: {"type":"server.connected","properties":{}}\n\n')
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const port = (server.address() as { port: number }).port
+  const adapter = new OpenCodeAdapter({} as never, WS, `http://127.0.0.1:${port}`)
+  const ac = new AbortController()
+  const timeout = setTimeout(() => ac.abort(), 5_000)
+  const collect = async () => {
+    const asks: string[] = []
+    for await (const evt of adapter.events(ac.signal)) {
+      if (evt.type === "ask.requested") asks.push(evt.ask.id)
+      if (asks.length === 2) break
+    }
+    return asks.sort()
+  }
+  try {
+    const both = await Promise.all([collect(), collect()])
+    assert.deepEqual(both, [["per_1", "q_1"], ["per_1", "q_1"]])
+  } finally {
+    clearTimeout(timeout)
+    ac.abort()
+    server.closeAllConnections()
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
+})
+
 const row = (id: string, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
   id,
   title: id,

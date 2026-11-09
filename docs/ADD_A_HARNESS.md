@@ -205,7 +205,7 @@ the probe output pasted in. See [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 jep ships `jep-watch`, `jep-restart`, `jep-rename`, `jep-show` and `jep-send` as shell commands, and the
 context header (`contextFor`) names them once per conversation. With
-`JEP_TOOLS=mcp` the same three are also offered as the `jep-tools` MCP server
+`JEP_TOOLS=mcp` the same tools are also offered as the `jep-tools` MCP server
 (`bin/jep-mcp.mjs`, `src/core/tools.ts`). A harness adds that server **beside**
 the person's own configuration, never in place of it, and passes the
 conversation id with `--session`: Claude `--mcp-config` + `--allowed-tools`,

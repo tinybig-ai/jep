@@ -112,7 +112,7 @@ list is the conversation list, rendered by Telegram itself:
 - Inside a topic, everything keys to that conversation: replies, the pinned
   status chip, the streaming draft, ask buttons, /settings, the /queue — as the
   conversation continues, so does the messaging.
-- **/new** in a topic closes it and opens a fresh one; from General it opens a
+- **/new** in a topic preserves it and opens a fresh one; from General it opens a
   new topic outright. Renaming a conversation renames its topic; deleting the
   conversation from inside its own topic deletes the topic too.
 - A conversation is pinned to one topic by design: opening the same one from a

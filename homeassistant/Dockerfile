@@ -33,8 +33,10 @@ ARG JEP_REF="main"
 ARG JEP_SHA=""
 # $JEP_SHA is read here on purpose: Docker only drops the cached clone when
 # an ARG value changes and that ARG is used by this RUN.
-RUN git clone --depth 1 --branch "$JEP_REF" "$JEP_REPO" /app/jep \
- && echo "$JEP_SHA" > /app/jep/.jep-sha \
+RUN git init /app/jep \
+ && git -C /app/jep remote add origin "$JEP_REPO" \
+ && git -C /app/jep fetch --depth 1 origin "${JEP_SHA:-$JEP_REF}" \
+ && git -C /app/jep checkout --detach FETCH_HEAD \
  && cd /app/jep \
  && npm ci --omit=dev --ignore-scripts
 
