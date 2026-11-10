@@ -1,5 +1,12 @@
 # Changelog — the HA app
 
+## 0.2.12
+
+`/model openrouter/...` works. The picker used to keep only `opencode` and
+`opencode-go`, so a free OpenCode model stayed selected and hit the free cap.
+OpenRouter models from `opencode models` are accepted. The menu stays short;
+type the full id.
+
 ## 0.2.11
 
 Preserve the existing fork's prebuilt-image upgrade path. CI checks that the
