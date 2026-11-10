@@ -79,7 +79,10 @@ try {
   assert.ok(sessions.body.items.some(s=>s.id === id), "OpenCode conversation was lost after restart")
   console.log(`HA smoke passed: ${image} (${platform}), default boot, pairing, web assets, tools and restart persistence`)
 } catch (err) {
-  try { console.error(docker("logs", name)) } catch {}
+  try {
+    console.error(docker("inspect", "--format", "{{json .State}}", name))
+    execFileSync("docker", ["logs", name], { stdio: "inherit", timeout: 10_000 })
+  } catch {}
   throw err
 } finally {
   try { docker("rm", "--force", name) } catch {}
