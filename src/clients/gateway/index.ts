@@ -657,7 +657,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   const startedAt = Date.now()
   // single-use, always: every successful pairing or terminal unlock spends the
   // code and mints a fresh one, so a code seen once is never valid again
-  let pairCode = deps.pairCode ?? newPairCode()
+  let pairCode = normalizePairCode(deps.pairCode ?? "") || newPairCode()
   let tokens = await loadTokens(deps.dataHome)
   let tokensStamp = await tokenFileStamp(deps.dataHome)
   const deviceNames = await loadDeviceNames(deps.dataHome)
@@ -1421,7 +1421,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           return json(res, 403, { error: "this gateway does not allow a terminal (set JEP_TERMINAL=1 on the daemon)" })
         }
         const code = str("code")
-        if (!code || !same(code.trim(), pairCode)) return json(res, 403, { error: "wrong pairing code" })
+        if (!code || !same(normalizePairCode(code), pairCode)) return json(res, 403, { error: "wrong pairing code" })
         terminalTokens.add(token)
         await saveTerminalTokens(deps.dataHome, terminalTokens)
         spendPairCode("terminal unlocked")

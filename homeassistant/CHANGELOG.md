@@ -5,6 +5,7 @@
 Home Assistant image metadata now identifies the version and architecture.
 The agent's `jep-*` commands are installed on PATH. Credentials placed in
 `/config/opencode/auth.json` are loaded at startup, as documented.
+Configured pairing codes now accept hyphens, spaces and lowercase letters.
 
 Before publishing, CI boots each architecture with the default options and no
 GitHub login. It checks pairing, the web client, OpenCode conversation creation,

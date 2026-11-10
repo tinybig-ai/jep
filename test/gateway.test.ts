@@ -35,6 +35,25 @@ async function startWith(
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const textOf = (j: { message?: Message }) => (j.message?.parts[0] as { text?: string } | undefined)?.text
 
+test("a configured pairing code accepts its displayed hyphens and case", async () => {
+  const g = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter: fakeAdapter() }],
+    dataHome: mkdtempSync(join(tmpdir(), "gw-pinned-")),
+    port: 0,
+    pairCode: "ha-12 ab",
+  })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const token = await pair(base, "ha-12 ab")
+    const res = await fetch(`${base}/workspaces`, { method: "POST", headers: { authorization: `Bearer ${token}` } })
+    assert.equal(res.status, 200)
+    const spent = await fetch(`${base}/pair`, { method: "POST", body: JSON.stringify({ code: "HA12AB" }) })
+    assert.equal(spent.status, 403, "the configured code is still single-use")
+  } finally {
+    await g.close()
+  }
+})
+
 test("a prompt sent mid-turn is queued, not refused, and runs when the turn ends", async () => {
   const a = stallable()
   const { base, headers, g } = await startWith(a)

@@ -9,7 +9,7 @@ const [image, platform] = process.argv.slice(2)
 if (!image || !/^linux\/(amd64|arm64)$/.test(platform ?? "")) throw new Error("Usage: node scripts/smoke-ha-image.mjs IMAGE linux/amd64|linux/arm64")
 const config = JSON.parse(readFileSync(new URL("../homeassistant/config.json", import.meta.url)))
 const name = `jep-ha-smoke-${process.pid}`
-const docker = (...args) => execFileSync("docker", args, { encoding: "utf8", timeout: 180_000 }).trim()
+const docker = (...args) => execFileSync("docker", args, { encoding: "utf8", timeout: 180_000, stdio: "pipe" }).trim()
 const inside = (code, ...args) => docker("exec", name, "node", "--input-type=module", "-e",
   `import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\n${code}`, ...args)
 const request = (path, body, token) => JSON.parse(inside(`
