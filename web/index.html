@@ -276,8 +276,8 @@
   dialog .line { display: flex; gap: 8px; align-items: center; }
   dialog input[type=text], dialog input[type=number], dialog select { flex: 1; min-width: 0; padding: 7px 9px; background: var(--bubble); border: 1px solid var(--line); border-radius: 8px; }
   dialog input[type=number] { flex: none; width: 64px; }
-  #term pre { margin: 0 0 10px; height: 50vh; overflow: auto; background: #111; color: #e8e8e8; padding: 10px; border-radius: 8px; font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; }
-  #term input { width: 100%; font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  #term { width: min(920px, calc(100vw - 32px)); }
+  #termHost { height: 420px; background: #111; border-radius: 8px; overflow: hidden; }
   dialog label.toggle { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0; font-size: 14px; }
   dialog label.toggle small { display: block; color: var(--dim); font-size: 12px; }
   dialog .danger { color: var(--accent); }
@@ -472,8 +472,7 @@ document.write('<link rel="stylesheet" href="v2.css">'
 
 <dialog id="term">
   <form method="dialog" class="line"><h2 style="margin:0">Terminal</h2><button>Close</button></form>
-  <pre id="termScreen"></pre>
-  <input id="termInput" autocomplete="off" spellcheck="false" aria-label="Type into the terminal">
+  <div id="termHost"></div>
 </dialog>
 <dialog id="settings">
   <h2>Conversation settings</h2>
@@ -1359,7 +1358,8 @@ function renderInspector() {
     if (!git.files && git.changedFiles) gl.append(el("div", "empty", `${git.changedFiles} file${git.changedFiles === 1 ? "" : "s"} changed.`))
     else if (!git.files?.length) gl.append(el("div", "empty", "No uncommitted changes."))
     for (const f of git.files ?? []) {
-      const a = pathItem(workspace ? workspace + "/" + f.path : f.path, "", workspace)
+      const root = git.root || workspace
+      const a = pathItem(root ? root + "/" + f.path : f.path, "", root)
       a.querySelector(".tag").replaceWith(...[f.additions ? el("span", "add", "+" + f.additions) : null, f.deletions ? el("span", "del", "−" + f.deletions) : null].filter(Boolean))
       a.prepend(el("span", "code " + f.code, f.code))
       gl.append(a)
@@ -2557,6 +2557,9 @@ $("mcp").onclick = async () => {
 }
 
 let termTimer = null
+let termView = null
+let termFrame = ""
+let termSend = Promise.resolve()
 function stopTerm() {
   if (termTimer) clearInterval(termTimer)
   termTimer = null
@@ -2569,11 +2572,49 @@ async function termAvailable() {
     $("termBtn").hidden = true
   }
 }
+// wterm paints a real grid. tmux still owns the shell; each poll is the
+// visible pane, drawn in place, and keystrokes are the bytes wterm produced.
+// ponytail: the browser loads wterm from a CDN. Offline, the button errors
+// and the upgrade is to vendor @wterm/dom into web/.
+function paintWterm(text, cursor) {
+  const rows = (text.endsWith("\n") ? text.slice(0, -1) : text).split("\n")
+  let out = "\x1b[H"
+  rows.forEach((line, i) => {
+    out += "\x1b[K" + line
+    if (i < rows.length - 1) out += "\r\n"
+  })
+  out += "\x1b[J"
+  if (cursor) out += `\x1b[${cursor.y + 1};${cursor.x + 1}H`
+  termView.write(out)
+}
 async function paintTerm() {
-  const frame = await call("/term/frame", { id: current })
-  const screen = $("termScreen")
-  screen.textContent = frame.text || ""
-  screen.scrollTop = screen.scrollHeight
+  const frame = await call("/term/frame", { id: current, ansi: true })
+  const mark = (frame.text || "") + "\0" + (frame.cursor ? frame.cursor.x + "," + frame.cursor.y : "")
+  if (mark === termFrame) return
+  termFrame = mark
+  paintWterm(frame.text || "", frame.cursor)
+}
+async function ensureTerm() {
+  if (termView) return
+  if (!document.querySelector("link[data-wterm]")) {
+    const css = document.createElement("link")
+    css.rel = "stylesheet"
+    css.href = "https://cdn.jsdelivr.net/npm/@wterm/dom@0.5.10/src/terminal.css"
+    css.dataset.wterm = ""
+    document.head.append(css)
+  }
+  const { WTerm } = await import("https://esm.sh/@wterm/dom@0.5.10")
+  termView = new WTerm($("termHost"), {
+    cols: 80,
+    rows: 24,
+    autoResize: false,
+    onData: (data) => {
+      if (!current || !data) return
+      const id = current
+      termSend = termSend.then(() => call("/term/input", { id, text: data })).catch((err) => fail(err))
+    },
+  })
+  await termView.init()
 }
 async function openTerm() {
   if (!current) return
@@ -2584,24 +2625,17 @@ async function openTerm() {
     if (!code) return
     await call("/term/unlock", { code: code.trim() })
   }
-  await call("/term/open", { id: current })
+  await call("/term/open", { id: current, cols: 80, rows: 24 })
   $("term").showModal()
+  await ensureTerm()
+  termFrame = ""
   await paintTerm()
   stopTerm()
-  termTimer = setInterval(() => { if (current) paintTerm().catch(() => {}) }, 500)
-  $("termInput").focus()
+  termTimer = setInterval(() => { if (current) paintTerm().catch(() => {}) }, 300)
+  termView.focus()
 }
 $("termBtn").onclick = () => openTerm().catch((err) => fail(err))
 $("term").addEventListener("close", stopTerm)
-$("termInput").addEventListener("keydown", (e) => {
-  if (!current) return
-  const named = { Enter: "Enter", Backspace: "BSpace", Tab: "Tab", ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right", Escape: "Escape" }
-  const send = (body) => call("/term/input", { id: current, ...body }).then(paintTerm).catch((err) => fail(err))
-  if (e.key === "c" && e.ctrlKey) { e.preventDefault(); send({ key: "C-c" }); return }
-  if (e.key === "d" && e.ctrlKey) { e.preventDefault(); send({ key: "C-d" }); return }
-  if (named[e.key]) { e.preventDefault(); send({ key: named[e.key] }); return }
-  if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); send({ text: e.key }) }
-})
 
 // the skills this harness loads; where it can, each can be hidden from the model
 $("skills").onclick = async () => {

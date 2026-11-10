@@ -186,6 +186,7 @@ async function gitView(workspace: string) {
     branch: s.detached ? "detached HEAD" : s.branch,
     head: commits[0] ?? null,
     changedFiles: s.files.length,
+    root: s.dir,
     // which ones, for a client that shows them (the web app's side column): code is M/A/D/R/?/U, newest status first
     files: s.files.slice(0, 60).map((f) => ({ path: f.path, code: f.code, staged: f.staged, additions: f.additions, deletions: f.deletions })),
     commits,
@@ -1048,9 +1049,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   const within = (abs: string, roots: string[]): boolean => roots.some((r) => abs === r || abs.startsWith(r + sep))
   // the real path of a file inside the roots, or null: a symlink in a
   // workspace must not reach outside it
-  const servedPath = async (abs: string): Promise<string | null> => {
+  const servedPath = async (abs: string, extra: string[] = []): Promise<string | null> => {
     const real = await realpath(abs)
-    const roots = await Promise.all(rootsFor().map((r) => realpath(r).catch(() => r)))
+    const roots = await Promise.all([...rootsFor(), ...extra].map((r) => realpath(r).catch(() => r)))
     return within(real, roots) ? real : null
   }
   // A file the agent has read in a session is already in that session's
@@ -1058,24 +1059,40 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   // shown. This is what makes an image read from outside the workspace (a
   // /tmp screenshot, say) renderable: it is not under a served root, but the
   // read tool named it, and the tool card is about to display it.
+  const basesFor = async (adapter: HarnessAdapter, sid: string): Promise<string[]> => {
+    const sessionDir = (await adapter.getSession(sid).catch(() => null))?.workspace
+    return [...new Set([sessionDir, adapter.workspace].filter((d): d is string => typeof d === "string" && d.length > 0))]
+  }
+  // a relative path is tried in the conversation's folder first, then the
+  // harness folder. The one that exists wins; otherwise the conversation folder.
+  const place = async (bases: string[], raw: string): Promise<string> => {
+    if (isAbsolute(raw) || bases.length === 0) return resolve(raw)
+    for (const dir of bases) {
+      const candidate = resolve(dir, raw)
+      if (await stat(candidate).then((s) => s.isFile()).catch(() => false)) return candidate
+    }
+    return resolve(bases[0]!, raw)
+  }
   const touched = new Map<string, { at: number; paths: Set<string> }>()
   const readPaths = async (adapter: HarnessAdapter, sid: string, fresh = false): Promise<Set<string>> => {
     const hit = touched.get(sid)
     if (hit && Date.now() - hit.at < (fresh ? 500 : 10_000)) return hit.paths
     const paths = new Set<string>()
+    const bases = await basesFor(adapter, sid)
     const messages = await adapter.messages(sid, { limit: 200 }).catch(() => [] as Message[])
+    const add = (value: string) => { for (const base of bases) paths.add(resolve(base, value)) }
     for (const message of messages) {
       for (const part of message.parts) {
         if (part.kind === "tool") {
-          for (const sent of sentFrom(part.name, part.input, part.output)) paths.add(resolve(adapter.workspace, sent))
+          for (const sent of sentFrom(part.name, part.input, part.output)) add(sent)
         }
         if (part.kind !== "tool" || !part.input || typeof part.input !== "object") continue
         const input = part.input as Record<string, unknown>
         for (const key of ["filePath", "file_path", "path"]) {
           const value = input[key]
-          if (typeof value === "string" && value) paths.add(resolve(adapter.workspace, value))
+          if (typeof value === "string" && value) add(value)
         }
-        for (const shown of shownFrom(part.name, input, part.output)) paths.add(resolve(adapter.workspace, shown))
+        for (const shown of shownFrom(part.name, input, part.output)) add(shown)
       }
     }
     touched.set(sid, { at: Date.now(), paths })
@@ -1197,10 +1214,11 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         if (!decoded) return json(res, 400, { error: "p required" })
         const sid = url.searchParams.get("id")
         const owner = sid ? await ensureListed(sid) : null
-        const abs = owner && !isAbsolute(decoded) ? resolve(owner.workspace, decoded) : resolve(decoded)
+        const bases = owner && sid ? await basesFor(owner, sid) : []
+        const abs = await place(bases, decoded)
         // a read the agent did in this session is allowed; anything else must
         // be inside a served root (a symlink out of one is still refused)
-        const real = await servedPath(abs).catch(() => null)
+        const real = await servedPath(abs, bases).catch(() => null)
         const read = !real && owner && sid ? ((await readPaths(owner, sid)).has(abs) || (await readPaths(owner, sid, true)).has(abs)) : false
         if (!real && !read) return json(res, 403, { error: OUTSIDE })
         try {
@@ -1664,12 +1682,11 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         // a directory on the client and then having the roots check second-guess it.
         const readPath = str("path")
         if (!readPath) return json(res, 400, { error: "path required" })
-        const abs = isAbsolute(readPath)
-          ? resolve(readPath)
-          : resolve(adapter.workspace, readPath)
-        if (!within(abs, rootsFor())) return json(res, 403, { error: OUTSIDE })
+        const bases = await basesFor(adapter, id)
+        const abs = await place(bases, readPath)
+        if (!within(abs, [...rootsFor(), ...bases.map((d) => resolve(d))])) return json(res, 403, { error: OUTSIDE })
         try {
-          const real = await servedPath(abs)
+          const real = await servedPath(abs, bases)
           if (!real) return json(res, 403, { error: OUTSIDE })
           const info = await stat(real)
           if (!info.isFile()) return json(res, 404, { error: "no such file" })
@@ -1874,10 +1891,16 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         try {
           if (path === "/term/open") {
             await deps.terminal.open(id, adapter.workspace)
+            if (deps.terminal.resize && typeof b.cols === "number" && typeof b.rows === "number") {
+              await deps.terminal.resize(id, b.cols, b.rows)
+            }
             return json(res, 200, { ok: true })
           }
           if (path === "/term/frame") {
-            return json(res, 200, { text: await deps.terminal.frame(id) })
+            const ansi = b.ansi === true
+            const text = await deps.terminal.frame(id, ansi)
+            const cursor = ansi && deps.terminal.cursor ? await deps.terminal.cursor(id) : undefined
+            return json(res, 200, cursor ? { text, cursor } : { text })
           }
           if (path === "/term/input") {
             const text = str("text")

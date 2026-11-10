@@ -1,5 +1,11 @@
 # Changelog — the HA app
 
+## 0.2.16
+
+The Terminal button is a [wterm](https://github.com/vercel-labs/wterm) screen:
+colors, a cursor, and keys that go straight to the shell. Opening a file uses
+that conversation's folder, and git changes use the repository root.
+
 ## 0.2.15
 
 A Terminal button in the web client opens a tmux shell in the conversation's
