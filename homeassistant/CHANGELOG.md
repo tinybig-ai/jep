@@ -1,5 +1,10 @@
 # Changelog — the HA app
 
+## 0.2.19
+
+On a phone the sidebar covers 90% of the screen. Details and Terminal are
+separate tabs.
+
 ## 0.2.18
 
 A badge on Terminal counts shells the agent still has running. They are

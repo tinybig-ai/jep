@@ -277,7 +277,7 @@
   dialog input[type=text], dialog input[type=number], dialog select { flex: 1; min-width: 0; padding: 7px 9px; background: var(--bubble); border: 1px solid var(--line); border-radius: 8px; }
   dialog input[type=number] { flex: none; width: 64px; }
   #term { width: min(920px, calc(100vw - 32px)); }
-  #termPane { display: flex; flex-direction: column; flex: 1; min-height: 200px; border-top: 1px solid var(--line); }
+  #termPane { display: flex; flex-direction: column; flex: 1; min-height: 0; }
   #termPane[hidden] { display: none; }
   .termbar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 12px; font-weight: 600; }
   .termbar span { flex: 1; }
@@ -341,6 +341,9 @@
   body.inspector-off #inspector { display: none; }
   body.term-open #inspector { display: flex; }
   #inspector > .head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; min-height: 52px; border-bottom: 1px solid var(--line); font-weight: 600; font-size: 14px; }
+  #inspector .tabs { display: flex; gap: 2px; flex: 1; min-width: 0; }
+  #inspector .tabs button { border: none; border-radius: 0; background: none; padding: 6px 8px; color: var(--dim); font-weight: 600; font-size: 14px; box-shadow: inset 0 -2px 0 transparent; }
+  #inspector .tabs button.on { color: var(--text); box-shadow: inset 0 -2px 0 var(--text); }
   #inspector > .head .grow { flex: 1; }
   #inspector > .body { overflow-y: auto; flex: 1; padding: 4px 0 20px; }
   #inspector details { border-bottom: 1px solid var(--line); }
@@ -368,11 +371,18 @@
   #inspector .grid img { width: 100%; height: 100%; object-fit: cover; display: block; }
   #inspector .refresh { padding: 2px 8px; font-size: 11px; }
   #toggleInspector { padding: 4px 8px; line-height: 1; }
-  @media (max-width: 1100px) { body:not(.term-open) #inspector, #toggleInspector { display: none; } }
+  @media (max-width: 1100px) and (min-width: 701px) { body:not(.term-open) #inspector, #toggleInspector { display: none; } }
   @media (max-width: 700px) {
     aside { width: 100%; }
-    body.chatting aside, body:not(.chatting) main { display: none; }
+    body.chatting aside:not(#inspector), body:not(.chatting) main { display: none; }
     #back { display: block; }
+    #toggleInspector { display: inline-flex; }
+    body:not(.inspector-off) #inspector:not([hidden]),
+    body.term-open #inspector:not([hidden]) {
+      position: fixed; top: 0; right: 0; bottom: 0; width: 90vw; max-width: 90vw;
+      z-index: 40; display: flex; box-shadow: -12px 0 40px #0008;
+      padding-top: env(safe-area-inset-top);
+    }
   }
   /* code colors: highlight.js's GitHub themes (BSD-3-Clause), on our own backgrounds */
   pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#24292e;background:#fff}.hljs-doctag,.hljs-keyword,.hljs-meta .hljs-keyword,.hljs-template-tag,.hljs-template-variable,.hljs-type,.hljs-variable.language_{color:#d73a49}.hljs-title,.hljs-title.class_,.hljs-title.class_.inherited__,.hljs-title.function_{color:#6f42c1}.hljs-attr,.hljs-attribute,.hljs-literal,.hljs-meta,.hljs-number,.hljs-operator,.hljs-selector-attr,.hljs-selector-class,.hljs-selector-id,.hljs-variable{color:#005cc5}.hljs-meta .hljs-string,.hljs-regexp,.hljs-string{color:#032f62}.hljs-built_in,.hljs-symbol{color:#e36209}.hljs-code,.hljs-comment,.hljs-formula{color:#6a737d}.hljs-name,.hljs-quote,.hljs-selector-pseudo,.hljs-selector-tag{color:#22863a}.hljs-subst{color:#24292e}.hljs-section{color:#005cc5;font-weight:700}.hljs-bullet{color:#735c0f}.hljs-emphasis{color:#24292e;font-style:italic}.hljs-strong{color:#24292e;font-weight:700}.hljs-addition{color:#22863a;background-color:#f0fff4}.hljs-deletion{color:#b31d28;background-color:#ffeef0}
@@ -467,7 +477,13 @@ document.write('<link rel="stylesheet" href="v2.css">'
 </main>
 
 <aside id="inspector" hidden aria-label="Conversation details">
-  <div class="head"><span class="grow">Details</span><button class="refresh" id="inspectorRefresh" type="button" title="Reload git changes">↻</button></div>
+  <div class="head">
+    <div class="tabs" role="tablist">
+      <button type="button" id="tabDetails" class="on" role="tab">Details</button>
+      <button type="button" id="tabTerm" role="tab">Terminal</button>
+    </div>
+    <button class="refresh" id="inspectorRefresh" type="button" title="Reload git changes">↻</button>
+  </div>
   <div class="body" id="inspectorBody"></div>
   <section id="termPane" hidden>
     <div class="termbar"><span id="termTitle">Terminal</span><button type="button" id="termLive" hidden>Shell</button><button type="button" id="termClose">Close</button></div>
@@ -1236,12 +1252,21 @@ let inspectorKey = ""   // what the column was last drawn from, so a redraw that
 
 const inspectorOpen = () => localStorage.getItem("jep.inspector") !== "off"
 function applyInspector() {
-  document.body.classList.toggle("inspector-off", !inspectorOpen())
-  $("toggleInspector").setAttribute("aria-pressed", String(inspectorOpen()))
+  const phone = matchMedia("(max-width: 700px)").matches
+  document.body.classList.toggle("inspector-off", phone ? !document.body.classList.contains("term-open") : !inspectorOpen())
+  $("toggleInspector").setAttribute("aria-pressed", String(!document.body.classList.contains("inspector-off")))
   $("inspector").hidden = !token || !current
-  if (inspectorOpen()) renderInspector()
+  if (!document.body.classList.contains("inspector-off")) renderInspector()
 }
 $("toggleInspector").onclick = () => {
+  if (matchMedia("(max-width: 700px)").matches) {
+    const open = document.body.classList.contains("inspector-off")
+    document.body.classList.toggle("inspector-off", !open)
+    if (open) { sideTab("details"); renderInspector(); loadGit(true) }
+    else closeTerm()
+    $("toggleInspector").setAttribute("aria-pressed", String(open))
+    return
+  }
   localStorage.setItem("jep.inspector", inspectorOpen() ? "off" : "on")
   applyInspector()
 }
@@ -1251,7 +1276,7 @@ document.addEventListener("keydown", (e) => {
 
 async function loadGit(force = false) {
   const id = current
-  if (!id || !inspectorOpen()) return
+  if (!id || document.body.classList.contains("inspector-off")) return
   if (!force && gitFor === id && git) return
   try {
     const g = await call("/git", { id })
@@ -1341,7 +1366,7 @@ const sectionOpen = (title, fallback) => { const v = localStorage.getItem("jep.i
 
 function renderInspector() {
   const root = $("inspectorBody")
-  if (!root || $("inspector").hidden || !inspectorOpen()) return
+  if (!root || $("inspector").hidden || document.body.classList.contains("inspector-off")) return
   const { files, pictures } = inspectorData()
   const session = sessions.find((s) => s.id === current)
   const key = JSON.stringify([current, files.length, files[0]?.[1].at, pictures.length, git && [git.branch, git.changedFiles, git.head?.hash], session?.workspace])
@@ -2591,8 +2616,7 @@ function closeTerm() {
   stopTerm()
   if (termResize) termResize.disconnect()
   termResize = null
-  document.body.classList.remove("term-open")
-  $("termPane").hidden = true
+  sideTab("details")
   termPending = []
   termScreen = { text: "", cursor: null }
   termSynced = false
@@ -2600,6 +2624,15 @@ function closeTerm() {
   termWatch = null
   termLog = ""
   jobsKey = ""
+}
+function sideTab(name) {
+  const term = name === "term"
+  $("inspectorBody").hidden = term
+  $("termPane").hidden = !term
+  $("tabDetails").classList.toggle("on", !term)
+  $("tabTerm").classList.toggle("on", term)
+  $("inspectorRefresh").hidden = term
+  document.body.classList.toggle("term-open", term)
 }
 let termAllowed = false
 let termWatch = null
@@ -2747,8 +2780,8 @@ async function ensureTerm() {
 }
 async function showPane() {
   $("inspector").hidden = false
-  document.body.classList.add("term-open")
-  $("termPane").hidden = false
+  document.body.classList.remove("inspector-off")
+  sideTab("term")
   await ensureTerm()
   termFit.fit()
 }
@@ -2809,6 +2842,8 @@ async function openTerm() {
   else renderShells()
 }
 $("termBtn").onclick = () => openTerm().catch((err) => fail(err))
+$("tabTerm").onclick = () => { if ($("termPane").hidden) openTerm().catch((err) => fail(err)) }
+$("tabDetails").onclick = closeTerm
 $("termLive").onclick = () => startLive().catch((err) => fail(err))
 $("termClose").onclick = closeTerm
 
