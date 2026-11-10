@@ -10,7 +10,7 @@ jep is a remote control for **opencode**, **codex** and **claude**, **pi** and m
 from **Telegram**, the **Android app**, or any client behind the
 [gateway](docs/GATEWAY.md). 
 
-[![](https://img.shields.io/badge/version-0.2.0-3d6aa8)](package.json)
+[![](https://img.shields.io/badge/version-0.3.0-3d6aa8)](package.json)
 [![](https://img.shields.io/badge/Node-%E2%89%A526-339933)](package.json)
 [![](https://img.shields.io/badge/adapters-opencode%20%C2%B7%20codex%20%C2%B7%20claude-26a269)](src/app/harnesses.ts)
 [![](https://img.shields.io/badge/clients-Telegram%20%C2%B7%20Android%20%C2%B7%20iOS%20%C2%B7%20macOS-643891)](docs/GATEWAY.md)
@@ -89,7 +89,8 @@ Every [release](https://github.com/tinybig-ai/jep/releases/latest) carries:
 - **iOS**: not on the App Store or TestFlight yet. Build it from Xcode; see
   [clients/ios](docs/clients/ios.md).
 
-The daemon is on npm: `npm install -g @tinybig-ai/jep`, then run `jep`.
+The daemon ships as an installable tarball on the same release:
+`npm install -g https://github.com/tinybig-ai/jep/releases/download/v0.3.0/tinybig-ai-jep-0.3.0.tgz`, then run `jep`.
 
 ### 0. One command, no checkout
 

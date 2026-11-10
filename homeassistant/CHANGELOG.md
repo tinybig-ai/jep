@@ -1,5 +1,12 @@
 # Changelog — the HA app
 
+## 0.3.0
+
+First upstream release, contributed by Alberto Xamin. Images are published as
+`ghcr.io/tinybig-ai/{arch}-jep` for amd64 and aarch64. Existing fork installations
+can retain their repository URL and persistent data; moving to a different HA
+repository is a separate migration.
+
 ## 0.2.22
 
 The context ring sits to the right of the model name. Click it and the
@@ -55,7 +62,6 @@ That saves the whole chat as a markdown file.
 Pictures in the web client load under Home Assistant ingress. Their URL was
 `/file`, which left the app and hit Home Assistant. It is now relative to
 the ingress path.
-
 ## 0.2.12
 
 `/model openrouter/...` works. The picker used to keep only `opencode` and

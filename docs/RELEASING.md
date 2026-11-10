@@ -6,9 +6,10 @@ key. See [CONTRIBUTING](../CONTRIBUTING.md) for the contribution flow and
 
 ## What actually ships
 
-- **The daemon / CLI** is published to npm as
-  [`@tinybig-ai/jep`](https://www.npmjs.com/package/@tinybig-ai/jep) (the bare
-  `jep` name belongs to an unrelated package). It also runs from source
+- **The daemon / CLI** ships as `tinybig-ai-jep-<version>.tgz` on the GitHub
+  Release. Install that tarball with `npm install -g <file-or-release-URL>`.
+  Publishing `@tinybig-ai/jep` to npm is optional and requires `NPM_TOKEN`.
+  The daemon also runs from source
   (`npx --yes github:tinybig-ai/jep`, or a checkout). Its version is
   `package.json`, and the release job refuses to publish if it doesn't match
   the tag.
@@ -20,6 +21,10 @@ key. See [CONTRIBUTING](../CONTRIBUTING.md) for the contribution flow and
 - **The iOS app** is not distributed yet: TestFlight and the App Store need an
   Apple Developer account. Users build it from Xcode
   ([clients/ios](clients/ios.md)).
+- **The Home Assistant app** ships as two public GHCR images,
+  `ghcr.io/tinybig-ai/amd64-jep:<version>` and
+  `ghcr.io/tinybig-ai/aarch64-jep:<version>`. The HA version and image owner
+  must agree with the daemon version and publishing repository.
 
 ## One-time: the signing key
 
@@ -50,26 +55,30 @@ Debug builds and PRs need none of this.
 1. Make sure `main` is green: the `check` and `android` workflows pass.
 2. Pick the version (semver; the project is pre-`1.0`, so a minor bump may carry
    a breaking change, so say so in the notes).
-3. Bump the daemon version in `package.json` and commit it to `main`.
+3. Bump `package.json`, `package-lock.json` and `homeassistant/config.json`
+   together. Confirm `repository.json` and the HA image prefix name the
+   publishing repository. Add `docs/releases/v<version>.md` with notes and
+   contributor credits. Run `node scripts/check-release.mjs v<version> tinybig-ai`
+   and commit the release preparation to `main`.
 4. Tag and push:
    ```sh
-   git tag -a v0.2.0 -m "v0.2.0"
-   git push origin v0.2.0
+   git tag -a v0.3.0 -m "v0.3.0"
+   git push origin v0.3.0
    ```
-5. The `release` workflow builds the signed APK, stamps it with the tag's
-   version (`versionName=0.2.0`, `versionCode` from the run number), and attaches
-   it to the GitHub Release for that tag. Watch the run.
-6. Verify: the Release has `jep-0.2.0.apk` and `JepBar-0.2.0.zip`, and
-   `npm view @tinybig-ai/jep version` prints `0.2.0`. Optionally install it:
-   `adb install jep-0.2.0.apk`.
+5. The workflow prepares a **draft**, then builds the signed APK, universal
+   macOS app, daemon tarball and both HA images. On first publication, an
+   organization owner must make both GHCR packages public in their package
+   settings. The final job verifies anonymous access to both images and only
+   then publishes the GitHub Release as latest. A failed build leaves a draft.
+6. Verify the Release has `jep-0.3.0.apk`, `JepBar-0.3.0.zip` and
+   `tinybig-ai-jep-0.3.0.tgz`. Run
+   `node scripts/check-ha-images.mjs tinybig-ai 0.3.0` to verify image access.
+   Check npm separately only when its publishing token is configured.
 
 ## When it goes wrong
 
-- Tags are cheap. Delete and re-tag:
-  ```sh
-  git push --delete origin v0.2.0
-  git tag -d v0.2.0
-  ```
+- Published tags are immutable. Fix source problems in a new version rather
+  than moving a tag users already installed.
   Re-running the workflow for an existing tag just re-uploads the asset
   (`--clobber`).
 - Without the secrets, the release job **fails loudly** rather than shipping an

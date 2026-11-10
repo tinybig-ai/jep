@@ -16,9 +16,55 @@ on:
 
 permissions:
   contents: write # create the release and upload the APK
+  packages: write # Home Assistant images, via ha-app.yml
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+      - name: Validate the release version
+        run: |
+          [ "$GITHUB_REF_TYPE" = tag ] || { echo '::error::Select a version tag when dispatching a release'; exit 1; }
+          node scripts/check-release.mjs "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY_OWNER"
+      - name: Prepare the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            notes="docs/releases/$GITHUB_REF_NAME.md"
+            if [ -f "$notes" ]; then
+              gh release create "$GITHUB_REF_NAME" --draft --notes-file "$notes" --title "$GITHUB_REF_NAME"
+            else
+              gh release create "$GITHUB_REF_NAME" --draft --generate-notes --title "$GITHUB_REF_NAME"
+            fi
+          fi
+
+  daemon:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+      - run: npm ci
+      - name: Package and attach the daemon
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          npm pack --pack-destination "$RUNNER_TEMP"
+          gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP/tinybig-ai-jep-${GITHUB_REF_NAME#v}.tgz" --clobber
+
+  homeassistant:
+    needs: prepare
+    uses: ./.github/workflows/ha-app.yml
+
   apk:
+    needs: prepare
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -66,18 +112,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          apk=android/app/build/outputs/apk/release/app-release.apk
-          asset="jep-${GITHUB_REF_NAME#v}.apk"
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "$apk#$asset" --clobber
-          else
-            gh release create "$GITHUB_REF_NAME" "$apk#$asset" --generate-notes --title "$GITHUB_REF_NAME"
-          fi
+          asset="$RUNNER_TEMP/jep-${GITHUB_REF_NAME#v}.apk"
+          cp android/app/build/outputs/apk/release/app-release.apk "$asset"
+          gh release upload "$GITHUB_REF_NAME" "$asset" --clobber
 
   # The macOS menu-bar app, as a zipped JepBar.app. Ad-hoc signed only (no
   # Apple Developer ID yet), so the first open is right-click → Open.
   jepbar:
-    needs: apk
+    needs: prepare
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
@@ -117,7 +159,7 @@ jobs:
 
   # The daemon on npm as @tinybig-ai/jep. Skipped until NPM_TOKEN is set.
   npm:
-    needs: apk
+    needs: daemon
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -140,3 +182,18 @@ jobs:
             echo "::error::package.json version does not match $GITHUB_REF_NAME"; exit 1; }
           npm ci
           npm publish --provenance
+
+  publish:
+    needs: [daemon, apk, jepbar, homeassistant, npm]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+      - name: Verify anonymous access to both HA images
+        run: node scripts/check-ha-images.mjs "$GITHUB_REPOSITORY_OWNER" "${GITHUB_REF_NAME#v}"
+      - name: Publish the completed release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false --latest

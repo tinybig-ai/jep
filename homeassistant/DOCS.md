@@ -29,9 +29,10 @@ folder, which the Supervisor finds by its `config.json` at any depth.
    * Telegram prints `pairing code: XXXX-XXXX` until the first `/pair`.
    * The gateway prints its own pairing code once at boot (phones only).
 
-Installation pulls this fork's prebuilt image, preserving the existing update
-path. Later starts reuse that image. A release published from a different
-repository must update the image prefix to that repository owner's registry.
+Installation pulls the upstream prebuilt image. Later starts reuse that image.
+Existing fork users can keep their repository URL and image source; switching
+repository URLs creates a different HA app identity and needs an explicit data
+migration or backup restore.
 
 ### Where the web client lives
 
@@ -63,11 +64,10 @@ push, wait for CI, then reinstall/update the app in HA. CI builds the exact
 `JEP_SHA` commit from `JEP_REPO`, so a branch moving during the build cannot
 silently change the source. Local builds use `JEP_REF` when no SHA is supplied.
 
-The image prefix is `ghcr.io/albertoxamin/{arch}-jep` for this fork. Publish both
-architecture packages as public. For an upstream release, change `image` to
-`ghcr.io/tinybig-ai/{arch}-jep` and update the root repository metadata before
-publishing. CI rejects a registry owner that does not match the publishing
-repository. Keep the app version and registry tags in step.
+The upstream image prefix is `ghcr.io/tinybig-ai/{arch}-jep`. Both architecture
+packages must be public. Fork releases use their own owner in `image` and the
+root repository metadata; CI rejects a registry owner that does not match the
+publishing repository. Keep the app version and registry tags in step.
 
 Local builds are opt-in: remove `image` and set the Dockerfile's `JEP_REPO` to
 the source repository you intend to install. Its default is upstream, so a fork
