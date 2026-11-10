@@ -1254,7 +1254,17 @@ function inspectorData() {
   return { files: [...files].sort((a, b) => b[1].at - a[1].at), pictures: [...pictures].sort((a, b) => b[1] - a[1]).map(([p]) => p) }
 }
 
-const fileUrl = (path) => `/file?p=${b64url(path)}&id=${encodeURIComponent(current)}&token=${token}`
+// Ingress mounts the page under /api/hassio_ingress/<token>/ and does not
+// rewrite paths. A site-absolute /file is Home Assistant, not this app.
+const fileUrl = (path) => {
+  const base = new URL(location.href)
+  if (!base.pathname.endsWith("/")) base.pathname += "/"
+  const u = new URL("file", base)
+  u.searchParams.set("p", b64url(path))
+  u.searchParams.set("id", current || "")
+  u.searchParams.set("token", token || "")
+  return u.pathname + u.search
+}
 
 function pathItem(path, tag, workspace) {
   const a = el("a", "item")
@@ -1828,7 +1838,7 @@ function outputNode(p, name, command) {
 // same bytes route attachments use, and it already scopes to the workspace
 function imageNode(filePath) {
   const a = el("a", "tool-image-link")
-  a.href = `/file?p=${b64url(filePath)}&id=${encodeURIComponent(current)}&token=${token}`
+  a.href = fileUrl(filePath)
   a.target = "_blank"; a.rel = "noopener"
   const img = el("img", "tool-image")
   img.src = a.href
@@ -1848,7 +1858,7 @@ const IMAGE = /\.(png|jpe?g|gif|webp|avif|bmp|svg|heic|heif)$/i
 const isImage = (file) => IMAGE.test(file || "")
 
 function fileNode(p) {
-  const url = `/file?p=${b64url(p.filePath)}&id=${encodeURIComponent(current)}&token=${token}`
+  const url = fileUrl(p.filePath)
   if ((p.mimeType || "").startsWith("image/")) {
     const img = el("img")
     img.src = url

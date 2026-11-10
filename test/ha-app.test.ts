@@ -122,7 +122,7 @@ test("ingress is on, so HA can mount the web client without any open port", () =
   // the web client it proxies must have no site-absolute URLs: ingress mounts
   // the app under /api/hassio_ingress/<token>/ and does not rewrite paths
   const page = readFileSync(join(import.meta.dirname, "..", "web", "index.html"), "utf8")
-  for (const ref of [/src="\/[^"]/, /href="\/[^"]/, /fetch\("\/[^"]/, /EventSource\(`\//]) {
+  for (const ref of [/src="\/[^"]/, /href="\/[^"]/, /fetch\("\/[^"]/, /EventSource\(`\//, /`\/file\?/]) {
     const hit = ref.exec(page)?.[0] ?? null
     assert.equal(hit, null, `absolute URL in web/index.html breaks ingress: ${hit}`)
   }

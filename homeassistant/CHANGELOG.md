@@ -1,5 +1,11 @@
 # Changelog — the HA app
 
+## 0.2.13
+
+Pictures in the web client load under Home Assistant ingress. Their URL was
+`/file`, which left the app and hit Home Assistant. It is now relative to
+the ingress path.
+
 ## 0.2.12
 
 `/model openrouter/...` works. The picker used to keep only `opencode` and
