@@ -30,6 +30,7 @@ import {
 import { shownFrom, withShown } from "../../core/show.ts"
 import { sentFrom, withSentFiles } from "../../core/send.ts"
 import { ingressIdentity } from "./ingress.ts"
+import { parseModelRef } from "../../core/models.ts"
 import { detach } from "../../core/detach.ts"
 import type { TurnLedger } from "../../core/ledger.ts"
 import { TurnEngine, type PendingTurn, type TurnResult } from "../../core/turn-engine.ts"
@@ -2046,10 +2047,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const text = asked || "see the attached file"
         // this conversation's chosen model, if the phone set one in Settings
         const ref = modelRef(models, id)
-        const slash = ref ? ref.indexOf("/") : -1
-        const providerID = slash > 0 ? ref!.slice(0, slash) : ""
-        const modelID = slash > 0 ? ref!.slice(slash + 1) : ""
-        const model = providerID && modelID ? { providerID, modelID } : undefined
+        const model = parseModelRef(ref)
         const agent = agents.get(id)
         let settle!: (r: TurnResult) => void
         const done = new Promise<TurnResult>((r) => { settle = r })
@@ -2087,7 +2085,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const existing = loops.get(key)
         if (existing?.status === "running") return json(res, 409, { error: "a loop is already running" })
         const ref = modelRef(models, id)
-        const [providerID = "", modelID = ""] = ref ? ref.split("/") : []
+        const model = parseModelRef(ref)
         const loop: LoopState = {
           sessionID: key,
           workspace: adapter.workspace,
@@ -2102,7 +2100,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         engine.startLoop(loop, {
           text: goal,
           filePaths: [],
-          ...(providerID && modelID ? { model: { providerID, modelID } } : {}),
+          ...(model ? { model } : {}),
           ...(agents.get(id) ? { agent: agents.get(id) } : {}),
           steer: false,
           loop: true,

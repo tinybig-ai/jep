@@ -387,6 +387,8 @@ export class CodexAdapter implements HarnessAdapter {
       if (hasResponseItems && row.type === "response_item") {
         switch (payload.type) {
           case "message": {
+            // Rollouts include private runtime instructions alongside replies.
+            if (payload.role !== "user" && payload.role !== "assistant") break
             const text = contentText(payload.content)
             if (!text.trim() || isCodexInjectedContext(text)) break
             // driven by another agent, codex records its tool calls and their
@@ -733,7 +735,7 @@ export class CodexAdapter implements HarnessAdapter {
   async models(): Promise<ModelRef[]> {
     // `codex exec -m` takes any model the account can reach; there is no list
     // command, so offer the ones the CLI documents as selectable.
-    return (process.env.JEP_CODEX_MODELS ?? "gpt-5.5-codex,gpt-5.5,gpt-5.1-codex")
+    return (process.env.JEP_CODEX_MODELS ?? "gpt-6.1-sol,gpt-6-astra,gpt-6.1-terra,gpt-6-luna,gpt-5.6-sol,gpt-5.5-codex,gpt-5.5,gpt-5.1-codex")
       .split(",")
       .map((m) => m.trim())
       .filter(Boolean)
@@ -775,8 +777,14 @@ export class CodexAdapter implements HarnessAdapter {
 // Codex item types -> jep parts. Unknown kinds become "other" rather than
 // being dropped, so a new item type shows up as something rather than nothing.
 function mapItem(item: any, workspace: string): Part | null {
+  if (item?.role !== undefined && item.role !== "user" && item.role !== "assistant") return null
   const type = String(item?.type ?? "")
   switch (type) {
+    case "DeveloperMessage":
+    case "developer_message":
+    case "SystemMessage":
+    case "system_message":
+      return null
     case "agent_message":
     case "AgentMessage": {
       const text = textOf(item)
