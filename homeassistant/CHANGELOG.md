@@ -1,5 +1,10 @@
 # Changelog — the HA app
 
+## 0.2.14
+
+Right-click a conversation in the web client and choose **Download transcript**.
+That saves the whole chat as a markdown file.
+
 ## 0.2.13
 
 Pictures in the web client load under Home Assistant ingress. Their URL was

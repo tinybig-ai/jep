@@ -785,6 +785,7 @@ function sessionMenu(s, x, y) {
     item(unread ? "Mark as read" : "Mark as unread", async () => { await call("/seen", unread ? { id: s.id } : { id: s.id, at: 0 }); reload() })
   }
   item("Copy ID", () => copyText(s.id))
+  item("Download transcript", () => exportTranscript(s))
   if (s.active) item("Stop", () => call("/stop", { id: s.id }))
   m.append(el("hr"))
   item("Archive", async () => {
@@ -804,6 +805,32 @@ function sessionMenu(s, x, y) {
 }
 
 function closeSessionMenu() { document.querySelector(".menu.ctx")?.remove() }
+
+// The whole conversation as markdown, from the same /history the screen reads.
+// No page limit: this is the one time the full record is the point.
+async function exportTranscript(s) {
+  const data = await call("/history", { id: s.id })
+  const lines = [`# ${s.title || "untitled"}`, ""]
+  for (const m of data.messages || []) {
+    const bits = []
+    for (const p of m.parts || []) {
+      if ((p.kind === "text" || p.kind === "quote") && p.text?.trim()) bits.push(p.text.trim())
+      else if (p.kind === "file") bits.push(`File: ${p.fileName || p.filePath || "attachment"}`)
+    }
+    const body = bits.join("\n\n")
+    if (!body) continue
+    lines.push(`## ${m.role === "user" ? "You" : "Assistant"}`, "", body, "")
+  }
+  const blob = new Blob([lines.join("\n")], { type: "text/markdown;charset=utf-8" })
+  const a = document.createElement("a")
+  const name = (s.title || "transcript").replace(/[^\w.-]+/g, "-").replace(/^-|-$/g, "").slice(0, 80) || "transcript"
+  a.href = URL.createObjectURL(blob)
+  a.download = `${name}.md`
+  document.body.append(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(a.href)
+}
 document.addEventListener("pointerdown", (e) => { if (!e.target.closest?.(".menu.ctx")) closeSessionMenu() })
 addEventListener("keydown", (e) => { if (e.key === "Escape") closeSessionMenu() })
 addEventListener("blur", closeSessionMenu)
