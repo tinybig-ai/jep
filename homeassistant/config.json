@@ -1,6 +1,6 @@
 {
   "name": "Jep",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "slug": "jep",
   "description": "One interface for every coding agent: Telegram and web gateway clients for opencode",
   "url": "https://github.com/tinybig-ai/jep/tree/main/homeassistant",

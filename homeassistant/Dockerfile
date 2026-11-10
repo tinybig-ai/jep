@@ -9,6 +9,12 @@
 # JEP_REPO / JEP_REF to build from your own fork and branch.
 FROM node:26-alpine
 
+ARG BUILD_VERSION="dev"
+ARG BUILD_ARCH
+LABEL io.hass.version="${BUILD_VERSION}" \
+      io.hass.type="app" \
+      io.hass.arch="${BUILD_ARCH}"
+
 # bash: the opencode installer is a bash script. tmux: the gateway's terminal
 # feature. git: agents live in repositories. ffmpeg + python3: voice-note
 # transcription (whisper itself stays opt-in — see DOCS.md).
@@ -38,7 +44,10 @@ RUN git init /app/jep \
  && git -C /app/jep fetch --depth 1 origin "${JEP_SHA:-$JEP_REF}" \
  && git -C /app/jep checkout --detach FETCH_HEAD \
  && cd /app/jep \
- && npm ci --omit=dev --ignore-scripts
+ && npm ci --omit=dev --ignore-scripts \
+ && for command in /app/jep/bin/jep*.mjs; do \
+      ln -s "$command" "/usr/local/bin/$(basename "$command" .mjs)"; \
+    done
 
 COPY run.sh /run.sh
 RUN chmod 755 /run.sh

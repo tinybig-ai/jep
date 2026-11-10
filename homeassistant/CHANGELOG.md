@@ -1,5 +1,15 @@
 # Changelog — the HA app
 
+## 0.3.1
+
+Home Assistant image metadata now identifies the version and architecture.
+The agent's `jep-*` commands are installed on PATH. Credentials placed in
+`/config/opencode/auth.json` are loaded at startup, as documented.
+
+Before publishing, CI boots each architecture with the default options and no
+GitHub login. It checks pairing, the web client, OpenCode conversation creation,
+and retention of conversations and workspace files after a restart.
+
 ## 0.3.0
 
 First upstream release, contributed by Alberto Xamin. Images are published as

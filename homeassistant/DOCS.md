@@ -16,10 +16,11 @@ Point the app store at this repository:
 
 1. **Settings → Apps → App Store → ⋮ → Repositories** (in older HA,
    Supervisor → Add-on Store), paste
-   `https://github.com/<your-fork-or-tinybig-ai>/jep` as the repository URL.
+   `https://github.com/tinybig-ai/jep` as the repository URL.
    The Supervisor finds the app by its `config.json`.
-2. Install **Jep**, set the options in the **Configuration** tab (below), then
-   **Start**.
+2. Install **Jep**. In **Configuration**, enter an `openrouter_api_key` or
+   paste existing OpenCode credentials into `opencode_auth`, then **Start**.
+   No GitHub token, Telegram bot or host port is needed for the sidebar.
 3. Open **Jep** in the sidebar. The web client is already signed in. A phone
    on a published port still needs the pairing code from the app's **Log**.
 
@@ -68,6 +69,16 @@ The upstream image prefix is `ghcr.io/tinybig-ai/{arch}-jep`. Both architecture
 packages must be public. Fork releases use their own owner in `image` and the
 root repository metadata; CI rejects a registry owner that does not match the
 publishing repository. Keep the app version and registry tags in step.
+
+Maintainers: if GitHub says visibility is disabled by organization administrators,
+an organization owner must first enable **Public** under **Package Creation** in
+the [organization package settings](https://github.com/organizations/tinybig-ai/settings/packages).
+Then set both `amd64-jep` and `aarch64-jep` to public in their package settings.
+Installing Jep never requires a GHCR account or token.
+
+Both architecture images are booted in CI before being pushed. The check starts
+OpenCode and the gateway with default options, creates a conversation, loads web
+assets, and confirms that a restart retains the conversation and workspace files.
 
 Local builds are opt-in: remove `image` and set the Dockerfile's `JEP_REPO` to
 the source repository you intend to install. Its default is upstream, so a fork

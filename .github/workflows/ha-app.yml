@@ -14,6 +14,7 @@ on:
       - "web/**"
       - "package.json"
       - "package-lock.json"
+      - "scripts/smoke-ha-image.mjs"
       - ".github/workflows/ha-app.yml"
   workflow_dispatch:
   workflow_call:
@@ -61,16 +62,19 @@ jobs:
 
       # image naming matches the `{arch}` placeholder the Supervisor accepts:
       # ghcr.io/<owner>/{arch}-jep with per-arch tags
-      - name: Build and push
+      - name: Build the image for testing
         uses: docker/build-push-action@v6
         with:
           context: ./homeassistant
           platforms: ${{ matrix.platform }}
-          push: true
+          load: true
+          provenance: false
           # The Dockerfile's default clone is upstream. This repo's image must
           # contain this repo's source, or a fork ships a UI that never got
           # the commit just pushed.
           build-args: |
+            BUILD_VERSION=${{ steps.app.outputs.version }}
+            BUILD_ARCH=${{ matrix.supervisor_arch }}
             JEP_REPO=https://github.com/${{ github.repository }}
             JEP_REF=${{ github.ref_name }}
             JEP_SHA=${{ github.sha }}
@@ -84,3 +88,21 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.licenses=MIT
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+
+      - name: Boot the image with default options and verify restart
+        env:
+          IMAGE: ghcr.io/${{ steps.app.outputs.owner }}/${{ matrix.supervisor_arch }}-jep:${{ steps.app.outputs.version }}
+          PLATFORM: ${{ matrix.platform }}
+        run: node scripts/smoke-ha-image.mjs "$IMAGE" "$PLATFORM"
+
+      - name: Push the tested image
+        env:
+          IMAGE: ghcr.io/${{ steps.app.outputs.owner }}/${{ matrix.supervisor_arch }}-jep
+          VERSION: ${{ steps.app.outputs.version }}
+        run: |
+          docker push "$IMAGE:$VERSION"
+          docker push "$IMAGE:latest"

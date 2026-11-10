@@ -42,7 +42,7 @@ mkdir -p "$jep_data/xdg/opencode" "$jep_data/home" "$app_config/opencode"
 # over a file, so the app UI stays the single place to edit.
 env_file="$jep_data/opts.env"
 python3 - "$options_file" "$env_file" "$app_config" "$jep_data/xdg" <<'PY'
-import json, os, shlex, sys
+import json, os, shlex, shutil, sys
 
 options_file, env_file, app_config, xdg_dir = sys.argv[1:5]
 try:
@@ -65,6 +65,8 @@ def paste(name, value, path):
 auth = (o.get("opencode_auth") or "").strip()
 if auth:
     paste("opencode_auth", auth, os.path.join(xdg_dir, "opencode", "auth.json"))
+elif os.path.isfile(os.path.join(app_config, "opencode", "auth.json")):
+    shutil.copyfile(os.path.join(app_config, "opencode", "auth.json"), os.path.join(xdg_dir, "opencode", "auth.json"))
 ocfg = (o.get("opencode_config") or "").strip()
 if ocfg:
     paste("opencode_config", ocfg, os.path.join(app_config, "opencode", "opencode.json"))

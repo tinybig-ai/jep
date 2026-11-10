@@ -90,16 +90,17 @@ Every [release](https://github.com/tinybig-ai/jep/releases/latest) carries:
   [clients/ios](docs/clients/ios.md).
 
 The daemon ships as an installable tarball on the same release:
-`npm install -g https://github.com/tinybig-ai/jep/releases/download/v0.3.0/tinybig-ai-jep-0.3.0.tgz`, then run `jep`.
+`npm install -g https://github.com/tinybig-ai/jep/releases/download/v0.3.1/tinybig-ai-jep-0.3.1.tgz`, then run `jep`.
 
 ### 0. One command, no checkout
 
 ```sh
-JEP_TG_TOKEN=<from @BotFather> npx --yes @tinybig-ai/jep
+JEP_GW_PORT=8099 npx --yes --package=https://github.com/tinybig-ai/jep/releases/download/v0.3.1/tinybig-ai-jep-0.3.1.tgz jep
 ```
 
-This runs the Telegram bot. The same daemon serves the Android app and other
-clients through the [gateway](docs/GATEWAY.md) (set `JEP_GW_PORT`); the client
+Open `http://localhost:8099` and enter the pairing code from the log. For
+Telegram, also set `JEP_TG_TOKEN` to the token from @BotFather. The same daemon
+serves the Android app and other clients through the [gateway](docs/GATEWAY.md); the client
 guides are in [docs/clients](docs/clients/). For the launchd daemon, the Android
 build, or hacking on jep, clone below.
 

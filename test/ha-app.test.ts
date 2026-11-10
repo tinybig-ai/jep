@@ -76,6 +76,16 @@ test("a github token is handed to gh and never printed", async () => {
   assert.doesNotMatch(r.out, /ghp-test-token/)
 })
 
+test("credentials dropped in the configuration share are loaded without pasting", async () => {
+  const root = sandbox({ gateway_enabled: true })
+  mkdirSync(join(root, "config", "opencode"))
+  writeFileSync(join(root, "config", "opencode", "auth.json"), '{"provider":{"key":"from-share"}}')
+  const r = await boot(root)
+  assert.equal(r.status, 0, r.out)
+  assert.equal(readFileSync(join(root, "data", "jep", "xdg", "opencode", "auth.json"), "utf8"), '{"provider":{"key":"from-share"}}')
+  assert.doesNotMatch(r.out, /from-share/)
+})
+
 test("optional GitHub login never blocks startup, with or without a token", async () => {
   for (const token of ["", "test-token"]) {
     const root = sandbox({ telegram_token: "1:a", github_token: token })
