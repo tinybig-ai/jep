@@ -1,5 +1,11 @@
 # Changelog — the HA app
 
+## 0.2.15
+
+A Terminal button in the web client opens a tmux shell in the conversation's
+folder. On by default in this app. Ingress does not ask for the pairing code
+again, because Home Assistant already signed you in.
+
 ## 0.2.14
 
 Right-click a conversation in the web client and choose **Download transcript**.

@@ -89,6 +89,7 @@ must change it before switching its users to local builds.
 | `model` | str, empty | default model, e.g. `openrouter/anthropic/claude-sonnet-4` |
 | `openrouter_api_key` | password, empty | your OpenRouter key; exported as `OPENROUTER_API_KEY`, which is all opencode needs to list and run OpenRouter models |
 | `github_token` | password, empty | optional GitHub token, supplied through `GH_TOKEN`. GitHub login never blocks startup. For interactive login later, run `gh auth login --web` from the app's shell or an agent when requested |
+| `terminal_enabled` | bool, `true` | tmux shell in the web client (`JEP_TERMINAL=1`). The Terminal button opens it for the current conversation. Ingress does not ask for the pairing code again |
 | `opencode_auth` | password, empty | paste the contents of `~/.local/share/opencode/auth.json` from a machine where you ran `opencode auth login`. Empty + no free models = no pickable models |
 | `opencode_config` | password, empty | paste the contents of `~/.config/opencode/opencode.json` (providers, MCP servers…) |
 | `transcribe_cmd` | str, empty | command printed-transcript replacement for whisper; voice notes need this or a whisper venv |

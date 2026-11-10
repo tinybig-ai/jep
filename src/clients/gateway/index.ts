@@ -1390,10 +1390,8 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       // again unlocks a shell for *this* device token. Until then nothing about
       // the terminal is reachable, so a leaked device token is not a shell.
       if (path === "/term") {
-        return json(res, 200, {
-          allowed: terminalAllowed,
-          authorized: terminalAllowed && terminalTokens.has(token),
-        })
+        const authorized = terminalAllowed && (!!ingress || terminalTokens.has(token))
+        return json(res, 200, { allowed: terminalAllowed, authorized })
       }
 
       if (path === "/term/unlock") {
@@ -1865,12 +1863,13 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
 
       // ── the in-chat terminal ────────────────────────────────────────────
       // A shell in the conversation's own folder. Only when the operator
-      // allows it AND this device proved the pairing code. How the shell is
+      // allows it AND this device proved the pairing code, unless Home Assistant
+      // already authenticated the browser. How the shell is
       // run (tmux, a pty, anything) is the Terminal port's business; this is
       // only the policy and the wire shape.
       if (path.startsWith("/term/")) {
         if (!terminalAllowed) return json(res, 403, { error: "this gateway does not allow a terminal" })
-        if (!terminalTokens.has(token)) return json(res, 403, { error: "terminal isn't unlocked for this device" })
+        if (!ingress && !terminalTokens.has(token)) return json(res, 403, { error: "terminal isn't unlocked for this device" })
         if (!deps.terminal) return json(res, 503, { error: "no terminal is available" })
         try {
           if (path === "/term/open") {

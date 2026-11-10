@@ -35,6 +35,9 @@ configuration:
   github_token:
     name: GitHub token
     description: Optional GitHub token supplied as GH_TOKEN. Leave empty to start without GitHub authentication; use gh auth login --web later when needed.
+  terminal_enabled:
+    name: Web terminal
+    description: A tmux shell for the open conversation, from the Terminal button. On by default. Home Assistant already signed you in, so no second pairing code.
   opencode_auth:
     name: opencode auth.json
     description: Paste the contents of ~/.local/share/opencode/auth.json from a machine where you ran `opencode auth login`. Empty = free opencode models only.

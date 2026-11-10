@@ -88,6 +88,15 @@ test("optional GitHub login never blocks startup, with or without a token", asyn
   }
 })
 
+test("the web terminal is on unless the option is turned off", async () => {
+  const on = sandbox({ telegram_token: "1:a" })
+  assert.equal((await boot(on)).status, 0)
+  assert.match(envFor(on), /export JEP_TERMINAL=1/)
+  const off = sandbox({ telegram_token: "1:a", terminal_enabled: false })
+  assert.equal((await boot(off)).status, 0)
+  assert.doesNotMatch(envFor(off), /JEP_TERMINAL/)
+})
+
 test("the openrouter key rides through as opencode's own env", async () => {
   const root = sandbox({ telegram_token: "1:a", openrouter_api_key: "sk-or-test" })
   const r = await boot(root)

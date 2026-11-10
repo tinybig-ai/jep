@@ -276,6 +276,8 @@
   dialog .line { display: flex; gap: 8px; align-items: center; }
   dialog input[type=text], dialog input[type=number], dialog select { flex: 1; min-width: 0; padding: 7px 9px; background: var(--bubble); border: 1px solid var(--line); border-radius: 8px; }
   dialog input[type=number] { flex: none; width: 64px; }
+  #term pre { margin: 0 0 10px; height: 50vh; overflow: auto; background: #111; color: #e8e8e8; padding: 10px; border-radius: 8px; font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; }
+  #term input { width: 100%; font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
   dialog label.toggle { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0; font-size: 14px; }
   dialog label.toggle small { display: block; color: var(--dim); font-size: 12px; }
   dialog .danger { color: var(--accent); }
@@ -440,6 +442,7 @@ document.write('<link rel="stylesheet" href="v2.css">'
         <button type="button" id="newHere" class="icon" title="Attach files" aria-label="Attach files"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m20.5 11.5-7.9 7.9a5 5 0 0 1-7.1-7.1l8.5-8.5a3.5 3.5 0 0 1 5 5l-8.6 8.6a2 2 0 0 1-2.8-2.8l7.8-7.8"/></svg></button>
         <input id="attachInput" type="file" multiple hidden>
         <button type="button" id="mcp" class="icon" title="MCP servers" aria-label="MCP servers"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4"/></svg></button>
+        <button type="button" id="termBtn" class="icon" title="Terminal" aria-label="Terminal" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM7 9l3 3-3 3M12 15h5"/></svg></button>
         <button type="button" id="skills" class="icon" title="Skills" aria-label="Skills"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3 5 14h6l-1 7 8-11h-6z"/></svg></button>
       </div>
       <span id="context"></span>
@@ -467,6 +470,11 @@ document.write('<link rel="stylesheet" href="v2.css">'
   </form>
 </dialog>
 
+<dialog id="term">
+  <form method="dialog" class="line"><h2 style="margin:0">Terminal</h2><button>Close</button></form>
+  <pre id="termScreen"></pre>
+  <input id="termInput" autocomplete="off" spellcheck="false" aria-label="Type into the terminal">
+</dialog>
 <dialog id="settings">
   <h2>Conversation settings</h2>
   <section>
@@ -2548,6 +2556,53 @@ $("mcp").onclick = async () => {
   } catch (err) { $("menu").hidden = true; fail(err) }
 }
 
+let termTimer = null
+function stopTerm() {
+  if (termTimer) clearInterval(termTimer)
+  termTimer = null
+}
+async function termAvailable() {
+  try {
+    const st = await call("/term", {})
+    $("termBtn").hidden = !st.allowed
+  } catch {
+    $("termBtn").hidden = true
+  }
+}
+async function paintTerm() {
+  const frame = await call("/term/frame", { id: current })
+  const screen = $("termScreen")
+  screen.textContent = frame.text || ""
+  screen.scrollTop = screen.scrollHeight
+}
+async function openTerm() {
+  if (!current) return
+  const st = await call("/term", {})
+  if (!st.allowed) throw new Error("This gateway does not allow a terminal")
+  if (!st.authorized) {
+    const code = window.prompt("Pairing code to unlock the terminal")
+    if (!code) return
+    await call("/term/unlock", { code: code.trim() })
+  }
+  await call("/term/open", { id: current })
+  $("term").showModal()
+  await paintTerm()
+  stopTerm()
+  termTimer = setInterval(() => { if (current) paintTerm().catch(() => {}) }, 500)
+  $("termInput").focus()
+}
+$("termBtn").onclick = () => openTerm().catch((err) => fail(err))
+$("term").addEventListener("close", stopTerm)
+$("termInput").addEventListener("keydown", (e) => {
+  if (!current) return
+  const named = { Enter: "Enter", Backspace: "BSpace", Tab: "Tab", ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right", Escape: "Escape" }
+  const send = (body) => call("/term/input", { id: current, ...body }).then(paintTerm).catch((err) => fail(err))
+  if (e.key === "c" && e.ctrlKey) { e.preventDefault(); send({ key: "C-c" }); return }
+  if (e.key === "d" && e.ctrlKey) { e.preventDefault(); send({ key: "C-d" }); return }
+  if (named[e.key]) { e.preventDefault(); send({ key: named[e.key] }); return }
+  if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); send({ text: e.key }) }
+})
+
 // the skills this harness loads; where it can, each can be hidden from the model
 $("skills").onclick = async () => {
   if (toggleMenu("skills")) return
@@ -2903,6 +2958,7 @@ function show() {
   loadSessions().catch((err) => fail(err, loadSessions))
   loadWorkspaces().catch((err) => fail(err, loadWorkspaces))
   follow()
+  termAvailable().catch(() => {})
 }
 
 window.onhashchange = () => {

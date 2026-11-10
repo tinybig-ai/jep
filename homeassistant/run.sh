@@ -82,6 +82,7 @@ pairs = [
     ("JEP_MODEL", o.get("model")),
     ("OPENROUTER_API_KEY", o.get("openrouter_api_key")),
     ("GH_TOKEN", o.get("github_token")),
+    ("JEP_TERMINAL", "1" if o.get("terminal_enabled", True) else ""),
     ("JEP_TRANSCRIBE_CMD", o.get("transcribe_cmd")),
     ("JEP_TRANSCRIBE_TIMEOUT", str(int(o.get("transcribe_timeout", 0))) if o.get("transcribe_timeout") else ""),
     ("JEP_WHISPER_DIR", o.get("whisper_dir")),
