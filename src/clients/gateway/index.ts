@@ -735,6 +735,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   }
 
   const terminalTokens = await loadTerminalTokens(deps.dataHome)
+  // how many keystrokes this shell has applied. The browser echoes ahead of
+  // the poll and drops that echo once a frame reports the same count.
+  const termGen = new Map<string, number>()
   const pushTokens = await loadPushTokens(deps.dataHome)
   // Whether this gateway offers a shell at all — an operator decision on the
   // machine, not something a paired phone can turn on for itself.
@@ -1900,13 +1903,15 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
             const ansi = b.ansi === true
             const text = await deps.terminal.frame(id, ansi)
             const cursor = ansi && deps.terminal.cursor ? await deps.terminal.cursor(id) : undefined
-            return json(res, 200, cursor ? { text, cursor } : { text })
+            return json(res, 200, { text, gen: termGen.get(id) ?? 0, ...(cursor ? { cursor } : {}) })
           }
           if (path === "/term/input") {
             const text = str("text")
             const key = str("key")
             await deps.terminal.send(id, { ...(key ? { key } : {}), ...(text != null ? { text } : {}) })
-            return json(res, 200, { ok: true })
+            const gen = (termGen.get(id) ?? 0) + 1
+            termGen.set(id, gen)
+            return json(res, 200, { ok: true, gen })
           }
           if (path === "/term/close") {
             await deps.terminal.close(id)

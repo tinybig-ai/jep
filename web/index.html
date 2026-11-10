@@ -277,7 +277,11 @@
   dialog input[type=text], dialog input[type=number], dialog select { flex: 1; min-width: 0; padding: 7px 9px; background: var(--bubble); border: 1px solid var(--line); border-radius: 8px; }
   dialog input[type=number] { flex: none; width: 64px; }
   #term { width: min(920px, calc(100vw - 32px)); }
-  #termHost { height: 420px; background: #111; border-radius: 8px; overflow: hidden; }
+  #termPane { display: flex; flex-direction: column; flex: 1; min-height: 200px; border-top: 1px solid var(--line); }
+  #termPane[hidden] { display: none; }
+  .termbar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 12px; font-weight: 600; }
+  .termbar span { flex: 1; }
+  #termHost { flex: 1; min-height: 0; overflow: hidden; }
   dialog label.toggle { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0; font-size: 14px; }
   dialog label.toggle small { display: block; color: var(--dim); font-size: 12px; }
   dialog .danger { color: var(--accent); }
@@ -326,7 +330,9 @@
 
   /* the right column: what this conversation touched, kept out of the way of the chat */
   #inspector { width: 320px; flex: none; background: var(--side); border-right: 0; border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+  body.term-open #inspector { width: min(560px, 46vw); }
   body.inspector-off #inspector { display: none; }
+  body.term-open #inspector { display: flex; }
   #inspector > .head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; min-height: 52px; border-bottom: 1px solid var(--line); font-weight: 600; font-size: 14px; }
   #inspector > .head .grow { flex: 1; }
   #inspector > .body { overflow-y: auto; flex: 1; padding: 4px 0 20px; }
@@ -355,7 +361,7 @@
   #inspector .grid img { width: 100%; height: 100%; object-fit: cover; display: block; }
   #inspector .refresh { padding: 2px 8px; font-size: 11px; }
   #toggleInspector { padding: 4px 8px; line-height: 1; }
-  @media (max-width: 1100px) { #inspector, #toggleInspector { display: none; } }
+  @media (max-width: 1100px) { body:not(.term-open) #inspector, #toggleInspector { display: none; } }
   @media (max-width: 700px) {
     aside { width: 100%; }
     body.chatting aside, body:not(.chatting) main { display: none; }
@@ -456,6 +462,10 @@ document.write('<link rel="stylesheet" href="v2.css">'
 <aside id="inspector" hidden aria-label="Conversation details">
   <div class="head"><span class="grow">Details</span><button class="refresh" id="inspectorRefresh" type="button" title="Reload git changes">↻</button></div>
   <div class="body" id="inspectorBody"></div>
+  <section id="termPane" hidden>
+    <div class="termbar"><span>Terminal</span><button type="button" id="termClose">Close</button></div>
+    <div id="termHost"></div>
+  </section>
 </aside>
 
 <dialog id="forceNow">
@@ -470,10 +480,6 @@ document.write('<link rel="stylesheet" href="v2.css">'
   </form>
 </dialog>
 
-<dialog id="term">
-  <form method="dialog" class="line"><h2 style="margin:0">Terminal</h2><button>Close</button></form>
-  <div id="termHost"></div>
-</dialog>
 <dialog id="settings">
   <h2>Conversation settings</h2>
   <section>
@@ -2558,11 +2564,29 @@ $("mcp").onclick = async () => {
 
 let termTimer = null
 let termView = null
+let termFit = null
 let termFrame = ""
 let termSend = Promise.resolve()
+let termNext = 0
+let termPending = []
+let termResize = null
+let termScreen = { text: "", cursor: null }
+let termSynced = false
+let termFitTimer = null
 function stopTerm() {
   if (termTimer) clearInterval(termTimer)
   termTimer = null
+}
+function closeTerm() {
+  stopTerm()
+  if (termResize) termResize.disconnect()
+  termResize = null
+  document.body.classList.remove("term-open")
+  $("termPane").hidden = true
+  termPending = []
+  termScreen = { text: "", cursor: null }
+  termSynced = false
+  termFrame = ""
 }
 async function termAvailable() {
   try {
@@ -2572,10 +2596,17 @@ async function termAvailable() {
     $("termBtn").hidden = true
   }
 }
-// wterm paints a real grid. tmux still owns the shell; each poll is the
-// visible pane, drawn in place, and keystrokes are the bytes wterm produced.
-// ponytail: the browser loads wterm from a CDN. Offline, the button errors
-// and the upgrade is to vendor @wterm/dom into web/.
+// What a cooked shell will echo. Arrows and Ctrl stay on the wire: guessing
+// those fights vim. The frame drops this guess once `gen` catches up.
+function localEcho(data) {
+  let out = ""
+  for (const ch of data) {
+    if (ch >= " " && ch !== "\x7f") out += ch
+    else if (ch === "\x7f" || ch === "\b") out += "\b \b"
+    else if (ch === "\r") out += "\r\n"
+  }
+  return out
+}
 function paintWterm(text, cursor) {
   const rows = (text.endsWith("\n") ? text.slice(0, -1) : text).split("\n")
   let out = "\x1b[H"
@@ -2586,38 +2617,56 @@ function paintWterm(text, cursor) {
   out += "\x1b[J"
   if (cursor) out += `\x1b[${cursor.y + 1};${cursor.x + 1}H`
   termView.write(out)
+  for (const p of termPending) if (p.echo) termView.write(p.echo)
 }
 async function paintTerm() {
   const frame = await call("/term/frame", { id: current, ansi: true })
-  const mark = (frame.text || "") + "\0" + (frame.cursor ? frame.cursor.x + "," + frame.cursor.y : "")
+  const gen = frame.gen || 0
+  if (!termSynced) { termNext = gen; termSynced = true }
+  termPending = termPending.filter((p) => p.gen > gen)
+  termScreen = { text: frame.text || "", cursor: frame.cursor }
+  const mark = gen + "\0" + termScreen.text + "\0" + (frame.cursor ? frame.cursor.x + "," + frame.cursor.y : "") + "\0" + termPending.map((p) => p.gen).join(",")
   if (mark === termFrame) return
   termFrame = mark
-  paintWterm(frame.text || "", frame.cursor)
+  paintWterm(termScreen.text, termScreen.cursor)
+}
+async function fitTerm() {
+  if (!termFit || !current) return
+  termFit.fit()
+  const cols = termView.cols
+  const rows = termView.rows
+  if (cols < 2 || rows < 2) return
+  await call("/term/open", { id: current, cols, rows })
 }
 async function ensureTerm() {
   if (termView) return
-  if (!document.querySelector("link[data-wterm]")) {
+  if (!document.querySelector("link[data-xterm]")) {
     const css = document.createElement("link")
     css.rel = "stylesheet"
-    css.href = "https://cdn.jsdelivr.net/npm/@wterm/dom@0.5.10/src/terminal.css"
-    css.dataset.wterm = ""
+    css.href = "https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css"
+    css.dataset.xterm = ""
     document.head.append(css)
   }
-  const { WTerm } = await import("https://esm.sh/@wterm/dom@0.5.10")
-  termView = new WTerm($("termHost"), {
-    cols: 80,
-    rows: 24,
-    autoResize: false,
-    onData: (data) => {
-      if (!current || !data) return
-      const id = current
-      termSend = termSend.then(() => call("/term/input", { id, text: data })).catch((err) => fail(err))
-    },
+  const { Terminal } = await import("https://esm.sh/@xterm/xterm@5.5.0")
+  const { FitAddon } = await import("https://esm.sh/@xterm/addon-fit@0.10.0")
+  termFit = new FitAddon()
+  termView = new Terminal({ fontSize: 13, cursorBlink: true, theme: { background: "#111111" } })
+  termView.loadAddon(termFit)
+  termView.open($("termHost"))
+  termView.onData((data) => {
+    if (!current || !data) return
+    const id = current
+    const gen = ++termNext
+    const echo = localEcho(data)
+    termPending.push({ gen, echo })
+    termFrame = ""
+    paintWterm(termScreen.text, termScreen.cursor)
+    termSend = termSend.then(() => call("/term/input", { id, text: data })).catch((err) => fail(err))
   })
-  await termView.init()
 }
 async function openTerm() {
   if (!current) return
+  if (!$("termPane").hidden) { closeTerm(); return }
   const st = await call("/term", {})
   if (!st.allowed) throw new Error("This gateway does not allow a terminal")
   if (!st.authorized) {
@@ -2625,17 +2674,29 @@ async function openTerm() {
     if (!code) return
     await call("/term/unlock", { code: code.trim() })
   }
-  await call("/term/open", { id: current, cols: 80, rows: 24 })
-  $("term").showModal()
+  $("inspector").hidden = false
+  document.body.classList.add("term-open")
+  $("termPane").hidden = false
   await ensureTerm()
+  termFit.fit()
+  await call("/term/open", { id: current, cols: termView.cols, rows: termView.rows })
+  termNext = 0
+  termPending = []
+  termSynced = false
   termFrame = ""
   await paintTerm()
   stopTerm()
-  termTimer = setInterval(() => { if (current) paintTerm().catch(() => {}) }, 300)
+  termTimer = setInterval(() => { if (current && !$("termPane").hidden) paintTerm().catch(() => {}) }, 200)
+  if (termResize) termResize.disconnect()
+  termResize = new ResizeObserver(() => {
+    clearTimeout(termFitTimer)
+    termFitTimer = setTimeout(() => fitTerm().catch(() => {}), 150)
+  })
+  termResize.observe($("termHost"))
   termView.focus()
 }
 $("termBtn").onclick = () => openTerm().catch((err) => fail(err))
-$("term").addEventListener("close", stopTerm)
+$("termClose").onclick = closeTerm
 
 // the skills this harness loads; where it can, each can be hidden from the model
 $("skills").onclick = async () => {

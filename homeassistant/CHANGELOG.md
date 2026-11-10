@@ -1,5 +1,11 @@
 # Changelog — the HA app
 
+## 0.2.17
+
+The terminal sits in the right sidebar, drawn with [xterm.js](https://xtermjs.org/).
+Letters, Backspace, and Enter show up immediately. The shell's own screen
+replaces that guess as soon as the next frame arrives.
+
 ## 0.2.16
 
 The Terminal button is a [wterm](https://github.com/vercel-labs/wterm) screen:
