@@ -48,7 +48,8 @@ rest.
   **Codex**, so any harness behind the layer is reachable from any device.
 - **📱 Clients wherever you are.** A **Telegram bot** with native rich messages
   (tables, collapsible thinking and tool calls, stop buttons, permission
-  prompts) and a **Jetpack Compose Android app**. The
+  prompts — and, with @BotFather's Threaded mode, one **forum topic per
+  conversation**) and a **Jetpack Compose Android app**. The
   [gateway](docs/GATEWAY.md) makes a web dashboard, Slack bot, or desktop
   widget a client too.
 - **⚡ Live from the first word.** Turns stream into an animated draft: a 💭
@@ -140,6 +141,10 @@ npm start
 > service** that restarts on a crash and, with `loginctl enable-linger`, comes
 > back after a reboot. Logs: `journalctl --user -u jep-tg -f`. CI boots the
 > daemon on Debian in mock mode, and has systemd verify the unit, on every push.
+
+> On **Home Assistant**, `homeassistant/` ships the same daemon as an **app**:
+> add this repository to the app store and both clients are options. See
+> [homeassistant/DOCS.md](homeassistant/DOCS.md).
 
 ### 3. Pick a client
 

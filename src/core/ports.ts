@@ -234,7 +234,7 @@ export interface HarnessAdapter {
    * only harnesses that expose it declare it, and a client hides the control
    * when the adapter doesn't. False when the harness refused (a turn may be
    * mid-flight). */
-  compact?(sessionID: string): Promise<boolean>
+  compact?(sessionID: string, model?: string): Promise<boolean>
   /** Stop the child server. Sessions stay on disk for the next boot. */
   close(): Promise<void>
 }
@@ -251,8 +251,12 @@ export interface HarnessSupervisor {
 export interface Terminal {
   /** start the shell for this session, or reattach to the one already running */
   open(sessionID: string, dir: string): Promise<void>
-  /** the shell's current screen, as rendered text */
-  frame(sessionID: string): Promise<string>
+  /** the shell's current screen. `ansi` keeps the colors tmux painted. */
+  frame(sessionID: string, ansi?: boolean): Promise<string>
+  /** cursor on that screen, 0-based. Absent when the backend has no cursor. */
+  cursor?(sessionID: string): Promise<{ x: number; y: number }>
+  /** fit the shell to the widget. Ignored when the backend has one fixed size. */
+  resize?(sessionID: string, cols: number, rows: number): Promise<void>
   /** type into it, or press a named key (Enter, Tab, C-c, …) */
   send(sessionID: string, input: { text?: string; key?: string }): Promise<void>
   /** stop it */

@@ -28,6 +28,8 @@ import {
   type LoopState,
 } from "../../core/loops.ts"
 import { shownFrom, withShown } from "../../core/show.ts"
+import { sentFrom, withSentFiles } from "../../core/send.ts"
+import { ingressIdentity } from "./ingress.ts"
 import { detach } from "../../core/detach.ts"
 import type { TurnLedger } from "../../core/ledger.ts"
 import { TurnEngine, type PendingTurn, type TurnResult } from "../../core/turn-engine.ts"
@@ -75,6 +77,11 @@ export interface GatewayDeps {
   resumesLoops?: boolean
   /** pinned pairing code; generated fresh per boot when omitted */
   pairCode?: string
+  /** Home Assistant ingress already authenticated this request. When set, a
+   * request carrying `X-Remote-User-Id` (stamped by the Supervisor, which
+   * strips any client-sent copy) may skip the pairing code. Safe only while
+   * the gateway's host port is unpublished: a published port can send the header. */
+  ingressTrust?: boolean
   /** attempts per address per minute before the pair gate slams shut; a
    * production default, loosened by tests that must pair repeatedly */
   pairLimit?: number
@@ -179,6 +186,7 @@ async function gitView(workspace: string) {
     branch: s.detached ? "detached HEAD" : s.branch,
     head: commits[0] ?? null,
     changedFiles: s.files.length,
+    root: s.dir,
     // which ones, for a client that shows them (the web app's side column): code is M/A/D/R/?/U, newest status first
     files: s.files.slice(0, 60).map((f) => ({ path: f.path, code: f.code, staged: f.staged, additions: f.additions, deletions: f.deletions })),
     commits,
@@ -333,7 +341,7 @@ const saveTitles = async (dataHome: string, titles: Map<string, string>): Promis
 // The model a conversation runs on is a client concern here too: the phone
 // picks one per session from Settings, and the gateway remembers it (persisted,
 // like the titles) so the choice survives the app closing and applies to the
-// next prompt. Default is no override — the harness's own model.
+// next prompt. A session with no pin uses its harness's configured default.
 async function loadModels(dataHome: string): Promise<Map<string, string>> {
   try {
     const raw = JSON.parse(await readFile(join(dataHome, MODELS_FILE), "utf8")) as Record<string, string>
@@ -347,6 +355,9 @@ const saveModels = async (dataHome: string, models: Map<string, string>): Promis
   await mkdir(dataHome, { recursive: true })
   await writeFile(join(dataHome, MODELS_FILE), JSON.stringify(Object.fromEntries(models), null, 1))
 }
+
+const modelRef = (models: Map<string, string>, sessionID: string): string | undefined =>
+  models.get(sessionID)
 
 // The primary agent (opencode's "build" / "plan") a conversation runs under,
 // remembered per session exactly like the model. Not a harness — a harness is
@@ -724,6 +735,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   }
 
   const terminalTokens = await loadTerminalTokens(deps.dataHome)
+  // how many keystrokes this shell has applied. The browser echoes ahead of
+  // the poll and drops that echo once a frame reports the same count.
+  const termGen = new Map<string, number>()
   const pushTokens = await loadPushTokens(deps.dataHome)
   // Whether this gateway offers a shell at all — an operator decision on the
   // machine, not something a paired phone can turn on for itself.
@@ -985,6 +999,11 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           // the same for a picture the agent showed: say so as a field, not as a command line
           if (out.type === "part.updated" && out.part) out = { ...out, part: withShown(out.part) }
           broadcast(out)
+          if (out.type === "part.updated" && out.part) {
+            for (const part of withSentFiles([out.part]).slice(1)) {
+              broadcast({ ...out, partID: part.id!, partType: "file", part })
+            }
+          }
           detach("wake a waiting turn", wake(evt))
         }
       } catch {
@@ -1033,9 +1052,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   const within = (abs: string, roots: string[]): boolean => roots.some((r) => abs === r || abs.startsWith(r + sep))
   // the real path of a file inside the roots, or null: a symlink in a
   // workspace must not reach outside it
-  const servedPath = async (abs: string): Promise<string | null> => {
+  const servedPath = async (abs: string, extra: string[] = []): Promise<string | null> => {
     const real = await realpath(abs)
-    const roots = await Promise.all(rootsFor().map((r) => realpath(r).catch(() => r)))
+    const roots = await Promise.all([...rootsFor(), ...extra].map((r) => realpath(r).catch(() => r)))
     return within(real, roots) ? real : null
   }
   // A file the agent has read in a session is already in that session's
@@ -1043,21 +1062,40 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   // shown. This is what makes an image read from outside the workspace (a
   // /tmp screenshot, say) renderable: it is not under a served root, but the
   // read tool named it, and the tool card is about to display it.
+  const basesFor = async (adapter: HarnessAdapter, sid: string): Promise<string[]> => {
+    const sessionDir = (await adapter.getSession(sid).catch(() => null))?.workspace
+    return [...new Set([sessionDir, adapter.workspace].filter((d): d is string => typeof d === "string" && d.length > 0))]
+  }
+  // a relative path is tried in the conversation's folder first, then the
+  // harness folder. The one that exists wins; otherwise the conversation folder.
+  const place = async (bases: string[], raw: string): Promise<string> => {
+    if (isAbsolute(raw) || bases.length === 0) return resolve(raw)
+    for (const dir of bases) {
+      const candidate = resolve(dir, raw)
+      if (await stat(candidate).then((s) => s.isFile()).catch(() => false)) return candidate
+    }
+    return resolve(bases[0]!, raw)
+  }
   const touched = new Map<string, { at: number; paths: Set<string> }>()
   const readPaths = async (adapter: HarnessAdapter, sid: string, fresh = false): Promise<Set<string>> => {
     const hit = touched.get(sid)
     if (hit && Date.now() - hit.at < (fresh ? 500 : 10_000)) return hit.paths
     const paths = new Set<string>()
+    const bases = await basesFor(adapter, sid)
     const messages = await adapter.messages(sid, { limit: 200 }).catch(() => [] as Message[])
+    const add = (value: string) => { for (const base of bases) paths.add(resolve(base, value)) }
     for (const message of messages) {
       for (const part of message.parts) {
+        if (part.kind === "tool") {
+          for (const sent of sentFrom(part.name, part.input, part.output)) add(sent)
+        }
         if (part.kind !== "tool" || !part.input || typeof part.input !== "object") continue
         const input = part.input as Record<string, unknown>
         for (const key of ["filePath", "file_path", "path"]) {
           const value = input[key]
-          if (typeof value === "string" && value) paths.add(resolve(adapter.workspace, value))
+          if (typeof value === "string" && value) add(value)
         }
-        for (const shown of shownFrom(part.name, input, part.output)) paths.add(resolve(adapter.workspace, shown))
+        for (const shown of shownFrom(part.name, input, part.output)) add(shown)
       }
     }
     touched.set(sid, { at: Date.now(), paths })
@@ -1072,6 +1110,12 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     if (head.startsWith("Bearer ")) return head.slice(7).trim()
     const q = url.searchParams.get("token")
     return q && q.length > 0 ? q : null
+  }
+
+  // The Supervisor sets this after authenticating the HA user. Empty or huge
+  // values are not an id. The flag is the opt-in; the header alone is nothing.
+  const ingressUser = (req: IncomingMessage): string | null => {
+    return ingressIdentity(deps.ingressTrust === true, req.socket.remoteAddress, req.headers["x-remote-user-id"])
   }
 
   const json = (res: ServerResponse, status: number, body: unknown): void => {
@@ -1091,6 +1135,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           devices: tokens.size,
           pushConfigured: !!deps.push,
           uptimeMs: Date.now() - startedAt,
+          trustedIngress: !!ingressUser(req),
         })
       }
 
@@ -1114,27 +1159,33 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
 
       if (path === "/pair" && req.method === "POST") {
         if (!pairRateOK(deps.pairLimit ?? 5, ip)) return json(res, 429, { error: "too many attempts, wait a minute" })
+        const ingress = ingressUser(req)
         const body = (await readBody(req)) as { code?: string } | undefined
-        if (typeof body?.code !== "string" || !same(normalizePairCode(body.code), pairCode)) {
+        if (!ingress && (typeof body?.code !== "string" || !same(normalizePairCode(body.code), pairCode))) {
           return json(res, 403, { error: "wrong pairing code" })
         }
         const token = randomBytes(24).toString("hex")
         tokens.set(token, Date.now())
         await saveTokens(deps.dataHome, tokens)
-        spendPairCode("device paired")
-        // hand back the next code: the one just used is spent
-        return json(res, 200, { token, nextCode: pairCode })
+        // the header did not use the code, so the code stays valid for a phone
+        if (!ingress) spendPairCode("device paired")
+        // nextCode is the live secret; an ingress browser must not receive it
+        return json(res, 200, ingress ? { token } : { token, nextCode: pairCode })
       }
 
-      // everything below is token-gated
-      const token = tokenOf(req, url)
+      // everything below is token-gated. An ingress request with no (or a stale)
+      // token still proceeds as that HA user; the terminal stays locked because
+      // this stand-in is not in terminalTokens.
+      let token = tokenOf(req, url)
       const stamp = await tokenFileStamp(deps.dataHome)
       if (stamp !== tokensStamp) {
         tokens = await loadTokens(deps.dataHome)
         tokensStamp = stamp
         for (const t of [...terminalTokens]) if (!tokens.has(t)) terminalTokens.delete(t)
       }
-      if (!token || !tokens.has(token)) return json(res, 401, { error: "pair first" })
+      const ingress = ingressUser(req)
+      if (ingress && (!token || !tokens.has(token))) token = `ingress:${ingress}`
+      if (!token || (!tokens.has(token) && !ingress)) return json(res, 401, { error: "pair first" })
       deviceActivity.set(token, Date.now())
 
       if (path === "/stream" && req.method === "GET") {
@@ -1166,10 +1217,11 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         if (!decoded) return json(res, 400, { error: "p required" })
         const sid = url.searchParams.get("id")
         const owner = sid ? await ensureListed(sid) : null
-        const abs = owner && !isAbsolute(decoded) ? resolve(owner.workspace, decoded) : resolve(decoded)
+        const bases = owner && sid ? await basesFor(owner, sid) : []
+        const abs = await place(bases, decoded)
         // a read the agent did in this session is allowed; anything else must
         // be inside a served root (a symlink out of one is still refused)
-        const real = await servedPath(abs).catch(() => null)
+        const real = await servedPath(abs, bases).catch(() => null)
         const read = !real && owner && sid ? ((await readPaths(owner, sid)).has(abs) || (await readPaths(owner, sid, true)).has(abs)) : false
         if (!real && !read) return json(res, 403, { error: OUTSIDE })
         try {
@@ -1359,10 +1411,8 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       // again unlocks a shell for *this* device token. Until then nothing about
       // the terminal is reachable, so a leaked device token is not a shell.
       if (path === "/term") {
-        return json(res, 200, {
-          allowed: terminalAllowed,
-          authorized: terminalAllowed && terminalTokens.has(token),
-        })
+        const authorized = terminalAllowed && (!!ingress || terminalTokens.has(token))
+        return json(res, 200, { allowed: terminalAllowed, authorized })
       }
 
       if (path === "/term/unlock") {
@@ -1635,12 +1685,11 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         // a directory on the client and then having the roots check second-guess it.
         const readPath = str("path")
         if (!readPath) return json(res, 400, { error: "path required" })
-        const abs = isAbsolute(readPath)
-          ? resolve(readPath)
-          : resolve(adapter.workspace, readPath)
-        if (!within(abs, rootsFor())) return json(res, 403, { error: OUTSIDE })
+        const bases = await basesFor(adapter, id)
+        const abs = await place(bases, readPath)
+        if (!within(abs, [...rootsFor(), ...bases.map((d) => resolve(d))])) return json(res, 403, { error: OUTSIDE })
         try {
-          const real = await servedPath(abs)
+          const real = await servedPath(abs, bases)
           if (!real) return json(res, 403, { error: OUTSIDE })
           const info = await stat(real)
           if (!info.isFile()) return json(res, 404, { error: "no such file" })
@@ -1744,9 +1793,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         // the window of the model this conversation actually runs on, which may
         // be one the picker does not list (an alias, a 1M variant, whatever the
         // CLI fell back to) — the status line's fill rate needs it either way
-        const running = models.get(id) ?? resolvedDefault
+        const running = modelRef(models, id) ?? resolvedDefault
         const contextLimit = (running && caps.get(running)?.contextLimit) || 0
-        return json(res, 200, { models: enriched, current: models.get(id) ?? null, default: resolvedDefault, contextLimit })
+        return json(res, 200, { models: enriched, current: modelRef(models, id) ?? null, default: resolvedDefault, contextLimit })
       }
 
       // the primary agents this harness offers, plus the conversation's choice.
@@ -1816,7 +1865,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         // reporting a timed-out summarize as "refused" sent the phone chasing the
         // wrong thing. Keep them apart.
         let failure: string | null = null
-        const ok = await adapter.compact(id).catch((err) => {
+        const ok = await adapter.compact(id, modelRef(models, id)).catch((err) => {
           const msg = (err as Error)?.message ?? String(err)
           console.error(`[gw] compact ${id} failed: ${msg}`)
           failure = /timeout|abort/i.test(msg) ? "compacting took too long and was given up on" : msg
@@ -1834,26 +1883,35 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
 
       // ── the in-chat terminal ────────────────────────────────────────────
       // A shell in the conversation's own folder. Only when the operator
-      // allows it AND this device proved the pairing code. How the shell is
+      // allows it AND this device proved the pairing code, unless Home Assistant
+      // already authenticated the browser. How the shell is
       // run (tmux, a pty, anything) is the Terminal port's business; this is
       // only the policy and the wire shape.
       if (path.startsWith("/term/")) {
         if (!terminalAllowed) return json(res, 403, { error: "this gateway does not allow a terminal" })
-        if (!terminalTokens.has(token)) return json(res, 403, { error: "terminal isn't unlocked for this device" })
+        if (!ingress && !terminalTokens.has(token)) return json(res, 403, { error: "terminal isn't unlocked for this device" })
         if (!deps.terminal) return json(res, 503, { error: "no terminal is available" })
         try {
           if (path === "/term/open") {
             await deps.terminal.open(id, adapter.workspace)
+            if (deps.terminal.resize && typeof b.cols === "number" && typeof b.rows === "number") {
+              await deps.terminal.resize(id, b.cols, b.rows)
+            }
             return json(res, 200, { ok: true })
           }
           if (path === "/term/frame") {
-            return json(res, 200, { text: await deps.terminal.frame(id) })
+            const ansi = b.ansi === true
+            const text = await deps.terminal.frame(id, ansi)
+            const cursor = ansi && deps.terminal.cursor ? await deps.terminal.cursor(id) : undefined
+            return json(res, 200, { text, gen: termGen.get(id) ?? 0, ...(cursor ? { cursor } : {}) })
           }
           if (path === "/term/input") {
             const text = str("text")
             const key = str("key")
             await deps.terminal.send(id, { ...(key ? { key } : {}), ...(text != null ? { text } : {}) })
-            return json(res, 200, { ok: true })
+            const gen = (termGen.get(id) ?? 0) + 1
+            termGen.set(id, gen)
+            return json(res, 200, { ok: true, gen })
           }
           if (path === "/term/close") {
             await deps.terminal.close(id)
@@ -1910,8 +1968,11 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       // applied to the next prompt — the choice outlives the app.
       if (path === "/setmodel") {
         const ref = str("model")
-        if (ref) models.set(id, ref)
-        else models.delete(id)
+        if (ref) {
+          models.set(id, ref)
+        } else {
+          models.delete(id)
+        }
         await saveModels(deps.dataHome, models)
         return json(res, 200, { ok: true, model: ref || null })
       }
@@ -1939,7 +2000,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const hasMore = limit > 0 && window.length > limit
         const messages = (limit > 0 ? window.slice(-limit) : window)
           .map(cleanForDisplay)
-          .map((m) => ({ ...m, parts: m.parts.map(withShown) }))
+          .map((m) => ({ ...m, parts: withSentFiles(m.parts.map(withShown)) }))
           // a loop turn and a watch's notice have no words left after their
           // marker: keep them so the client can still draw the boundary
           .filter((m) => m.role !== "user" || m.parts.length > 0 || m.loop || m.notice)
@@ -1984,8 +2045,10 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         if (!asked && filePaths.length === 0) return json(res, 400, { error: "text required" })
         const text = asked || "see the attached file"
         // this conversation's chosen model, if the phone set one in Settings
-        const ref = models.get(id)
-        const [providerID = "", modelID = ""] = ref ? ref.split("/") : []
+        const ref = modelRef(models, id)
+        const slash = ref ? ref.indexOf("/") : -1
+        const providerID = slash > 0 ? ref!.slice(0, slash) : ""
+        const modelID = slash > 0 ? ref!.slice(slash + 1) : ""
         const model = providerID && modelID ? { providerID, modelID } : undefined
         const agent = agents.get(id)
         let settle!: (r: TurnResult) => void
@@ -2023,7 +2086,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const key = engine.turnKey(id)
         const existing = loops.get(key)
         if (existing?.status === "running") return json(res, 409, { error: "a loop is already running" })
-        const ref = models.get(id)
+        const ref = modelRef(models, id)
         const [providerID = "", modelID = ""] = ref ? ref.split("/") : []
         const loop: LoopState = {
           sessionID: key,
@@ -2120,7 +2183,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   }
   const bound = (server.address() as { port: number }).port
   listening = bound
-  console.error(`[gw] listening on :${bound}  ·  pairing code: ${pairCode}`)
+  console.error(`[gw] listening on :${bound}  ·  pairing code: ${pairCode}${deps.ingressTrust ? "  ·  ingress trust on" : ""}`)
 
   return {
     pairCode,

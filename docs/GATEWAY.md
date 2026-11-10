@@ -93,8 +93,8 @@ answers, it does so with `jep-tell` and the answer arrives as a message.
 
 | route | body | returns |
 |---|---|---|
-| `POST /pair` | `{code}` | `{token}` (5 tries / 60 s) |
-| `GET /health` | (none) | `{ok,paired,devices,pushConfigured,uptimeMs}` |
+| `POST /pair` | `{code}` | `{token,nextCode}` (5 tries / 60 s). With `JEP_GW_INGRESS_TRUST=1`, a socket peer of `172.30.32.2` (Supervisor), and `X-Remote-User-Id`, the code is skipped, the pairing code is not spent, and `nextCode` is omitted |
+| `GET /health` | (none) | `{ok,paired,devices,pushConfigured,uptimeMs,trustedIngress}` — `trustedIngress` requires the Supervisor's socket address, its identity header, and the ingress opt-in |
 | `POST /devices` | (none) | `{devices[]}`: paired device fingerprints, names, pairing/last-seen times, and whether each is the calling device |
 | `POST /devices/rename` | `{id,name}` | `{ok,id,name}`: rename one paired device |
 | `POST /devices/revoke` | `{id}` | `{ok,current}`: revoke one device token; `current` says whether the caller revoked itself |
@@ -134,9 +134,9 @@ answers, it does so with `jep-tell` and the answer arrives as a message.
 | `POST /term` | (none) | `{authorized}`: whether *this* device token may open a shell (see below) |
 | `POST /term/unlock` | `{code}` | `{ok}` or 403: prove the pairing code a second time to allow a terminal from this device |
 | `POST /term/lock` | (none) | `{ok}`: drop that grant |
-| `POST /term/open` | `{id}` | `{ok,name}`: start (or reattach) the conversation's tmux shell in its workspace |
-| `POST /term/frame` | `{id}` | `{text}`: the shell's screen as rendered text |
-| `POST /term/input` | `{id,text?,key?}` | `{ok}`: type `text`, or press a named `key` (Enter/Tab/C-c/…) |
+| `POST /term/open` | `{id, cols?, rows?}` | `{ok,name}`: start (or reattach) the conversation's tmux shell in its workspace. `cols` and `rows` resize it to the widget |
+| `POST /term/frame` | `{id, ansi?}` | `{text, gen, cursor?}`: the shell's screen. `ansi: true` keeps colors, `cursor` is `{x, y}`, and `gen` counts keystrokes already applied |
+| `POST /term/input` | `{id,text?,key?}` | `{ok, gen}`: type `text`, or press a named `key` (Enter/Tab/C-c/…). `gen` is how many inputs this shell has applied |
 | `POST /term/close` | `{id}` | `{ok}`: kill the shell |
 | `POST /skills` | `{id}` | `{skills[],toggleable}`: the SKILL.md dirs this harness loads (`{name,description,scope,path,disableModelInvocation}`) |
 | `POST /setskill` | `{id,path,disabled}` | `{ok}`: hide (or allow) a skill for the model; flips `disable-model-invocation` in its frontmatter |

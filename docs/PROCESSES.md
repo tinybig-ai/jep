@@ -58,6 +58,13 @@ scripts/
   install.sh              // writes the plist, but proves a launchd job can read
                           // the checkout first (see section 5)
   jep-daemon.sh           // the plist's entry point: same probe at every launch
+homeassistant/
+  run.sh                  // the Home Assistant app's entry point: options.json →
+                          // the daemon's env (same surface as install-linux.sh),
+                          // then exec node; JEP_HA_DRY_RUN=1 prints and exits
+  Dockerfile              // node:26-alpine + opencode, clones the repo at build
+  config.json             // the Supervisor's app definition; both clients are
+                          // options (see homeassistant/DOCS.md)
 test/
   *.test.ts               // node --test, no framework. The pure modules get unit
                           // tests; core/git.ts also builds real repos in a temp
@@ -89,6 +96,7 @@ fixture/
 | Var | Meaning |
 |-----|---------|
 | `JEP_TG_TOKEN` | Telegram bot token (live mode) |
+| `JEP_TG_FORUM` | `auto` (default) or `off`: with @BotFather's **Threaded mode** on, each conversation becomes a forum topic (see "Bot forum topics" below). `off` never tries. |
 | `JEP_DATA_HOME` | data dir (pairing.json, store.json, opencode/). Default: temp dir |
 | `JEP_TG_MOCK=1` | mock mode: reads JSON-lines updates from stdin, dumps calls |
 | `JEP_WORKSPACES` | `:`-separated workspace dirs (default: `process.cwd()`; mock mode: the two fixtures) |

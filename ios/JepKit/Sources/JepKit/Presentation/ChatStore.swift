@@ -388,7 +388,19 @@ public final class ChatStore {
                 let servedNow = batch.messages.filter { $0.role == .user }
                 update { st in
                     let prior = st
-                    st.messages = batch.messages + optimistic
+                    // A refresh started while a prompt is in flight can return
+                    // after that prompt's final message. Keep local messages
+                    // that the stale history page does not know about, or the
+                    // refresh can erase the reply from the screen.
+                    let batchIDs = Set(batch.messages.map(\.id))
+                    let optimisticIDs = Set(optimistic.map(\.id))
+                    let servedUserText = Set(batch.messages.filter { $0.role == .user }.map(textOf))
+                    let local = prior.messages.filter {
+                        !batchIDs.contains($0.id) &&
+                            !optimisticIDs.contains($0.id) &&
+                            !($0.role == .user && servedUserText.contains(textOf($0)))
+                    }
+                    st.messages = batch.messages + local + optimistic
                     if liveRowIsSettled(prior.live?.messageId, batch.messages) { st.live = nil }
                     st.hasMore = batch.hasMore
                     st.loop = batch.loop

@@ -255,7 +255,10 @@
   .tools button.icon { padding: 3px 5px; border-radius: 6px; line-height: 0; }
   button.icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
   button.icon:hover { color: var(--text); }
-  #model { margin-left: auto; }
+  .modelrow { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+  .modelrow #model { margin-left: 0; }
+  #ctxRing { border: none; padding: 0; background: none; line-height: 0; color: var(--dim); }
+  #ctxRing:hover { color: var(--text); background: none; }
   .menu.right { left: auto; right: max(20px, calc(50% - 390px)); }
   .menu h4 { margin: 6px 10px 4px; font-size: 11px; font-weight: 500; color: var(--dim); text-transform: uppercase; letter-spacing: .5px; }
   .menu label { display: flex; gap: 8px; align-items: flex-start; padding: 6px 10px; font-size: 13px; border-radius: 6px; cursor: pointer; }
@@ -276,6 +279,19 @@
   dialog .line { display: flex; gap: 8px; align-items: center; }
   dialog input[type=text], dialog input[type=number], dialog select { flex: 1; min-width: 0; padding: 7px 9px; background: var(--bubble); border: 1px solid var(--line); border-radius: 8px; }
   dialog input[type=number] { flex: none; width: 64px; }
+  #term { width: min(920px, calc(100vw - 32px)); }
+  #termPane { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  #termPane[hidden] { display: none; }
+  .termbar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 12px; font-weight: 600; }
+  .termbar span { flex: 1; }
+  #termHost { flex: 1; min-height: 0; overflow: hidden; }
+  #termBtn { position: relative; }
+  #termCount { position: absolute; top: -3px; right: -3px; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 8px; background: var(--accent); color: #fff; font: 600 10px/14px ui-sans-serif, system-ui, sans-serif; }
+  #termJobs { display: flex; flex-direction: column; max-height: 108px; overflow: auto; border-bottom: 1px solid var(--line); }
+  #termJobs[hidden] { display: none; }
+  #termJobs button { border: none; border-radius: 0; text-align: left; padding: 5px 10px; font: 12px/1.3 ui-monospace, Menlo, monospace; color: var(--dim); background: transparent; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #termJobs button.run { color: var(--text); }
+  #termJobs button.on { background: var(--bubble); color: var(--text); }
   dialog label.toggle { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0; font-size: 14px; }
   dialog label.toggle small { display: block; color: var(--dim); font-size: 12px; }
   dialog .danger { color: var(--accent); }
@@ -295,6 +311,15 @@
   /* files dragged over the conversation: the composer says it will take them */
   form.compose.dropping .box { outline: 2px dashed var(--accent); outline-offset: 2px; }
   form.compose .box { max-width: 780px; margin: 0 auto; display: flex; gap: 8px; align-items: flex-end; }
+  #ctx { max-width: 780px; margin: 0 auto 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
+  #ctx h3 { margin: 0 0 4px; font-size: 13px; }
+  #ctx .ctx-top { display: flex; justify-content: space-between; gap: 8px; color: var(--dim); font-size: 12px; margin-bottom: 8px; }
+  #ctx .bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--line); }
+  #ctx .bar i { display: block; height: 100%; }
+  #ctx .legend { margin: 8px 0 0; display: flex; flex-direction: column; gap: 3px; }
+  #ctx .legend div { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+  #ctx .sw { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+  #ctx .legend b { margin-left: auto; font-weight: 500; }
   textarea {
     flex: 1; resize: none; max-height: 40vh; min-height: 42px; padding: 10px 12px;
     background: var(--bubble); border: 1px solid var(--line); border-radius: 12px; outline: none;
@@ -324,8 +349,13 @@
 
   /* the right column: what this conversation touched, kept out of the way of the chat */
   #inspector { width: 320px; flex: none; background: var(--side); border-right: 0; border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+  body.term-open #inspector { width: min(560px, 46vw); }
   body.inspector-off #inspector { display: none; }
+  body.term-open #inspector { display: flex; }
   #inspector > .head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; min-height: 52px; border-bottom: 1px solid var(--line); font-weight: 600; font-size: 14px; }
+  #inspector .tabs { display: flex; gap: 2px; flex: 1; min-width: 0; }
+  #inspector .tabs button { border: none; border-radius: 0; background: none; padding: 6px 8px; color: var(--dim); font-weight: 600; font-size: 14px; box-shadow: inset 0 -2px 0 transparent; }
+  #inspector .tabs button.on { color: var(--text); box-shadow: inset 0 -2px 0 var(--text); }
   #inspector > .head .grow { flex: 1; }
   #inspector > .body { overflow-y: auto; flex: 1; padding: 4px 0 20px; }
   #inspector details { border-bottom: 1px solid var(--line); }
@@ -353,11 +383,18 @@
   #inspector .grid img { width: 100%; height: 100%; object-fit: cover; display: block; }
   #inspector .refresh { padding: 2px 8px; font-size: 11px; }
   #toggleInspector { padding: 4px 8px; line-height: 1; }
-  @media (max-width: 1100px) { #inspector, #toggleInspector { display: none; } }
+  @media (max-width: 1100px) and (min-width: 701px) { body:not(.term-open) #inspector, #toggleInspector { display: none; } }
   @media (max-width: 700px) {
     aside { width: 100%; }
-    body.chatting aside, body:not(.chatting) main { display: none; }
+    body.chatting aside:not(#inspector), body:not(.chatting) main { display: none; }
     #back { display: block; }
+    #toggleInspector { display: inline-flex; }
+    body:not(.inspector-off) #inspector:not([hidden]),
+    body.term-open #inspector:not([hidden]) {
+      position: fixed; top: 0; right: 0; bottom: 0; width: 90vw; max-width: 90vw;
+      z-index: 40; display: flex; box-shadow: -12px 0 40px #0008;
+      padding-top: env(safe-area-inset-top);
+    }
   }
   /* code colors: highlight.js's GitHub themes (BSD-3-Clause), on our own backgrounds */
   pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#24292e;background:#fff}.hljs-doctag,.hljs-keyword,.hljs-meta .hljs-keyword,.hljs-template-tag,.hljs-template-variable,.hljs-type,.hljs-variable.language_{color:#d73a49}.hljs-title,.hljs-title.class_,.hljs-title.class_.inherited__,.hljs-title.function_{color:#6f42c1}.hljs-attr,.hljs-attribute,.hljs-literal,.hljs-meta,.hljs-number,.hljs-operator,.hljs-selector-attr,.hljs-selector-class,.hljs-selector-id,.hljs-variable{color:#005cc5}.hljs-meta .hljs-string,.hljs-regexp,.hljs-string{color:#032f62}.hljs-built_in,.hljs-symbol{color:#e36209}.hljs-code,.hljs-comment,.hljs-formula{color:#6a737d}.hljs-name,.hljs-quote,.hljs-selector-pseudo,.hljs-selector-tag{color:#22863a}.hljs-subst{color:#24292e}.hljs-section{color:#005cc5;font-weight:700}.hljs-bullet{color:#735c0f}.hljs-emphasis{color:#24292e;font-style:italic}.hljs-strong{color:#24292e;font-weight:700}.hljs-addition{color:#22863a;background-color:#f0fff4}.hljs-deletion{color:#b31d28;background-color:#ffeef0}
@@ -369,13 +406,16 @@
 // after the page's own script. There is one client, not a version to choose.
 document.documentElement.classList.add("v2")
 document.querySelector("meta[name=viewport]").content += ", viewport-fit=cover, interactive-widget=resizes-content"
-document.write('<link rel="stylesheet" href="/v2.css">'
+// href/src without a leading slash: the page must work as-is when Home
+// Assistant's ingress proxy mounts it under /api/hassio_ingress/<token>/ (no
+// rewriting happens there), which a relative base makes work at "/" too
+document.write('<link rel="stylesheet" href="v2.css">'
   + '<meta name="theme-color" content="#fcfbfa" media="(prefers-color-scheme: light)">'
   + '<meta name="theme-color" content="#111113" media="(prefers-color-scheme: dark)">')
 </script>
-<script src="/highlight.min.js" defer></script>
-<script src="/marked.js" defer></script>
-<script src="/purify.min.js" defer></script>
+<script src="highlight.min.js" defer></script>
+<script src="marked.js" defer></script>
+<script src="purify.min.js" defer></script>
 </head>
 <body>
 
@@ -424,6 +464,7 @@ document.write('<link rel="stylesheet" href="/v2.css">'
       <label><input type="radio" name="mode" value="after"><span>After this turn</span></label>
       <label><input type="radio" name="mode" value="now"><span>Now</span></label>
     </div>
+    <div id="ctx" hidden></div>
     <div class="box">
       <textarea id="input" rows="1" placeholder="Message"></textarea>
       <button type="button" id="stop" title="Stop the running turn" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>Stop</button>
@@ -437,19 +478,34 @@ document.write('<link rel="stylesheet" href="/v2.css">'
         <button type="button" id="newHere" class="icon" title="Attach files" aria-label="Attach files"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m20.5 11.5-7.9 7.9a5 5 0 0 1-7.1-7.1l8.5-8.5a3.5 3.5 0 0 1 5 5l-8.6 8.6a2 2 0 0 1-2.8-2.8l7.8-7.8"/></svg></button>
         <input id="attachInput" type="file" multiple hidden>
         <button type="button" id="mcp" class="icon" title="MCP servers" aria-label="MCP servers"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4"/></svg></button>
+        <button type="button" id="termBtn" class="icon" title="Terminal" aria-label="Terminal" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM7 9l3 3-3 3M12 15h5"/></svg><span id="termCount" hidden></span></button>
         <button type="button" id="skills" class="icon" title="Skills" aria-label="Skills"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3 5 14h6l-1 7 8-11h-6z"/></svg></button>
       </div>
       <span id="context"></span>
       <span id="spend"></span>
-      <button type="button" id="model" class="link" title="Change the model"></button>
+      <span class="modelrow">
+        <button type="button" id="model" class="link" title="Change the model"></button>
+        <button type="button" id="ctxRing" title="Context" aria-label="Context usage" aria-expanded="false"><svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" stroke-width="2.5" opacity=".25"/><circle id="ctxArc" cx="10" cy="10" r="7" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" transform="rotate(-90 10 10)" stroke-dasharray="0 44"/></svg></button>
+      </span>
     </div>
     <div id="menu" class="menu" hidden></div>
   </form>
 </main>
 
 <aside id="inspector" hidden aria-label="Conversation details">
-  <div class="head"><span class="grow">Details</span><button class="refresh" id="inspectorRefresh" type="button" title="Reload git changes">↻</button></div>
+  <div class="head">
+    <div class="tabs" role="tablist">
+      <button type="button" id="tabDetails" class="on" role="tab">Details</button>
+      <button type="button" id="tabTerm" role="tab">Terminal</button>
+    </div>
+    <button class="refresh" id="inspectorRefresh" type="button" title="Reload git changes">↻</button>
+  </div>
   <div class="body" id="inspectorBody"></div>
+  <section id="termPane" hidden>
+    <div class="termbar"><span id="termTitle">Terminal</span><button type="button" id="termLive" hidden>Shell</button><button type="button" id="termClose">Close</button></div>
+    <div id="termJobs" hidden></div>
+    <div id="termHost"></div>
+  </section>
 </aside>
 
 <dialog id="forceNow">
@@ -560,7 +616,9 @@ function setHealth(kind, label, detail = label) {
 async function call(path, body = {}) {
   let res
   try {
-    res = await fetch(path, {
+    // relative, never site-absolute: under Home Assistant's ingress the page
+    // is mounted at /api/hassio_ingress/<token>/ and the prefix must ride along
+    res = await fetch("./" + path.replace(/^\/+/, ""), {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
       body: JSON.stringify(body),
@@ -582,7 +640,7 @@ async function call(path, body = {}) {
 
 async function loadHealth() {
   try {
-    const res = await fetch("/health", { cache: "no-store" })
+    const res = await fetch("./health", { cache: "no-store" })
     const data = await res.json().catch(() => ({}))
     if (!res.ok || !data.ok) throw new Error("gateway unavailable")
     if (token) setHealth("online", "Connected", `Gateway online · ${data.devices ?? 0} device${data.devices === 1 ? "" : "s"}${data.pushConfigured ? " · push enabled" : ""}`)
@@ -599,9 +657,39 @@ function unpair(message = "") {
   show()
 }
 
+// Home Assistant already authenticated the person. /health says so per request
+// (the Supervisor adds the header; a direct port does not). One silent /pair,
+// then the page is a normal paired client. A failure leaves the code form up.
+let autoPairing = false
+async function autoPair() {
+  if (token || autoPairing) return
+  autoPairing = true
+  let minted = false
+  try {
+    const res = await fetch("./health", { cache: "no-store" })
+    const data = await res.json().catch(() => ({}))
+    if (!data.trustedIngress) return
+    const paired = await fetch("./pair", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    })
+    const body = await paired.json().catch(() => ({}))
+    if (!paired.ok || typeof body.token !== "string") return
+    token = body.token
+    localStorage.setItem("jep.token", token)
+    minted = true
+  } catch {
+    // loadHealth already marks the gateway offline
+  } finally {
+    autoPairing = false
+  }
+  if (minted) show()
+}
+
 $("pair").onsubmit = async (e) => {
   e.preventDefault()
-  const res = await fetch("/pair", {
+  const res = await fetch("./pair", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ code: $("code").value.trim() }),
@@ -750,6 +838,7 @@ function sessionMenu(s, x, y) {
     item(unread ? "Mark as read" : "Mark as unread", async () => { await call("/seen", unread ? { id: s.id } : { id: s.id, at: 0 }); reload() })
   }
   item("Copy ID", () => copyText(s.id))
+  item("Download transcript", () => exportTranscript(s))
   if (s.active) item("Stop", () => call("/stop", { id: s.id }))
   m.append(el("hr"))
   item("Archive", async () => {
@@ -769,6 +858,32 @@ function sessionMenu(s, x, y) {
 }
 
 function closeSessionMenu() { document.querySelector(".menu.ctx")?.remove() }
+
+// The whole conversation as markdown, from the same /history the screen reads.
+// No page limit: this is the one time the full record is the point.
+async function exportTranscript(s) {
+  const data = await call("/history", { id: s.id })
+  const lines = [`# ${s.title || "untitled"}`, ""]
+  for (const m of data.messages || []) {
+    const bits = []
+    for (const p of m.parts || []) {
+      if ((p.kind === "text" || p.kind === "quote") && p.text?.trim()) bits.push(p.text.trim())
+      else if (p.kind === "file") bits.push(`File: ${p.fileName || p.filePath || "attachment"}`)
+    }
+    const body = bits.join("\n\n")
+    if (!body) continue
+    lines.push(`## ${m.role === "user" ? "You" : "Assistant"}`, "", body, "")
+  }
+  const blob = new Blob([lines.join("\n")], { type: "text/markdown;charset=utf-8" })
+  const a = document.createElement("a")
+  const name = (s.title || "transcript").replace(/[^\w.-]+/g, "-").replace(/^-|-$/g, "").slice(0, 80) || "transcript"
+  a.href = URL.createObjectURL(blob)
+  a.download = `${name}.md`
+  document.body.append(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(a.href)
+}
 document.addEventListener("pointerdown", (e) => { if (!e.target.closest?.(".menu.ctx")) closeSessionMenu() })
 addEventListener("keydown", (e) => { if (e.key === "Escape") closeSessionMenu() })
 addEventListener("blur", closeSessionMenu)
@@ -936,10 +1051,11 @@ async function open(id) {
   $("stop").hidden = true
   $("menu").hidden = true
   choices = null; usage = null
-  if (!current) return
+  if (!current) { closeTerm(); return }
   markSeen()
   loadStatus()
   await readHistory()
+  if (!$("termPane").hidden) rebindTerm()
   $("input").focus()
 }
 
@@ -1083,6 +1199,7 @@ function render(follow = true) {
   renderQueue()
   renderStatus()
   renderInspector()
+  renderShells()
   if (follow && atBottom) scroller.scrollTop = scroller.scrollHeight
 }
 
@@ -1151,12 +1268,21 @@ let inspectorKey = ""   // what the column was last drawn from, so a redraw that
 
 const inspectorOpen = () => localStorage.getItem("jep.inspector") !== "off"
 function applyInspector() {
-  document.body.classList.toggle("inspector-off", !inspectorOpen())
-  $("toggleInspector").setAttribute("aria-pressed", String(inspectorOpen()))
+  const phone = matchMedia("(max-width: 700px)").matches
+  document.body.classList.toggle("inspector-off", phone ? !document.body.classList.contains("term-open") : !inspectorOpen())
+  $("toggleInspector").setAttribute("aria-pressed", String(!document.body.classList.contains("inspector-off")))
   $("inspector").hidden = !token || !current
-  if (inspectorOpen()) renderInspector()
+  if (!document.body.classList.contains("inspector-off")) renderInspector()
 }
 $("toggleInspector").onclick = () => {
+  if (matchMedia("(max-width: 700px)").matches) {
+    const open = document.body.classList.contains("inspector-off")
+    document.body.classList.toggle("inspector-off", !open)
+    if (open) { sideTab("details"); renderInspector(); loadGit(true) }
+    else closeTerm()
+    $("toggleInspector").setAttribute("aria-pressed", String(open))
+    return
+  }
   localStorage.setItem("jep.inspector", inspectorOpen() ? "off" : "on")
   applyInspector()
 }
@@ -1166,7 +1292,7 @@ document.addEventListener("keydown", (e) => {
 
 async function loadGit(force = false) {
   const id = current
-  if (!id || !inspectorOpen()) return
+  if (!id || document.body.classList.contains("inspector-off")) return
   if (!force && gitFor === id && git) return
   try {
     const g = await call("/git", { id })
@@ -1219,7 +1345,17 @@ function inspectorData() {
   return { files: [...files].sort((a, b) => b[1].at - a[1].at), pictures: [...pictures].sort((a, b) => b[1] - a[1]).map(([p]) => p) }
 }
 
-const fileUrl = (path) => `/file?p=${b64url(path)}&id=${encodeURIComponent(current)}&token=${token}`
+// Ingress mounts the page under /api/hassio_ingress/<token>/ and does not
+// rewrite paths. A site-absolute /file is Home Assistant, not this app.
+const fileUrl = (path) => {
+  const base = new URL(location.href)
+  if (!base.pathname.endsWith("/")) base.pathname += "/"
+  const u = new URL("file", base)
+  u.searchParams.set("p", b64url(path))
+  u.searchParams.set("id", current || "")
+  u.searchParams.set("token", token || "")
+  return u.pathname + u.search
+}
 
 function pathItem(path, tag, workspace) {
   const a = el("a", "item")
@@ -1246,7 +1382,7 @@ const sectionOpen = (title, fallback) => { const v = localStorage.getItem("jep.i
 
 function renderInspector() {
   const root = $("inspectorBody")
-  if (!root || $("inspector").hidden || !inspectorOpen()) return
+  if (!root || $("inspector").hidden || document.body.classList.contains("inspector-off")) return
   const { files, pictures } = inspectorData()
   const session = sessions.find((s) => s.id === current)
   const key = JSON.stringify([current, files.length, files[0]?.[1].at, pictures.length, git && [git.branch, git.changedFiles, git.head?.hash], session?.workspace])
@@ -1279,7 +1415,8 @@ function renderInspector() {
     if (!git.files && git.changedFiles) gl.append(el("div", "empty", `${git.changedFiles} file${git.changedFiles === 1 ? "" : "s"} changed.`))
     else if (!git.files?.length) gl.append(el("div", "empty", "No uncommitted changes."))
     for (const f of git.files ?? []) {
-      const a = pathItem(workspace ? workspace + "/" + f.path : f.path, "", workspace)
+      const root = git.root || workspace
+      const a = pathItem(root ? root + "/" + f.path : f.path, "", root)
       a.querySelector(".tag").replaceWith(...[f.additions ? el("span", "add", "+" + f.additions) : null, f.deletions ? el("span", "del", "−" + f.deletions) : null].filter(Boolean))
       a.prepend(el("span", "code " + f.code, f.code))
       gl.append(a)
@@ -1597,7 +1734,7 @@ async function uploadAttachments(files) {
     list.push(item)
     renderAttachments()
     try {
-      const res = await fetch(`/attach?id=${encodeURIComponent(id)}&name=${encodeURIComponent(file.name)}`, {
+      const res = await fetch(`./attach?id=${encodeURIComponent(id)}&name=${encodeURIComponent(file.name)}`, {
         method: "POST",
         headers: { authorization: `Bearer ${token}`, "content-type": file.type || "application/octet-stream" },
         body: file,
@@ -1793,7 +1930,7 @@ function outputNode(p, name, command) {
 // same bytes route attachments use, and it already scopes to the workspace
 function imageNode(filePath) {
   const a = el("a", "tool-image-link")
-  a.href = `/file?p=${b64url(filePath)}&id=${encodeURIComponent(current)}&token=${token}`
+  a.href = fileUrl(filePath)
   a.target = "_blank"; a.rel = "noopener"
   const img = el("img", "tool-image")
   img.src = a.href
@@ -1813,7 +1950,7 @@ const IMAGE = /\.(png|jpe?g|gif|webp|avif|bmp|svg|heic|heif)$/i
 const isImage = (file) => IMAGE.test(file || "")
 
 function fileNode(p) {
-  const url = `/file?p=${b64url(p.filePath)}&id=${encodeURIComponent(current)}&token=${token}`
+  const url = fileUrl(p.filePath)
   if ((p.mimeType || "").startsWith("image/")) {
     const img = el("img")
     img.src = url
@@ -2128,7 +2265,7 @@ let reread = null
 
 function follow() {
   feed?.close()
-  feed = new EventSource(`/stream?token=${token}`)
+  feed = new EventSource(`./stream?token=${token}`)
   feed.onmessage = (m) => {
     const evt = JSON.parse(m.data)
     if (evt.type === "ask.requested" && evt.ask?.sessionID !== current) notifyAsk(evt.ask)
@@ -2355,21 +2492,66 @@ function renderStatus() {
   const model = short(choices?.current) || short(last?.model) || short(running)
   $("model").textContent = model ? model + " ▾" : choices ? "default model ▾" : ""
   $("model").hidden = !choices && !model
-  const used = last ? last.tokens.input + last.tokens.cache.read + last.tokens.cache.write : 0
-  const limit = choices?.models?.find((m) => `${m.providerID}/${m.modelID}` === running)?.contextLimit || choices?.contextLimit || 0
-  $("context").replaceChildren()
-  if (used && limit) {
-    const pct = Math.min(100, Math.round((used / limit) * 100))
-    const meter = el("span", "meter" + (pct >= 80 ? " high" : ""))
-    const fill = el("i")
-    fill.style.width = pct + "%"
-    meter.append(fill)
-    $("context").append(meter, `${tokens(used)} / ${tokens(limit)} (${pct}%)`)
-    $("context").title = "Context window used by the last reply"
-  } else if (used) $("context").append(`${tokens(used)} context`)
+  renderContext()
   const spent = usage?.cost || 0
   $("spend").textContent = spent > 0 ? "$" + (spent < 10 ? spent.toFixed(2) : spent.toFixed(0)) : ""
   $("spend").title = usage?.unpriced ? `${usage.unpriced} turns had no price from the harness` : "Spent in this conversation"
+}
+
+// The ring under Send is the last reply's prompt against the model's window.
+// The slices are the token counts the harness reported. jep does not split
+// that prompt into rules, skills, or tools.
+function contextNow() {
+  const last = [...messages].reverse().find((m) => m.role === "assistant" && m.tokens)
+  const running = choices?.current || choices?.default
+  const t = last?.tokens
+  const used = t ? t.input + t.cache.read + t.cache.write : 0
+  const limit = choices?.models?.find((m) => `${m.providerID}/${m.modelID}` === running)?.contextLimit || choices?.contextLimit || 0
+  return { t, used, limit }
+}
+function renderContext() {
+  const { t, used, limit } = contextNow()
+  const pct = limit ? Math.min(1, used / limit) : 0
+  const circ = 2 * Math.PI * 7
+  const arc = $("ctxArc")
+  arc.setAttribute("stroke-dasharray", `${(circ * pct).toFixed(2)} ${circ.toFixed(2)}`)
+  arc.style.stroke = pct >= 0.8 ? "var(--accent)" : "currentColor"
+  $("ctxRing").title = limit ? `${tokens(used)} / ${tokens(limit)} context` : used ? `${tokens(used)} context` : "No context yet"
+  if ($("ctx").hidden) return
+  const slices = [
+    ["Input", t?.input || 0, "#5b8def"],
+    ["Cache read", t?.cache.read || 0, "#c4a35a"],
+    ["Cache write", t?.cache.write || 0, "#d08a00"],
+  ]
+  const bar = el("div", "bar")
+  const denom = limit || used || 1
+  for (const [name, n, color] of slices) {
+    if (!n) continue
+    const i = el("i")
+    i.style.width = Math.min(100, (n / denom) * 100) + "%"
+    i.style.background = color
+    i.title = name
+    bar.append(i)
+  }
+  const legend = el("div", "legend")
+  for (const [name, n, color] of slices) {
+    const row = el("div")
+    const sw = el("span", "sw")
+    sw.style.background = color
+    row.append(sw, name, el("b", "", tokens(n)))
+    legend.append(row)
+  }
+  if (t?.output || t?.reasoning) {
+    legend.append(el("div", "", `Last reply ${tokens((t.output || 0) + (t.reasoning || 0))} out`))
+  }
+  const top = el("div", "ctx-top")
+  top.append(el("span", "", limit ? `${Math.round(pct * 100)}%` : "Context"), el("span", "", limit ? `${tokens(used)} / ${tokens(limit)}` : tokens(used)))
+  $("ctx").replaceChildren(el("h3", "", "Context"), top, bar, legend)
+}
+$("ctxRing").onclick = () => {
+  $("ctx").hidden = !$("ctx").hidden
+  $("ctxRing").setAttribute("aria-expanded", String(!$("ctx").hidden))
+  renderContext()
 }
 
 // one small menu above the composer, opened by whichever control asked for it
@@ -2475,6 +2657,256 @@ $("mcp").onclick = async () => {
       : [el("div", "empty", "No MCP servers configured for this harness.")])])
   } catch (err) { $("menu").hidden = true; fail(err) }
 }
+
+let termTimer = null
+let termView = null
+let termFit = null
+let termFrame = ""
+let termSend = Promise.resolve()
+let termNext = 0
+let termPending = []
+let termResize = null
+let termScreen = { text: "", cursor: null }
+let termSynced = false
+let termFitTimer = null
+function stopTerm() {
+  if (termTimer) clearInterval(termTimer)
+  termTimer = null
+}
+function closeTerm() {
+  stopTerm()
+  if (termResize) termResize.disconnect()
+  termResize = null
+  sideTab("details")
+  termPending = []
+  termScreen = { text: "", cursor: null }
+  termSynced = false
+  termFrame = ""
+  termWatch = null
+  termLog = ""
+  jobsKey = ""
+}
+function sideTab(name) {
+  const term = name === "term"
+  $("inspectorBody").hidden = term
+  $("termPane").hidden = !term
+  $("tabDetails").classList.toggle("on", !term)
+  $("tabTerm").classList.toggle("on", term)
+  $("inspectorRefresh").hidden = term
+  document.body.classList.toggle("term-open", term)
+}
+let termAllowed = false
+let termWatch = null
+let termLog = ""
+let jobsKey = ""
+function shells() {
+  const byId = new Map()
+  const parts = []
+  for (const m of messages) for (const p of m.parts || []) parts.push(p)
+  for (const l of live.values()) if (l.part) parts.push(l.part)
+  for (const p of parts) {
+    if (p.kind !== "tool") continue
+    const name = String(p.name || "").toLowerCase()
+    if (name !== "bash" && name !== "run" && name !== "shell") continue
+    const args = typeof p.input === "object" && p.input ? p.input : {}
+    const command = String(args.command || args.cmd || p.title || "shell").split("\n")[0]
+    const text = (p.output == null || p.output === "" ? "" : typeof p.output === "string" ? p.output : JSON.stringify(p.output, null, 2)).replace(/<\/?shell_metadata>/g, "").trim()
+    byId.set(p.id || command, { id: p.id || command, command, running: p.status === "running" || p.status === "pending", text })
+  }
+  const rows = [...byId.values()]
+  return [...rows.filter((r) => r.running), ...rows.filter((r) => !r.running).slice(-6).reverse()]
+}
+function syncTermBtn() {
+  const running = shells().some((s) => s.running)
+  $("termBtn").hidden = !termAllowed && !running
+  const n = shells().filter((s) => s.running).length
+  $("termCount").hidden = !n
+  $("termCount").textContent = n ? String(n) : ""
+}
+function renderShells() {
+  syncTermBtn()
+  if ($("termPane").hidden) return
+  const jobs = shells()
+  const key = jobs.map((j) => j.id + (j.running ? "!" : "")).join("|") + ":" + (termWatch || "")
+  if (key !== jobsKey) {
+    jobsKey = key
+    const box = $("termJobs")
+    box.hidden = !jobs.length
+    box.replaceChildren(...jobs.map((j) => {
+      const b = el("button", (j.id === termWatch ? "on" : "") + (j.running ? " run" : ""))
+      b.type = "button"
+      b.title = j.command
+      b.textContent = (j.running ? "● " : "") + j.command
+      b.onclick = () => watchJob(j.id)
+      return b
+    }))
+  }
+  if (termWatch) paintLog()
+}
+function paintLog() {
+  const job = shells().find((s) => s.id === termWatch)
+  if (!job || !termView) { termWatch = null; return }
+  $("termTitle").textContent = job.command
+  if (job.text === termLog) return
+  termLog = job.text
+  termView.reset()
+  termView.write(job.text || "(no output yet)\r\n")
+}
+function watchJob(id) {
+  termWatch = id
+  termLog = ""
+  if (termView) {
+    termView.options.disableStdin = true
+    termView.options.cursorBlink = false
+  }
+  $("termLive").hidden = !termAllowed
+  jobsKey = ""
+  renderShells()
+}
+async function termAvailable() {
+  try {
+    termAllowed = !!(await call("/term", {})).allowed
+  } catch {
+    termAllowed = false
+  }
+  syncTermBtn()
+}
+// What a cooked shell will echo. Arrows and Ctrl stay on the wire: guessing
+// those fights vim. The frame drops this guess once `gen` catches up.
+function localEcho(data) {
+  let out = ""
+  for (const ch of data) {
+    if (ch >= " " && ch !== "\x7f") out += ch
+    else if (ch === "\x7f" || ch === "\b") out += "\b \b"
+    else if (ch === "\r") out += "\r\n"
+  }
+  return out
+}
+function paintWterm(text, cursor) {
+  const rows = (text.endsWith("\n") ? text.slice(0, -1) : text).split("\n")
+  let out = "\x1b[H"
+  rows.forEach((line, i) => {
+    out += "\x1b[K" + line
+    if (i < rows.length - 1) out += "\r\n"
+  })
+  out += "\x1b[J"
+  if (cursor) out += `\x1b[${cursor.y + 1};${cursor.x + 1}H`
+  termView.write(out)
+  for (const p of termPending) if (p.echo) termView.write(p.echo)
+}
+async function paintTerm() {
+  const frame = await call("/term/frame", { id: current, ansi: true })
+  const gen = frame.gen || 0
+  if (!termSynced) { termNext = gen; termSynced = true }
+  termPending = termPending.filter((p) => p.gen > gen)
+  termScreen = { text: frame.text || "", cursor: frame.cursor }
+  const mark = gen + "\0" + termScreen.text + "\0" + (frame.cursor ? frame.cursor.x + "," + frame.cursor.y : "") + "\0" + termPending.map((p) => p.gen).join(",")
+  if (mark === termFrame) return
+  termFrame = mark
+  paintWterm(termScreen.text, termScreen.cursor)
+}
+async function fitTerm() {
+  if (!termFit || !current || !termAllowed || termWatch) return
+  termFit.fit()
+  const cols = termView.cols
+  const rows = termView.rows
+  if (cols < 2 || rows < 2) return
+  await call("/term/open", { id: current, cols, rows })
+}
+async function ensureTerm() {
+  if (termView) return
+  if (!document.querySelector("link[data-xterm]")) {
+    const css = document.createElement("link")
+    css.rel = "stylesheet"
+    css.href = "https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css"
+    css.dataset.xterm = ""
+    document.head.append(css)
+  }
+  const { Terminal } = await import("https://esm.sh/@xterm/xterm@5.5.0")
+  const { FitAddon } = await import("https://esm.sh/@xterm/addon-fit@0.10.0")
+  termFit = new FitAddon()
+  termView = new Terminal({ fontSize: 13, cursorBlink: true, theme: { background: "#111111" } })
+  termView.loadAddon(termFit)
+  termView.open($("termHost"))
+  termView.onData((data) => {
+    if (!current || !data || termWatch) return
+    const id = current
+    const gen = ++termNext
+    const echo = localEcho(data)
+    termPending.push({ gen, echo })
+    termFrame = ""
+    paintWterm(termScreen.text, termScreen.cursor)
+    termSend = termSend.then(() => call("/term/input", { id, text: data })).catch((err) => fail(err))
+  })
+}
+async function showPane() {
+  $("inspector").hidden = false
+  document.body.classList.remove("inspector-off")
+  sideTab("term")
+  await ensureTerm()
+  termFit.fit()
+}
+async function startLive() {
+  termWatch = null
+  termLog = ""
+  termView.options.disableStdin = false
+  termView.options.cursorBlink = true
+  $("termTitle").textContent = "Terminal"
+  $("termLive").hidden = true
+  jobsKey = ""
+  termFit.fit()
+  await call("/term/open", { id: current, cols: termView.cols, rows: termView.rows })
+  termNext = 0
+  termPending = []
+  termSynced = false
+  termFrame = ""
+  await paintTerm()
+  termView.focus()
+}
+function rebindTerm() {
+  if ($("termPane").hidden || !termView) return
+  termWatch = null
+  termLog = ""
+  jobsKey = ""
+  if (termAllowed) startLive().catch((err) => fail(err))
+  else renderShells()
+}
+async function openTerm() {
+  if (!current) return
+  if (!$("termPane").hidden) { closeTerm(); return }
+  const running = shells().find((s) => s.running)
+  if (!termAllowed && !running) return
+  await showPane()
+  if (termResize) termResize.disconnect()
+  termResize = new ResizeObserver(() => {
+    clearTimeout(termFitTimer)
+    termFitTimer = setTimeout(() => fitTerm().catch(() => {}), 150)
+  })
+  termResize.observe($("termHost"))
+  stopTerm()
+  termTimer = setInterval(() => {
+    if ($("termPane").hidden) return
+    if (termWatch) paintLog()
+    else if (current && termAllowed) paintTerm().catch(() => {})
+  }, 200)
+  if (termAllowed) {
+    const st = await call("/term", {})
+    let unlocked = st.authorized
+    if (!unlocked) {
+      const code = window.prompt("Pairing code to unlock the terminal")
+      if (code) { await call("/term/unlock", { code: code.trim() }); unlocked = true }
+      else if (!running) { closeTerm(); return }
+    }
+    if (unlocked) await startLive()
+  }
+  if (running) watchJob(running.id)
+  else renderShells()
+}
+$("termBtn").onclick = () => openTerm().catch((err) => fail(err))
+$("tabTerm").onclick = () => { if ($("termPane").hidden) openTerm().catch((err) => fail(err)) }
+$("tabDetails").onclick = closeTerm
+$("termLive").onclick = () => startLive().catch((err) => fail(err))
+$("termClose").onclick = closeTerm
 
 // the skills this harness loads; where it can, each can be hidden from the model
 $("skills").onclick = async () => {
@@ -2818,7 +3250,11 @@ function show() {
   document.querySelector("main").hidden = !token
   loadHealth()
   if (!healthTimer) healthTimer = setInterval(loadHealth, 15_000)
-  if (!token) return void feed?.close()
+  if (!token) {
+    feed?.close()
+    void autoPair()
+    return
+  }
   // the last list known, at once; the gateway's answer replaces it when it comes
   try { sessions = JSON.parse(localStorage.getItem("jep.sessions") || "[]") } catch { sessions = [] }
   renderSessions()
@@ -2827,6 +3263,7 @@ function show() {
   loadSessions().catch((err) => fail(err, loadSessions))
   loadWorkspaces().catch((err) => fail(err, loadWorkspaces))
   follow()
+  termAvailable().catch(() => {})
 }
 
 window.onhashchange = () => {
@@ -2839,6 +3276,6 @@ window.onhashchange = () => {
 setInterval(() => { if (token && !document.hidden) loadSessions().catch(() => {}) }, 60_000)
 show()
 </script>
-<script>document.write('<script src="/v2.js"><\/script>')</script>
+<script>document.write('<script src="v2.js"><\/script>')</script>
 </body>
 </html>
