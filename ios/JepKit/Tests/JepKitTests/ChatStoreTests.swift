@@ -126,6 +126,23 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertTrue(s.state.hasMore)
     }
 
+    func testStaleRefreshDoesNotEraseAReplyThatArrivedFirst() async {
+        let gw = gateway()
+        let gate = AsyncStream<Void>.makeStream()
+        gw.on("/history") { _ in
+            for await _ in gate.stream { break }
+            return (200, #"{"messages":[],"hasMore":false,"asks":[]}"#)
+        }
+        gw.on("/prompt", json: reply)
+        let s = store(gw)
+        let refresh = s.refresh()
+        await s.send("hello")?.value
+        XCTAssertTrue(s.state.messages.contains { $0.id == "a1" })
+        gate.continuation.yield()
+        await refresh.value
+        XCTAssertTrue(s.state.messages.contains { $0.id == "a1" })
+    }
+
     func testLiveRowSettledOnlyByCompletion() {
         XCTAssertFalse(liveRowIsSettled("m", [msg("m")]))
         XCTAssertTrue(liveRowIsSettled("m", [msg("m", durationMs: 3)]))
