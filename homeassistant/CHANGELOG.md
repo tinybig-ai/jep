@@ -1,5 +1,16 @@
 # Changelog — the HA app
 
+## 0.2.21
+
+A ring under Send shows how full the context window is. Click it for the
+breakdown of the last reply: input, cache read, and cache write.
+
+## 0.2.20
+
+Compact uses the conversation's model, including ids with more than one
+slash. A provider error (such as a free-tier cap) is shown as that error.
+A refusal still means a turn is already running.
+
 ## 0.2.19
 
 On a phone the sidebar covers 90% of the screen. Details and Terminal are

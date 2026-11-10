@@ -234,7 +234,7 @@ export interface HarnessAdapter {
    * only harnesses that expose it declare it, and a client hides the control
    * when the adapter doesn't. False when the harness refused (a turn may be
    * mid-flight). */
-  compact?(sessionID: string): Promise<boolean>
+  compact?(sessionID: string, model?: string): Promise<boolean>
   /** Stop the child server. Sessions stay on disk for the next boot. */
   close(): Promise<void>
 }

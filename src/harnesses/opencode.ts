@@ -885,9 +885,14 @@ export class OpenCodeAdapter implements HarnessAdapter {
   // far into one summary message and continues from there. It needs the model
   // named (the same one prompts run under) because the summarizing turn runs on
   // it. Refuses while a turn is in flight — reported as false, not an error.
-  async compact(sessionID: string): Promise<boolean> {
+  async compact(sessionID: string, model?: string): Promise<boolean> {
     try {
-      const [providerID = "", modelID = ""] = MODEL_REF ? MODEL_REF.split("/") : ["", ""]
+      // the chat's pin, else the daemon default. modelID is everything after
+      // the first slash, so openrouter/google/gemma stays one id.
+      const ref = model || MODEL_REF || ""
+      const slash = ref.indexOf("/")
+      const providerID = slash > 0 ? ref.slice(0, slash) : ""
+      const modelID = slash > 0 ? ref.slice(slash + 1) : ""
       await this.#json(`/session/${encodeURIComponent(toNativeId(sessionID))}/summarize`, {
         method: "POST",
         body: JSON.stringify(providerID && modelID ? { providerID, modelID } : {}),
@@ -898,10 +903,10 @@ export class OpenCodeAdapter implements HarnessAdapter {
       })
       return true
     } catch (err) {
-      // a refusal is a fact to keep: 404 here means this opencode build has no
-      // summarize route (older CLI), 409 means a turn owns the session. Without
-      // the body a caller can't tell them apart.
-      if (err instanceof HttpError && err.status >= 400 && err.status < 500) {
+      // 409: a turn already owns the session. Anything else (a free-tier cap,
+      // a bad model id) is the reason compact failed, so it must reach the
+      // button instead of looking like a refusal.
+      if (err instanceof HttpError && err.status === 409) {
         console.error(`[opencode] compact ${sessionID} refused: ${err.message}`)
         return false
       }

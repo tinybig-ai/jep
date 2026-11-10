@@ -308,8 +308,21 @@
   /* files dragged over the conversation: the composer says it will take them */
   form.compose.dropping .box { outline: 2px dashed var(--accent); outline-offset: 2px; }
   form.compose .box { max-width: 780px; margin: 0 auto; display: flex; gap: 8px; align-items: flex-end; }
+  .composer { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .sendcol { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  #ctxRing { border: none; padding: 5px; border-radius: 8px; background: var(--bubble); line-height: 0; color: var(--dim); }
+  #ctxRing:hover { color: var(--text); }
+  #ctx { margin: 0 0 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
+  #ctx h3 { margin: 0 0 4px; font-size: 13px; }
+  #ctx .ctx-top { display: flex; justify-content: space-between; gap: 8px; color: var(--dim); font-size: 12px; margin-bottom: 8px; }
+  #ctx .bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--line); }
+  #ctx .bar i { display: block; height: 100%; }
+  #ctx .legend { margin: 8px 0 0; display: flex; flex-direction: column; gap: 3px; }
+  #ctx .legend div { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+  #ctx .sw { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+  #ctx .legend b { margin-left: auto; font-weight: 500; }
   textarea {
-    flex: 1; resize: none; max-height: 40vh; min-height: 42px; padding: 10px 12px;
+    width: 100%; flex: 1; resize: none; max-height: 40vh; min-height: 42px; padding: 10px 12px;
     background: var(--bubble); border: 1px solid var(--line); border-radius: 12px; outline: none;
   }
 
@@ -453,9 +466,15 @@ document.write('<link rel="stylesheet" href="v2.css">'
       <label><input type="radio" name="mode" value="now"><span>Now</span></label>
     </div>
     <div class="box">
-      <textarea id="input" rows="1" placeholder="Message"></textarea>
+      <div class="composer">
+        <div id="ctx" hidden></div>
+        <textarea id="input" rows="1" placeholder="Message"></textarea>
+      </div>
       <button type="button" id="stop" title="Stop the running turn" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>Stop</button>
-      <button type="submit" id="send">Send</button>
+      <div class="sendcol">
+        <button type="submit" id="send">Send</button>
+        <button type="button" id="ctxRing" title="Context" aria-label="Context usage" aria-expanded="false"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" stroke-width="2.5" opacity=".25"/><circle id="ctxArc" cx="10" cy="10" r="7" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" transform="rotate(-90 10 10)" stroke-dasharray="0 44"/></svg></button>
+      </div>
     </div>
     <div id="loopBar" class="loopbar" hidden></div>
     <div id="attachments" class="attachments" hidden aria-live="polite"></div>
@@ -2476,21 +2495,66 @@ function renderStatus() {
   const model = short(choices?.current) || short(last?.model) || short(running)
   $("model").textContent = model ? model + " ▾" : choices ? "default model ▾" : ""
   $("model").hidden = !choices && !model
-  const used = last ? last.tokens.input + last.tokens.cache.read + last.tokens.cache.write : 0
-  const limit = choices?.models?.find((m) => `${m.providerID}/${m.modelID}` === running)?.contextLimit || choices?.contextLimit || 0
-  $("context").replaceChildren()
-  if (used && limit) {
-    const pct = Math.min(100, Math.round((used / limit) * 100))
-    const meter = el("span", "meter" + (pct >= 80 ? " high" : ""))
-    const fill = el("i")
-    fill.style.width = pct + "%"
-    meter.append(fill)
-    $("context").append(meter, `${tokens(used)} / ${tokens(limit)} (${pct}%)`)
-    $("context").title = "Context window used by the last reply"
-  } else if (used) $("context").append(`${tokens(used)} context`)
+  renderContext()
   const spent = usage?.cost || 0
   $("spend").textContent = spent > 0 ? "$" + (spent < 10 ? spent.toFixed(2) : spent.toFixed(0)) : ""
   $("spend").title = usage?.unpriced ? `${usage.unpriced} turns had no price from the harness` : "Spent in this conversation"
+}
+
+// The ring under Send is the last reply's prompt against the model's window.
+// The slices are the token counts the harness reported. jep does not split
+// that prompt into rules, skills, or tools.
+function contextNow() {
+  const last = [...messages].reverse().find((m) => m.role === "assistant" && m.tokens)
+  const running = choices?.current || choices?.default
+  const t = last?.tokens
+  const used = t ? t.input + t.cache.read + t.cache.write : 0
+  const limit = choices?.models?.find((m) => `${m.providerID}/${m.modelID}` === running)?.contextLimit || choices?.contextLimit || 0
+  return { t, used, limit }
+}
+function renderContext() {
+  const { t, used, limit } = contextNow()
+  const pct = limit ? Math.min(1, used / limit) : 0
+  const circ = 2 * Math.PI * 7
+  const arc = $("ctxArc")
+  arc.setAttribute("stroke-dasharray", `${(circ * pct).toFixed(2)} ${circ.toFixed(2)}`)
+  arc.style.stroke = pct >= 0.8 ? "var(--accent)" : "currentColor"
+  $("ctxRing").title = limit ? `${tokens(used)} / ${tokens(limit)} context` : used ? `${tokens(used)} context` : "No context yet"
+  if ($("ctx").hidden) return
+  const slices = [
+    ["Input", t?.input || 0, "#5b8def"],
+    ["Cache read", t?.cache.read || 0, "#c4a35a"],
+    ["Cache write", t?.cache.write || 0, "#d08a00"],
+  ]
+  const bar = el("div", "bar")
+  const denom = limit || used || 1
+  for (const [name, n, color] of slices) {
+    if (!n) continue
+    const i = el("i")
+    i.style.width = Math.min(100, (n / denom) * 100) + "%"
+    i.style.background = color
+    i.title = name
+    bar.append(i)
+  }
+  const legend = el("div", "legend")
+  for (const [name, n, color] of slices) {
+    const row = el("div")
+    const sw = el("span", "sw")
+    sw.style.background = color
+    row.append(sw, name, el("b", "", tokens(n)))
+    legend.append(row)
+  }
+  if (t?.output || t?.reasoning) {
+    legend.append(el("div", "", `Last reply ${tokens((t.output || 0) + (t.reasoning || 0))} out`))
+  }
+  const top = el("div", "ctx-top")
+  top.append(el("span", "", limit ? `${Math.round(pct * 100)}%` : "Context"), el("span", "", limit ? `${tokens(used)} / ${tokens(limit)}` : tokens(used)))
+  $("ctx").replaceChildren(el("h3", "", "Context"), top, bar, legend)
+}
+$("ctxRing").onclick = () => {
+  $("ctx").hidden = !$("ctx").hidden
+  $("ctxRing").setAttribute("aria-expanded", String(!$("ctx").hidden))
+  renderContext()
 }
 
 // one small menu above the composer, opened by whichever control asked for it

@@ -1865,7 +1865,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         // reporting a timed-out summarize as "refused" sent the phone chasing the
         // wrong thing. Keep them apart.
         let failure: string | null = null
-        const ok = await adapter.compact(id).catch((err) => {
+        const ok = await adapter.compact(id, modelRef(models, id)).catch((err) => {
           const msg = (err as Error)?.message ?? String(err)
           console.error(`[gw] compact ${id} failed: ${msg}`)
           failure = /timeout|abort/i.test(msg) ? "compacting took too long and was given up on" : msg
@@ -2046,7 +2046,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const text = asked || "see the attached file"
         // this conversation's chosen model, if the phone set one in Settings
         const ref = modelRef(models, id)
-        const [providerID = "", modelID = ""] = ref ? ref.split("/") : []
+        const slash = ref ? ref.indexOf("/") : -1
+        const providerID = slash > 0 ? ref!.slice(0, slash) : ""
+        const modelID = slash > 0 ? ref!.slice(slash + 1) : ""
         const model = providerID && modelID ? { providerID, modelID } : undefined
         const agent = agents.get(id)
         let settle!: (r: TurnResult) => void
