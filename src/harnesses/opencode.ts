@@ -491,7 +491,10 @@ export class OpenCodeAdapter implements HarnessAdapter {
         const providerID = ref.slice(0, slash)
         const modelID = ref.slice(slash + 1)
         if (!modelID) continue
-        if (providerID === "opencode" || providerID === "opencode-go" || configProviders.has(providerID)) {
+        // opencode models prints every configured provider. The picker keeps
+        // opencode's own catalogue plus OpenRouter; anything else only if the
+        // person's opencode.json names that provider.
+        if (providerID === "opencode" || providerID === "opencode-go" || providerID === "openrouter" || configProviders.has(providerID)) {
           refs.push({ providerID, modelID })
         }
       }

@@ -4219,7 +4219,10 @@ export class TelegramBot {
     // blind pick — it is the one row whose meaning isn't written on it
     const defaultRef = (await ws.adapter.defaultModel?.().catch(() => null)) ?? null
     const caps = (await ws.adapter.capabilities?.().catch(() => new Map<string, ModelCaps>())) ?? new Map<string, ModelCaps>()
-    const labels = await this.#modelLabels(chatID)
+    const all = await this.#modelLabels(chatID)
+    // OpenRouter is hundreds of rows. /model can name any of them; the menu
+    // keeps the short list, plus the one currently pinned so it stays visible.
+    const labels = all.filter((l) => l === "default" || l === current || !l.startsWith("openrouter/"))
     const pages = Math.max(1, Math.ceil(labels.length / MAX_LIST))
     c.modelList = labels
     // Opening the picker jumps to whichever page holds the current model, so
