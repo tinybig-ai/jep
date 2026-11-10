@@ -1,5 +1,10 @@
 # Changelog — the HA app
 
+## 0.2.22
+
+The context ring sits to the right of the model name. Click it and the
+breakdown still opens above the message box.
+
 ## 0.2.21
 
 A ring under Send shows how full the context window is. Click it for the
