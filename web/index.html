@@ -282,6 +282,13 @@
   .termbar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 12px; font-weight: 600; }
   .termbar span { flex: 1; }
   #termHost { flex: 1; min-height: 0; overflow: hidden; }
+  #termBtn { position: relative; }
+  #termCount { position: absolute; top: -3px; right: -3px; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 8px; background: var(--accent); color: #fff; font: 600 10px/14px ui-sans-serif, system-ui, sans-serif; }
+  #termJobs { display: flex; flex-direction: column; max-height: 108px; overflow: auto; border-bottom: 1px solid var(--line); }
+  #termJobs[hidden] { display: none; }
+  #termJobs button { border: none; border-radius: 0; text-align: left; padding: 5px 10px; font: 12px/1.3 ui-monospace, Menlo, monospace; color: var(--dim); background: transparent; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #termJobs button.run { color: var(--text); }
+  #termJobs button.on { background: var(--bubble); color: var(--text); }
   dialog label.toggle { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0; font-size: 14px; }
   dialog label.toggle small { display: block; color: var(--dim); font-size: 12px; }
   dialog .danger { color: var(--accent); }
@@ -448,7 +455,7 @@ document.write('<link rel="stylesheet" href="v2.css">'
         <button type="button" id="newHere" class="icon" title="Attach files" aria-label="Attach files"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m20.5 11.5-7.9 7.9a5 5 0 0 1-7.1-7.1l8.5-8.5a3.5 3.5 0 0 1 5 5l-8.6 8.6a2 2 0 0 1-2.8-2.8l7.8-7.8"/></svg></button>
         <input id="attachInput" type="file" multiple hidden>
         <button type="button" id="mcp" class="icon" title="MCP servers" aria-label="MCP servers"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4"/></svg></button>
-        <button type="button" id="termBtn" class="icon" title="Terminal" aria-label="Terminal" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM7 9l3 3-3 3M12 15h5"/></svg></button>
+        <button type="button" id="termBtn" class="icon" title="Terminal" aria-label="Terminal" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM7 9l3 3-3 3M12 15h5"/></svg><span id="termCount" hidden></span></button>
         <button type="button" id="skills" class="icon" title="Skills" aria-label="Skills"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3 5 14h6l-1 7 8-11h-6z"/></svg></button>
       </div>
       <span id="context"></span>
@@ -463,7 +470,8 @@ document.write('<link rel="stylesheet" href="v2.css">'
   <div class="head"><span class="grow">Details</span><button class="refresh" id="inspectorRefresh" type="button" title="Reload git changes">↻</button></div>
   <div class="body" id="inspectorBody"></div>
   <section id="termPane" hidden>
-    <div class="termbar"><span>Terminal</span><button type="button" id="termClose">Close</button></div>
+    <div class="termbar"><span id="termTitle">Terminal</span><button type="button" id="termLive" hidden>Shell</button><button type="button" id="termClose">Close</button></div>
+    <div id="termJobs" hidden></div>
     <div id="termHost"></div>
   </section>
 </aside>
@@ -1011,10 +1019,11 @@ async function open(id) {
   $("stop").hidden = true
   $("menu").hidden = true
   choices = null; usage = null
-  if (!current) return
+  if (!current) { closeTerm(); return }
   markSeen()
   loadStatus()
   await readHistory()
+  if (!$("termPane").hidden) rebindTerm()
   $("input").focus()
 }
 
@@ -1158,6 +1167,7 @@ function render(follow = true) {
   renderQueue()
   renderStatus()
   renderInspector()
+  renderShells()
   if (follow && atBottom) scroller.scrollTop = scroller.scrollHeight
 }
 
@@ -2587,14 +2597,85 @@ function closeTerm() {
   termScreen = { text: "", cursor: null }
   termSynced = false
   termFrame = ""
+  termWatch = null
+  termLog = ""
+  jobsKey = ""
+}
+let termAllowed = false
+let termWatch = null
+let termLog = ""
+let jobsKey = ""
+function shells() {
+  const byId = new Map()
+  const parts = []
+  for (const m of messages) for (const p of m.parts || []) parts.push(p)
+  for (const l of live.values()) if (l.part) parts.push(l.part)
+  for (const p of parts) {
+    if (p.kind !== "tool") continue
+    const name = String(p.name || "").toLowerCase()
+    if (name !== "bash" && name !== "run" && name !== "shell") continue
+    const args = typeof p.input === "object" && p.input ? p.input : {}
+    const command = String(args.command || args.cmd || p.title || "shell").split("\n")[0]
+    const text = (p.output == null || p.output === "" ? "" : typeof p.output === "string" ? p.output : JSON.stringify(p.output, null, 2)).replace(/<\/?shell_metadata>/g, "").trim()
+    byId.set(p.id || command, { id: p.id || command, command, running: p.status === "running" || p.status === "pending", text })
+  }
+  const rows = [...byId.values()]
+  return [...rows.filter((r) => r.running), ...rows.filter((r) => !r.running).slice(-6).reverse()]
+}
+function syncTermBtn() {
+  const running = shells().some((s) => s.running)
+  $("termBtn").hidden = !termAllowed && !running
+  const n = shells().filter((s) => s.running).length
+  $("termCount").hidden = !n
+  $("termCount").textContent = n ? String(n) : ""
+}
+function renderShells() {
+  syncTermBtn()
+  if ($("termPane").hidden) return
+  const jobs = shells()
+  const key = jobs.map((j) => j.id + (j.running ? "!" : "")).join("|") + ":" + (termWatch || "")
+  if (key !== jobsKey) {
+    jobsKey = key
+    const box = $("termJobs")
+    box.hidden = !jobs.length
+    box.replaceChildren(...jobs.map((j) => {
+      const b = el("button", (j.id === termWatch ? "on" : "") + (j.running ? " run" : ""))
+      b.type = "button"
+      b.title = j.command
+      b.textContent = (j.running ? "● " : "") + j.command
+      b.onclick = () => watchJob(j.id)
+      return b
+    }))
+  }
+  if (termWatch) paintLog()
+}
+function paintLog() {
+  const job = shells().find((s) => s.id === termWatch)
+  if (!job || !termView) { termWatch = null; return }
+  $("termTitle").textContent = job.command
+  if (job.text === termLog) return
+  termLog = job.text
+  termView.reset()
+  termView.write(job.text || "(no output yet)\r\n")
+}
+function watchJob(id) {
+  termWatch = id
+  termLog = ""
+  if (termView) {
+    termView.options.disableStdin = true
+    termView.options.cursorBlink = false
+  }
+  $("termLive").hidden = !termAllowed
+  jobsKey = ""
+  renderShells()
 }
 async function termAvailable() {
   try {
-    const st = await call("/term", {})
-    $("termBtn").hidden = !st.allowed
+    termAllowed = !!(await call("/term", {})).allowed
   } catch {
-    $("termBtn").hidden = true
+    termAllowed = false
   }
+  syncTermBtn()
 }
 // What a cooked shell will echo. Arrows and Ctrl stay on the wire: guessing
 // those fights vim. The frame drops this guess once `gen` catches up.
@@ -2631,7 +2712,7 @@ async function paintTerm() {
   paintWterm(termScreen.text, termScreen.cursor)
 }
 async function fitTerm() {
-  if (!termFit || !current) return
+  if (!termFit || !current || !termAllowed || termWatch) return
   termFit.fit()
   const cols = termView.cols
   const rows = termView.rows
@@ -2654,7 +2735,7 @@ async function ensureTerm() {
   termView.loadAddon(termFit)
   termView.open($("termHost"))
   termView.onData((data) => {
-    if (!current || !data) return
+    if (!current || !data || termWatch) return
     const id = current
     const gen = ++termNext
     const echo = localEcho(data)
@@ -2664,20 +2745,21 @@ async function ensureTerm() {
     termSend = termSend.then(() => call("/term/input", { id, text: data })).catch((err) => fail(err))
   })
 }
-async function openTerm() {
-  if (!current) return
-  if (!$("termPane").hidden) { closeTerm(); return }
-  const st = await call("/term", {})
-  if (!st.allowed) throw new Error("This gateway does not allow a terminal")
-  if (!st.authorized) {
-    const code = window.prompt("Pairing code to unlock the terminal")
-    if (!code) return
-    await call("/term/unlock", { code: code.trim() })
-  }
+async function showPane() {
   $("inspector").hidden = false
   document.body.classList.add("term-open")
   $("termPane").hidden = false
   await ensureTerm()
+  termFit.fit()
+}
+async function startLive() {
+  termWatch = null
+  termLog = ""
+  termView.options.disableStdin = false
+  termView.options.cursorBlink = true
+  $("termTitle").textContent = "Terminal"
+  $("termLive").hidden = true
+  jobsKey = ""
   termFit.fit()
   await call("/term/open", { id: current, cols: termView.cols, rows: termView.rows })
   termNext = 0
@@ -2685,17 +2767,49 @@ async function openTerm() {
   termSynced = false
   termFrame = ""
   await paintTerm()
-  stopTerm()
-  termTimer = setInterval(() => { if (current && !$("termPane").hidden) paintTerm().catch(() => {}) }, 200)
+  termView.focus()
+}
+function rebindTerm() {
+  if ($("termPane").hidden || !termView) return
+  termWatch = null
+  termLog = ""
+  jobsKey = ""
+  if (termAllowed) startLive().catch((err) => fail(err))
+  else renderShells()
+}
+async function openTerm() {
+  if (!current) return
+  if (!$("termPane").hidden) { closeTerm(); return }
+  const running = shells().find((s) => s.running)
+  if (!termAllowed && !running) return
+  await showPane()
   if (termResize) termResize.disconnect()
   termResize = new ResizeObserver(() => {
     clearTimeout(termFitTimer)
     termFitTimer = setTimeout(() => fitTerm().catch(() => {}), 150)
   })
   termResize.observe($("termHost"))
-  termView.focus()
+  stopTerm()
+  termTimer = setInterval(() => {
+    if ($("termPane").hidden) return
+    if (termWatch) paintLog()
+    else if (current && termAllowed) paintTerm().catch(() => {})
+  }, 200)
+  if (termAllowed) {
+    const st = await call("/term", {})
+    let unlocked = st.authorized
+    if (!unlocked) {
+      const code = window.prompt("Pairing code to unlock the terminal")
+      if (code) { await call("/term/unlock", { code: code.trim() }); unlocked = true }
+      else if (!running) { closeTerm(); return }
+    }
+    if (unlocked) await startLive()
+  }
+  if (running) watchJob(running.id)
+  else renderShells()
 }
 $("termBtn").onclick = () => openTerm().catch((err) => fail(err))
+$("termLive").onclick = () => startLive().catch((err) => fail(err))
 $("termClose").onclick = closeTerm
 
 // the skills this harness loads; where it can, each can be hidden from the model

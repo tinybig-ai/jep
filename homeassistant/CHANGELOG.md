@@ -1,5 +1,11 @@
 # Changelog — the HA app
 
+## 0.2.18
+
+A badge on Terminal counts shells the agent still has running. They are
+listed in the sidebar. Click one for a read-only log. Shell returns to the
+interactive terminal.
+
 ## 0.2.17
 
 The terminal sits in the right sidebar, drawn with [xterm.js](https://xtermjs.org/).
