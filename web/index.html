@@ -69,7 +69,8 @@
   #log { max-width: 780px; margin: 0 auto; padding: 20px; }
   .older { display: block; margin: 0 auto 16px; }
   .msg { margin: 0 0 16px; position: relative; }
-  .msg.user { display: flex; justify-content: flex-end; }
+  .msg.user { display: flex; flex-direction: column; align-items: flex-end; }
+  .fail-note { max-width: min(420px, 85%); margin: 22px 0 0; padding: 8px 12px; border: 1px solid var(--accent); border-radius: 12px; background: var(--bg); color: var(--accent); font-size: 13px; white-space: pre-wrap; }
   /* a message's details, under it while hovered; nothing moves */
   .msg[data-info]:hover::after {
     content: attr(data-info); position: absolute; top: calc(100% + 1px); left: 0; right: 0;
@@ -93,7 +94,6 @@
   }
   .msg.user:hover .retry-send, .msg.user.keep-actions .retry-send { display: inline-block; }
   .retry-send:hover { color: var(--text); background: none; }
-  .fail-note { margin: 6px 0 0; color: var(--accent); font-size: 13px; white-space: pre-wrap; }
   .msg.user[data-info]:hover::after { right: 42px; }
   .msg.user .text a { color: #fff; }
   .msg.user details { color: #fffc; }
@@ -728,6 +728,14 @@ const roles = new Map()   // messageID → role, as the feed announces them
 const sending = new Map() // session → prompts of ours still in flight
 let pendingText = []      // sends the record does not show yet
 const turnErrors = []     // a failed send, kept after the words land in the record: {text, at, error}
+const hiddenFails = new Set()
+function failKey(m) {
+  return `${m.id || ""}|${m.time || ""}|${textOf(m).trim()}`
+}
+function forgetTurnError(text) {
+  const t = (text || "").trim()
+  for (let i = turnErrors.length - 1; i >= 0; i--) if (turnErrors[i].text === t) turnErrors.splice(i, 1)
+}
 let queue = []            // the daemon's prompts waiting behind the running turn, in order
 let loop = null           // the loop this conversation is running, if any
 let attachments = []      // files uploaded for the next prompt
@@ -1501,6 +1509,7 @@ function transcript(all) {
       if (m.notice) { out.push(wakeNode(m.notice)); continue }
       if (m.from) { out.push(guestNode(m)); continue }
       if (saysNothing(m)) continue
+      if (hiddenFails.has(failKey(m))) continue
       // a failed send, or a reply that came back as an error, keeps Edit and Retry on screen
       const noted = m.errorText || notedError(m)
       const failed = !m.queued && (!!m.undelivered || turnFailed(i) || !!noted)
@@ -1530,7 +1539,7 @@ function transcript(all) {
     }
     // a reply's details ride on the last thing it said
     if (out.length > before && !run.length) out[out.length - 1].dataset.info = replyInfo(m)
-    if (m.error) out.push(failNote(errorText(m.error)))
+    if (m.error && !/abort/i.test(errorText(m.error))) out.push(failNote(errorText(m.error)))
   }
   flush(true)
   return out
@@ -1866,6 +1875,8 @@ function sentActions(node, m) {
   retry.type = "button"
   retry.onclick = () => {
     retry.disabled = true
+    hiddenFails.add(failKey(m))
+    forgetTurnError(text)
     retryMessage(m).catch(fail).finally(() => { retry.disabled = false })
   }
   actions.append(edit, retry)

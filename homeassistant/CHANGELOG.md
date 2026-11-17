@@ -1,5 +1,10 @@
 # Changelog — the HA app
 
+## 0.3.13
+
+A failed turn's error sits in a card under the message. Retry hides that
+message.
+
 ## 0.3.12
 
 A provider failure the harness only writes to its log is sent to the open
