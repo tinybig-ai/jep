@@ -1,5 +1,12 @@
 # Changelog — the HA app
 
+## 0.3.15
+
+The sidebar diff is a scrollable list. Each file has a sticky header with
+its name and the added and removed line counts, then the changed lines.
+Activity detail is Compact, Default, or Detailed. Compact is one line.
+Detailed also shows command output.
+
 ## 0.3.14
 
 Hover a conversation to see its folder and branch. A change in the

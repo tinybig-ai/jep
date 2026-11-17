@@ -16,7 +16,7 @@ import { describeAsk } from "../../core/asks.ts"
 import { hasMcp, parseConversationMcp, type ConversationMcp } from "../../core/mcp.ts"
 import { pushFor, UnregisteredToken, type PushNotifier } from "../../core/push.ts"
 import { LIVENESS, type LivenessConfig } from "../../core/liveness.ts"
-import { displayPath, isRepo, originSlug, patchFile, repoContaining, repoStatus } from "../../core/git.ts"
+import { displayPath, fullDiff, isRepo, originSlug, patchFile, repoContaining, repoStatus } from "../../core/git.ts"
 import { listSkills, defaultSkillDirs, writeSkillModelInvocation } from "../../core/skills.ts"
 import type { AskRequest, DomainEvent, Message, Part } from "../../core/types.ts"
 import { renderCarryover } from "../../core/carryover.ts"
@@ -1878,6 +1878,19 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const rows = await adapter.messages(id, { limit: 100 }).catch(() => [])
         const dir = await repoContaining(editedPaths(rows, adapter.workspace), adapter.workspace)
         return json(res, 200, await gitView(dir))
+      }
+
+      // the whole working tree as one patch, so the sidebar can render every
+      // changed file without one request each. Untracked files are included.
+      if (path === "/git/patch") {
+        const rows = await adapter.messages(id, { limit: 100 }).catch(() => [])
+        const dir = await repoContaining(editedPaths(rows, adapter.workspace), adapter.workspace)
+        if (!(await isRepo(dir))) return json(res, 200, { patch: "" })
+        const s = await repoStatus(dir, 1)
+        let patch = await fullDiff(dir, s.files, s.born)
+        const cap = 400_000
+        if (patch.length > cap) patch = patch.slice(0, cap) + "\n… truncated"
+        return json(res, 200, { patch })
       }
 
       // one changed file's patch, for the details column. The path is relative

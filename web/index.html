@@ -136,6 +136,7 @@
   summary { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .msg.assistant:has(> details) { margin-bottom: 8px; }
   details.work > summary { font-weight: 500; }
+  .work.compact { color: var(--dim); font-size: 13px; margin: 2px 0; }
   details.work.active > summary { color: var(--text); }
   details.work.failed > summary { color: var(--accent); }
   .toolhead { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
@@ -150,12 +151,17 @@
   pre.diff div { white-space: pre-wrap; }
   pre.diff .added { background: #2f9e4418; } pre.diff .removed { background: #e0313118; }
   pre.diff .hunk { color: var(--dim); }
-  #diffView { width: min(920px, calc(100vw - 32px)); }
-  #diffView form { display: flex; flex-direction: column; max-height: 70vh; }
-  #diffView .line { margin-bottom: 10px; }
-  #diffView h2 { flex: 1; margin: 0; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #diffBody { overflow: auto; }
-  #diffBody pre { margin: 0; max-height: none; }
+  .side-diff .diffback { position: sticky; top: 0; z-index: 2; display: block; width: 100%; text-align: left; border: none; border-radius: 0; border-bottom: 1px solid var(--line); background: var(--side); padding: 8px 14px; font-size: 13px; font-weight: 600; }
+  .side-diff .filehead { position: sticky; top: 34px; z-index: 1; display: flex; gap: 8px; align-items: baseline; padding: 6px 12px; background: var(--bg); border-bottom: 1px solid var(--line); font-size: 13px; }
+  .side-diff .fname { font-weight: 600; white-space: nowrap; }
+  .side-diff .fdir { flex: 1; min-width: 0; color: var(--dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+  .side-diff .stat { margin-left: auto; flex: none; display: flex; gap: 6px; font: 12px ui-monospace, Menlo, monospace; }
+  .side-diff .stat .add { color: #2f9e44; } .side-diff .stat .del { color: var(--accent); }
+  .dline { display: flex; font: 12px/1.45 ui-monospace, Menlo, monospace; }
+  .dline .ln { width: 2.6em; flex: none; text-align: right; color: var(--dim); padding: 0 4px; user-select: none; }
+  .dline .txt { flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; padding-right: 8px; }
+  .dline.add { background: #2f9e4422; } .dline.del { background: #e0313122; }
+  .dline.hunk, .dline.note { display: block; color: var(--dim); padding: 4px 12px; font-size: 11px; }
   .workbody { max-height: 280px; overflow-y: auto; padding: 4px 0 4px 14px; border-left: 1px solid var(--line); margin: 4px 0 0 4px; }
   details pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow-y: auto; font: 12px ui-monospace, Menlo, monospace; background: var(--code); padding: 8px; border-radius: 6px; }
   summary { cursor: pointer; }
@@ -534,16 +540,6 @@ document.write('<link rel="stylesheet" href="v2.css">'
   </section>
 </aside>
 
-<dialog id="diffView">
-  <form method="dialog">
-    <div class="line">
-      <h2 id="diffTitle"></h2>
-      <button value="cancel">Close</button>
-    </div>
-    <div id="diffBody"></div>
-  </form>
-</dialog>
-
 <dialog id="forceNow">
   <form method="dialog">
     <h2>Send now?</h2>
@@ -561,6 +557,16 @@ document.write('<link rel="stylesheet" href="v2.css">'
   <section>
     <h3>Title</h3>
     <form class="line" id="renameForm"><input type="text" id="rename"><button>Rename</button></form>
+  </section>
+  <section>
+    <h3>Activity</h3>
+    <div class="line">
+      <select id="detail" title="Compact is one line, such as edited 3 files, ran 2 commands. Default is each step. Detailed also shows command output.">
+        <option value="compact">Compact</option>
+        <option value="default">Default</option>
+        <option value="detailed">Detailed</option>
+      </select>
+    </div>
   </section>
   <section id="agentSection" hidden>
     <h3>Agent</h3>
@@ -1131,7 +1137,7 @@ async function open(id) {
   $("start").hidden = id !== "new"
   $("scroll").hidden = id === "new"
   fillTries = 0
-  git = null; inspectorKey = ""
+  git = null; inspectorKey = ""; sideDiff = null; sidePatchFor = ""; sideShown = ""
   messages = []; asks = []; etag = null; hasMore = false; loadingOlder = false; live = new Map(); pendingText = []; queue = []
   loop = null; renderLoop()
   $("input").value = (current && remembered(draftKey(current))) || ""
@@ -1404,7 +1410,7 @@ async function loadGit(force = false) {
     renderInspector()
   } catch { /* the column is a convenience: a failed read leaves it as it was */ }
 }
-$("inspectorRefresh").onclick = () => loadGit(true)
+$("inspectorRefresh").onclick = () => { sidePatchFor = ""; sideShown = ""; loadGit(true) }
 
 const PATH_KEYS = ["filePath", "file_path", "path"]
 const fileOf = (p) => {
@@ -1483,9 +1489,16 @@ function section(title, count, open, ...children) {
 }
 const sectionOpen = (title, fallback) => { const v = localStorage.getItem("jep.inspector." + title); return v === null ? fallback : v === "1" }
 
+let sideDiff = null       // a changed path to show, or "*" for the whole list; null is the details
+let sidePatch = ""
+let sidePatchFor = ""
+let sideShown = ""
+let sideGen = 0
+
 function renderInspector() {
   const root = $("inspectorBody")
   if (!root || $("inspector").hidden || document.body.classList.contains("inspector-off")) return
+  if (sideDiff) { renderSideDiff(); return }
   const { files, pictures } = inspectorData()
   const session = sessions.find((s) => s.id === current)
   const key = JSON.stringify([current, files.length, files[0]?.[1].at, pictures.length, git && [git.branch, git.changedFiles, git.head?.hash], session?.workspace])
@@ -1542,29 +1555,112 @@ function renderInspector() {
   root.replaceChildren(...kids)
 }
 
-async function openDiff(rel) {
-  const dlg = $("diffView")
-  $("diffTitle").textContent = rel
-  $("diffBody").replaceChildren(el("div", "empty", "Reading…"))
-  if (!dlg.open) dlg.showModal()
-  try {
-    const { patch } = await call("/git/file", { id: current, path: rel })
-    if ($("diffTitle").textContent !== rel) return
-    $("diffBody").replaceChildren(patch ? patchNode(patch) : el("div", "empty", "No textual change."))
-  } catch (err) {
-    if ($("diffTitle").textContent === rel) $("diffBody").replaceChildren(el("div", "empty", String(err?.message || err)))
-  }
+function openDiff(rel) {
+  sideDiff = rel || "*"
+  renderSideDiff()
 }
-function patchNode(patch) {
-  const pre = el("pre", "diff")
-  const lines = String(patch).split("\n")
-  const cap = lines.slice(0, 2500)
-  for (const l of cap) {
-    const cls = l.startsWith("@@") ? "hunk" : l.startsWith("+") && !l.startsWith("+++") ? "added" : l.startsWith("-") && !l.startsWith("---") ? "removed" : ""
-    pre.append(el("div", cls, l || " "))
+function diffBack() {
+  const b = el("button", "diffback", "‹ Details")
+  b.type = "button"
+  b.onclick = () => { sideDiff = null; inspectorKey = ""; renderInspector() }
+  return b
+}
+function patchPath(line) {
+  const quoted = line.match(/ "b\/(.+)"$/) || line.match(/ b\/"(.+)"$/)
+  if (quoted) return quoted[1]
+  const plain = line.match(/ b\/(.+)$/)
+  return plain ? plain[1] : ""
+}
+function parsePatch(patch) {
+  const files = []
+  let cur = null
+  let oldN = 0
+  let newN = 0
+  const skip = /^(---|(\+\+\+)|index |new file|deleted file|similarity |rename |old mode|new mode|\\ No newline)/
+  for (const line of String(patch).split("\n")) {
+    if (line.startsWith("diff --git ")) {
+      cur = { path: patchPath(line), rows: [] }
+      files.push(cur)
+      continue
+    }
+    if (!cur || skip.test(line)) continue
+    if (line.startsWith("Binary files")) { cur.rows.push({ kind: "note", text: "Binary file" }); continue }
+    if (line.startsWith("@@")) {
+      const m = /@@ -(\d+)(?:,\d+)? \+(\d+)/.exec(line)
+      oldN = m ? Number(m[1]) : 0
+      newN = m ? Number(m[2]) : 0
+      cur.rows.push({ kind: "hunk", text: line })
+      continue
+    }
+    if (line.startsWith("+")) cur.rows.push({ kind: "add", text: line.slice(1), n: newN++ })
+    else if (line.startsWith("-")) cur.rows.push({ kind: "del", text: line.slice(1), o: oldN++ })
+    else if (line.startsWith(" ")) cur.rows.push({ kind: "ctx", text: line.slice(1), o: oldN++, n: newN++ })
   }
-  if (lines.length > cap.length) pre.append(el("div", "hunk", `… ${lines.length - cap.length} more lines`))
-  return pre
+  return files
+}
+function diffLine(row) {
+  if (row.kind === "hunk" || row.kind === "note") return el("div", "dline " + row.kind, row.text)
+  const n = el("div", "dline " + row.kind)
+  n.append(el("span", "ln", row.kind === "add" ? "" : String(row.o ?? "")), el("span", "ln", row.kind === "del" ? "" : String(row.n ?? "")), el("span", "txt", row.text))
+  return n
+}
+async function renderSideDiff() {
+  const root = $("inspectorBody")
+  if (!root || !sideDiff) return
+  const stamp = [current, git?.head?.hash || "", git?.changedFiles ?? ""].join("|")
+  const view = stamp + "|" + sideDiff
+  if (sideShown === view && root.querySelector(".side-diff")) return
+  const gen = ++sideGen
+  if (sidePatchFor !== stamp) {
+    root.replaceChildren(diffBack(), el("div", "empty", "Reading…"))
+    try {
+      const got = await call("/git/patch", { id: current })
+      if (gen !== sideGen || !sideDiff) return
+      sidePatch = got.patch || ""
+      sidePatchFor = stamp
+    } catch (err) {
+      if (gen === sideGen) root.replaceChildren(diffBack(), el("div", "empty", String(err?.message || err)))
+      return
+    }
+  }
+  const parsed = new Map(parsePatch(sidePatch).map((f) => [f.path, f]))
+  const known = git?.files ?? []
+  const paths = known.map((f) => f.path)
+  for (const p of parsed.keys()) if (p && !paths.includes(p)) paths.push(p)
+  const wrap = el("div", "side-diff")
+  wrap.append(diffBack())
+  if (!paths.length) wrap.append(el("div", "empty", "No uncommitted changes."))
+  for (const path of paths) {
+    const meta = known.find((f) => f.path === path)
+    const file = parsed.get(path)
+    const block = el("section", "filediff")
+    block.dataset.path = path
+    const head = el("div", "filehead")
+    const name = path.split("/").pop()
+    const dir = path.slice(0, Math.max(0, path.length - name.length)).replace(/\/$/, "")
+    const title = el("span", "fname", name || path)
+    title.title = path
+    head.append(title)
+    if (dir) head.append(el("span", "fdir", dir))
+    const rows = file?.rows ?? []
+    const add = meta?.additions || rows.filter((r) => r.kind === "add").length
+    const del = meta?.deletions || rows.filter((r) => r.kind === "del").length
+    const stat = el("span", "stat")
+    if (add) stat.append(el("span", "add", "+" + add))
+    if (del) stat.append(el("span", "del", "−" + del))
+    head.append(stat)
+    const body = el("div", "dbody")
+    const cap = rows.slice(0, 800)
+    if (!cap.length) body.append(el("div", "dline note", "No textual change."))
+    else body.append(...cap.map(diffLine))
+    if (rows.length > cap.length) body.append(el("div", "dline hunk", `… ${rows.length - cap.length} more lines`))
+    block.append(head, body)
+    wrap.append(block)
+  }
+  if (sidePatch.endsWith("… truncated")) wrap.append(el("div", "empty", "The rest of the diff was cut off."))
+  root.replaceChildren(wrap)
+  sideShown = view
+  if (sideDiff !== "*") wrap.querySelector(`[data-path="${CSS.escape(sideDiff)}"]`)?.scrollIntoView({ block: "start" })
 }
 
 function dividerNode(label, quiet = false) {
@@ -1589,8 +1685,11 @@ function transcript(all) {
   const out = []
   let run = []
   const flush = (last = false) => {
-    if (run.length === 1) out.push(assistant(workItem(run[0].p)))
-    else if (run.length > 1) out.push(assistant(workFold(run, last && busy())))
+    if (!run.length) return
+    const live = last && busy()
+    if (detailLevel() === "compact") out.push(assistant(workFold(run, live)))
+    else if (run.length === 1) out.push(assistant(workItem(run[0].p)))
+    else out.push(assistant(workFold(run, live)))
     run = []
   }
   const list = settleCompaction(all)
@@ -1631,7 +1730,7 @@ function transcript(all) {
     }
     const before = out.length
     for (const p of m.parts) {
-      if (isWork(p)) run.push({ p, m })
+      if (isWork(p) || (detailLevel() === "compact" && isEdit(p))) run.push({ p, m })
       else if (p.kind === "tool") {
         flush()
         out.push(assistant(toolNode(p)))
@@ -1745,10 +1844,17 @@ function assistant(child) {
 function workFold(run, active) {
   const parts = run.map((r) => r.p)
   const timed = [...new Set(run.map((r) => r.m))].filter((m) => m.time)
-  const span = timed.length ? Math.max(...timed.map((m) => m.time + (m.durationMs || 0))) - Math.min(...timed.map((m) => m.time)) : 0
+  const spanMs = timed.length ? Math.max(...timed.map((m) => m.time + (m.durationMs || 0))) - Math.min(...timed.map((m) => m.time)) : 0
   const failed = parts.some((p) => p.status === "error")
+  const title = workTitle(parts, spanMs, active)
+  if (detailLevel() === "compact") {
+    const line = el("div", "work compact" + (failed ? " failed" : "") + (active ? " active" : ""))
+    line.textContent = title
+    return line
+  }
   const d = keep(el("details", "work" + (failed ? " failed" : "") + (active ? " active" : "")), "work:" + (parts[0].id || ""))
-  d.append(el("summary", "", workTitle(parts, span, active)))
+  if (detailLevel() === "detailed") d.open = true
+  d.append(el("summary", "", title))
   const body = el("div", "workbody")
   body.dataset.keep = "wb:" + (parts[0].id || "")
   for (const p of parts) body.append(workItem(p))
@@ -1760,6 +1866,7 @@ function workItem(p) {
   if (p.kind === "reasoning") {
     const key = "r:" + (p.id || p.text.slice(0, 40))
     const d = keep(fold(p.durationMs >= 1000 ? `Thought for ${span(p.durationMs)}` : "Thought", p.text), key)
+    if (detailLevel() === "detailed") d.open = true
     const pre = d.querySelector("pre")
     if (pre) pre.dataset.keep = key
     return d
@@ -2042,6 +2149,11 @@ function toolNode(p) {
     : null
   const body = diff ? diffNode(diff, langOf(file)) : picture || outputNode(p, name, arg("command"))
   if (body) body.dataset.keep = "t:" + p.id
+  if (detailLevel() === "detailed" && body && !diff && (name === "bash" || name === "run")) {
+    const box = el("div", "tool")
+    box.append(head, body)
+    return box
+  }
   if (!body) {
     const line = el("div", "tool")
     line.append(head)
@@ -3214,10 +3326,21 @@ $("model").onclick = () => {
   ], true)
 }
 
+$("detail").onchange = () => {
+  localStorage.setItem("jep.detail", $("detail").value)
+  if (current) render(false)
+}
+function detailLevel() {
+  const v = localStorage.getItem("jep.detail")
+  return v === "compact" || v === "detailed" ? v : "default"
+}
+$("detail").value = detailLevel()
+
 $("gear").onclick = async () => {
   const id = current
   const s = sessions.find((x) => x.id === id)
   $("rename").value = s?.title || ""
+  $("detail").value = detailLevel()
   $("notifyAnswers").checked = notificationsEnabled("answers")
   $("notifyAsks").checked = notificationsEnabled("asks")
   $("notifyFailures").checked = notificationsEnabled("failures")
