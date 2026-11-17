@@ -17,7 +17,8 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { readFile, stat } from "node:fs/promises"
-import { dirname, join } from "node:path"
+import { homedir } from "node:os"
+import { dirname, isAbsolute, join } from "node:path"
 
 const execFileAsync = promisify(execFile)
 
@@ -346,6 +347,39 @@ export async function repoStatus(workspace: string, commitLimit = 5): Promise<Gi
     commits: await commits(dir, commitLimit),
     born,
   }
+}
+
+/** `git@github.com:owner/name.git` or `https://host/owner/name` → `owner/name`. */
+export function remoteSlug(url: string): string | null {
+  const m = url.trim().replace(/\.git$/, "").match(/[:/]([^/:]+)\/([^/]+)$/)
+  return m ? `${m[1]}/${m[2]}` : null
+}
+
+/** the first remote that names an owner/repo, or null */
+export async function originSlug(dir: string): Promise<string | null> {
+  for (const name of await remotes(dir)) {
+    const r = await git(dir, ["remote", "get-url", name])
+    const slug = r.ok ? remoteSlug(r.out) : null
+    if (slug) return slug
+  }
+  return null
+}
+
+/** `/Users/me/src/jep` → `~/src/jep`. A path outside home is unchanged. */
+export function displayPath(dir: string, home = homedir()): string {
+  if (dir === home) return "~"
+  const prefix = home.endsWith("/") ? home : home + "/"
+  return dir.startsWith(prefix) ? "~/" + dir.slice(prefix.length) : dir
+}
+
+/** one relative path's patch against HEAD. An untracked file diffs against an empty file.
+ * A path that leaves the repo is empty. */
+export async function patchFile(dir: string, rel: string): Promise<string> {
+  if (!rel || isAbsolute(rel) || rel.split(/[/\\]/).includes("..")) return ""
+  const born = (await git(dir, ["rev-parse", "--verify", "--quiet", "HEAD"])).ok
+  const tracked = await git(dir, ["ls-files", "--error-unmatch", "--", rel])
+  const code = tracked.ok ? "M" : "?"
+  return fileDiff(dir, { path: rel, code, staged: false, additions: 0, deletions: 0, binary: false }, born)
 }
 
 /** one file's patch — including an untracked one, which `git diff` alone won't show */

@@ -16,7 +16,7 @@ import { describeAsk } from "../../core/asks.ts"
 import { hasMcp, parseConversationMcp, type ConversationMcp } from "../../core/mcp.ts"
 import { pushFor, UnregisteredToken, type PushNotifier } from "../../core/push.ts"
 import { LIVENESS, type LivenessConfig } from "../../core/liveness.ts"
-import { isRepo, repoContaining, repoStatus } from "../../core/git.ts"
+import { displayPath, isRepo, originSlug, patchFile, repoContaining, repoStatus } from "../../core/git.ts"
 import { listSkills, defaultSkillDirs, writeSkillModelInvocation } from "../../core/skills.ts"
 import type { AskRequest, DomainEvent, Message, Part } from "../../core/types.ts"
 import { renderCarryover } from "../../core/carryover.ts"
@@ -196,7 +196,8 @@ function editedPaths(messages: { parts: { kind: string; input?: unknown }[] }[],
 // same core/git.ts the Telegram /git screen reads, so the two clients cannot
 // disagree about what changed. This file only decides what the phone is sent.
 async function gitView(workspace: string) {
-  if (!(await isRepo(workspace))) return { isRepository: false, branch: null, head: null, changedFiles: 0, files: [], commits: [] }
+  const folder = displayPath(workspace)
+  if (!(await isRepo(workspace))) return { isRepository: false, branch: null, head: null, changedFiles: 0, files: [], commits: [], root: null, folder, repo: null }
   const s = await repoStatus(workspace, 30)
   const commits = s.commits.map((c) => ({ hash: c.hash, shortHash: c.hash, subject: c.subject, author: c.author, time: Math.floor(c.at / 1000) }))
   return {
@@ -205,6 +206,8 @@ async function gitView(workspace: string) {
     head: commits[0] ?? null,
     changedFiles: s.files.length,
     root: s.dir,
+    folder: displayPath(s.dir),
+    repo: await originSlug(s.dir),
     // which ones, for a client that shows them (the web app's side column): code is M/A/D/R/?/U, newest status first
     files: s.files.slice(0, 60).map((f) => ({ path: f.path, code: f.code, staged: f.staged, additions: f.additions, deletions: f.deletions })),
     commits,
@@ -1875,6 +1878,20 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const rows = await adapter.messages(id, { limit: 100 }).catch(() => [])
         const dir = await repoContaining(editedPaths(rows, adapter.workspace), adapter.workspace)
         return json(res, 200, await gitView(dir))
+      }
+
+      // one changed file's patch, for the details column. The path is relative
+      // to that repo; anything that leaves it comes back empty.
+      if (path === "/git/file") {
+        const rel = str("path")
+        if (!rel) return json(res, 400, { error: "path required" })
+        const rows = await adapter.messages(id, { limit: 100 }).catch(() => [])
+        const dir = await repoContaining(editedPaths(rows, adapter.workspace), adapter.workspace)
+        if (!(await isRepo(dir))) return json(res, 404, { error: "not a repository" })
+        let patch = await patchFile(dir, rel)
+        const cap = 200_000
+        if (patch.length > cap) patch = patch.slice(0, cap) + "\n… truncated"
+        return json(res, 200, { patch })
       }
 
       // Compress this conversation's context (opencode "compact"). The port is

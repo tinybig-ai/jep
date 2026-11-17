@@ -1,5 +1,10 @@
 # Changelog — the HA app
 
+## 0.3.14
+
+Hover a conversation to see its folder and branch. A change in the
+sidebar opens a diff, and no longer downloads the file.
+
 ## 0.3.13
 
 A failed turn's error sits in a card under the message. Retry hides that
