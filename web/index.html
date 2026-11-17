@@ -151,8 +151,8 @@
   pre.diff div { white-space: pre-wrap; }
   pre.diff .added { background: #2f9e4418; } pre.diff .removed { background: #e0313118; }
   pre.diff .hunk { color: var(--dim); }
-  .side-diff .diffback { position: sticky; top: 0; z-index: 2; display: block; width: 100%; text-align: left; border: none; border-radius: 0; border-bottom: 1px solid var(--line); background: var(--side); padding: 8px 14px; font-size: 13px; font-weight: 600; }
-  .side-diff .filehead { position: sticky; top: 34px; z-index: 1; display: flex; gap: 8px; align-items: baseline; padding: 6px 12px; background: var(--bg); border-bottom: 1px solid var(--line); font-size: 13px; }
+  .side-diff .diffback { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; box-sizing: border-box; height: 36px; width: 100%; text-align: left; border: none; border-radius: 0; border-bottom: 1px solid var(--line); background: var(--side); padding: 0 14px; font-size: 13px; font-weight: 600; line-height: 1; }
+  .side-diff .filehead { position: sticky; top: 36px; z-index: 1; display: flex; gap: 8px; align-items: baseline; padding: 6px 12px; background: var(--side); border-bottom: 1px solid var(--line); font-size: 13px; }
   .side-diff .fname { font-weight: 600; white-space: nowrap; }
   .side-diff .fdir { flex: 1; min-width: 0; color: var(--dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
   .side-diff .stat { margin-left: auto; flex: none; display: flex; gap: 6px; font: 12px ui-monospace, Menlo, monospace; }
@@ -375,7 +375,10 @@
   #pair p { color: var(--dim); }
 
   /* the right column: what this conversation touched, kept out of the way of the chat */
-  #inspector { width: 320px; flex: none; background: var(--side); border-right: 0; border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+  #inspector { position: relative; width: 320px; flex: none; background: var(--side); border-right: 0; border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+  #inspector > .resize { position: absolute; left: -3px; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 5; }
+  #inspector > .resize:hover, body.resizing #inspector > .resize { background: var(--accent); }
+  body.resizing { cursor: col-resize; user-select: none; }
   body.term-open #inspector { width: min(560px, 46vw); }
   body.inspector-off #inspector { display: none; }
   body.term-open #inspector { display: flex; }
@@ -384,7 +387,7 @@
   #inspector .tabs button { border: none; border-radius: 0; background: none; padding: 6px 8px; color: var(--dim); font-weight: 600; font-size: 14px; box-shadow: inset 0 -2px 0 transparent; }
   #inspector .tabs button.on { color: var(--text); box-shadow: inset 0 -2px 0 var(--text); }
   #inspector > .head .grow { flex: 1; }
-  #inspector > .body { overflow-y: auto; flex: 1; padding: 4px 0 20px; }
+  #inspector > .body { overflow-y: auto; flex: 1; padding: 0 0 20px; }
   #inspector details { border-bottom: 1px solid var(--line); }
   #inspector summary { cursor: pointer; padding: 10px 14px; font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--dim); display: flex; gap: 8px; align-items: center; list-style: none; }
   #inspector summary::-webkit-details-marker { display: none; }
@@ -412,8 +415,9 @@
   #inspector .refresh { padding: 2px 8px; font-size: 11px; }
   #toggleInspector { padding: 4px 8px; line-height: 1; }
   @media (max-width: 1100px) and (min-width: 701px) { body:not(.term-open) #inspector, #toggleInspector { display: none; } }
-  @media (max-width: 700px) {
+    @media (max-width: 700px) {
     aside { width: 100%; }
+    #inspector > .resize { display: none; }
     body.chatting aside:not(#inspector), body:not(.chatting) main { display: none; }
     #back { display: block; }
     #toggleInspector { display: inline-flex; }
@@ -525,6 +529,7 @@ document.write('<link rel="stylesheet" href="v2.css">'
 </main>
 
 <aside id="inspector" hidden aria-label="Conversation details">
+  <div class="resize" id="inspectorSize" role="separator" aria-orientation="vertical" aria-label="Resize details" title="Drag to resize"></div>
   <div class="head">
     <div class="tabs" role="tablist">
       <button type="button" id="tabDetails" class="on" role="tab">Details</button>
@@ -1411,6 +1416,36 @@ async function loadGit(force = false) {
   } catch { /* the column is a convenience: a failed read leaves it as it was */ }
 }
 $("inspectorRefresh").onclick = () => { sidePatchFor = ""; sideShown = ""; loadGit(true) }
+
+function applyInspectorWidth() {
+  const pane = $("inspector")
+  if (matchMedia("(max-width: 700px)").matches) { pane.style.width = ""; return }
+  const saved = Number(localStorage.getItem("jep.inspectorWidth") || 0)
+  pane.style.width = saved >= 220 ? `${Math.min(saved, innerWidth - 280)}px` : ""
+}
+applyInspectorWidth()
+addEventListener("resize", applyInspectorWidth)
+$("inspectorSize").onpointerdown = (e) => {
+  if (e.button !== 0 || matchMedia("(max-width: 700px)").matches) return
+  const pane = $("inspector")
+  const startX = e.clientX
+  const startW = pane.getBoundingClientRect().width
+  pane.style.width = `${startW}px`
+  document.body.classList.add("resizing")
+  e.currentTarget.setPointerCapture(e.pointerId)
+  const move = (ev) => {
+    const w = Math.max(220, Math.min(innerWidth - 280, startW - (ev.clientX - startX)))
+    pane.style.width = `${w}px`
+  }
+  const up = (ev) => {
+    e.currentTarget.removeEventListener("pointermove", move)
+    e.currentTarget.removeEventListener("pointerup", up)
+    document.body.classList.remove("resizing")
+    localStorage.setItem("jep.inspectorWidth", String(Math.round(pane.getBoundingClientRect().width)))
+  }
+  e.currentTarget.addEventListener("pointermove", move)
+  e.currentTarget.addEventListener("pointerup", up)
+}
 
 const PATH_KEYS = ["filePath", "file_path", "path"]
 const fileOf = (p) => {

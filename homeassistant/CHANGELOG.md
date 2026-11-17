@@ -1,5 +1,10 @@
 # Changelog — the HA app
 
+## 0.3.16
+
+The details column drags wider or narrower. Its file header sits flush
+with the top of the column.
+
 ## 0.3.15
 
 The sidebar diff is a scrollable list. Each file has a sticky header with
