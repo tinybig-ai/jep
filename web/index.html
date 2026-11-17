@@ -1325,7 +1325,7 @@ function render(follow = true) {
 const shownBy = (p) => (Array.isArray(p.shown) ? p.shown : []).filter(isImage)
 const showsImage = (p) => p.kind === "tool" && shownBy(p).length > 0
 const isWork = (p) => (p.kind === "tool" && !isEdit(p) && !showsImage(p)) || (p.kind === "reasoning" && p.text.trim())
-const isEdit = (p) => !!editsOf(p.name.toLowerCase(), typeof p.input === "object" && p.input ? p.input : {})
+const isEdit = (p) => p.kind === "tool" && !!editsOf(String(p.name || "").toLowerCase(), typeof p.input === "object" && p.input ? p.input : {})
 
 // opencode folds the history and writes a synthetic user message whose only
 // part is the compaction marker; the summarize reply that answers it arrives as
@@ -1427,24 +1427,26 @@ applyInspectorWidth()
 addEventListener("resize", applyInspectorWidth)
 $("inspectorSize").onpointerdown = (e) => {
   if (e.button !== 0 || matchMedia("(max-width: 700px)").matches) return
+  e.preventDefault()
   const pane = $("inspector")
   const startX = e.clientX
   const startW = pane.getBoundingClientRect().width
   pane.style.width = `${startW}px`
   document.body.classList.add("resizing")
-  e.currentTarget.setPointerCapture(e.pointerId)
   const move = (ev) => {
     const w = Math.max(220, Math.min(innerWidth - 280, startW - (ev.clientX - startX)))
-    pane.style.width = `${w}px`
+    pane.style.width = `${Math.round(w)}px`
   }
-  const up = (ev) => {
-    e.currentTarget.removeEventListener("pointermove", move)
-    e.currentTarget.removeEventListener("pointerup", up)
+  const up = () => {
+    window.removeEventListener("pointermove", move)
+    window.removeEventListener("pointerup", up)
+    window.removeEventListener("pointercancel", up)
     document.body.classList.remove("resizing")
     localStorage.setItem("jep.inspectorWidth", String(Math.round(pane.getBoundingClientRect().width)))
   }
-  e.currentTarget.addEventListener("pointermove", move)
-  e.currentTarget.addEventListener("pointerup", up)
+  window.addEventListener("pointermove", move)
+  window.addEventListener("pointerup", up)
+  window.addEventListener("pointercancel", up)
 }
 
 const PATH_KEYS = ["filePath", "file_path", "path"]
@@ -1916,7 +1918,7 @@ function workTitle(parts, ms, active) {
   const tools = parts.filter((p) => p.kind === "tool")
   if (!tools.length) return active ? "Thinking" : ms >= 1000 ? `Thought for ${span(ms)}` : "Thought"
   const counts = {}
-  for (const t of tools) { const k = t.name.toLowerCase(); counts[k] = (counts[k] || 0) + 1 }
+  for (const t of tools) { const k = String(t.name || "").toLowerCase(); counts[k] = (counts[k] || 0) + 1 }
   const said = Object.entries(counts).map(([k, n]) => {
     const noun = NOUN[k] || "call"
     return `${VERB[k] || k} ${n} ${n === 1 ? noun : noun.endsWith("ch") ? noun + "es" : noun + "s"}`
@@ -2150,7 +2152,7 @@ function retryMessage(m) {
 // "Ran" and the command. Opened, an edit is its diff and anything else its
 // output, never the call's raw JSON.
 function toolNode(p) {
-  const name = p.name.toLowerCase()
+  const name = String(p.name || "").toLowerCase()
   const args = typeof p.input === "object" && p.input ? p.input : {}
   const arg = (...keys) => keys.map((k) => args[k]).find((v) => typeof v === "string")
   const selected = arg("file_path", "filePath", "path") || p.title || ""

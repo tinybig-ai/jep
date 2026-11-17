@@ -1,5 +1,10 @@
 # Changelog — the HA app
 
+## 0.3.17
+
+Compact mode no longer crashes on a step with no name. Letting go of the
+details column ends the resize.
+
 ## 0.3.16
 
 The details column drags wider or narrower. Its file header sits flush
