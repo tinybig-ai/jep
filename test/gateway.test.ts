@@ -10,6 +10,7 @@ import { tmpdir } from "node:os"
 import net from "node:net"
 import { fakeAdapter, pair, spawnGateway, stallable } from "./support/gateway.ts"
 import { join } from "node:path"
+import { displayPath } from "../src/core/git.ts"
 
 async function startWith(
   a: ReturnType<typeof stallable>,
@@ -1901,7 +1902,7 @@ test("/git reads the workspace through core/git, and says so when there is no re
     assert.equal(v.head.shortHash, v.head.hash)
     assert.ok(v.head.time > 1_700_000_000, "seconds, as the phone expects")
     where = plain
-    assert.deepEqual(await view(), { isRepository: false, branch: null, head: null, changedFiles: 0, files: [], commits: [] })
+    assert.deepEqual(await view(), { isRepository: false, branch: null, head: null, changedFiles: 0, files: [], commits: [], root: null, folder: displayPath(plain), repo: null })
   } finally {
     await g.close()
   }
