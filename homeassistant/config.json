@@ -1,6 +1,6 @@
 {
   "name": "Jep",
-  "version": "0.3.18",
+  "version": "0.3.19",
   "slug": "jep",
   "description": "One interface for every coding agent: Telegram and web clients for opencode, codex, claude, pi, and goose",
   "url": "https://github.com/albertoxamin/jep/tree/main/homeassistant",
@@ -50,7 +50,7 @@
       "dir": "/data/jep/workspace",
       "browse_root": "/data"
     },
-    "model": {
+    "models": {
       "id": "",
       "openrouter_api_key": ""
     },
@@ -99,7 +99,7 @@
       "dir": "str",
       "browse_root": "str"
     },
-    "model": {
+    "models": {
       "id": "str?",
       "openrouter_api_key": "password?"
     },
@@ -139,6 +139,7 @@
     "ingress_trust": "bool?",
     "workspace_dir": "str?",
     "browse_root": "str?",
+    "model": "str?",
     "openrouter_api_key": "password?",
     "github_token": "password?",
     "terminal_enabled": "bool?",

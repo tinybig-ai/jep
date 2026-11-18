@@ -225,6 +225,14 @@ test("grouped settings win over a leftover flat key", async () => {
   assert.match(envFor(root), /export JEP_TG_FORUM=off/)
 })
 
+test("an older model string still applies when the Models block is empty", async () => {
+  const root = sandbox({ gateway_enabled: true, model: "openrouter/foo", models: { id: "", openrouter_api_key: "sk-new" } })
+  const r = await boot(root)
+  assert.equal(r.status, 0, r.out)
+  assert.match(envFor(root), /export JEP_MODEL=openrouter\/foo/)
+  assert.match(envFor(root), /export OPENROUTER_API_KEY=sk-new/)
+})
+
 test("both clients off refuses to start", async () => {
   const root = sandbox({ telegram_token: "", gateway_enabled: false })
   const r = await boot(root)

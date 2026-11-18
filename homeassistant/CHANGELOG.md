@@ -1,5 +1,11 @@
 # Changelog — the HA app
 
+## 0.3.19
+
+Saving configuration works when an older install still has `model` as
+text. The model settings are in the Models block. That text stays as
+Previous default model.
+
 ## 0.3.18
 
 Configuration is grouped into collapsible blocks: Telegram, Gateway,

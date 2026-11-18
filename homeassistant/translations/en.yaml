@@ -41,8 +41,8 @@ configuration:
       browse_root:
         name: Browse root
         description: What Add project can list, inside the container.
-  model:
-    name: Model
+  models:
+    name: Models
     description: The model new conversations start on.
     fields:
       id:
@@ -137,9 +137,12 @@ configuration:
     name: Previous workspace folder
   browse_root:
     name: Previous browse root
+  model:
+    name: Previous default model
+    description: From the last version. The Models section wins when its model is set.
   openrouter_api_key:
     name: Previous OpenRouter key
-    description: From the last version. The Model section wins when its key is set.
+    description: From the last version. The Models section wins when its key is set.
   github_token:
     name: Previous GitHub token
   terminal_enabled:

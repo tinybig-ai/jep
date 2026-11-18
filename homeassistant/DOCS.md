@@ -19,7 +19,7 @@ Point the app store at this repository:
    Supervisor → Add-on Store), paste
    `https://github.com/tinybig-ai/jep` as the repository URL.
    The Supervisor finds the app by its `config.json`.
-2. Install **Jep**. In **Configuration**, open **Model** and enter an
+2. Install **Jep**. In **Configuration**, open **Models** and enter an
    OpenRouter key, or open **Harnesses** and paste OpenCode credentials,
    then **Start**.
    No GitHub token, Telegram bot or host port is needed for the sidebar.
@@ -97,7 +97,7 @@ Configuration tab.
 | Telegram | Bot token from [@BotFather](https://t.me/BotFather). Empty token turns the bot off. Forum topics: `auto` uses Threaded mode (each conversation is a topic); `off` never tries. |
 | Gateway | Web client and phone apps, port `8099`, bind address, pinned pairing code, ingress trust, and the web terminal. |
 | Workspace | Folder conversations start in (`/data/jep/workspace`) and the browse root (`/data`). |
-| Model | Default `provider/model`, and the OpenRouter key (`OPENROUTER_API_KEY`). |
+| Models | Default `provider/model`, and the OpenRouter key (`OPENROUTER_API_KEY`). |
 | Harnesses | Which of opencode, codex, claude, pi, and goose may start, which one is the default, and pasted OpenCode `auth.json` / `opencode.json`. A harness that is not installed is skipped. |
 | GitHub | Optional token (`GH_TOKEN`). |
 | Voice notes | Transcription command, timeout, whisper folder, whisper model. |
