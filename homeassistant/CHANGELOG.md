@@ -1,5 +1,13 @@
 # Changelog — the HA app
 
+## 0.3.18
+
+Configuration is grouped into collapsible blocks: Telegram, Gateway,
+Workspace, Model, Harnesses, GitHub, Voice notes, and Phone push.
+Harnesses can each be switched on, and one of them is the default.
+Open Configuration after updating and check the token and API keys
+before you save. A grouped field wins over the previous flat value.
+
 ## 0.3.17
 
 Compact mode no longer crashes on a step with no name. Letting go of the

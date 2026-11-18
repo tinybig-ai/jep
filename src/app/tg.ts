@@ -429,10 +429,16 @@ async function main() {
   })
 
   // only offer harnesses that are actually installed here — a picker row that
-  // always fails is worse than no row
+  // always fails is worse than no row. JEP_HARNESSES (comma list) drops one
+  // the configuration switched off; unset means every installed harness.
+  const harnessAllow = new Set((process.env.JEP_HARNESSES ?? "").split(",").map((s) => s.trim()).filter(Boolean))
   const available: Array<{ id: string; label: string; icon: string; settings: HarnessSettingSpec[] }> = []
   for (const h of harnesses) {
     if (mockMode && h.id !== DEFAULT_HARNESS) continue
+    if (harnessAllow.size && !harnessAllow.has(h.id)) {
+      console.error(`[harness] ${h.id} switched off — not offering it`)
+      continue
+    }
     if (await h.available()) available.push({ id: h.id, label: h.label, icon: h.icon, settings: h.settings?.() ?? [] })
     else console.error(`[harness] ${h.id} unavailable — not offering it`)
   }

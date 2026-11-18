@@ -1,76 +1,170 @@
 configuration:
-  telegram_token:
-    name: Telegram bot token
-    description: Token from @BotFather. Leave empty to run without Telegram.
-  telegram_forum:
-    name: Forum topics (Threaded mode)
-    description: 'auto: with "Threaded mode" enabled for this bot in @BotFather, each conversation becomes its own topic (messages in General spawn a topic). off: never try. Leave empty for auto.'
-  gateway_enabled:
-    name: Enable gateway
-    description: Serve the web client and native app clients (phone pairing, SSE). Works without Telegram.
-  gateway_port:
-    name: Gateway port
-    description: Port the gateway listens on inside the app. Ingress uses 8099. The Network tab's host port stays empty unless a phone needs it.
-  gateway_bind:
-    name: Gateway bind address
-    description: 'Empty = all interfaces. Set e.g. 127.0.0.1 to keep it container-local.'
-  gateway_pair_code:
-    name: Gateway pairing code
-    description: Pin the code a client pairs with. Empty = a fresh, single-print code at every boot.
-  ingress_trust:
-    name: Trust Home Assistant ingress
-    description: Trust the HA identity header only from the Supervisor. Sidebar access skips pairing; direct phone connections still require a code.
-  workspace_dir:
-    name: Workspace folder
-    description: 'The folder conversations start in. Throwaway pods live under the app data home, so nothing to manage.'
-  browse_root:
-    name: Browse root
-    description: What the "Add project" browser can list, inside the container.
+  telegram:
+    name: Telegram
+    description: The bot. Leave the token empty to run without Telegram.
+    fields:
+      token:
+        name: Bot token
+        description: Token from @BotFather.
+      forum:
+        name: Forum topics
+        description: 'auto tries Threaded mode (each conversation is its own topic). off never tries.'
+  gateway:
+    name: Gateway
+    description: The web client and the phone apps.
+    fields:
+      enabled:
+        name: Enable gateway
+        description: Serve the web client and the phone apps. Works without Telegram.
+      port:
+        name: Port
+        description: Port inside the app. Ingress uses 8099. Leave the Network host port empty unless a phone needs it.
+      bind:
+        name: Bind address
+        description: Empty listens on every interface. 127.0.0.1 stays inside the container.
+      pair_code:
+        name: Pairing code
+        description: Pin the code a phone pairs with. Empty prints a fresh code at each boot.
+      ingress_trust:
+        name: Trust Home Assistant ingress
+        description: The sidebar skips pairing. A phone on the raw port still needs a code.
+      terminal:
+        name: Web terminal
+        description: A tmux shell for the open conversation, from the Terminal button.
+  workspace:
+    name: Workspace
+    description: Where conversations start, and which folders a client may browse.
+    fields:
+      dir:
+        name: Workspace folder
+        description: The folder conversations start in. Throwaway pods live under the app data.
+      browse_root:
+        name: Browse root
+        description: What Add project can list, inside the container.
   model:
-    name: Default model
-    description: 'Provider/model jep starts conversations on, e.g. openrouter/anthropic/claude-sonnet-4. Empty = harness default.'
+    name: Model
+    description: The model new conversations start on.
+    fields:
+      id:
+        name: Default model
+        description: 'Provider and model, such as openrouter/anthropic/claude-sonnet-4. Empty uses the harness default.'
+      openrouter_api_key:
+        name: OpenRouter API key
+        description: Handed to OpenCode as OPENROUTER_API_KEY. Empty if you do not use OpenRouter.
+  harnesses:
+    name: Harnesses
+    description: Which coding agents jep may start. One that is not installed is skipped.
+    fields:
+      default:
+        name: Default harness
+        description: The agent a new conversation uses when you do not pick one.
+      opencode:
+        name: OpenCode
+      codex:
+        name: Codex
+      claude:
+        name: Claude
+      pi:
+        name: Pi
+      goose:
+        name: Goose
+      opencode_auth:
+        name: OpenCode auth.json
+        description: Paste ~/.local/share/opencode/auth.json from a machine where you ran opencode auth login.
+      opencode_config:
+        name: OpenCode config
+        description: Paste ~/.config/opencode/opencode.json (providers, MCP servers, agents).
+  github:
+    name: GitHub
+    description: Optional. The app starts without it.
+    fields:
+      token:
+        name: Token
+        description: Supplied as GH_TOKEN. Empty leaves GitHub signed out.
+  voice:
+    name: Voice notes
+    description: Off unless a command or a whisper folder is set.
+    fields:
+      command:
+        name: Transcription command
+        description: Reads a WAV on stdin and prints the transcript.
+      timeout:
+        name: Timeout
+        description: Seconds a transcription may run.
+      whisper_dir:
+        name: Whisper folder
+        description: Path to a whisper .venv, for example under /config.
+      whisper_model:
+        name: Whisper model
+        description: Model name, such as medium. Empty uses medium.
+  push:
+    name: Phone push
+    description: Optional notifications for the Android and iOS apps.
+    fields:
+      fcm_key:
+        name: Android key
+        description: Firebase service-account JSON.
+      apns_key:
+        name: Apple key path
+        description: Path to the .p8 inside the container, such as /config/AuthKey_XXXX.p8.
+      apns_key_id:
+        name: Apple key id
+      apns_team_id:
+        name: Apple team id
+      apns_topic:
+        name: Apple topic
+        description: The app bundle id.
+      apns_sandbox:
+        name: Apple sandbox
+        description: On for a development or TestFlight build.
+  telegram_token:
+    name: Previous Telegram token
+    description: From the last version. Used when the Telegram token above is empty.
+  telegram_forum:
+    name: Previous forum setting
+    description: From the last version. The Telegram section wins when it is set.
+  gateway_enabled:
+    name: Previous gateway switch
+  gateway_port:
+    name: Previous gateway port
+  gateway_bind:
+    name: Previous bind address
+  gateway_pair_code:
+    name: Previous pairing code
+  ingress_trust:
+    name: Previous ingress trust
+  workspace_dir:
+    name: Previous workspace folder
+  browse_root:
+    name: Previous browse root
   openrouter_api_key:
-    name: OpenRouter API key
-    description: Your OpenRouter key; the daemon hands it to opencode as OPENROUTER_API_KEY. Leave empty if you don't use OpenRouter.
+    name: Previous OpenRouter key
+    description: From the last version. The Model section wins when its key is set.
   github_token:
-    name: GitHub token
-    description: Optional GitHub token supplied as GH_TOKEN. Leave empty to start without GitHub authentication; use gh auth login --web later when needed.
+    name: Previous GitHub token
   terminal_enabled:
-    name: Web terminal
-    description: A tmux shell for the open conversation, from the Terminal button. On by default. Home Assistant already signed you in, so no second pairing code.
+    name: Previous web terminal switch
   opencode_auth:
-    name: opencode auth.json
-    description: Paste the contents of ~/.local/share/opencode/auth.json from a machine where you ran `opencode auth login`. Empty = free opencode models only.
+    name: Previous OpenCode auth
   opencode_config:
-    name: opencode opencode.json
-    description: Paste the contents of ~/.config/opencode/opencode.json (providers, MCP servers, agent settings).
+    name: Previous OpenCode config
   transcribe_cmd:
-    name: Transcription command
-    description: Command that reads a WAV on stdin and prints the transcript. Voice notes are off unless this or whisper_dir is set.
+    name: Previous transcription command
   transcribe_timeout:
-    name: Transcription timeout
-    description: Seconds a transcription may run before jep gives up on it.
+    name: Previous transcription timeout
   whisper_dir:
-    name: Whisper venv folder
-    description: Path to a ready whisper .venv (put it under the app's Configuration share, then use /config/...).
+    name: Previous whisper folder
   whisper_model:
-    name: Whisper model
-    description: Whisper model name, e.g. medium (the default when empty).
+    name: Previous whisper model
   fcm_key:
-    name: FCM service account key
-    description: Contents of the service account key JSON for Android push notifications.
+    name: Previous Android push key
   apns_key:
-    name: APNs key path
-    description: Path to the Apple push .p8 key inside the container (e.g. /config/AuthKey_XXXX.p8).
+    name: Previous Apple key path
   apns_key_id:
-    name: APNs key id
-    description: The 10-character key id from the Apple developer portal.
+    name: Previous Apple key id
   apns_team_id:
-    name: APNs team id
-    description: Your Apple developer team id.
+    name: Previous Apple team id
   apns_topic:
-    name: APNs topic
-    description: The bundle id of the app receiving push.
+    name: Previous Apple topic
   apns_sandbox:
-    name: APNs sandbox
-    description: Enable for TestFlight/development builds.
+    name: Previous Apple sandbox

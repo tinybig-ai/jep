@@ -62,39 +62,72 @@ def paste(name, value, path):
     with open(path, "w") as f:
         f.write(value)
 
-auth = (o.get("opencode_auth") or "").strip()
+def group(name):
+    value = o.get(name)
+    return value if isinstance(value, dict) else {}
+
+def pick(g, key, flat, default=None):
+    """a grouped value wins when it is set; a pre-group flat key still works"""
+    nested = group(g).get(key, None)
+    if nested not in (None, ""):
+        return nested
+    if flat in o and o.get(flat) not in (None, ""):
+        return o.get(flat)
+    if nested is not None:
+        return nested
+    if flat in o:
+        return o.get(flat)
+    return default
+
+auth = str(pick("harnesses", "opencode_auth", "opencode_auth") or "").strip()
 if auth:
     paste("opencode_auth", auth, os.path.join(xdg_dir, "opencode", "auth.json"))
 elif os.path.isfile(os.path.join(app_config, "opencode", "auth.json")):
     shutil.copyfile(os.path.join(app_config, "opencode", "auth.json"), os.path.join(xdg_dir, "opencode", "auth.json"))
-ocfg = (o.get("opencode_config") or "").strip()
+ocfg = str(pick("harnesses", "opencode_config", "opencode_config") or "").strip()
 if ocfg:
     paste("opencode_config", ocfg, os.path.join(app_config, "opencode", "opencode.json"))
 
+order = ["opencode", "codex", "claude", "pi", "goose"]
+if "harnesses" in o:
+    chosen = group("harnesses")
+    enabled = [name for name in order if chosen.get(name, True)]
+    default = chosen.get("default") or "opencode"
+    if default not in enabled:
+        default = enabled[0] if enabled else ""
+else:
+    enabled = order
+    default = "opencode"
+if not enabled:
+    sys.exit("no harness is switched on — enable opencode, codex, claude, pi, or goose")
+
+gateway_on = pick("gateway", "enabled", "gateway_enabled", True)
 pairs = [
-    ("JEP_TG_TOKEN", o.get("telegram_token")),
-    ("JEP_TG_FORUM", o.get("telegram_forum")),
-    ("JEP_GW_PORT", str(int(o.get("gateway_port", 8099))) if o.get("gateway_enabled") else ""),
-    ("JEP_GW_BIND", o.get("gateway_bind")),
-    ("JEP_GW_PAIR_CODE", o.get("gateway_pair_code")),
+    ("JEP_TG_TOKEN", pick("telegram", "token", "telegram_token")),
+    ("JEP_TG_FORUM", pick("telegram", "forum", "telegram_forum")),
+    ("JEP_GW_PORT", str(int(pick("gateway", "port", "gateway_port", 8099))) if gateway_on else ""),
+    ("JEP_GW_BIND", pick("gateway", "bind", "gateway_bind")),
+    ("JEP_GW_PAIR_CODE", pick("gateway", "pair_code", "gateway_pair_code")),
     # missing key (an update that has not rewritten options.json yet) stays on
-    ("JEP_GW_INGRESS_TRUST", "1" if o.get("ingress_trust", True) else ""),
-    ("JEP_WORKSPACES", o.get("workspace_dir")),
-    ("JEP_BROWSE_ROOT", o.get("browse_root")),
-    ("JEP_MODEL", o.get("model")),
-    ("OPENROUTER_API_KEY", o.get("openrouter_api_key")),
-    ("GH_TOKEN", o.get("github_token")),
-    ("JEP_TERMINAL", "1" if o.get("terminal_enabled", True) else ""),
-    ("JEP_TRANSCRIBE_CMD", o.get("transcribe_cmd")),
-    ("JEP_TRANSCRIBE_TIMEOUT", str(int(o.get("transcribe_timeout", 0))) if o.get("transcribe_timeout") else ""),
-    ("JEP_WHISPER_DIR", o.get("whisper_dir")),
-    ("JEP_WHISPER_MODEL", o.get("whisper_model")),
-    ("JEP_FCM_KEY", o.get("fcm_key")),
-    ("JEP_APNS_KEY", o.get("apns_key")),
-    ("JEP_APNS_KEY_ID", o.get("apns_key_id")),
-    ("JEP_APNS_TEAM_ID", o.get("apns_team_id")),
-    ("JEP_APNS_TOPIC", o.get("apns_topic")),
-    ("JEP_APNS_SANDBOX", "1" if o.get("apns_sandbox") else ""),
+    ("JEP_GW_INGRESS_TRUST", "1" if pick("gateway", "ingress_trust", "ingress_trust", True) else ""),
+    ("JEP_WORKSPACES", pick("workspace", "dir", "workspace_dir")),
+    ("JEP_BROWSE_ROOT", pick("workspace", "browse_root", "browse_root")),
+    ("JEP_MODEL", pick("model", "id", "model")),
+    ("OPENROUTER_API_KEY", pick("model", "openrouter_api_key", "openrouter_api_key")),
+    ("GH_TOKEN", pick("github", "token", "github_token")),
+    ("JEP_TERMINAL", "1" if pick("gateway", "terminal", "terminal_enabled", True) else ""),
+    ("JEP_HARNESS", default),
+    ("JEP_HARNESSES", ",".join(enabled)),
+    ("JEP_TRANSCRIBE_CMD", pick("voice", "command", "transcribe_cmd")),
+    ("JEP_TRANSCRIBE_TIMEOUT", str(int(pick("voice", "timeout", "transcribe_timeout") or 0)) if pick("voice", "timeout", "transcribe_timeout") else ""),
+    ("JEP_WHISPER_DIR", pick("voice", "whisper_dir", "whisper_dir")),
+    ("JEP_WHISPER_MODEL", pick("voice", "whisper_model", "whisper_model")),
+    ("JEP_FCM_KEY", pick("push", "fcm_key", "fcm_key")),
+    ("JEP_APNS_KEY", pick("push", "apns_key", "apns_key")),
+    ("JEP_APNS_KEY_ID", pick("push", "apns_key_id", "apns_key_id")),
+    ("JEP_APNS_TEAM_ID", pick("push", "apns_team_id", "apns_team_id")),
+    ("JEP_APNS_TOPIC", pick("push", "apns_topic", "apns_topic")),
+    ("JEP_APNS_SANDBOX", "1" if pick("push", "apns_sandbox", "apns_sandbox") else ""),
 ]
 with open(env_file, "w") as f:
     f.write("# generated from options.json by run.sh\n")
