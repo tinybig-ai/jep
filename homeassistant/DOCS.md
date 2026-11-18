@@ -103,8 +103,6 @@ Configuration tab.
 | Voice notes | Transcription command, timeout, whisper folder, whisper model. |
 | Phone push | Android FCM key and Apple push key path, key id, team id, topic, sandbox. |
 
-An options file from before 0.3.18 (flat `telegram_token`, `gateway_enabled`, …) still starts. The grouped value wins once you save the new form.
-
 Options not listed here (pairing windows, recycle rules, tmux sizes…) keep
 jep's defaults; the daemon exposes them as `JEP_*` env vars, see
 `docs/PROCESSES.md` § operator's manual.

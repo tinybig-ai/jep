@@ -1,5 +1,9 @@
 # Changelog — the HA app
 
+## 0.3.20
+
+The Previous fields are gone. Values live only in the groups.
+
 ## 0.3.19
 
 Saving configuration works when an older install still has `model` as
