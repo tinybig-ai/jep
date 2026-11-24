@@ -1,6 +1,6 @@
 {
   "name": "@tinybig-ai/jep",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "type": "module",
   "description": "One interface for every coding agent: a hexagonal core with Telegram, Android and gateway clients (opencode, codex, claude)",
   "license": "MIT",
@@ -34,7 +34,8 @@
     "jep-restart": "bin/jep-restart.mjs",
     "jep-rename": "bin/jep-rename.mjs",
     "jep-read": "bin/jep-read.mjs",
-    "jep-tell": "bin/jep-tell.mjs"
+    "jep-tell": "bin/jep-tell.mjs",
+    "jep-end-turn": "bin/jep-end-turn.mjs"
   },
   "engines": {
     "node": ">=22.6.0"

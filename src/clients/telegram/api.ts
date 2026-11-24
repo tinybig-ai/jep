@@ -53,6 +53,7 @@ export interface TgMessage {
   // General is told apart from "sent to the conversation".
   is_topic_message?: boolean
   message_thread_id?: number
+  forum_topic_created?: { name: string; icon_color?: number; icon_custom_emoji_id?: string }
 }
 
 export interface TgUpdate {
@@ -68,14 +69,13 @@ export interface TgUpdate {
   stopped_message_generation?: { chat: { id: number }; draft_id?: number; message_thread_id?: number }
 }
 
-export interface InlineButton {
+export type InlineButton = {
   text: string
-  callback_data: string
   /** optional button background: "success" (green), "danger" (red), "primary" (blue) */
   style?: "success" | "danger" | "primary"
   /** render the button inert — it does nothing when pressed (Bot API 10.3+) */
   disabled?: boolean
-}
+} & ({ callback_data: string; url?: never } | { url: string; callback_data?: never })
 
 /** a button inside a rich message (RichBlockButtons, Bot API 10.3+) */
 export interface RichMessageButton {
@@ -107,6 +107,7 @@ export type ParseMode = "HTML" | "MarkdownV2"
 
 export interface TelegramApi {
   getUpdates(props: { offset?: number; timeout?: number }): Promise<TgUpdate[]>
+  getMe(): Promise<{ username?: string; has_topics_enabled?: boolean }>
   // bot forums: when a conversation is a topic, every send carries the topic's
   // thread id alongside the chat id — the `chatID + threadID` pair is the
   // actual address. Optional everywhere, so non-forum chats send as before.
@@ -256,10 +257,10 @@ export function createTelegramApi(token: string): TelegramApi {
     ".json": "application/json",
   }
 
-  // classic inline buttons carry text/callback plus optional style and the
+  // classic inline buttons carry a callback or URL plus optional style and the
   // inert `disabled` flag (DisabledButton: an empty object, Bot API 10.3+).
   function serialInline(b: InlineButton): Record<string, unknown> {
-    const out: Record<string, unknown> = { text: b.text, callback_data: b.callback_data }
+    const out: Record<string, unknown> = { text: b.text, ...(b.url ? { url: b.url } : { callback_data: b.callback_data }) }
     if (b.style) out.style = b.style
     if (b.disabled) out.disabled = {}
     return out
@@ -311,6 +312,9 @@ export function createTelegramApi(token: string): TelegramApi {
   }
 
   return {
+    getMe() {
+      return call<{ username?: string; has_topics_enabled?: boolean }>("getMe", {})
+    },
     async getUpdates(props) {
       // long poll: Telegram holds the request open for `timeout` seconds by
       // design, so the abort deadline is that plus room for the round trip

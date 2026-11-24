@@ -19,11 +19,13 @@ import { Pairing } from "../clients/telegram/pair.ts"
 import { ChatStore } from "../clients/telegram/store.ts"
 import { startContinuity } from "./continuity.ts"
 import { TurnLedger } from "../core/ledger.ts"
+import { ConversationDeletions } from "../core/conversation-deletions.ts"
 import { ReminderStore } from "../clients/telegram/reminders.ts"
 import type { PairingAdmin } from "../core/pairing.ts"
 import type { PushNotifier } from "../core/push.ts"
 import { detach } from "../core/detach.ts"
 import { acquireDaemonLock, LOCK_FILE } from "./lock.ts"
+import { ExecutionPolicy, applyExecutionPolicy } from "../core/execution-policy.ts"
 
 const FIXTURE = join(import.meta.dirname, "..", "..", "fixture")
 const DEFAULT_WORKSPACES = ["workspace-alpha", "workspace-beta"].map((n) => join(FIXTURE, n))
@@ -130,6 +132,9 @@ async function buildMockApi(): Promise<MockApi> {
   let nextTopicID = 901
   const calls: CallRec[] = []
   return {
+    async getMe() {
+      return { username: "jep_mock_bot" }
+    },
     async getUpdates(props) {
       return updates
         .filter((u) => props.offset == null || u.update_id >= props.offset)
@@ -294,6 +299,7 @@ async function main() {
     if (reaped.length) console.error(`[boot] stopped ${reaped.length} orphaned opencode serve process(es): ${reaped.join(", ")}`)
   }
   const store = ChatStore.load(join(DATA_HOME, "store.json"))
+  const executionPolicy = new ExecutionPolicy(DATA_HOME)
   const dirs = (process.env.JEP_WORKSPACES ?? "").split(":").filter(Boolean)
   // no env var to set up before the bot is useful: outside mock mode, the
   // workspace defaults to wherever this process was launched from/with (the
@@ -336,7 +342,7 @@ async function main() {
     const state = await probeDir(dir)
     if (state === "missing") throw new Error(`${dir} is not on disk`)
     if (state === "blocked") throw new Error(unreadable(dir))
-    const ad = await harness.start(dir)
+    const ad = applyExecutionPolicy(await harness.start(dir), executionPolicy)
     assertAdapterImplements(ad)
     return { name: uniqueWsName(dir, workspaces), dir, adapter: ad }
   }
@@ -429,10 +435,16 @@ async function main() {
   })
 
   // only offer harnesses that are actually installed here — a picker row that
-  // always fails is worse than no row
+  // always fails is worse than no row. JEP_HARNESSES (comma list) drops one
+  // the configuration switched off; unset means every installed harness.
+  const harnessAllow = new Set((process.env.JEP_HARNESSES ?? "").split(",").map((s) => s.trim()).filter(Boolean))
   const available: Array<{ id: string; label: string; icon: string; settings: HarnessSettingSpec[] }> = []
   for (const h of harnesses) {
     if (mockMode && h.id !== DEFAULT_HARNESS) continue
+    if (harnessAllow.size && !harnessAllow.has(h.id)) {
+      console.error(`[harness] ${h.id} switched off — not offering it`)
+      continue
+    }
     if (await h.available()) available.push({ id: h.id, label: h.label, icon: h.icon, settings: h.settings?.() ?? [] })
     else console.error(`[harness] ${h.id} unavailable — not offering it`)
   }
@@ -460,10 +472,13 @@ async function main() {
     }
   }
 
+  const deletions = new ConversationDeletions(join(DATA_HOME, "pending-conversation-deletions.json"))
   const bot = new TelegramBot(tg, workspaces, activeWsName, pairing, store, (process.env.JEP_TG_MODELS ?? "")
     .split(",")
     .map((s) => s.trim())
-    .filter(Boolean), UPLOADS_DIR, spawnWorkspace, available, ReminderStore.load(join(DATA_HOME, "reminders.json")), ledger)
+    .filter(Boolean), UPLOADS_DIR, spawnWorkspace, available, ReminderStore.load(join(DATA_HOME, "reminders.json")), ledger, deletions)
+  deletions.onDeleted((id) => bot.conversationDeleted(id))
+  detach("retry conversation cleanup", deletions.retryPending())
 
   // The native phone client's side door: same process, same workspace
   // servers, no Telegram involved. Optional — set JEP_GW_PORT to turn it on.
@@ -471,6 +486,8 @@ async function main() {
   if (process.env.JEP_GW_PORT) {
     const { startGateway } = await import("../clients/gateway/index.ts")
     const gw = await startGateway({
+      executionPolicy,
+      deletions,
       adapters: () => workspaces.map((w) => ({ name: w.name, adapter: w.adapter })),
       ledger,
       // marks for every harness jep knows, not only the ones installed here: a chat
@@ -558,6 +575,16 @@ async function main() {
     })
     console.error(`gateway: POST /pair {"code":…} on http://<tailscale-or-lan-ip>:${process.env.JEP_GW_PORT}`)
     gwPairingAdmin = gw.pairingAdmin
+    // A card the daemon raises itself (an agent asks to read or message another conversation)
+    // has no harness stream to ride, so the gateway's broadcast reached only its own clients and
+    // Telegram never saw it. The bot takes the same card, answers it through the same port, and
+    // stands it down when another client answers first.
+    gw.daemonAsks.onRequested((ask) => {
+      detach("daemon ask to telegram", bot.showDaemonAsk(ask, gw.daemonAsks.answer))
+    })
+    gw.daemonAsks.onResolved((askID, optionID) => {
+      detach("daemon ask closed in telegram", bot.closeDaemonAsk(askID, optionID))
+    })
     // what keeps work across a restart, and lets an agent hand off a wait or a
     // restart: the daemon's own, reaching the turns only through the gateway's port.
     // A restart is the clean shutdown, then launchd starts the daemon again.
@@ -648,7 +675,8 @@ async function main() {
   detach("register bot commands", (async () => {
     for (let attempt = 1; attempt <= 5; attempt++) {
       try {
-        await tg.setMyCommands(TelegramBot.commands)
+        const { has_topics_enabled } = await tg.getMe()
+        await tg.setMyCommands(has_topics_enabled ? TelegramBot.commands.filter((c) => c.command !== "new") : TelegramBot.commands)
         if (attempt > 1) console.error(`setMyCommands succeeded on attempt ${attempt}`)
         return
       } catch (err) {

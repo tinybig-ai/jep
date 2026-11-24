@@ -19,12 +19,16 @@ set -eu
 
 root="${JEP_ROOT:?JEP_ROOT is not set — re-run scripts/install.sh}"
 node="${JEP_NODE:-node}"
-# a readable tree answers instantly; this is a deadline, not a wait
-probe_timeout="${JEP_PROBE_TIMEOUT:-5}"
+# A readable tree answers instantly, so this is a deadline, not a wait. It is
+# generous because a restart is the busiest moment the machine has: workspace
+# servers are still exiting and the disk is loaded, and a slow read looks the
+# same as a blocked one. A real TCC block never answers, so it fails every try.
+probe_timeout="${JEP_PROBE_TIMEOUT:-20}"
+probe_tries="${JEP_PROBE_TRIES:-3}"
 # launchd restarts us every ThrottleInterval, so a diagnosis that exited at
-# once would repeat a dozen times a minute. One line every few minutes is
+# once would repeat a dozen times a minute. One line every half minute is
 # plenty to find in a log.
-hold="${JEP_PROBE_BACKOFF:-300}"
+hold="${JEP_PROBE_BACKOFF:-30}"
 
 # Refuse to start beside another jep. Two daemons on one gateway port is how a
 # restart turned into an EADDRINUSE crash loop (and, with a full disk, a long
@@ -53,15 +57,20 @@ while holder=$(other_jep); do
 done
 
 # the read that node itself would do first, in a process we are free to kill
-"$node" -e 'require("fs").readFileSync(process.argv[1] + "/package.json")' "$root" >/dev/null 2>&1 &
-probe=$!
-( sleep "$probe_timeout"; kill -9 "$probe" 2>/dev/null ) >/dev/null 2>&1 &
-watchdog=$!
-
-if wait "$probe" 2>/dev/null; then
+try=1
+while [ "$try" -le "$probe_tries" ]; do
+  "$node" -e 'require("fs").readFileSync(process.argv[1] + "/package.json")' "$root" >/dev/null 2>&1 &
+  probe=$!
+  ( sleep "$probe_timeout"; kill -9 "$probe" 2>/dev/null ) >/dev/null 2>&1 &
+  watchdog=$!
+  if wait "$probe" 2>/dev/null; then
+    kill "$watchdog" 2>/dev/null || true
+    exec "$node" --experimental-strip-types "$root/src/app/tg.ts"
+  fi
   kill "$watchdog" 2>/dev/null || true
-  exec "$node" --experimental-strip-types "$root/src/app/tg.ts"
-fi
+  echo "jep: tree read attempt $try/$probe_tries did not answer in ${probe_timeout}s" >&2
+  try=$((try + 1))
+done
 
 cat >&2 <<EOF
 jep: node cannot read $root

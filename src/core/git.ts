@@ -17,7 +17,8 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { readFile, stat } from "node:fs/promises"
-import { join } from "node:path"
+import { homedir } from "node:os"
+import { dirname, isAbsolute, join } from "node:path"
 
 const execFileAsync = promisify(execFile)
 
@@ -102,6 +103,47 @@ export async function isRepo(dir: string): Promise<boolean> {
 export async function repoRoot(dir: string): Promise<string | null> {
   const r = await git(dir, ["rev-parse", "--show-toplevel"])
   return r.ok ? r.out.trim() || null : null
+}
+
+/** The repo these edited files live in. The root that holds the most of them
+ * wins. A tie keeps `fallback` when that is one of the roots. No repo among
+ * them: `fallback`, which is the conversation's workspace. */
+async function existingDir(start: string): Promise<string> {
+  let dir = start
+  for (;;) {
+    try {
+      if ((await stat(dir)).isDirectory()) return dir
+    } catch { /* a new file's folder may not exist yet */ }
+    const parent = dirname(dir)
+    if (parent === dir) return dir
+    dir = parent
+  }
+}
+
+export async function repoContaining(files: string[], fallback: string): Promise<string> {
+  const counts = new Map<string, number>()
+  const cached = new Map<string, string | null>()
+  for (const file of files) {
+    const dir = await existingDir(dirname(file))
+    let root = cached.get(dir)
+    if (root === undefined) {
+      root = await repoRoot(dir)
+      cached.set(dir, root)
+    }
+    if (!root) continue
+    counts.set(root, (counts.get(root) ?? 0) + 1)
+  }
+  if (!counts.size) return fallback
+  const home = await repoRoot(fallback)
+  let best = fallback
+  let n = -1
+  for (const [root, count] of counts) {
+    if (count > n || (count === n && home != null && root === home)) {
+      best = root
+      n = count
+    }
+  }
+  return best
 }
 
 // porcelain v2 is the only status format with a documented, stable grammar —
@@ -305,6 +347,39 @@ export async function repoStatus(workspace: string, commitLimit = 5): Promise<Gi
     commits: await commits(dir, commitLimit),
     born,
   }
+}
+
+/** `git@github.com:owner/name.git` or `https://host/owner/name` → `owner/name`. */
+export function remoteSlug(url: string): string | null {
+  const m = url.trim().replace(/\.git$/, "").match(/[:/]([^/:]+)\/([^/]+)$/)
+  return m ? `${m[1]}/${m[2]}` : null
+}
+
+/** the first remote that names an owner/repo, or null */
+export async function originSlug(dir: string): Promise<string | null> {
+  for (const name of await remotes(dir)) {
+    const r = await git(dir, ["remote", "get-url", name])
+    const slug = r.ok ? remoteSlug(r.out) : null
+    if (slug) return slug
+  }
+  return null
+}
+
+/** `/Users/me/src/jep` → `~/src/jep`. A path outside home is unchanged. */
+export function displayPath(dir: string, home = homedir()): string {
+  if (dir === home) return "~"
+  const prefix = home.endsWith("/") ? home : home + "/"
+  return dir.startsWith(prefix) ? "~/" + dir.slice(prefix.length) : dir
+}
+
+/** one relative path's patch against HEAD. An untracked file diffs against an empty file.
+ * A path that leaves the repo is empty. */
+export async function patchFile(dir: string, rel: string): Promise<string> {
+  if (!rel || isAbsolute(rel) || rel.split(/[/\\]/).includes("..")) return ""
+  const born = (await git(dir, ["rev-parse", "--verify", "--quiet", "HEAD"])).ok
+  const tracked = await git(dir, ["ls-files", "--error-unmatch", "--", rel])
+  const code = tracked.ok ? "M" : "?"
+  return fileDiff(dir, { path: rel, code, staged: false, additions: 0, deletions: 0, binary: false }, born)
 }
 
 /** one file's patch — including an untracked one, which `git diff` alone won't show */

@@ -6,6 +6,8 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.jep.client.domain.model.SendMode
+import dev.jep.client.domain.model.ConversationSettings
+import dev.jep.client.domain.model.SlashCommand
 import dev.jep.client.domain.model.Ask
 import dev.jep.client.domain.model.AskEntry
 import dev.jep.client.domain.repository.Attention
@@ -82,6 +84,10 @@ class ChatViewModel(
     private val memory: ConversationMemory = ConversationMemory.None,
     // what the device must hear about this screen to decide on notifications
     private val attention: Attention = Attention.None,
+    /** read per send, not once: the Keep going switch can be flipped while this
+     *  chat is on screen */
+    initialKeepGoing: Boolean = false,
+    private val onKeepGoingChanged: (Boolean) -> Unit = {},
 ) : ViewModel() {
 
     // a chat the user renamed no longer matches the sessions-list title
@@ -171,6 +177,10 @@ class ChatViewModel(
         val git: GitSnapshot? = null,
         val gitLoading: Boolean = false,
         val gitError: String? = null,
+        /** what the daemon lets this conversation be set to (its mode and switches), as data */
+        val conversation: ConversationSettings = ConversationSettings(),
+        /** slash commands the harness offers, loaded once per chat; empty when it cannot list them */
+        val commands: List<SlashCommand> = emptyList(),
         val harnessSettings: HarnessSettings = HarnessSettings(),
         val harnessSettingsLoading: Boolean = false,
         /** subagent sessions of this conversation, loaded on demand */
@@ -241,6 +251,8 @@ class ChatViewModel(
         // what the conversation's harness can do (the menu's Compact) and its
         // options, known before anyone opens a menu
         loadHarnessSettings(quiet = true)
+        loadConversation()
+        loadCommands()
         // The push feed is a convenience, not the record: it drops on a daemon
         // restart, a network change, a backgrounded radio. A chat that stops
         // updating is worse than one that reconnects a moment late, so we
@@ -911,6 +923,43 @@ class ChatViewModel(
                 .onFailure { err ->
                     _state.update { it.copy(harnessSettingsLoading = false, notice = if (quiet) it.notice else err.message ?: "couldn't load the options") }
                 }
+        }
+    }
+
+    private fun loadConversation() {
+        viewModelScope.launch {
+            runCatching { repo.conversationSettings(sessionId) }
+                .onSuccess { c -> _state.update { it.copy(conversation = c) } }
+        }
+    }
+
+    private fun loadCommands() {
+        viewModelScope.launch {
+            runCatching { repo.commands(sessionId) }
+                .onSuccess { list -> _state.update { it.copy(commands = list) } }
+        }
+    }
+
+    /** one tap walks the daemon's modes in the order it names them */
+    fun cycleMode() {
+        val c = _state.value.conversation
+        if (c.modes.isEmpty()) return
+        val next = c.modes[(c.modes.indexOf(c.mode) + 1) % c.modes.size]
+        _state.update { it.copy(conversation = c.copy(mode = next)) }
+        viewModelScope.launch {
+            runCatching { repo.setConversationMode(sessionId, next) }
+                .onSuccess { res -> _state.update { st -> st.copy(conversation = st.conversation.copy(mode = res.mode, values = res.values)) } }
+                .onFailure { err -> _state.update { it.copy(conversation = c, notice = err.message ?: "couldn't change the mode") } }
+        }
+    }
+
+    fun setConversationSetting(id: String, enabled: Boolean) {
+        val before = _state.value.conversation
+        _state.update { st -> st.copy(conversation = before.copy(values = before.values + (id to enabled))) }
+        viewModelScope.launch {
+            runCatching { repo.setConversationSetting(sessionId, id, enabled) }
+                .onSuccess { ok -> if (!ok) _state.update { it.copy(conversation = before, notice = "couldn't change that setting") } }
+                .onFailure { err -> _state.update { it.copy(conversation = before, notice = err.message ?: "couldn't change that setting") } }
         }
     }
 

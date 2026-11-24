@@ -37,12 +37,12 @@ final class LoopTests: XCTestCase {
         goal.typeText("make the tests pass")
         app.buttons["start loop"].firstMatch.tap()
 
-        let bar = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Loop running'")).firstMatch
+        let bar = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Keeping going'")).firstMatch
         XCTAssertTrue(bar.waitForExistence(timeout: 10), "a running loop shows over the composer")
         app.buttons["Stop"].firstMatch.tap()
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Loop stopped'")).firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Stopped after'")).firstMatch.waitForExistence(timeout: 10))
         app.buttons["Dismiss"].firstMatch.tap()
-        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Loop '")).firstMatch.waitForExistence(timeout: 3), "dismissed")
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Keeping going'")).firstMatch.waitForExistence(timeout: 3), "dismissed")
         app.navigationBars.buttons.element(boundBy: 0).tap()
     }
 }

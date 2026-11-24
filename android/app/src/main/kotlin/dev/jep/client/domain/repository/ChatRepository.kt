@@ -10,6 +10,10 @@ import dev.jep.client.domain.model.ChatPart
 import dev.jep.client.domain.model.FileDiff
 import dev.jep.client.domain.model.GitSnapshot
 import dev.jep.client.domain.model.Harnesses
+import dev.jep.client.domain.model.ConversationSettings
+import dev.jep.client.domain.model.Device
+import dev.jep.client.domain.model.UsageStats
+import dev.jep.client.domain.model.SlashCommand
 import dev.jep.client.domain.model.HarnessSetting
 import dev.jep.client.domain.model.HarnessSettings
 import dev.jep.client.domain.model.ImportableSession
@@ -157,6 +161,11 @@ interface ChatRepository {
     /** harness controls for the creation form; every client renders the schema generically */
     suspend fun harnessOptions(harness: String): List<HarnessSetting>
     /** the current harness controls for one existing conversation */
+    suspend fun conversationSettings(sessionId: String): ConversationSettings
+    suspend fun setConversationMode(sessionId: String, mode: String): ConversationSettings
+    suspend fun setConversationSetting(sessionId: String, key: String, enabled: Boolean): Boolean
+    /** the harness's slash commands; empty when it cannot list them */
+    suspend fun commands(sessionId: String): List<SlashCommand>
     suspend fun sessionHarnessSettings(sessionId: String): HarnessSettings
     suspend fun setSessionHarnessSetting(sessionId: String, key: String, enabled: Boolean): Boolean
     /** the models available to a conversation, and its current choice */
@@ -202,6 +211,14 @@ interface ChatRepository {
     suspend fun terminalStatus(): TerminalAccess
     /** the fresh pairing code an already-paired device may read off, to log in elsewhere */
     suspend fun pairCode(): String?
+    suspend fun devices(): List<Device>
+    /** usage across every conversation, for the settings summary */
+    suspend fun stats(): UsageStats
+    suspend fun renameDevice(id: String, name: String): Boolean
+    /** @return true when the device removed was this one, so the pairing is gone */
+    suspend fun revokeDevice(id: String): Boolean
+    /** queue a daemon restart; it happens once every turn has ended */
+    suspend fun restartDaemon(): Boolean
     /** prove the pairing code again, unlocking a shell for this device token */
     suspend fun unlockTerminal(code: String): Boolean
     /** drop that grant for this device token */

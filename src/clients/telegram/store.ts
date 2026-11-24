@@ -317,6 +317,19 @@ export class ChatStore {
     this.#save()
   }
 
+  forgetChat(chatID: number): void {
+    const key = String(chatID)
+    delete this.#chatContext[key]
+    delete this.#statusMsgs[key]
+    delete this.#pending[key]
+    delete this.#held[key]
+    delete this.#verbosity[key]
+    delete this.#agents[key]
+    delete this.#injectContext[key]
+    for (const modelKey of Object.keys(this.#models)) if (modelKey.startsWith(`${key}:`)) delete this.#models[modelKey]
+    this.#save()
+  }
+
   /** last known sessions for a workspace dir, newest first */
   indexedSessions(dir: string, harness?: string | null): IndexedSession[] {
     return this.#sessionIndex[indexKey(dir, harness)] ?? []

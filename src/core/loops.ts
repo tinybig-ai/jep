@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { loopMarker } from "./transcript.ts"
+import { keepGoingText } from "./keepgoing.ts"
 
 export { loopMarker, readLoopMarker } from "./transcript.ts"
 
@@ -19,6 +20,11 @@ export interface LoopSpec {
   goal: string
   /** total turns, the goal turn included. The cap is the safety net */
   max: number
+  /** done when the agent says so with `jep-end-turn` instead of when a check
+   *  passes: core/keepgoing.ts, which supplies its own brakes */
+  stop?: "tool"
+  /** with `stop: "tool"`: the agent's own word does not end it (core/keepgoing.ts) */
+  relentless?: boolean
   /** shell command run in the workspace; exit 0 means done */
   verify?: string
   /** text the reply must contain for done, when there is no command */
@@ -47,6 +53,8 @@ export interface LoopState {
   lastVerify?: LoopVerify
   /** consecutive transient failures retried for the current turn */
   attempts?: number
+  /** when the next try of a failed turn is due (ms epoch), while one is waited for */
+  retryAt?: number
   /** why it stopped, when it did not stop because the goal was met */
   error?: string
 }
@@ -106,6 +114,17 @@ export function evaluateLoop(input: {
  */
 export function continuationText(state: LoopState, verify?: LoopVerify, restarted = false): string {
   const { spec, iteration } = state
+  // keep going carries neither a verifier's output nor a marker to repeat: the
+  // only thing the next turn must know is that it has not stopped yet
+  if (spec.stop === "tool")
+    return keepGoingText({
+      goal: spec.goal,
+      iteration,
+      max: spec.max,
+      elapsedMs: Date.now() - state.startedAt,
+      restarted,
+      ...(spec.relentless ? { relentless: true } : {}),
+    })
   const lines = [
     loopMarker(iteration, spec.max),
     `Continue the loop. This is turn ${iteration} of ${spec.max}.`,

@@ -151,7 +151,30 @@ data class MkdirRes(val ok: Boolean = false, val path: String = "")
 data class NextCodeRes(val ok: Boolean = false, val nextCode: String? = null)
 
 @Serializable
-data class DevicesRes(val devices: List<JsonElement> = emptyList(), val pairCode: String? = null)
+data class DevicesRes(val devices: List<DeviceDto> = emptyList(), val pairCode: String? = null)
+
+@Serializable
+data class DeviceDto(
+    val id: String = "",
+    val name: String = "",
+    val pairedAt: Long = 0,
+    val lastSeen: Long = 0,
+    val current: Boolean = false,
+)
+
+@Serializable
+data class StatsUsageDto(val total: Long = 0, val cost: Double = 0.0, val turns: Int = 0)
+
+@Serializable
+data class StatsRes(
+    val today: StatsUsageDto = StatsUsageDto(),
+    val week: StatsUsageDto = StatsUsageDto(),
+    val all: StatsUsageDto = StatsUsageDto(),
+    val sessions: Int = 0,
+)
+
+@Serializable
+data class RevokeRes(val current: Boolean = false)
 
 @Serializable
 data class HistoryRes(
@@ -218,6 +241,21 @@ data class HarnessSettingsRes(
     /** the conversation's harness can compress its context */
     val compact: Boolean = false,
 )
+
+@Serializable
+data class ConversationSettingsRes(
+    val options: List<HarnessSettingDto> = emptyList(),
+    val values: Map<String, Boolean> = emptyMap(),
+    /** what the conversation does after a turn; the daemon names the modes */
+    val mode: String = "normal",
+    val modes: List<String> = emptyList(),
+)
+
+@Serializable
+data class SlashCommandDto(val name: String = "", val description: String = "", val source: String = "")
+
+@Serializable
+data class CommandsRes(val commands: List<SlashCommandDto> = emptyList())
 
 @Serializable
 data class DirEntryDto(val name: String = "", val git: Boolean = false)

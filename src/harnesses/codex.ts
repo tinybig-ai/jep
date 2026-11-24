@@ -1,5 +1,7 @@
 import { readCodexMcp, writeCodexMcpEnabled, mcpPaths } from "./mcpconfig.ts"
 import { killStuckTools, stopTree } from "../core/proctree.ts"
+import { compactCodexThread } from "./codex-compact.ts"
+import { failedCodexInputs, rememberFailedCodexInput, forgetFailedCodexInputs } from "./codex-inputs.ts"
 import type { McpServer } from "../core/types.ts"
 import { spawn, execFile, type ChildProcess } from "node:child_process"
 import { DatabaseSync } from "node:sqlite"
@@ -11,7 +13,7 @@ import type { HarnessAdapter, HarnessSettingSpec, ModelRef, ModelCaps } from "..
 import type { DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionSummary, SkillDirs } from "../core/types.ts"
 import { hasMcp, type ConversationMcp } from "../core/mcp.ts"
 import { MCP_SERVER_PATH, TOOL_NAMES, TOOLS_SERVER, toolsMode, wantsMcp } from "../core/tools.ts"
-import { splitQuoteText, withQuoteText, stripInjectedContext, contextFor, transcriptText } from "../core/transcript.ts"
+import { JEP_CONTEXT_VERSION, splitQuoteText, withQuoteText, stripInjectedContext, contextFor, transcriptText, isScaffold } from "../core/transcript.ts"
 
 /**
  * Codex CLI as a harness.
@@ -72,11 +74,12 @@ export class CodexAdapter implements HarnessAdapter {
   // pending id -> real thread id, once the first turn names it
   #alias = new Map<string, string>()
   // conversations that already got jep's context header (see contextFor)
-  #briefed = new Set<string>()
+  #briefed = new Map<string, number>()
   // titles for sessions we created but Codex hasn't recorded yet
   #pendingTitles = new Map<string, { title: string; createdAt: number }>()
   // live `codex exec` children, by session, so abort() has something to kill
   #running = new Map<string, ChildProcess>()
+  #compacting = new Set<string>()
   // every open events() subscriber; a turn's stdout is fanned out to all of them
   #bus = new Set<(evt: DomainEvent) => void>()
   #closed = false
@@ -303,6 +306,7 @@ export class CodexAdapter implements HarnessAdapter {
     if (isPending(native)) {
       // never reached disk; forgetting it locally is the whole delete
       this.#pendingTitles.delete(native)
+      await forgetFailedCodexInputs(CODEX_HOME, native)
       return true
     }
     try {
@@ -312,6 +316,7 @@ export class CodexAdapter implements HarnessAdapter {
         execFile(CODEX_BIN, ["delete", "--force", native], { timeout: 30_000 }, (err) => (err ? reject(err) : resolve()))
       })
       this.#metaCache.clear()
+      await forgetFailedCodexInputs(CODEX_HOME, native)
       return true
     } catch (err) {
       console.error(`[codex] delete failed for ${native}: ${(err as Error)?.message ?? err}`)
@@ -325,7 +330,7 @@ export class CodexAdapter implements HarnessAdapter {
     const native = this.#real(sessionID)
     if (isPending(native)) return []
     const file = (await this.#rolloutFiles()).find((f) => f.endsWith(`-${native}.jsonl`))
-    if (!file) return []
+    if (!file) return failedCodexInputs(CODEX_HOME, native)
     let raw: string
     try {
       raw = await readFile(file, "utf8")
@@ -387,7 +392,9 @@ export class CodexAdapter implements HarnessAdapter {
       if (hasResponseItems && row.type === "response_item") {
         switch (payload.type) {
           case "message": {
-            // Rollouts include private runtime instructions alongside replies.
+            // Rollouts also store system/developer messages (skills, model
+            // instructions, tool definitions). Only conversation roles are
+            // visible; an unknown or missing role is never an assistant reply.
             if (payload.role !== "user" && payload.role !== "assistant") break
             const text = contentText(payload.content)
             if (!text.trim() || isCodexInjectedContext(text)) break
@@ -461,7 +468,14 @@ export class CodexAdapter implements HarnessAdapter {
         }
       }
     }
-    return out
+    const failed = await failedCodexInputs(CODEX_HOME, native)
+    // A failed request may already be in the native rollout. Receipts only
+    // fill gaps where the CLI exited before recording the person's input.
+    return [...out, ...failed.filter((input) => !out.some((m) =>
+      m.role === "user" && Math.abs(m.time - input.time) < 60_000 &&
+      transcriptText(m.parts.filter((p) => p.kind === "text").map((p) => p.text).join("")) ===
+      transcriptText(input.parts.filter((p) => p.kind === "text").map((p) => p.text).join("")),
+    ))].sort((a, b) => a.time - b.time)
   }
 
   // ─── running a turn ─────────────────────────────────────────────────────
@@ -482,6 +496,7 @@ export class CodexAdapter implements HarnessAdapter {
     },
   ): Promise<Message> {
     const native = this.#real(sessionID)
+    if (this.#compacting.has(native)) throw new Error("this conversation is compacting; wait for it to finish")
     const pending = isPending(native)
 
     const sandbox = opts?.harnessSettings?.dangerouslySkipPermissions ? ["--dangerously-bypass-approvals-and-sandbox"] : ["-s", DEFAULT_SANDBOX]
@@ -505,13 +520,20 @@ export class CodexAdapter implements HarnessAdapter {
         args.push("-c", `${key}.default_tools_approval_mode="approve"`)
       }
     if (opts?.model?.modelID) args.push("-m", opts.model.modelID)
-    for (const f of opts?.filePaths ?? []) args.push("-i", f)
     // resume keeps the thread; a pending session starts a fresh one
     if (!pending) args.push("resume", native)
+    // exec's image option accepts multiple values: before `resume` it swallows
+    // the subcommand and prompt. Resume has its own image option, and `--`
+    // terminates image arguments before the person's words in either mode.
+    const files = opts?.filePaths ?? []
+    for (const f of files.filter((fp) => /\.(png|jpe?g|webp|gif)$/i.test(fp))) args.push("-i", f)
+    if (files.length) args.push("--")
     // codex takes nothing but text, so a quote is a headed block ahead of the
     // message, and messages() takes back exactly that block (splitQuoteText).
     // jep's header goes first, once per conversation (see contextFor).
-    args.push(`${contextFor(text, this.#briefed, native, opts?.brief)}${withQuoteText(text, opts?.quote)}`)
+    const sentAt = Date.now()
+    const words = `${withQuoteText(text, opts?.quote)}${files.length ? `\n\nAttached files:\n${files.map((f) => `- ${f}`).join("\n")}` : ""}`
+    args.push(`${contextFor(text, this.#briefed, native, opts?.brief)}${words}`)
 
     const child = spawn(CODEX_BIN, args, { cwd: this.workspace, stdio: ["ignore", "pipe", "pipe"] })
     this.#running.set(native, child)
@@ -550,7 +572,7 @@ export class CodexAdapter implements HarnessAdapter {
                 this.#running.set(threadID, child)
                 // the next turn arrives under the real id; same conversation,
                 // so it must not be briefed a second time
-                this.#briefed.add(threadID)
+                this.#briefed.set(threadID, JEP_CONTEXT_VERSION)
               }
               this.#emit({ type: "message.created", sessionID: toInternalId(threadID), messageID: "", role: "assistant" })
               continue
@@ -611,6 +633,7 @@ export class CodexAdapter implements HarnessAdapter {
           if (opts?.signal?.aborted) return reject(new Error("prompt aborted"))
           if (code !== 0 && !failure) {
             failure = { name: "CodexError", message: stderr.trim().slice(0, 400) || `codex exec exited ${code}` }
+            this.#emit({ type: "session.error", sessionID: toInternalId(threadID || native), message: failure.message })
           }
           resolve()
         })
@@ -623,6 +646,11 @@ export class CodexAdapter implements HarnessAdapter {
       this.#metaCache.clear() // the rollout just changed
     }
 
+    if (failure && !isScaffold(text)) {
+      await rememberFailedCodexInput(CODEX_HOME, threadID || native, words, sentAt).catch((err) => {
+        console.error(`[codex] could not save failed input: ${(err as Error).message}`)
+      })
+    }
     return {
       id: toInternalId(`${threadID}:turn-${Date.now()}`),
       sessionID: toInternalId(threadID || native),
@@ -631,6 +659,22 @@ export class CodexAdapter implements HarnessAdapter {
       parts,
       ...(tokens ? { tokens } : {}),
       ...(failure ? { error: failure } : {}),
+    }
+  }
+
+  async compact(sessionID: string): Promise<{ ok: boolean; error?: string }> {
+    const native = this.#real(sessionID)
+    if (this.#closed) return { ok: false, error: "the Codex adapter is closed" }
+    if (isPending(native)) return { ok: false, error: "send a message before compacting this conversation" }
+    if (this.#running.has(native)) return { ok: false, error: "a turn is running on this session" }
+    const child = spawn(CODEX_BIN, ["app-server", "--listen", "stdio://"], { cwd: this.workspace, stdio: ["pipe", "pipe", "pipe"] })
+    this.#running.set(native, child)
+    this.#compacting.add(native)
+    try {
+      return await compactCodexThread(child, native, this.workspace)
+    } finally {
+      this.#running.delete(native)
+      this.#compacting.delete(native)
     }
   }
 
@@ -734,7 +778,9 @@ export class CodexAdapter implements HarnessAdapter {
 
   async models(): Promise<ModelRef[]> {
     // `codex exec -m` takes any model the account can reach; there is no list
-    // command, so offer the ones the CLI documents as selectable.
+    // command, so offer the current first-party models the CLI documents as
+    // selectable. Keep JEP_CODEX_MODELS as an escape hatch for accounts with
+    // a narrower catalog or for newly released model ids.
     return (process.env.JEP_CODEX_MODELS ?? "gpt-6.1-sol,gpt-6-astra,gpt-6.1-terra,gpt-6-luna,gpt-5.6-sol,gpt-5.5-codex,gpt-5.5,gpt-5.1-codex")
       .split(",")
       .map((m) => m.trim())
@@ -777,6 +823,8 @@ export class CodexAdapter implements HarnessAdapter {
 // Codex item types -> jep parts. Unknown kinds become "other" rather than
 // being dropped, so a new item type shows up as something rather than nothing.
 function mapItem(item: any, workspace: string): Part | null {
+  // Some feeds carry role metadata, others name internal message types. This
+  // mapper serves both live output and Desktop history, so filter them here.
   if (item?.role !== undefined && item.role !== "user" && item.role !== "assistant") return null
   const type = String(item?.type ?? "")
   switch (type) {

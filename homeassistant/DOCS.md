@@ -3,7 +3,8 @@
 One interface for every coding agent, inside Home Assistant. Runs the jep
 daemon (`src/app/tg.ts`) in the app's own container with **Telegram** and the
 **gateway web/app client** both configurable in the app settings, either one
-on its own or both together. Agents run on **opencode**.
+on its own or both together. Agents run on the harnesses you switch on:
+**opencode**, **codex**, **claude**, **pi**, and **goose**.
 
 The daemon keeps its architecture here: Telegram on one side, the gateway on
 the other, the same `HarnessAdapter` underneath. Nothing about jep changes —
@@ -18,8 +19,9 @@ Point the app store at this repository:
    Supervisor → Add-on Store), paste
    `https://github.com/tinybig-ai/jep` as the repository URL.
    The Supervisor finds the app by its `config.json`.
-2. Install **Jep**. In **Configuration**, enter an `openrouter_api_key` or
-   paste existing OpenCode credentials into `opencode_auth`, then **Start**.
+2. Install **Jep**. In **Configuration**, open **Models** and enter an
+   OpenRouter key, or open **Harnesses** and paste OpenCode credentials,
+   then **Start**.
    No GitHub token, Telegram bot or host port is needed for the sidebar.
 3. Open **Jep** in the sidebar. The web client is already signed in. A phone
    on a published port still needs the pairing code from the app's **Log**.
@@ -65,10 +67,11 @@ push, wait for CI, then reinstall/update the app in HA. CI builds the exact
 `JEP_SHA` commit from `JEP_REPO`, so a branch moving during the build cannot
 silently change the source. Local builds use `JEP_REF` when no SHA is supplied.
 
-The upstream image prefix is `ghcr.io/tinybig-ai/{arch}-jep`. Both architecture
-packages must be public. Fork releases use their own owner in `image` and the
-root repository metadata; CI rejects a registry owner that does not match the
-publishing repository. Keep the app version and registry tags in step.
+The image prefix is `ghcr.io/<the owner of the GitHub repo you added>/{arch}-jep`.
+This checkout uses `ghcr.io/albertoxamin/{arch}-jep`. Upstream uses
+`ghcr.io/tinybig-ai/{arch}-jep`. CI rejects a publish whose `image` owner
+is not the repository it is running in, and a push to main rewrites
+`config.json` and `repository.json` when a merge left the other fork's name.
 
 Maintainers: if GitHub says visibility is disabled by organization administrators,
 an organization owner must first enable **Public** under **Package Creation** in
@@ -86,29 +89,19 @@ must change it before switching its users to local builds.
 
 ## Options
 
-| Option | Type / default | Meaning |
-|---|---|---|
-| `telegram_token` | password, empty | token from [@BotFather](https://t.me/BotFather). Empty = Telegram bot off. |
-| `telegram_forum` | list (`auto`/`off`), `auto` | with Threaded mode enabled for the bot in @BotFather, every conversation runs as its own **forum topic**: a message typed in General spawns a topic titled with the prompt, /new opens one, deleting the conversation deletes the topic. `auto` probes `createForumTopic` once and falls back to plain chat for 10 minutes when Telegram refuses. |
-| `gateway_enabled` | bool, `true` | run the gateway (web client, Android app client) |
-| `gateway_port` | port, `8099` | port inside the app. Ingress is fixed to this. The host port stays unmapped until the Network tab sets one |
-| `gateway_bind` | str, empty | what to bind: empty = all interfaces (default), `127.0.0.1` = container-local |
-| `gateway_pair_code` | str, empty | pin the gateway pairing code instead of a fresh one per boot |
-| `ingress_trust` | bool, `true` | trust the HA user header only from the Supervisor at `172.30.32.2`; direct connections still require pairing |
-| `workspace_dir` | str, `/data/jep/workspace` | the one served workspace every conversation starts from. Throwaway pods (`Add project → pod` in the client) live under the data home, so no folders to manage |
-| `browse_root` | str, `/data` | browser root when adding a folder from a client |
-| `model` | str, empty | default model, e.g. `openrouter/anthropic/claude-sonnet-4` |
-| `openrouter_api_key` | password, empty | your OpenRouter key; exported as `OPENROUTER_API_KEY`, which is all opencode needs to list and run OpenRouter models |
-| `github_token` | password, empty | optional GitHub token, supplied through `GH_TOKEN`. GitHub login never blocks startup. For interactive login later, run `gh auth login --web` from the app's shell or an agent when requested |
-| `terminal_enabled` | bool, `true` | tmux shell in the web client (`JEP_TERMINAL=1`). The Terminal button opens it for the current conversation. Ingress does not ask for the pairing code again |
-| `opencode_auth` | password, empty | paste the contents of `~/.local/share/opencode/auth.json` from a machine where you ran `opencode auth login`. Empty + no free models = no pickable models |
-| `opencode_config` | password, empty | paste the contents of `~/.config/opencode/opencode.json` (providers, MCP servers…) |
-| `transcribe_cmd` | str, empty | command printed-transcript replacement for whisper; voice notes need this or a whisper venv |
-| `transcribe_timeout` | int, `300` | seconds a transcription may take |
-| `whisper_dir` | str, empty | path to a ready whisper `.venv` (e.g. put it under the `addon_configs` share) |
-| `whisper_model` | str, empty | whisper model (`medium` when unset) |
-| `fcm_key` | password, empty | service-account key JSON for Android push |
-| `apns_*` | str/bool, empty | iOS push: `apns_key` is the **path** to the `.p8` file (see the config share below), plus key id / team id / topic / sandbox |
+Configuration is grouped. Each group is a collapsible block in the app's
+Configuration tab.
+
+| Group | What it sets |
+|---|---|
+| Telegram | Bot token from [@BotFather](https://t.me/BotFather). Empty token turns the bot off. Forum topics: `auto` uses Threaded mode (each conversation is a topic); `off` never tries. |
+| Gateway | Web client and phone apps, port `8099`, bind address, pinned pairing code, ingress trust, and the web terminal. |
+| Workspace | Folder conversations start in (`/data/jep/workspace`) and the browse root (`/data`). |
+| Models | Default `provider/model`, and the OpenRouter key (`OPENROUTER_API_KEY`). |
+| Harnesses | Which of opencode, codex, claude, pi, and goose may start, which one is the default, and pasted OpenCode `auth.json` / `opencode.json`. A harness that is not installed is skipped. |
+| GitHub | Optional token (`GH_TOKEN`). |
+| Voice notes | Transcription command, timeout, whisper folder, whisper model. |
+| Phone push | Android FCM key and Apple push key path, key id, team id, topic, sandbox. |
 
 Options not listed here (pairing windows, recycle rules, tmux sizes…) keep
 jep's defaults; the daemon exposes them as `JEP_*` env vars, see
@@ -120,7 +113,7 @@ jep's defaults; the daemon exposes them as `JEP_*` env vars, see
 |---|---|---|
 | `/config/opencode/opencode.json` | the app's **Configuration** share (Settings → Apps → Jep → three-dot menu → *gears*; also /addon_configs/jep via Samba) | opencode config; users can drop `auth.json` here too |
 | `/data/jep` — sessions, pairing, pods, gateway tokens | app data, private (included in HA backups) | everything jep owns |
-| `/share` | shared folder | pick as `workspace_dir` or `browse_root` for repos you edit in HA too |
+| `/share` | shared folder | pick as the workspace folder or browse root for repos you edit in HA too |
 
 Secrets (`opencode_auth`, `opencode_config`, `telegram_token`, `github_token`, `fcm_key`) are
 stored in Home Assistant's own app options and only ever written into the

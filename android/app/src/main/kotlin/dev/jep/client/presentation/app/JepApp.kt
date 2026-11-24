@@ -71,6 +71,12 @@ fun JepApp(app: AppViewModel) {
                 onGroupByProject = { app.setGroupByProject(it) },
                 onReconnect = { address, code, done -> app.reconnect(address, code, done) },
                 onForgetPairing = { app.forgetPairing() },
+                stats = app.stats.collectAsState().value,
+                devices = app.devices.collectAsState().value,
+                onRenameDevice = { id, name -> app.renameDevice(id, name) },
+                onRevokeDevice = { app.revokeDevice(it) },
+                daemonNote = app.daemonNote.collectAsState().value,
+                onRestartDaemon = { app.restartDaemon() },
             )
         }
         screen is Screen.Chat -> {

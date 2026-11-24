@@ -1,8 +1,8 @@
 {
   "name": "Jep",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "slug": "jep",
-  "description": "One interface for every coding agent: Telegram and web gateway clients for opencode",
+  "description": "One interface for every coding agent: Telegram and web clients for opencode, codex, claude, pi, and goose",
   "url": "https://github.com/tinybig-ai/jep/tree/main/homeassistant",
   "arch": [
     "aarch64",
@@ -34,57 +34,101 @@
     }
   ],
   "options": {
-    "telegram_token": "",
-    "telegram_forum": "auto",
-    "gateway_enabled": true,
-    "gateway_port": 8099,
-    "gateway_bind": "",
-    "gateway_pair_code": "",
-    "ingress_trust": true,
-    "workspace_dir": "/data/jep/workspace",
-    "browse_root": "/data",
-    "model": "",
-    "openrouter_api_key": "",
-    "github_token": "",
-    "terminal_enabled": true,
-    "opencode_auth": "",
-    "opencode_config": "",
-    "transcribe_cmd": "",
-    "transcribe_timeout": 300,
-    "whisper_dir": "",
-    "whisper_model": "",
-    "fcm_key": "",
-    "apns_key": "",
-    "apns_key_id": "",
-    "apns_team_id": "",
-    "apns_topic": "",
-    "apns_sandbox": false
+    "telegram": {
+      "token": "",
+      "forum": "auto"
+    },
+    "gateway": {
+      "enabled": true,
+      "port": 8099,
+      "bind": "",
+      "pair_code": "",
+      "ingress_trust": true,
+      "terminal": true
+    },
+    "workspace": {
+      "dir": "/data/jep/workspace",
+      "browse_root": "/data"
+    },
+    "models": {
+      "id": "",
+      "openrouter_api_key": ""
+    },
+    "harnesses": {
+      "default": "opencode",
+      "opencode": true,
+      "codex": true,
+      "claude": true,
+      "pi": true,
+      "goose": true,
+      "opencode_auth": "",
+      "opencode_config": ""
+    },
+    "github": {
+      "token": ""
+    },
+    "voice": {
+      "command": "",
+      "timeout": 300,
+      "whisper_dir": "",
+      "whisper_model": ""
+    },
+    "push": {
+      "fcm_key": "",
+      "apns_key": "",
+      "apns_key_id": "",
+      "apns_team_id": "",
+      "apns_topic": "",
+      "apns_sandbox": false
+    }
   },
   "schema": {
-    "telegram_token": "password",
-    "telegram_forum": "list(auto|off)?",
-    "gateway_enabled": "bool",
-    "gateway_port": "port",
-    "gateway_bind": "str?",
-    "gateway_pair_code": "str?",
-    "ingress_trust": "bool",
-    "workspace_dir": "str",
-    "browse_root": "str",
-    "model": "str?",
-    "openrouter_api_key": "password?",
-    "github_token": "password?",
-    "terminal_enabled": "bool",
-    "opencode_auth": "password?",
-    "opencode_config": "password?",
-    "transcribe_cmd": "str?",
-    "transcribe_timeout": "int(5,3600)?",
-    "whisper_dir": "str?",
-    "whisper_model": "str?",
-    "fcm_key": "password?",
-    "apns_key": "str?",
-    "apns_key_id": "str?",
-    "apns_team_id": "str?",
-    "apns_topic": "str?",
-    "apns_sandbox": "bool?"
+    "telegram": {
+      "token": "password?",
+      "forum": "list(auto|off)"
+    },
+    "gateway": {
+      "enabled": "bool",
+      "port": "port",
+      "bind": "str?",
+      "pair_code": "str?",
+      "ingress_trust": "bool",
+      "terminal": "bool"
+    },
+    "workspace": {
+      "dir": "str",
+      "browse_root": "str"
+    },
+    "models": {
+      "id": "str?",
+      "openrouter_api_key": "password?"
+    },
+    "harnesses": {
+      "default": "list(opencode|codex|claude|pi|goose)",
+      "opencode": "bool",
+      "codex": "bool",
+      "claude": "bool",
+      "pi": "bool",
+      "goose": "bool",
+      "opencode_auth": "password?",
+      "opencode_config": "password?"
+    },
+    "github": {
+      "token": "password?"
+    },
+    "voice": {
+      "command": "str?",
+      "timeout": "int(5,3600)",
+      "whisper_dir": "str?",
+      "whisper_model": "str?"
+    },
+    "push": {
+      "fcm_key": "password?",
+      "apns_key": "str?",
+      "apns_key_id": "str?",
+      "apns_team_id": "str?",
+      "apns_topic": "str?",
+      "apns_sandbox": "bool"
+    }
   }
 }

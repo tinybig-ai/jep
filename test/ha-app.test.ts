@@ -128,16 +128,16 @@ test("ingress is on, so HA can mount the web client without any open port", () =
     webui?: string
     watchdog?: string
     ports: Record<string, number | null>
-    options: { ingress_trust: boolean }
-    schema: { ingress_trust: string }
+    options: { gateway: { ingress_trust: boolean } }
+    schema: { gateway: { ingress_trust: string } }
   }
   assert.equal(cfg.ingress, true, "the Supervisor's ingress proxy is the /api/hassio_ingress/... route")
   assert.equal(cfg.ingress_port, 8099)
   assert.equal(cfg.ports["8099/tcp"], null, "an unpublished host port is what makes the ingress header unforgeable")
   assert.equal(cfg.webui, undefined)
   assert.equal(cfg.watchdog, undefined)
-  assert.equal(cfg.options.ingress_trust, true)
-  assert.equal(cfg.schema.ingress_trust, "bool")
+  assert.equal(cfg.options.gateway.ingress_trust, true)
+  assert.equal(cfg.schema.gateway.ingress_trust, "bool")
   // the web client it proxies must have no site-absolute URLs: ingress mounts
   // the app under /api/hassio_ingress/<token>/ and does not rewrite paths
   const page = readFileSync(join(import.meta.dirname, "..", "web", "index.html"), "utf8")
@@ -199,7 +199,38 @@ test("the image source stays with the installed repository during an upgrade", (
   const owner = new URL(repository.url).pathname.split("/")[1]!.toLowerCase()
   assert.equal(cfg.image, `ghcr.io/${owner}/{arch}-jep`)
   assert.equal(cfg.slug, "jep")
-  assert.equal(cfg.options.workspace_dir, "/data/jep/workspace")
+  assert.equal(cfg.options.workspace.dir, "/data/jep/workspace")
+})
+
+test("a switched-off harness is omitted, and a default that is off moves to one that is on", async () => {
+  const root = sandbox({
+    gateway_enabled: true,
+    harnesses: { default: "goose", opencode: false, codex: false, claude: true, pi: false, goose: false },
+  })
+  const r = await boot(root)
+  assert.equal(r.status, 0, r.out)
+  assert.match(envFor(root), /export JEP_HARNESS=claude/)
+  assert.match(envFor(root), /export JEP_HARNESSES=claude/)
+})
+
+test("grouped settings win over a leftover flat key", async () => {
+  const root = sandbox({
+    telegram_token: "flat-token",
+    telegram: { token: "grouped-token", forum: "off" },
+    gateway_enabled: true,
+  })
+  const r = await boot(root)
+  assert.equal(r.status, 0, r.out)
+  assert.match(envFor(root), /export JEP_TG_TOKEN=grouped-token/)
+  assert.match(envFor(root), /export JEP_TG_FORUM=off/)
+})
+
+test("an older model string still applies when the Models block is empty", async () => {
+  const root = sandbox({ gateway_enabled: true, model: "openrouter/foo", models: { id: "", openrouter_api_key: "sk-new" } })
+  const r = await boot(root)
+  assert.equal(r.status, 0, r.out)
+  assert.match(envFor(root), /export JEP_MODEL=openrouter\/foo/)
+  assert.match(envFor(root), /export OPENROUTER_API_KEY=sk-new/)
 })
 
 test("both clients off refuses to start", async () => {

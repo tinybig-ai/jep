@@ -44,6 +44,7 @@ struct ChatView: View {
             status = retainStatus(status, statusSummary(st))
             chat.loadModels()
             chat.loadHarnessSettings(quiet: true)
+            chat.loadConversationMode(quiet: true)
         }
         .sheet(item: $sheet) { s in sheetView(s) }
         .fullScreenCover(isPresented: $expanded) {
@@ -226,6 +227,19 @@ struct ChatView: View {
     private func bottom(_ st: ChatState) -> some View {
         VStack(spacing: 8) {
             if let loop = st.loop { LoopBar(loop: loop, stop: { chat.stopLoop() }, clear: { chat.clearLoop() }) }
+            // a mode other than normal is on for this chat and nothing is in flight: one
+            // quiet line, so a mode the person cannot see never keeps going unnoticed
+            if st.loop == nil, st.conversationMode.mode != "normal" {
+                HStack(spacing: 8) {
+                    Text(st.conversationMode.label).jepFont(12, .semibold)
+                    Spacer(minLength: 0)
+                    Button("Next mode") { chat.cycleConversationMode() }.jepFont(13)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .glassCard(14)
+                .accessibilityIdentifier("keep-going-armed")
+            }
             ForEach(Array(st.queued.enumerated()), id: \.element.id) { index, q in
                 HStack(spacing: 8) {
                     Image(systemName: q.mode == .afterReply ? "clock" : "arrow.turn.down.right").foregroundStyle(.secondary)
@@ -636,6 +650,13 @@ private func loopLabel(_ m: ChatMessage) -> String {
 /// A loop, over the composer while it runs and after it ends: where it is, what the goal is, and the one
 /// button that matters (Stop while it runs, Dismiss once it is over).
 struct LoopBar: View {
+    /// "Keeping going · turn N" while it runs, and what ended it when it does not
+    static func label(loop: LoopInfo, turn: Int) -> String {
+        if loop.running { return "Keeping going · turn \(turn)" }
+        let turns = "\(loop.iteration) \(loop.iteration == 1 ? "turn" : "turns")"
+        return loop.status == "done" ? "Finished after \(turns)" : "Stopped after \(turns)"
+    }
+
     let loop: LoopInfo
     let stop: () -> Void
     let clear: () -> Void
@@ -644,7 +665,9 @@ struct LoopBar: View {
         let turn = min(loop.max, loop.iteration + (loop.running ? 1 : 0))
         let detail = [loop.goal, loop.verifyCode.map { "verify exit \($0)" }, loop.error].compactMap { $0 }.joined(separator: " · ")
         HStack(spacing: 8) {
-            Text("Loop \(loop.status) \(turn)/\(loop.max)").jepFont(12, .semibold)
+            // the backstop is jep's, not a budget the person chose, so it is
+            // never shown; the words match the phone and the web
+            Text(Self.label(loop: loop, turn: turn)).jepFont(12, .semibold)
             Text(detail).jepFont(12).foregroundStyle(.secondary).lineLimit(1)
             Spacer(minLength: 0)
             Button(loop.running ? "Stop" : "Dismiss") { loop.running ? stop() : clear() }.jepFont(13)

@@ -4,7 +4,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { addUsage, emptyUsage, fmtMoney, usageChip, usageOf } from "../src/core/usage.ts"
+import { addUsage, emptyUsage, fmtMoney, statsOf, usageChip, usageOf } from "../src/core/usage.ts"
 import type { Message } from "../src/core/types.ts"
 
 const assistant = (over: Partial<Message> = {}): Message => ({
@@ -85,4 +85,57 @@ test("money is shown at the precision the number deserves", () => {
   assert.equal(fmtMoney(0.42), "$0.42")
   assert.equal(fmtMoney(12.345), "$12.35")
   assert.equal(fmtMoney(1234.5), "$1235")
+})
+
+test("stats roll up by day, model and harness, and keep empty days", () => {
+  const now = new Date(2026, 10, 6, 12, 0, 0).getTime() // local noon, Fri Nov 6 2026
+  const at = (daysAgo: number, hour = 9) => {
+    const d = new Date(now)
+    d.setDate(d.getDate() - daysAgo)
+    d.setHours(hour, 0, 0, 0)
+    return d.getTime()
+  }
+  const stats = statsOf(
+    [
+      {
+        harness: "opencode",
+        messages: [
+          assistant({ time: at(0), model: "a/one" }),
+          assistant({ time: at(1), model: "a/one", cost: 0.5 }),
+        ],
+      },
+      {
+        harness: "claude",
+        messages: [
+          assistant({ time: at(10), model: "b/two" }),
+          user(),
+        ],
+      },
+    ],
+    { days: 30, now },
+  )
+
+  assert.equal(stats.days.length, 30, "the chart gets a full window, empty days included")
+  assert.equal(stats.days[29]!.day, "2026-11-06")
+  assert.equal(stats.today.total, 137)
+  assert.equal(stats.week.total, 274, "today and yesterday, not the turn ten days ago")
+  assert.equal(stats.all.total, 411, "every counted turn, however old")
+  assert.equal(stats.sessions, 2, "the user-only conversation is not a session with usage")
+  assert.equal(stats.scanned, 2)
+  assert.deepEqual(stats.models.map((m) => m.key), ["a/one", "b/two"])
+  assert.deepEqual(stats.harnesses.map((h) => h.key), ["opencode", "claude"])
+  assert.equal(stats.harnesses[0]!.turns, 2)
+  assert.equal(stats.busiest?.day, "2026-11-06")
+  assert.equal(stats.first, at(10))
+  assert.equal(stats.last, at(0))
+})
+
+test("stats keep a priced-at-zero turn distinct from an unreported price", () => {
+  const now = new Date(2026, 10, 6, 12, 0, 0).getTime()
+  const stats = statsOf([{ harness: "goose", messages: [assistant({ cost: 0, model: "free/one" }), assistant()] }], { days: 7, now })
+  assert.equal(stats.all.priced, 1)
+  assert.equal(stats.all.unpriced, 1)
+  assert.equal(stats.all.cost, 0)
+  assert.equal(stats.models.find((m) => m.key === "free/one")!.priced, 1)
+  assert.equal(stats.models.find((m) => m.key === "unreported")!.unpriced, 1)
 })

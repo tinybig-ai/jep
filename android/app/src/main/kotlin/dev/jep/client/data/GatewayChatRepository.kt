@@ -6,6 +6,8 @@ import dev.jep.client.data.dto.AttachRes
 import dev.jep.client.data.dto.BrowseRes
 import dev.jep.client.data.dto.DiffRes
 import dev.jep.client.data.dto.GitRes
+import dev.jep.client.data.dto.ConversationSettingsRes
+import dev.jep.client.data.dto.CommandsRes
 import dev.jep.client.data.dto.HarnessSettingsRes
 import dev.jep.client.data.dto.ErrorDto
 import dev.jep.client.data.dto.HarnessesRes
@@ -39,6 +41,14 @@ import dev.jep.client.domain.model.FileDiff
 import dev.jep.client.domain.model.HarnessMark
 import dev.jep.client.domain.model.Harnesses
 import dev.jep.client.domain.model.AskEntry
+import dev.jep.client.domain.model.ConversationSettings
+import dev.jep.client.domain.model.Device
+import dev.jep.client.domain.model.UsageStats
+import dev.jep.client.domain.model.UsageTotal
+import dev.jep.client.data.dto.StatsRes
+import dev.jep.client.data.dto.StatsUsageDto
+import dev.jep.client.data.dto.RevokeRes
+import dev.jep.client.domain.model.SlashCommand
 import dev.jep.client.domain.model.HarnessSetting
 import dev.jep.client.domain.model.HarnessSettings
 import dev.jep.client.domain.model.ImportableSession
@@ -196,6 +206,30 @@ private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     override suspend fun harnessOptions(harness: String): List<HarnessSetting> =
         decode("/harness-settings", HarnessSettingsRes.serializer(), payload("harness" to harness)).options.map { it.toDomain() }
 
+    override suspend fun conversationSettings(sessionId: String): ConversationSettings =
+        decode("/conversation-settings", ConversationSettingsRes.serializer(), payload("id" to sessionId)).toDomain()
+
+    override suspend fun setConversationMode(sessionId: String, mode: String): ConversationSettings {
+        val res = decode("/set-conversation-mode", ConversationSettingsRes.serializer(), payload("id" to sessionId, "mode" to mode))
+        // the answer names the mode and the switches; the list of modes is unchanged
+        return ConversationSettings(res.mode, emptyList(), emptyList(), res.values)
+    }
+
+    override suspend fun setConversationSetting(sessionId: String, key: String, enabled: Boolean): Boolean =
+        post("/set-conversation-setting", buildJsonObject {
+            put("id", sessionId)
+            put("key", key)
+            put("enabled", enabled)
+        }.toString()).first in 200..299
+
+    override suspend fun commands(sessionId: String): List<SlashCommand> =
+        try {
+            decode("/commands", CommandsRes.serializer(), payload("id" to sessionId)).commands.map { it.toDomain() }
+        } catch (e: ApiFailure) {
+            // 501: this harness cannot list its commands. Not an error to show.
+            if (e.status == 501 || e.status == 502) emptyList() else throw e
+        }
+
     override suspend fun sessionHarnessSettings(sessionId: String): HarnessSettings =
         decode("/harness-settings", HarnessSettingsRes.serializer(), payload("id" to sessionId)).toDomain()
 
@@ -279,6 +313,24 @@ private val json = Json { ignoreUnknownKeys = true; isLenient = true }
         onNextCode(pairCode)
         return pairCode
     }
+
+    override suspend fun stats(): UsageStats {
+        val r = decode("/stats", StatsRes.serializer(), buildJsonObject { put("days", 30) }.toString(), long)
+        fun StatsUsageDto.t() = UsageTotal(total, cost, turns)
+        return UsageStats(r.today.t(), r.week.t(), r.all.t(), r.sessions)
+    }
+
+    override suspend fun devices(): List<Device> =
+        decode("/devices", DevicesRes.serializer()).devices.map { Device(it.id, it.name, it.pairedAt, it.lastSeen, it.current) }
+
+    override suspend fun renameDevice(id: String, name: String): Boolean =
+        post("/devices/rename", payload("id" to id, "name" to name)).first in 200..299
+
+    override suspend fun revokeDevice(id: String): Boolean =
+        decode("/devices/revoke", RevokeRes.serializer(), payload("id" to id)).current
+
+    override suspend fun restartDaemon(): Boolean =
+        post("/restart", buildJsonObject { put("quiet", 5); put("maxWait", 180) }.toString()).first in 200..299
 
     override suspend fun unlockTerminal(code: String): Boolean {
         val (status, text) = post("/term/unlock", payload("code" to code))

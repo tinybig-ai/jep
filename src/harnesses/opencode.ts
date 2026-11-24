@@ -6,16 +6,18 @@ import os from "node:os"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { Agent, fetch, type RequestInit } from "undici"
-import type { AgentRef, HarnessAdapter, HarnessSettingSpec, ModelRef, ModelCaps } from "../core/ports.ts"
+import type { AgentRef, HarnessAdapter, HarnessSettingSpec, ModelRef, ModelCaps, HarnessCommand } from "../core/ports.ts"
 import type { AskOption, AskQuestion, DomainEvent, FileDiff, HarnessError, Message, Part, ProjectSummary, SessionSummary, SkillDirs } from "../core/types.ts"
 import { TurnAbortedError } from "../core/types.ts"
 import { resolveAgent } from "../core/agents.ts"
 import type { ServerLoad } from "../core/recycle.ts"
 import { MCP_SERVER_PATH, TOOLS_SERVER, toolsMode, wantsMcp } from "../core/tools.ts"
-import { quoteBlock, readQuoteBlock, contextFor } from "../core/transcript.ts"
+import { quoteBlock, readQuoteBlock, contextFor, isSlashCommand } from "../core/transcript.ts"
 import { parseOptionIDs } from "../core/questions.ts"
+import { describeError } from "../core/errors.ts"
 import { parseOpencodeLogError } from "./opencode-log.ts"
 import { detach } from "../core/detach.ts"
+import { parseModelRef } from "../core/models.ts"
 import { setTimeout as pollDelay } from "node:timers/promises"
 const OPENCODE_BIN = process.env.OPENCODE_BIN ?? "opencode"
 const MODEL_REF = process.env.JEP_MODEL?.trim() ? process.env.JEP_MODEL.trim() : undefined
@@ -94,6 +96,9 @@ const MIME_BY_EXT: Record<string, string> = {
   ".gif": "image/gif",
   ".svg": "image/svg+xml",
   ".pdf": "application/pdf",
+  // OpenCode reads text/plain files into context. An octet-stream file part
+  // is passed to the provider instead, where conversation exports fail.
+  ...Object.fromEntries(["md", "markdown", "txt", "json", "jsonl", "yaml", "yml", "toml", "csv", "log", "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "sh", "css", "html", "xml"].map((ext) => [`.${ext}`, "text/plain"])),
 }
 
 // opencode spells a stop as an error: MessageAbortedError, or a plain
@@ -339,7 +344,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
   #child: ChildProcess
   #eventReaders = new Set<ReadableStreamDefaultReader<Uint8Array>>()
   // conversations that already got jep's context header (see contextFor)
-  #briefed = new Set<string>()
+  #briefed = new Map<string, number>()
   // the last compaction handled per conversation, so the same one does not
   // un-brief again (see #noteCompaction)
   #compactions = new Map<string, string>()
@@ -714,16 +719,36 @@ export class OpenCodeAdapter implements HarnessAdapter {
         { type: "text", text: `${contextFor(text, this.#briefed, native, opts?.brief)}${text}` },
         ...(opts?.filePaths ?? []).map((fp) => ({ type: "file", mime: mimeFor(fp), url: pathToFileURL(fp).href })),
       ]
-      const res = await fetch(this.#url(`/session/${encodeURIComponent(toNativeId(sessionID))}/message`), {
+      // A slash command is not text for the model here: opencode expands it
+      // itself, behind its own endpoint. Only names it lists are routed there, so
+      // a path that merely starts with "/" still goes as a plain message.
+      const command = isSlashCommand(text) ? await this.#commandFor(text) : null
+      const res = await fetch(this.#url(`/session/${encodeURIComponent(toNativeId(sessionID))}/${command ? "command" : "message"}`), {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ parts, ...(model ? { model } : {}), ...(agent ? { agent } : {}) }),
+        body: JSON.stringify(
+          command
+            ? {
+                command: command.name,
+                arguments: command.args,
+                ...(model ? { model: `${model.providerID}/${model.modelID}` } : {}),
+                ...(agent ? { agent } : {}),
+                parts: parts.filter((p) => p.type === "file"),
+              }
+            : { parts, ...(model ? { model } : {}), ...(agent ? { agent } : {}) },
+        ),
         signal: controller.signal,
         dispatcher: NO_TIMEOUT_AGENT,
       })
       if (!res.ok) {
         const textError = await res.text().catch(() => "")
-        throw new Error(`prompt -> ${res.status}: ${textError.slice(0, 200)}`)
+        // the useful sentence is on stderr and can land a moment after the 500
+        let named = this.providerError(sessionID) ?? this.#recentProviderError()
+        if (!named) {
+          await pollDelay(100)
+          named = this.providerError(sessionID) ?? this.#recentProviderError()
+        }
+        throw new Error(named ? describeError(named) : `prompt -> ${res.status}: ${textError.slice(0, 200)}`)
       }
       const data = (await res.json()) as { info?: any; parts?: any[] }
       return mapMessage(data.info ?? {}, data.parts ?? [], this.workspace)
@@ -885,30 +910,90 @@ export class OpenCodeAdapter implements HarnessAdapter {
   // far into one summary message and continues from there. It needs the model
   // named (the same one prompts run under) because the summarizing turn runs on
   // it. Refuses while a turn is in flight — reported as false, not an error.
-  async compact(sessionID: string, model?: string): Promise<boolean> {
+  // The header as a message of its own (see HarnessAdapter.brief): opencode takes
+  // `noReply`, so it is recorded and the model stays quiet.
+  async brief(sessionID: string): Promise<boolean> {
+    const native = toNativeId(sessionID)
+    const header = contextFor("", this.#briefed, native, true).trim()
+    if (!header) return true
     try {
-      // the chat's pin, else the daemon default. modelID is everything after
-      // the first slash, so openrouter/google/gemma stays one id.
-      const ref = model || MODEL_REF || ""
-      const slash = ref.indexOf("/")
-      const providerID = slash > 0 ? ref.slice(0, slash) : ""
-      const modelID = slash > 0 ? ref.slice(slash + 1) : ""
+      await this.#json(`/session/${encodeURIComponent(native)}/message`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ parts: [{ type: "text", text: header }], noReply: true }),
+      })
+      return true
+    } catch (err) {
+      // the header was spent by contextFor and never landed: the next message carries it
+      this.#briefed.delete(native)
+      console.error(`[opencode] brief ${native} failed: ${(err as Error)?.message ?? err}`)
+      return false
+    }
+  }
+
+  async commands(_sessionID: string): Promise<HarnessCommand[]> {
+    const list = await this.#commandList()
+    return list.map((c) => ({ name: c.name, ...(c.description ? { description: c.description } : {}), source: c.source ?? "command" }))
+  }
+
+  // GET /command is cheap but it runs on every slash message, so the list is
+  // held briefly; a new command file shows up within the window.
+  #commands: { at: number; list: Array<{ name: string; description?: string; source?: string }> } | null = null
+  async #commandList(): Promise<Array<{ name: string; description?: string; source?: string }>> {
+    if (this.#commands && Date.now() - this.#commands.at < 30_000) return this.#commands.list
+    const raw = await this.#json<Array<{ name?: string; description?: string; source?: string }>>("/command")
+    const list = raw.filter((c): c is { name: string; description?: string; source?: string } => typeof c.name === "string" && c.name !== "")
+    this.#commands = { at: Date.now(), list }
+    return list
+  }
+
+  // "/name args" -> the command opencode knows by that name, or null
+  async #commandFor(text: string): Promise<{ name: string; args: string } | null> {
+    const m = /^\/(\S+)\s*([\s\S]*)$/.exec(text)
+    if (!m) return null
+    try {
+      return (await this.#commandList()).some((c) => c.name === m[1]) ? { name: m[1]!, args: m[2]!.trim() } : null
+    } catch {
+      return null
+    }
+  }
+
+  async compact(sessionID: string, opts?: { model?: ModelRef }): Promise<{ ok: boolean; error?: string }> {
+    try {
+      let model = opts?.model
+      if (!model) {
+        // summarize requires an explicit model even when normal prompts use
+        // OpenCode's default. Prefer this conversation's latest recorded
+        // choice over the daemon's global default, using a bounded history read.
+        const rows = await this.#json<Array<{ info?: { model?: ModelRef; providerID?: string; modelID?: string; time?: { created?: number } } }>>(
+          `/session/${encodeURIComponent(toNativeId(sessionID))}/message?limit=8`,
+        )
+        const infos = rows.map((row) => row.info).filter((info) => info !== undefined)
+          .sort((a, b) => (b.time?.created ?? 0) - (a.time?.created ?? 0))
+        for (const info of infos) {
+          const candidate = info.model ?? { providerID: info.providerID ?? "", modelID: info.modelID ?? "" }
+          if (candidate.providerID && candidate.modelID) { model = candidate; break }
+        }
+      }
+      model ??= parseModelRef(MODEL_REF)
+      if (!model) {
+        const config = await this.#json<{ model?: string }>("/config")
+        model = parseModelRef(config.model)
+      }
+      if (!model?.providerID || !model.modelID) return { ok: false, error: "Choose a model or send a message before compacting this conversation." }
       await this.#json(`/session/${encodeURIComponent(toNativeId(sessionID))}/summarize`, {
         method: "POST",
-        body: JSON.stringify(providerID && modelID ? { providerID, modelID } : {}),
+        body: JSON.stringify({ providerID: model.providerID, modelID: model.modelID }),
         // summarize runs a real model turn, so #json's 30s read-only ceiling cuts
         // it off mid-summary and reports the timeout as a refusal. Give it a
         // turn-sized budget of its own instead.
         signal: AbortSignal.timeout(COMPACT_TIMEOUT_MS),
       })
-      return true
+      return { ok: true }
     } catch (err) {
-      // 409: a turn already owns the session. Anything else (a free-tier cap,
-      // a bad model id) is the reason compact failed, so it must reach the
-      // button instead of looking like a refusal.
-      if (err instanceof HttpError && err.status === 409) {
+      if (err instanceof HttpError && err.status >= 400 && err.status < 500) {
         console.error(`[opencode] compact ${sessionID} refused: ${err.message}`)
-        return false
+        return { ok: false, error: err.message }
       }
       throw err
     }
@@ -924,6 +1009,12 @@ export class OpenCodeAdapter implements HarnessAdapter {
   // 429 never gets blamed for an unrelated stall minutes later.
   providerError(sessionID: string): HarnessError | null {
     return this.#providerErrors.get(toNativeId(sessionID))?.error ?? null
+  }
+
+  // a provider failure opencode logged without a session id, if it just happened
+  #recentProviderError(): HarnessError | null {
+    const any = this.#providerErrors.get("*")
+    return any && Date.now() - any.at < 15_000 ? any.error : null
   }
 
   /**
@@ -1545,7 +1636,11 @@ async function spawnOpenCodeServer(key: string, opts?: { dataHome?: string }): P
     for (const line of chunk.toString().split("\n")) {
       if (!line.trim()) continue
       const err = parseOpencodeLogError(line)
-      if (err) providerErrors.set(err.sessionID, { error: err.error, at: Date.now() })
+      if (err) {
+        const slot = { error: err.error, at: Date.now() }
+        if (err.sessionID) providerErrors.set(err.sessionID, slot)
+        providerErrors.set("*", slot)
+      }
       if (err || /\blevel=(ERROR|WARN)\b/.test(line)) console.error(`[opencode:${tag}] ${line}`)
     }
   }

@@ -4,6 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>jep</title>
+<script>
+  // Before the first paint: the look and the motion are this browser's own
+  // choice, remembered here, so the page never flashes the other way.
+  try {
+    const theme = localStorage.getItem("jep.theme")
+    if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme
+    if (localStorage.getItem("jep.motion") === "off") document.documentElement.dataset.motion = "off"
+  } catch {}
+</script>
 <!-- the jep apple, the same curves scripts/gen_icon.py draws for the apps -->
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%223%203.5%2018%2017%22%3E%3Cdefs%3E%3ClinearGradient%20id%3D%22f%22%20x1%3D%220%22%20y1%3D%224.47%22%20x2%3D%220%22%20y2%3D%2219.53%22%20gradientUnits%3D%22userSpaceOnUse%22%3E%3Cstop%20offset%3D%220%22%20stop-color%3D%22%23F66676%22/%3E%3Cstop%20offset%3D%22.45%22%20stop-color%3D%22%23E43A50%22/%3E%3Cstop%20offset%3D%221%22%20stop-color%3D%22%23C42438%22/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath%20fill%3D%22url%28%23f%29%22%20d%3D%22M%2012.00%2C9.29%20C%2013.85%2C7.39%2018.02%2C7.09%2019.64%2C9.56%20C%2021.14%2C11.93%2020.33%2C15.67%2018.02%2C17.94%20C%2016.51%2C19.42%2014.78%2C19.92%2013.50%2C19.23%20C%2012.58%2C18.83%2011.42%2C18.83%2010.50%2C19.23%20C%209.22%2C19.92%207.49%2C19.42%205.98%2C17.94%20C%203.67%2C15.67%202.86%2C11.93%204.36%2C9.56%20C%205.98%2C7.09%2010.15%2C7.39%2012.00%2C9.29%20Z%22/%3E%3Cpath%20fill%3D%22url%28%23f%29%22%20d%3D%22M%2013.39%2C6.99%20C%2014.20%2C5.02%2016.51%2C4.23%2018.02%2C4.53%20C%2017.32%2C6.20%2015.47%2C7.29%2013.39%2C6.99%20Z%22/%3E%3Cpath%20d%3D%22M%2012.17%2C8.67%20L%2012.52%2C5.40%22%20stroke%3D%22%23E95A6E%22%20stroke-width%3D%221.15%22%20stroke-linecap%3D%22round%22/%3E%3C/svg%3E">
 <link rel="apple-touch-icon" href="data:image/png;base64,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">
@@ -19,7 +28,9 @@
     }
   }
   * { box-sizing: border-box; }
-  html, body { height: 100%; margin: 0; }
+  /* the app scrolls inside its own panes: a pull down at the top of one must not reach the
+     browser, which reads it as pull-to-refresh and reloads the page */
+  html, body { height: 100%; margin: 0; overscroll-behavior-y: none; }
   body {
     background: var(--bg); color: var(--text);
     font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -65,11 +76,12 @@
   #health.online { color: #2f9e44; }
   #health.warn { color: #d08a00; }
   #health.error { color: var(--accent); }
-  #scroll { flex: 1; overflow-y: auto; }
+  #scroll { flex: 1; overflow-y: auto; overscroll-behavior-y: contain; }
   #log { max-width: 780px; margin: 0 auto; padding: 20px; }
   .older { display: block; margin: 0 auto 16px; }
   .msg { margin: 0 0 16px; position: relative; }
-  .msg.user { display: flex; justify-content: flex-end; }
+  .msg.user { display: flex; flex-direction: column; align-items: flex-end; }
+  .fail-note { max-width: min(420px, 85%); margin: 22px 0 0; padding: 8px 12px; border: 1px solid var(--accent); border-radius: 12px; background: var(--bg); color: var(--accent); font-size: 13px; white-space: pre-wrap; }
   /* a message's details, under it while hovered; nothing moves */
   .msg[data-info]:hover::after {
     content: attr(data-info); position: absolute; top: calc(100% + 1px); left: 0; right: 0;
@@ -91,7 +103,7 @@
     background: none; font-size: 11px; line-height: 1.55; text-decoration: underline dotted;
     text-underline-offset: 3px;
   }
-  .msg.user:hover .retry-send { display: inline-block; }
+  .msg.user:hover .retry-send, .msg.user.keep-actions .retry-send { display: inline-block; }
   .retry-send:hover { color: var(--text); background: none; }
   .msg.user[data-info]:hover::after { right: 42px; }
   .msg.user .text a { color: #fff; }
@@ -135,6 +147,7 @@
   summary { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .msg.assistant:has(> details) { margin-bottom: 8px; }
   details.work > summary { font-weight: 500; }
+  .work.compact { color: var(--dim); font-size: 13px; margin: 2px 0; }
   details.work.active > summary { color: var(--text); }
   details.work.failed > summary { color: var(--accent); }
   .toolhead { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
@@ -148,6 +161,18 @@
   .toolhead .added, .toolhead .removed { font: 12px ui-monospace, Menlo, monospace; flex: none; }
   pre.diff div { white-space: pre-wrap; }
   pre.diff .added { background: #2f9e4418; } pre.diff .removed { background: #e0313118; }
+  pre.diff .hunk { color: var(--dim); }
+  .side-diff .diffback { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; box-sizing: border-box; height: 36px; width: 100%; text-align: left; border: none; border-radius: 0; border-bottom: 1px solid var(--line); background: var(--side); padding: 0 14px; font-size: 13px; font-weight: 600; line-height: 1; }
+  .side-diff .filehead { position: sticky; top: 36px; z-index: 1; display: flex; gap: 8px; align-items: baseline; padding: 6px 12px; background: var(--side); border-bottom: 1px solid var(--line); font-size: 13px; }
+  .side-diff .fname { font-weight: 600; white-space: nowrap; }
+  .side-diff .fdir { flex: 1; min-width: 0; color: var(--dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+  .side-diff .stat { margin-left: auto; flex: none; display: flex; gap: 6px; font: 12px ui-monospace, Menlo, monospace; }
+  .side-diff .stat .add { color: #2f9e44; } .side-diff .stat .del { color: var(--accent); }
+  .dline { display: flex; font: 12px/1.45 ui-monospace, Menlo, monospace; }
+  .dline .ln { width: 2.6em; flex: none; text-align: right; color: var(--dim); padding: 0 4px; user-select: none; }
+  .dline .txt { flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; padding-right: 8px; }
+  .dline.add { background: #2f9e4422; } .dline.del { background: #e0313122; }
+  .dline.hunk, .dline.note { display: block; color: var(--dim); padding: 4px 12px; font-size: 11px; }
   .workbody { max-height: 280px; overflow-y: auto; padding: 4px 0 4px 14px; border-left: 1px solid var(--line); margin: 4px 0 0 4px; }
   details pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow-y: auto; font: 12px ui-monospace, Menlo, monospace; background: var(--code); padding: 8px; border-radius: 6px; }
   summary { cursor: pointer; }
@@ -196,6 +221,9 @@
   .modes input { display: none; }
   .modes span { display: block; border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; color: var(--dim); cursor: pointer; }
   .modes input:checked + span { border-color: var(--text); color: var(--text); }
+  .modebtn { border: 1px solid var(--line); background: none; border-radius: 999px; padding: 2px 11px; font: inherit; color: var(--dim); cursor: pointer; }
+  .modebtn[data-mode="keep"] { border-color: var(--text); color: var(--text); }
+  .modebtn[data-mode="relentless"] { border-color: #d9534f; color: #d9534f; }
   form.compose { position: relative; }
   .status { max-width: 780px; margin: 6px auto 0; display: flex; align-items: center; gap: 12px; color: var(--dim); font-size: 12px; min-height: 18px; }
   .status:empty { display: none; }
@@ -209,7 +237,7 @@
   #forceNow button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   .msg.queued-msg.editing .body { opacity: .3; outline: 2px dashed currentColor; outline-offset: 2px; }
   .queued-actions, .msg-actions { display: none; position: absolute; right: 0; top: calc(100% + 1px); gap: 10px; }
-  .msg.user:hover .queued-actions, .msg.user:hover .msg-actions, .queued-actions:focus-within, .msg-actions:focus-within { display: flex; }
+  .msg.user:hover .queued-actions, .msg.user:hover .msg-actions, .queued-actions:focus-within, .msg-actions:focus-within, .msg.user.keep-actions .msg-actions { display: flex; }
   .queued-actions button, .msg-actions button { border: none; padding: 0 2px; background: none; color: var(--dim); font-size: 11px; line-height: 1.55; text-decoration: underline dotted; text-underline-offset: 3px; }
   .queued-actions button:hover, .msg-actions button:hover { color: var(--text); background: none; }
   .msg.queued-msg[data-info]:hover::after, .msg.has-actions[data-info]:hover::after { right: 90px; }
@@ -271,6 +299,11 @@
   .menu.ctx hr { border: none; border-top: 1px solid var(--line); margin: 4px 6px; }
   .menu.ctx button.danger { color: var(--accent); }
   .session .title input { width: 100%; font: inherit; padding: 1px 4px; border: 1px solid var(--accent); border-radius: 4px; background: var(--bg); color: inherit; }
+  .place { position: fixed; z-index: 40; width: 280px; pointer-events: none; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 8px 28px #0003; padding: 12px 14px; }
+  .place b { display: block; font-size: 14px; margin: 0 0 8px; }
+  .place .prow { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; margin-top: 6px; }
+  .place .prow svg { width: 14px; height: 14px; flex: none; margin-top: 3px; }
+  .place .sub { color: var(--dim); padding-left: 22px; font-size: 12px; }
   dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--bg); color: var(--text); width: min(440px, calc(100vw - 32px)); padding: 20px; }
   dialog::backdrop { background: #0006; }
   dialog h2 { margin: 0 0 14px; font-size: 17px; }
@@ -311,6 +344,16 @@
   /* files dragged over the conversation: the composer says it will take them */
   form.compose.dropping .box { outline: 2px dashed var(--accent); outline-offset: 2px; }
   form.compose .box { max-width: 780px; margin: 0 auto; display: flex; gap: 8px; align-items: flex-end; }
+  /* the harness's own slash commands, offered while a message starts with "/" */
+  .slashmenu { max-width: 780px; margin: 0 auto 6px; max-height: 38vh; overflow-y: auto; background: var(--side); border: 1px solid var(--line); border-radius: 12px; padding: 4px; }
+  .slashrow { padding: 7px 10px; border-radius: 8px; cursor: pointer; display: grid; gap: 1px; }
+  .slashrow .name { display: flex; gap: 8px; align-items: baseline; }
+  .slashrow .name b { font-weight: 600; }
+  .slashrow .src { color: var(--dim); font-size: 11px; }
+  .slashrow small { color: var(--dim); font-size: 12.5px; line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; }
+  .slashrow.on { background: var(--bubble); }
+  .slashrow.on small { -webkit-line-clamp: 6; }
+  .slashmenu .none { padding: 8px 10px; color: var(--dim); font-size: 13px; }
   #ctx { max-width: 780px; margin: 0 auto 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
   #ctx h3 { margin: 0 0 4px; font-size: 13px; }
   #ctx .ctx-top { display: flex; justify-content: space-between; gap: 8px; color: var(--dim); font-size: 12px; margin-bottom: 8px; }
@@ -320,6 +363,14 @@
   #ctx .legend div { display: flex; align-items: center; gap: 8px; font-size: 12px; }
   #ctx .sw { width: 8px; height: 8px; border-radius: 2px; flex: none; }
   #ctx .legend b { margin-left: auto; font-weight: 500; }
+  #termChip { max-width: 780px; margin: 0 auto 8px; }
+  #termChipBtn { display: inline-flex; align-items: center; gap: 6px; border: none; border-radius: 999px; padding: 4px 12px; background: var(--bubble); font-size: 13px; }
+  #termChipBtn svg { fill: currentColor; }
+  #termChipList { margin-top: 6px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--bg); }
+  #termChipList .name { display: flex; align-items: baseline; gap: 8px; width: 100%; border: none; border-top: 1px solid var(--line); background: none; text-align: left; padding: 8px 12px; font: 13px/1.3 ui-monospace, Menlo, monospace; }
+  #termChipList .name:first-child { border-top: none; }
+  #termChipList .cmd { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #termChipList .age { flex: none; color: var(--dim); }
   textarea {
     flex: 1; resize: none; max-height: 40vh; min-height: 42px; padding: 10px 12px;
     background: var(--bubble); border: 1px solid var(--line); border-radius: 12px; outline: none;
@@ -348,16 +399,19 @@
   #pair p { color: var(--dim); }
 
   /* the right column: what this conversation touched, kept out of the way of the chat */
-  #inspector { width: 320px; flex: none; background: var(--side); border-right: 0; border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
-  body.term-open #inspector { width: min(560px, 46vw); }
-  body.inspector-off #inspector { display: none; }
+  #inspector { width: var(--inspector-width, 320px); flex: none; background: var(--side); border-right: 0; border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+  #inspectorResize { width: 7px; flex: none; cursor: col-resize; touch-action: none; background: var(--bg); }
+  #inspectorResize:hover, #inspectorResize:focus-visible, body.resizing-inspector #inspectorResize { background: var(--ring); }
+  body.resizing-inspector { cursor: col-resize; user-select: none; }
+  body.inspector-off #inspector, body.inspector-off #inspectorResize { display: none; }
+  #inspector.previewing > .head, #inspector.previewing > .body { display: none; }
   body.term-open #inspector { display: flex; }
   #inspector > .head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; min-height: 52px; border-bottom: 1px solid var(--line); font-weight: 600; font-size: 14px; }
   #inspector .tabs { display: flex; gap: 2px; flex: 1; min-width: 0; }
   #inspector .tabs button { border: none; border-radius: 0; background: none; padding: 6px 8px; color: var(--dim); font-weight: 600; font-size: 14px; box-shadow: inset 0 -2px 0 transparent; }
   #inspector .tabs button.on { color: var(--text); box-shadow: inset 0 -2px 0 var(--text); }
   #inspector > .head .grow { flex: 1; }
-  #inspector > .body { overflow-y: auto; flex: 1; padding: 4px 0 20px; }
+  #inspector > .body { overflow-y: auto; flex: 1; padding: 0 0 20px; }
   #inspector details { border-bottom: 1px solid var(--line); }
   #inspector summary { cursor: pointer; padding: 10px 14px; font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--dim); display: flex; gap: 8px; align-items: center; list-style: none; }
   #inspector summary::-webkit-details-marker { display: none; }
@@ -367,7 +421,8 @@
   #inspector .list { padding: 0 8px 10px; }
   #inspector .empty { padding: 0 14px 12px; color: var(--dim); font-size: 13px; }
   #inspector .item { display: flex; gap: 8px; align-items: baseline; padding: 4px 6px; border-radius: 6px; font-size: 13px; color: inherit; text-decoration: none; }
-  #inspector a.item:hover { background: var(--bubble); }
+  #inspector a.item:hover, #inspector button.item:hover { background: var(--bubble); }
+  #inspector button.item { width: 100%; border: none; background: none; text-align: left; font: inherit; cursor: pointer; }
   #inspector .item .name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: none; max-width: 55%; }
   #inspector .item .dir { color: var(--dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; direction: rtl; text-align: left; }
   #inspector .item .tag { color: var(--dim); font-size: 11px; flex: none; }
@@ -383,12 +438,59 @@
   #inspector .grid img { width: 100%; height: 100%; object-fit: cover; display: block; }
   #inspector .refresh { padding: 2px 8px; font-size: 11px; }
   #toggleInspector { padding: 4px 8px; line-height: 1; }
-  @media (max-width: 1100px) and (min-width: 701px) { body:not(.term-open) #inspector, #toggleInspector { display: none; } }
+  #inspectorClose { display: none; }
+  /* the file preview: one file at a time, arrows walk the list it came from */
+  dialog#preview { position: static; width: 100%; max-width: none; height: 100%; max-height: none; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 0; background: var(--bg); color: var(--text); }
+  dialog#preview[open] { display: flex; flex-direction: column; flex: 1; }
+  dialog#preview.fullscreen { position: fixed; inset: 0; width: 100vw; height: 100dvh; }
+  dialog#preview::backdrop { background: #000a; }
+  #preview .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px; flex: none; border-bottom: 1px solid var(--line); }
+  #preview .meta { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  #preview .meta .name { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #preview .meta .path { color: var(--dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
+  #preview .acts { width: 100%; display: flex; align-items: center; gap: 4px; }
+  #preview .acts button, #preview .acts a { display: inline-flex; align-items: center; justify-content: center; min-width: 36px; height: 36px; padding: 0 9px; border: 1px solid var(--line); border-radius: 9px; background: var(--card); color: var(--text); font-size: 19px; line-height: 1; text-decoration: none; cursor: pointer; }
+  #preview .acts button:disabled { opacity: .35; }
+  #preview .acts .count { color: var(--dim); font-size: 12px; flex: 1; min-width: 40px; text-align: center; }
+  #preview .stage { flex: 1; min-height: 0; overflow: auto; display: flex; align-items: center; justify-content: center; background: var(--side); }
+  #preview img.shot { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+  #preview pre { margin: 0; width: 100%; height: 100%; overflow: auto; padding: 16px 18px; font: 12.5px/1.55 ui-monospace, Menlo, monospace; text-align: left; }
+  #preview .note { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 24px; color: var(--dim); text-align: center; }
+  #preview .note .button { display: inline-block; padding: 8px 14px; border: 1px solid var(--line); border-radius: 9px; color: var(--text); text-decoration: none; }
+  /* the general settings: this browser's own preferences, and what jep's
+     conversations have used — not one conversation's */
+  dialog#general { width: min(660px, calc(100vw - 24px)); max-height: min(86dvh, 880px); padding: 0; }
+  dialog#general[open] { display: flex; flex-direction: column; }
+  #general .generalhead, #general .generalfoot { flex: none; padding: 16px 20px; }
+  #general .generalhead { display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); }
+  #general .generalhead h2 { flex: 1; margin: 0; }
+  #general .generalbody { overflow: auto; padding: 16px 20px; }
+  #general .generalfoot { display: flex; justify-content: flex-end; border-top: 1px solid var(--line); }
+  #general section { margin: 0 0 18px; }
+  /* the usage sheet */
+  .statcards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .statcard { background: var(--bubble); border-radius: 12px; padding: 9px 11px; min-width: 0; }
+  .statcard b { display: block; font-size: 18px; font-weight: 600; letter-spacing: -.3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .statcard span { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--dim); }
+  .statcard small { display: block; font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .statchart { display: flex; align-items: flex-end; gap: 2px; height: 74px; margin: 12px 0 4px; }
+  .statchart i { flex: 1; min-width: 2px; min-height: 3px; border-radius: 3px 3px 0 0; background: color-mix(in srgb, var(--accent) 70%, transparent); }
+  .statchart i.today { background: var(--accent); }
+  .statscale { display: flex; justify-content: space-between; color: var(--dim); font-size: 11px; }
+  .statrank { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 3px 0; }
+  .statrank .name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .statrank .meter { flex: 0 0 40%; height: 6px; border-radius: 3px; background: var(--bubble); overflow: hidden; }
+  .statrank .meter i { display: block; height: 100%; background: color-mix(in srgb, var(--accent) 70%, transparent); }
+  .statrank .num { flex: none; color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .statnote { color: var(--dim); font-size: 12px; margin: 8px 0 0; }
+  @media (max-width: 1100px) { #inspector, #inspectorResize, #toggleInspector { display: none; } }
   @media (max-width: 700px) {
     aside { width: 100%; }
+    #inspector > .resize { display: none; }
     body.chatting aside:not(#inspector), body:not(.chatting) main { display: none; }
     #back { display: block; }
     #toggleInspector { display: inline-flex; }
+    #inspectorClose { display: inline-flex; min-width: 36px; min-height: 36px; align-items: center; justify-content: center; }
     body:not(.inspector-off) #inspector:not([hidden]),
     body.term-open #inspector:not([hidden]) {
       position: fixed; top: 0; right: 0; bottom: 0; width: 90vw; max-width: 90vw;
@@ -427,7 +529,7 @@ document.write('<link rel="stylesheet" href="v2.css">'
 </form>
 
 <aside hidden>
-  <div class="brand"><svg xmlns="http://www.w3.org/2000/svg" viewBox="3 3.5 18 17"><defs><linearGradient id="b" x1="0" y1="4.47" x2="0" y2="19.53" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#F66676"/><stop offset=".45" stop-color="#E43A50"/><stop offset="1" stop-color="#C42438"/></linearGradient></defs><path fill="url(#b)" d="M 12.00,9.29 C 13.85,7.39 18.02,7.09 19.64,9.56 C 21.14,11.93 20.33,15.67 18.02,17.94 C 16.51,19.42 14.78,19.92 13.50,19.23 C 12.58,18.83 11.42,18.83 10.50,19.23 C 9.22,19.92 7.49,19.42 5.98,17.94 C 3.67,15.67 2.86,11.93 4.36,9.56 C 5.98,7.09 10.15,7.39 12.00,9.29 Z"/><path fill="url(#b)" d="M 13.39,6.99 C 14.20,5.02 16.51,4.23 18.02,4.53 C 17.32,6.20 15.47,7.29 13.39,6.99 Z"/><path d="M 12.17,8.67 L 12.52,5.40" stroke="#E95A6E" stroke-width="1.15" stroke-linecap="round"/></svg>jep<a href="#new" class="plus" title="New conversation" aria-label="New conversation">+</a></div>
+  <div class="brand"><svg xmlns="http://www.w3.org/2000/svg" viewBox="3 3.5 18 17"><defs><linearGradient id="b" x1="0" y1="4.47" x2="0" y2="19.53" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#F66676"/><stop offset=".45" stop-color="#E43A50"/><stop offset="1" stop-color="#C42438"/></linearGradient></defs><path fill="url(#b)" d="M 12.00,9.29 C 13.85,7.39 18.02,7.09 19.64,9.56 C 21.14,11.93 20.33,15.67 18.02,17.94 C 16.51,19.42 14.78,19.92 13.50,19.23 C 12.58,18.83 11.42,18.83 10.50,19.23 C 9.22,19.92 7.49,19.42 5.98,17.94 C 3.67,15.67 2.86,11.93 4.36,9.56 C 5.98,7.09 10.15,7.39 12.00,9.29 Z"/><path fill="url(#b)" d="M 13.39,6.99 C 14.20,5.02 16.51,4.23 18.02,4.53 C 17.32,6.20 15.47,7.29 13.39,6.99 Z"/><path d="M 12.17,8.67 L 12.52,5.40" stroke="#E95A6E" stroke-width="1.15" stroke-linecap="round"/></svg>jep<button type="button" id="brandSettings" class="icon openSettings" title="Settings" aria-label="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 3.5v2.2M12 18.3v2.2M4.9 7.8l1.9 1.1M17.2 15.1l1.9 1.1M4.9 16.2l1.9-1.1M17.2 8.9l1.9-1.1"/></svg></button><a href="#new" class="plus" title="New conversation" aria-label="New conversation">+</a></div>
   <div id="sessions"></div>
 </aside>
 
@@ -437,6 +539,7 @@ document.write('<link rel="stylesheet" href="v2.css">'
     <h1 id="title"></h1>
     <span id="health" title="gateway status">Connecting…</span>
     <button id="toggleInspector" type="button" title="Details (Ctrl/Cmd + \\)" aria-label="Show or hide the details column" aria-pressed="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M15 4v16"/></svg></button>
+    <button type="button" id="headerSettings" class="icon openSettings" title="Settings" aria-label="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 3.5v2.2M12 18.3v2.2M4.9 7.8l1.9 1.1M17.2 15.1l1.9 1.1M4.9 16.2l1.9-1.1M17.2 8.9l1.9-1.1"/></svg></button>
   </header>
   <form id="start" hidden>
     <h2>New conversation</h2>
@@ -459,12 +562,18 @@ document.write('<link rel="stylesheet" href="v2.css">'
   <div id="scroll"><div id="log"></div></div>
   <form class="compose" id="compose">
     <div class="queue" id="queue" hidden></div>
+    <div class="modes" id="convSettings" hidden></div>
     <div class="modes" id="modes" hidden>
       <label><input type="radio" name="mode" value="steer" checked><span>Steer</span></label>
       <label><input type="radio" name="mode" value="after"><span>After this turn</span></label>
       <label><input type="radio" name="mode" value="now"><span>Now</span></label>
     </div>
+    <div class="slashmenu" id="slashMenu" role="listbox" aria-label="Commands" hidden></div>
     <div id="ctx" hidden></div>
+    <div id="termChip" hidden>
+      <button type="button" id="termChipBtn" aria-expanded="false"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="3.5" cy="4" r="1.2"/><circle cx="8" cy="4" r="1.2"/><circle cx="12.5" cy="4" r="1.2"/><circle cx="3.5" cy="8" r="1.2"/><circle cx="8" cy="8" r="1.2"/><circle cx="12.5" cy="8" r="1.2"/></svg><span id="termChipLabel">1 Terminal</span></button>
+      <div id="termChipList" hidden></div>
+    </div>
     <div class="box">
       <textarea id="input" rows="1" placeholder="Message"></textarea>
       <button type="button" id="stop" title="Stop the running turn" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>Stop</button>
@@ -492,15 +601,31 @@ document.write('<link rel="stylesheet" href="v2.css">'
   </form>
 </main>
 
+<div id="inspectorResize" hidden role="separator" aria-label="Resize details column" aria-orientation="vertical" aria-controls="inspector" tabindex="0"></div>
 <aside id="inspector" hidden aria-label="Conversation details">
   <div class="head">
     <div class="tabs" role="tablist">
       <button type="button" id="tabDetails" class="on" role="tab">Details</button>
       <button type="button" id="tabTerm" role="tab">Terminal</button>
     </div>
+    <button type="button" id="inspectorClose" aria-label="Close details" title="Close details">×</button>
     <button class="refresh" id="inspectorRefresh" type="button" title="Reload git changes">↻</button>
   </div>
   <div class="body" id="inspectorBody"></div>
+<dialog id="preview" aria-label="File preview">
+  <div class="bar">
+    <div class="meta"><span class="name" id="previewName"></span><span class="path" id="previewPath"></span></div>
+    <div class="acts">
+      <button type="button" id="previewPrev" title="Previous (←)" aria-label="Previous">‹</button>
+      <span class="count" id="previewCount"></span>
+      <button type="button" id="previewNext" title="Next (→)" aria-label="Next">›</button>
+      <button type="button" id="previewFullscreen" title="Fullscreen" aria-label="Fullscreen" aria-pressed="false">⛶</button>
+      <a id="previewOpen" target="_blank" rel="noopener" title="Open in a new tab" aria-label="Open in a new tab">↗</a>
+      <button type="button" id="previewClose" title="Close (Esc)" aria-label="Close">×</button>
+    </div>
+  </div>
+  <div class="stage" id="previewStage"></div>
+</dialog>
   <section id="termPane" hidden>
     <div class="termbar"><span id="termTitle">Terminal</span><button type="button" id="termLive" hidden>Shell</button><button type="button" id="termClose">Close</button></div>
     <div id="termJobs" hidden></div>
@@ -525,6 +650,16 @@ document.write('<link rel="stylesheet" href="v2.css">'
   <section>
     <h3>Title</h3>
     <form class="line" id="renameForm"><input type="text" id="rename"><button>Rename</button></form>
+  </section>
+  <section>
+    <h3>Activity</h3>
+    <div class="line">
+      <select id="detail" title="Compact is one line, such as edited 3 files, ran 2 commands. Default is each step. Detailed also shows command output.">
+        <option value="compact">Compact</option>
+        <option value="default">Default</option>
+        <option value="detailed">Detailed</option>
+      </select>
+    </div>
   </section>
   <section id="agentSection" hidden>
     <h3>Agent</h3>
@@ -551,23 +686,6 @@ document.write('<link rel="stylesheet" href="v2.css">'
     </form>
   </section>
   <section>
-    <h3>Notifications</h3>
-    <label class="toggle"><input type="checkbox" id="notifyAnswers" checked><span>Answers in other chats<small>Show a browser notification when this tab is in the background.</small></span></label>
-    <label class="toggle"><input type="checkbox" id="notifyAsks" checked><span>Permission requests<small>Alert when another chat needs your input.</small></span></label>
-    <label class="toggle"><input type="checkbox" id="notifyFailures" checked><span>Failures<small>Alert when another chat stops with an error.</small></span></label>
-    <div class="row"><button type="button" id="enableNotifications">Enable browser notifications</button></div>
-  </section>
-  <section>
-    <h3>Daemon</h3>
-    <div id="daemonStatus">Checking…</div>
-    <div class="row"><button type="button" id="restartDaemon">Restart when idle</button></div>
-  </section>
-  <section>
-    <h3>Devices</h3>
-    <div id="pairCode" hidden><span>Pairing code</span> <code id="pairCodeText"></code></div>
-    <div id="devices"><span class="spin">Loading…</span></div>
-  </section>
-  <section>
     <h3>Conversation</h3>
     <div class="row">
       <button type="button" id="compact" hidden>Compact context</button>
@@ -577,11 +695,60 @@ document.write('<link rel="stylesheet" href="v2.css">'
       <button type="button" id="delete" class="danger">Delete</button>
     </div>
   </section>
-  <section>
-    <h3>This browser</h3>
-    <div class="row"><button type="button" id="unpair" class="danger">Unpair</button></div>
-  </section>
   <div class="row" style="justify-content: flex-end"><button type="button" id="closeSettings">Done</button></div>
+</dialog>
+
+<dialog id="general">
+  <div class="generalhead">
+    <h2>Settings</h2>
+    <button type="button" id="closeGeneralTop" class="icon" title="Close" aria-label="Close settings">×</button>
+  </div>
+  <div class="generalbody">
+    <section>
+      <h3>Agent permissions</h3>
+      <div id="executionSettings" aria-live="polite"></div>
+    </section>
+    <section>
+      <h3>Stats</h3>
+      <div id="stats"><span class="spin">Reading conversations</span></div>
+    </section>
+    <section>
+      <h3>Preferences</h3>
+      <div class="field">Theme
+        <div class="choices" id="theme">
+          <label><input type="radio" name="theme" value="system" checked><span>System</span></label>
+          <label><input type="radio" name="theme" value="light"><span>Light</span></label>
+          <label><input type="radio" name="theme" value="dark"><span>Dark</span></label>
+        </div>
+      </div>
+      <label class="toggle"><input type="checkbox" id="prefMotion"><span>Reduce motion<small>Turn off transitions and animations.</small></span></label>
+      <label class="toggle"><input type="checkbox" id="prefDetails" checked><span>Details column<small>Files, git and gallery beside a conversation, on a wide window.</small></span></label>
+    </section>
+    <section>
+      <h3>Notifications</h3>
+      <label class="toggle"><input type="checkbox" id="notifyAnswers" checked><span>Answers in other chats<small>Show a browser notification when this tab is in the background.</small></span></label>
+      <label class="toggle"><input type="checkbox" id="notifyAsks" checked><span>Permission requests<small>Alert when another chat needs your input.</small></span></label>
+      <label class="toggle"><input type="checkbox" id="notifyFailures" checked><span>Failures<small>Alert when another chat stops with an error.</small></span></label>
+      <div class="row"><button type="button" id="enableNotifications">Enable browser notifications</button></div>
+    </section>
+    <section>
+      <h3>Daemon</h3>
+      <div id="daemonStatus">Checking…</div>
+      <div class="row"><button type="button" id="restartDaemon">Restart when idle</button></div>
+    </section>
+    <section>
+      <h3>Devices</h3>
+      <div id="pairCode" hidden><span>Pairing code</span> <code id="pairCodeText"></code></div>
+      <div id="devices"><span class="spin">Loading…</span></div>
+    </section>
+    <section>
+      <h3>This browser</h3>
+      <div class="row"><button type="button" id="unpair" class="danger">Unpair</button></div>
+      <div class="row"><button type="button" id="forceRefresh">Force refresh</button></div>
+      <p class="hint">Reload the web client and re-read harness models without changing the gateway or pairing.</p>
+    </section>
+  </div>
+  <div class="generalfoot"><button type="button" id="closeGeneral">Done</button></div>
 </dialog>
 
 <div id="errors">
@@ -714,6 +881,16 @@ let live = new Map()      // partID → { messageID, part } streamed since the l
 const roles = new Map()   // messageID → role, as the feed announces them
 const sending = new Map() // session → prompts of ours still in flight
 let pendingText = []      // sends the record does not show yet
+let historyRead = 0       // only the newest concurrent history read may replace the view
+const turnErrors = []     // a failed send, kept after the words land in the record: {text, at, error}
+const hiddenFails = new Set()
+function failKey(m) {
+  return `${m.id || ""}|${m.time || ""}|${textOf(m).trim()}`
+}
+function forgetTurnError(text) {
+  const t = (text || "").trim()
+  for (let i = turnErrors.length - 1; i >= 0; i--) if (turnErrors[i].text === t) turnErrors.splice(i, 1)
+}
 let queue = []            // the daemon's prompts waiting behind the running turn, in order
 let loop = null           // the loop this conversation is running, if any
 let attachments = []      // files uploaded for the next prompt
@@ -785,6 +962,57 @@ function harnessMark(h) {
 // the conversation whose title is being edited in place: a redraw would throw the edit away
 let renaming = null
 
+const places = new Map()
+const placeWait = new Set()
+let placeFor = null
+function hidePlace() {
+  placeFor = null
+  document.querySelector(".place")?.remove()
+}
+const shortPath = (p) => String(p || "").replace(/^\/(Users|home)\/[^/]+/, "~")
+function stroke(d) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg")
+  svg.setAttribute("viewBox", "0 0 24 24")
+  svg.setAttribute("fill", "none")
+  svg.setAttribute("stroke", "currentColor")
+  svg.setAttribute("stroke-width", "1.8")
+  svg.setAttribute("stroke-linecap", "round")
+  svg.setAttribute("stroke-linejoin", "round")
+  const p = document.createElementNS("http://www.w3.org/2000/svg", "path")
+  p.setAttribute("d", d)
+  svg.append(p)
+  return svg
+}
+function showPlace(s, anchor) {
+  placeFor = s.id
+  let card = document.querySelector(".place")
+  if (!card) { card = el("div", "place"); document.body.append(card) }
+  const g = places.get(s.id)
+  const folder = g?.folder || shortPath(s.workspace)
+  card.replaceChildren(el("b", "", s.title || "untitled"))
+  if (g?.repo || g?.branch) {
+    const row = el("div", "prow")
+    row.append(stroke("M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a9 9 0 0 1-9 9"), el("span", "", g.repo || "git"))
+    card.append(row)
+    if (g.branch) card.append(el("div", "sub", g.branch))
+  }
+  if (folder) {
+    const row = el("div", "prow")
+    row.append(stroke("M3 7h6l2 2h10v11H3z"), el("span", "", folder))
+    card.append(row)
+    card.append(el("div", "sub", "Local"))
+  }
+  const r = anchor.getBoundingClientRect()
+  card.style.left = `${Math.max(8, Math.min(r.right + 8, innerWidth - 288))}px`
+  card.style.top = `${Math.max(8, Math.min(r.top, innerHeight - 140))}px`
+  if (places.has(s.id) || placeWait.has(s.id)) return
+  placeWait.add(s.id)
+  call("/git", { id: s.id }).then((got) => {
+    places.set(s.id, got)
+    if (placeFor === s.id) showPlace(s, anchor)
+  }).catch(() => {}).finally(() => placeWait.delete(s.id))
+}
+
 function renderSessions() {
   if (renaming) return
   $("sessions").replaceChildren(...sessions.map((s) => {
@@ -792,6 +1020,8 @@ function renderSessions() {
     const a = el("a", "session" + (s.id === current ? " open" : "") + (unread ? " unread" : ""))
     a.href = "#" + encodeURIComponent(s.id)
     a.dataset.id = s.id
+    a.onmouseenter = () => showPlace(s, a)
+    a.onmouseleave = hidePlace
     a.oncontextmenu = (e) => { e.preventDefault(); sessionMenu(s, e.clientX, e.clientY) }
     const row = el("div", "row")
     const title = el("div", "title", s.title || "untitled")
@@ -1026,14 +1256,17 @@ $("start").onsubmit = async (e) => {
 
 // ── one conversation ──────────────────────────────────────────────────────
 async function open(id) {
+  closePreview(false)
+  previewImages.clear()
   endEdit()
   saveDraft()
   if (current) attachmentsOf.set(current, attachments)
   current = id === "new" ? null : id
+  loadConversationSettings().catch(() => {})
   $("start").hidden = id !== "new"
   $("scroll").hidden = id === "new"
   fillTries = 0
-  git = null; inspectorKey = ""
+  git = null; inspectorKey = ""; sideDiff = null; sidePatchFor = ""; sideShown = ""
   messages = []; asks = []; etag = null; hasMore = false; loadingOlder = false; live = new Map(); pendingText = []; queue = []
   loop = null; renderLoop()
   $("input").value = (current && remembered(draftKey(current))) || ""
@@ -1063,10 +1296,14 @@ async function open(id) {
 async function readHistory() {
   const id = current
   if (!id) return
+  const read = ++historyRead
   const data = await call("/history", { id, limit: PAGE, etag })
-  if (id !== current || data.unchanged) return
+  if (id !== current || read !== historyRead || data.unchanged) return
   const first = data.messages[0]?.time ?? Infinity
-  messages = [...messages.filter((m) => m.time < first), ...data.messages]
+  const merged = [...messages.filter((m) => m.time < first), ...data.messages]
+  const unique = new Map()
+  for (const message of merged) unique.set(message.id, message)
+  messages = [...unique.values()]
   if (!messages.some((m) => m.time < first)) hasMore = data.hasMore
   asks = data.asks.filter((a) => a.state === "pending")
   queue = data.queue ?? []
@@ -1083,8 +1320,11 @@ async function readHistory() {
   const joined = messages.filter((m) => m.role === "user" && m.time).map((m) => ({ time: m.time, pieces: new Set(textOf(m).split("\n\n").map((t) => t.trim())) }))
   // (an earlier message with the same words is not this one: "go on" twice)
   const now = Date.now()
-  pendingText = pendingText.filter((p) => !(p.sentAt && joined.some((m) => m.time >= p.sentAt - 5000 && (m.pieces.has(p.text.trim()) || [...m.pieces].join("\n\n") === p.text.trim())))
-    && !(p.answeredAt && now - p.answeredAt > 15_000))
+  pendingText = pendingText.filter((p) => {
+    const absorbed = p.sentAt && joined.some((m) => m.time >= p.sentAt - 5000 && (m.pieces.has(p.text.trim()) || [...m.pieces].join("\n\n") === p.text.trim()))
+    if ((absorbed || (p.answeredAt && now - p.answeredAt > 15_000)) && p.error) noteTurnError(p.text, p.sentAt || now, p.error)
+    return !absorbed && !(p.answeredAt && now - p.answeredAt > 15_000)
+  })
   const seen = new Set(messages.flatMap((m) => [m.id, ...m.parts.map((p) => p.id)]))
   for (const [pid, l] of live) if (seen.has(pid) || seen.has(l.messageID)) live.delete(pid)
   render()
@@ -1159,16 +1399,29 @@ function render(follow = true) {
   }
   // queued as soon as it is sent into a running turn, before the daemon's
   // line confirms it; it leaves once it has left that line
+  const normalizePrompt = (text) => String(text || "").replace(/\s+/g, " ").trim()
+  const messageMillis = (time) => Number(time) > 0 && Number(time) < 1e12 ? Number(time) * 1000 : Number(time)
+  // The harness can record our user row before the blocking /prompt request
+  // returns. Reconcile by text and time during every render, not only during
+  // the next history poll, so the optimistic bubble cannot sit beside its
+  // transcript copy as "Sending…".
+  const hasTranscript = (p) => {
+    const text = normalizePrompt(p.text)
+    if (!text || !p.sentAt) return false
+    const after = Number(p.sentAt || 0) - 10_000
+    return messages.some((m) => m.role === "user" && normalizePrompt(textOf(m)) === text && messageMillis(m.time) >= after)
+  }
+  const visiblePending = pendingText.filter((p) => !hasTranscript(p))
   const inQueue = (p) => queue.some((q) => q.clientID && q.clientID === p.clientID) || !!p.expectQueue
   const all = [
     ...messages,
-    ...pendingText.filter((p) => !inQueue(p)).map((p) => ({ role: "user", parts: [{ kind: "text", text: p.text }], undelivered: p.failed, retry: p.retry, sending: !p.failed })),
+    ...visiblePending.filter((p) => !inQueue(p)).map((p) => ({ role: "user", parts: [{ kind: "text", text: p.text }], undelivered: p.failed, errorText: p.error, retry: p.retry, sending: !p.failed })),
     ...(live.size ? [{ role: "assistant", id: [...live.values()][0].messageID, parts: [...live.values()].map((l) => l.part), live: true }] : []),
   ]
   // what waits for the next turn is not in the agent's reading yet: it comes
   // after the reply running now and after "working", see-through
   const waiting = [
-    ...pendingText.filter(inQueue).map((p) => {
+    ...visiblePending.filter(inQueue).map((p) => {
       const queued = queue.find((q) => q.clientID && q.clientID === p.clientID) ?? { clientID: p.clientID, steer: p.steer }
       return { role: "user", parts: [{ kind: "text", text: p.text }], queued }
     }),
@@ -1181,7 +1434,8 @@ function render(follow = true) {
   for (const a of asks) nodes.push(askNode(a))
   if (busy() && !asks.length) nodes.push(el("div", "spin", "working"))
   nodes.push(...transcript(waiting))
-  for (const q of queue) if (q.loop) nodes.push(dividerNode(`loop ${q.loop.iteration}/${q.loop.max}, waiting its turn`, true))
+  // jep's turn count and its 200-turn backstop are internal, so the divider names neither
+  for (const q of queue) if (q.loop) nodes.push(dividerNode("· jep · keeping going, waiting its turn ·", true))
   else if (q.notice) nodes.push(dividerNode(q.noticeKind === "resumed" ? "· jep · restarted, waiting its turn ·" : q.noticeKind === "retry" ? "· jep · asking again, waiting its turn ·" : q.noticeKind === "guest" ? "· a message from another conversation, waiting its turn ·" : "· jep · a watch is done, waiting its turn ·", true))
   // A box that scrolls on its own (a turn's work, a tool's output) is a new
   // box after every redraw, and a new box starts at the top: whoever was
@@ -1213,7 +1467,7 @@ function render(follow = true) {
 const shownBy = (p) => (Array.isArray(p.shown) ? p.shown : []).filter(isImage)
 const showsImage = (p) => p.kind === "tool" && shownBy(p).length > 0
 const isWork = (p) => (p.kind === "tool" && !isEdit(p) && !showsImage(p)) || (p.kind === "reasoning" && p.text.trim())
-const isEdit = (p) => !!editsOf(p.name.toLowerCase(), typeof p.input === "object" && p.input ? p.input : {})
+const isEdit = (p) => p.kind === "tool" && !!editsOf(String(p.name || "").toLowerCase(), typeof p.input === "object" && p.input ? p.input : {})
 
 // opencode folds the history and writes a synthetic user message whose only
 // part is the compaction marker; the summarize reply that answers it arrives as
@@ -1272,6 +1526,9 @@ function applyInspector() {
   document.body.classList.toggle("inspector-off", phone ? !document.body.classList.contains("term-open") : !inspectorOpen())
   $("toggleInspector").setAttribute("aria-pressed", String(!document.body.classList.contains("inspector-off")))
   $("inspector").hidden = !token || !current
+  $("inspectorResize").hidden = !token || !current
+  sizeInspector(inspectorWidth)
+  if ($("prefDetails")) $("prefDetails").checked = inspectorOpen()
   if (!document.body.classList.contains("inspector-off")) renderInspector()
 }
 $("toggleInspector").onclick = () => {
@@ -1283,11 +1540,73 @@ $("toggleInspector").onclick = () => {
     $("toggleInspector").setAttribute("aria-pressed", String(open))
     return
   }
+  if (inspectorOpen()) closePreview(false)
   localStorage.setItem("jep.inspector", inspectorOpen() ? "off" : "on")
   applyInspector()
 }
+$("inspectorClose").onclick = () => {
+  closePreview(false)
+  closeTerm()
+  document.body.classList.add("inspector-off")
+  $("toggleInspector").setAttribute("aria-pressed", "false")
+}
+matchMedia("(max-width: 700px)").addEventListener("change", applyInspector)
 document.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === "\\") { e.preventDefault(); $("toggleInspector").click() }
+})
+
+// Persist the preferred size, and clamp only the displayed width so shrinking
+// the window does not overwrite the person's choice for a larger display.
+let inspectorWidth = Number(localStorage.getItem("jep.inspector.width") || localStorage.getItem("jep.inspectorWidth")) || 320
+const inspectorMax = () => Math.max(280, innerWidth - document.querySelector("body > aside").getBoundingClientRect().width - 367)
+function sizeInspector(width, save = false) {
+  const max = inspectorMax()
+  const clamped = Math.round(Math.max(280, Math.min(max, width)))
+  document.documentElement.style.setProperty("--inspector-width", `${clamped}px`)
+  const handle = $("inspectorResize")
+  handle.setAttribute("aria-valuemin", "280")
+  handle.setAttribute("aria-valuemax", String(max))
+  handle.setAttribute("aria-valuenow", String(clamped))
+  if (save) {
+    inspectorWidth = clamped
+    localStorage.setItem("jep.inspector.width", String(clamped))
+  }
+}
+sizeInspector(inspectorWidth)
+$("inspectorResize").addEventListener("pointerdown", (e) => {
+  if (e.button !== 0) return
+  e.preventDefault()
+  const handle = e.currentTarget
+  const start = e.clientX
+  const width = $("inspector").getBoundingClientRect().width
+  handle.setPointerCapture(e.pointerId)
+  document.body.classList.add("resizing-inspector")
+  const move = (event) => sizeInspector(width + start - event.clientX, true)
+  const end = () => {
+    handle.removeEventListener("pointermove", move)
+    handle.removeEventListener("pointerup", end)
+    handle.removeEventListener("pointercancel", end)
+    handle.removeEventListener("lostpointercapture", end)
+    document.body.classList.remove("resizing-inspector")
+  }
+  handle.addEventListener("pointermove", move)
+  handle.addEventListener("pointerup", end)
+  handle.addEventListener("pointercancel", end)
+  handle.addEventListener("lostpointercapture", end)
+})
+$("inspectorResize").addEventListener("keydown", (e) => {
+  const width = $("inspector").getBoundingClientRect().width
+  if (e.key === "ArrowLeft") sizeInspector(width + 32, true)
+  else if (e.key === "ArrowRight") sizeInspector(width - 32, true)
+  else if (e.key === "Home") sizeInspector(280, true)
+  else if (e.key === "End") sizeInspector(inspectorMax(), true)
+  else return
+  e.preventDefault()
+})
+addEventListener("resize", () => {
+  sizeInspector(inspectorWidth)
+  if ($("preview").open && innerWidth <= 1100 && !$("preview").classList.contains("fullscreen")) setPreviewFullscreen(true)
+  $("previewFullscreen").disabled = innerWidth <= 1100
 })
 
 async function loadGit(force = false) {
@@ -1303,7 +1622,7 @@ async function loadGit(force = false) {
     renderInspector()
   } catch { /* the column is a convenience: a failed read leaves it as it was */ }
 }
-$("inspectorRefresh").onclick = () => loadGit(true)
+$("inspectorRefresh").onclick = () => { sidePatchFor = ""; sideShown = ""; loadGit(true) }
 
 const PATH_KEYS = ["filePath", "file_path", "path"]
 const fileOf = (p) => {
@@ -1348,6 +1667,7 @@ function inspectorData() {
 // Ingress mounts the page under /api/hassio_ingress/<token>/ and does not
 // rewrite paths. A site-absolute /file is Home Assistant, not this app.
 const fileUrl = (path) => {
+  if (/^https?:\/\//i.test(path)) return path
   const base = new URL(location.href)
   if (!base.pathname.endsWith("/")) base.pathname += "/"
   const u = new URL("file", base)
@@ -1357,15 +1677,148 @@ const fileUrl = (path) => {
   return u.pathname + u.search
 }
 
-function pathItem(path, tag, workspace) {
-  const a = el("a", "item")
-  a.href = fileUrl(path); a.target = "_blank"; a.rel = "noopener"; a.title = path
+// A file opens beside the conversation. The list it
+// came from (the Files column, the gallery) is the one the arrows walk; a
+// modifier-click still opens the plain file in a tab, as a link should.
+function previewLink(node, path, list) {
+  node.href = fileUrl(path); node.target = "_blank"; node.rel = "noopener"
+  node.addEventListener("click", (e) => {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+    e.preventDefault()
+    const paths = typeof list === "function" ? list() : list
+    openPreview(paths?.length ? paths : [path], path)
+  })
+  return node
+}
+
+function pathItem(path, tag, workspace, list, onOpen) {
+  const a = onOpen ? el("button", "item") : previewLink(el("a", "item"), path, list)
+  if (onOpen) { a.type = "button"; a.onclick = onOpen }
+  a.title = path
   const rel = workspace && path.startsWith(workspace + "/") ? path.slice(workspace.length + 1) : path
   const name = rel.split("/").pop()
   const dir = rel.slice(0, rel.length - name.length).replace(/\/$/, "")
   a.append(el("span", "name", name), el("span", "dir", dir), el("span", "tag", tag))
   return a
 }
+
+let previewList = []
+let previewIndex = 0
+let previewTicket = 0
+let previewOpener = null
+const previewImages = new Set()
+
+function closePreview(restoreFocus = true) {
+  const dialog = $("preview")
+  if (dialog.open) dialog.close()
+  ++previewTicket // a pending file read must not paint into another chat
+  $("inspector").classList.remove("previewing")
+  dialog.classList.remove("fullscreen")
+  $("inspector").append(dialog)
+  $("previewStage").replaceChildren()
+  if (restoreFocus && previewOpener?.isConnected) previewOpener.focus()
+}
+
+function setPreviewFullscreen(fullscreen) {
+  const dialog = $("preview")
+  if (dialog.open) dialog.close()
+  dialog.classList.toggle("fullscreen", fullscreen)
+  ;(fullscreen ? document.body : $("inspector")).append(dialog)
+  if (fullscreen) dialog.showModal()
+  else dialog.show()
+  $("previewFullscreen").setAttribute("aria-pressed", String(fullscreen))
+  $("previewFullscreen").setAttribute("aria-label", fullscreen ? "Return to column" : "Fullscreen")
+  $("previewFullscreen").title = fullscreen ? "Return to column" : "Fullscreen"
+  $("previewFullscreen").disabled = innerWidth <= 1100
+  $("previewStage").focus()
+}
+
+function imageGallery(path) {
+  const paths = [...new Set([...inspectorData().pictures, ...previewImages, path])]
+  return paths
+}
+
+function workspaceOfSession() {
+  return sessions.find((s) => s.id === current)?.workspace || ""
+}
+
+function openPreview(list, path) {
+  if (!$("termPane").hidden) closeTerm()
+  previewOpener = document.activeElement
+  previewList = [...new Set([...list, path])]
+  const at = previewList.indexOf(path)
+  previewIndex = at < 0 ? 0 : at
+  localStorage.setItem("jep.inspector", "on")
+  applyInspector()
+  $("inspector").classList.add("previewing")
+  $("previewStage").tabIndex = -1
+  setPreviewFullscreen(innerWidth <= 1100)
+  renderPreview()
+}
+
+function stepPreview(delta) {
+  if (previewList.length < 2) return
+  previewIndex = (previewIndex + delta + previewList.length) % previewList.length
+  renderPreview()
+}
+
+async function renderPreview() {
+  const path = previewList[previewIndex]
+  const ticket = ++previewTicket
+  const workspace = workspaceOfSession()
+  const rel = workspace && path.startsWith(workspace + "/") ? path.slice(workspace.length + 1) : path
+  const name = path.split("/").pop() || path
+  $("previewName").textContent = name
+  $("previewPath").textContent = rel === name ? "" : rel
+  $("previewPath").title = path
+  $("previewCount").textContent = previewList.length > 1 ? `${previewIndex + 1} / ${previewList.length}` : ""
+  $("previewPrev").disabled = previewList.length < 2
+  $("previewNext").disabled = previewList.length < 2
+  $("previewOpen").href = fileUrl(path)
+  const stage = $("previewStage")
+  stage.replaceChildren()
+  if (isImage(path) || previewImages.has(path)) {
+    const img = el("img", "shot")
+    img.src = fileUrl(path)
+    img.alt = path.split("/").pop() || "image"
+    stage.append(img)
+    return
+  }
+  stage.append(el("div", "note", "Loading…"))
+  try {
+    const data = await call("/read", { id: current, path })
+    if (ticket !== previewTicket) return
+    const text = data.text ?? ""
+    if (text.includes("\u0000")) throw new Error("This looks like a binary file.")
+    const clipped = text.length > 400_000
+    const body = clipped ? text.slice(0, 400_000) + `\n\n… showing the first 400,000 of ${text.length.toLocaleString()} characters; open in a new tab for all of it.` : text
+    const pre = el("pre")
+    const code = el("code", "", body)
+    pre.append(code)
+    stage.replaceChildren(pre)
+    if (!clipped && text.length < 200_000 && window.hljs?.highlightElement) { try { hljs.highlightElement(code) } catch {} }
+  } catch (err) {
+    if (ticket !== previewTicket) return
+    const note = el("div", "note")
+    note.append(el("div", "", "No preview for this file."), el("div", "", err.message))
+    const open = el("a", "button", "Open in a new tab")
+    open.href = fileUrl(path); open.target = "_blank"; open.rel = "noopener"
+    note.append(open)
+    stage.replaceChildren(note)
+  }
+}
+
+$("previewPrev").onclick = () => stepPreview(-1)
+$("previewNext").onclick = () => stepPreview(1)
+$("previewClose").onclick = () => closePreview()
+$("previewFullscreen").onclick = () => setPreviewFullscreen(!$("preview").classList.contains("fullscreen"))
+$("preview").addEventListener("cancel", (e) => { e.preventDefault(); closePreview() })
+$("preview").addEventListener("keydown", (e) => {
+  if (e.target.closest("pre, input, textarea") || e.metaKey || e.ctrlKey || e.altKey) return
+  if (e.key === "ArrowLeft") { e.preventDefault(); stepPreview(-1) }
+  else if (e.key === "ArrowRight") { e.preventDefault(); stepPreview(1) }
+  else if (e.key === "Escape") { e.preventDefault(); closePreview() }
+})
 
 function section(title, count, open, ...children) {
   const d = el("details")
@@ -1380,9 +1833,16 @@ function section(title, count, open, ...children) {
 }
 const sectionOpen = (title, fallback) => { const v = localStorage.getItem("jep.inspector." + title); return v === null ? fallback : v === "1" }
 
+let sideDiff = null       // a changed path to show, or "*" for the whole list; null is the details
+let sidePatch = ""
+let sidePatchFor = ""
+let sideShown = ""
+let sideGen = 0
+
 function renderInspector() {
   const root = $("inspectorBody")
   if (!root || $("inspector").hidden || document.body.classList.contains("inspector-off")) return
+  if (sideDiff) { renderSideDiff(); return }
   const { files, pictures } = inspectorData()
   const session = sessions.find((s) => s.id === current)
   const key = JSON.stringify([current, files.length, files[0]?.[1].at, pictures.length, git && [git.branch, git.changedFiles, git.head?.hash], session?.workspace])
@@ -1401,9 +1861,10 @@ function renderInspector() {
   // files the agent touched
   const fl = el("div", "list")
   if (!files.length) fl.append(el("div", "empty", "Nothing opened or changed yet."))
+  const filePaths = files.slice(0, 80).map(([path]) => path)
   for (const [path, f] of files.slice(0, 80)) {
     const bits = [f.wrote ? "wrote" : "", f.edits ? `edited${f.edits > 1 ? " ×" + f.edits : ""}` : "", f.reads ? `read${f.reads > 1 ? " ×" + f.reads : ""}` : ""].filter(Boolean)
-    fl.append(pathItem(path, bits.join(" · "), workspace))
+    fl.append(pathItem(path, bits.join(" · "), workspace, filePaths))
   }
   kids.push(section("Files", files.length, sectionOpen("Files", true), fl))
   // the repository's changes
@@ -1414,9 +1875,10 @@ function renderInspector() {
     // a gateway older than this column counts the changes but does not name them
     if (!git.files && git.changedFiles) gl.append(el("div", "empty", `${git.changedFiles} file${git.changedFiles === 1 ? "" : "s"} changed.`))
     else if (!git.files?.length) gl.append(el("div", "empty", "No uncommitted changes."))
+    const gitPaths = (git.files ?? []).map((f) => workspace ? workspace + "/" + f.path : f.path)
     for (const f of git.files ?? []) {
       const root = git.root || workspace
-      const a = pathItem(root ? root + "/" + f.path : f.path, "", root)
+      const a = pathItem(root ? root + "/" + f.path : f.path, "", root, undefined, () => openDiff(f.path))
       a.querySelector(".tag").replaceWith(...[f.additions ? el("span", "add", "+" + f.additions) : null, f.deletions ? el("span", "del", "−" + f.deletions) : null].filter(Boolean))
       a.prepend(el("span", "code " + f.code, f.code))
       gl.append(a)
@@ -1430,13 +1892,124 @@ function renderInspector() {
   kids.push(section("Changes", git?.isRepository ? git.changedFiles : null, sectionOpen("Changes", true), gl))
   // pictures shown or looked at
   const gal = el("div", "grid")
-  for (const p of pictures.slice(0, 60)) {
-    const a = el("a"); a.href = fileUrl(p); a.target = "_blank"; a.rel = "noopener"; a.title = p
+  const gallery = pictures.slice(0, 60)
+  for (const p of gallery) {
+    const a = previewLink(el("a"), p, gallery)
+    a.title = p
     const img = el("img"); img.src = fileUrl(p); img.loading = "lazy"; img.alt = p.split("/").pop() || "image"
     a.append(img); gal.append(a)
   }
   kids.push(section("Gallery", pictures.length, sectionOpen("Gallery", true), pictures.length ? gal : el("div", "empty", "No pictures yet.")))
   root.replaceChildren(...kids)
+}
+
+function openDiff(rel) {
+  closePreview(false)
+  sideDiff = rel || "*"
+  renderSideDiff()
+}
+function diffBack() {
+  const b = el("button", "diffback", "‹ Details")
+  b.type = "button"
+  b.onclick = () => { sideDiff = null; inspectorKey = ""; renderInspector() }
+  return b
+}
+function patchPath(line) {
+  const quoted = line.match(/ "b\/(.+)"$/) || line.match(/ b\/"(.+)"$/)
+  if (quoted) return quoted[1]
+  const plain = line.match(/ b\/(.+)$/)
+  return plain ? plain[1] : ""
+}
+function parsePatch(patch) {
+  const files = []
+  let cur = null
+  let oldN = 0
+  let newN = 0
+  const skip = /^(---|(\+\+\+)|index |new file|deleted file|similarity |rename |old mode|new mode|\\ No newline)/
+  for (const line of String(patch).split("\n")) {
+    if (line.startsWith("diff --git ")) {
+      cur = { path: patchPath(line), rows: [] }
+      files.push(cur)
+      continue
+    }
+    if (!cur || skip.test(line)) continue
+    if (line.startsWith("Binary files")) { cur.rows.push({ kind: "note", text: "Binary file" }); continue }
+    if (line.startsWith("@@")) {
+      const m = /@@ -(\d+)(?:,\d+)? \+(\d+)/.exec(line)
+      oldN = m ? Number(m[1]) : 0
+      newN = m ? Number(m[2]) : 0
+      cur.rows.push({ kind: "hunk", text: line })
+      continue
+    }
+    if (line.startsWith("+")) cur.rows.push({ kind: "add", text: line.slice(1), n: newN++ })
+    else if (line.startsWith("-")) cur.rows.push({ kind: "del", text: line.slice(1), o: oldN++ })
+    else if (line.startsWith(" ")) cur.rows.push({ kind: "ctx", text: line.slice(1), o: oldN++, n: newN++ })
+  }
+  return files
+}
+function diffLine(row) {
+  if (row.kind === "hunk" || row.kind === "note") return el("div", "dline " + row.kind, row.text)
+  const n = el("div", "dline " + row.kind)
+  n.append(el("span", "ln", row.kind === "add" ? "" : String(row.o ?? "")), el("span", "ln", row.kind === "del" ? "" : String(row.n ?? "")), el("span", "txt", row.text))
+  return n
+}
+async function renderSideDiff() {
+  const root = $("inspectorBody")
+  if (!root || !sideDiff) return
+  const stamp = [current, git?.head?.hash || "", git?.changedFiles ?? ""].join("|")
+  const view = stamp + "|" + sideDiff
+  if (sideShown === view && root.querySelector(".side-diff")) return
+  const gen = ++sideGen
+  if (sidePatchFor !== stamp) {
+    root.replaceChildren(diffBack(), el("div", "empty", "Reading…"))
+    try {
+      const got = await call("/git/patch", { id: current })
+      if (gen !== sideGen || !sideDiff) return
+      sidePatch = got.patch || ""
+      sidePatchFor = stamp
+    } catch (err) {
+      if (gen === sideGen) root.replaceChildren(diffBack(), el("div", "empty", String(err?.message || err)))
+      return
+    }
+  }
+  const parsed = new Map(parsePatch(sidePatch).map((f) => [f.path, f]))
+  const known = git?.files ?? []
+  const paths = known.map((f) => f.path)
+  for (const p of parsed.keys()) if (p && !paths.includes(p)) paths.push(p)
+  const wrap = el("div", "side-diff")
+  wrap.append(diffBack())
+  if (!paths.length) wrap.append(el("div", "empty", "No uncommitted changes."))
+  for (const path of paths) {
+    const meta = known.find((f) => f.path === path)
+    const file = parsed.get(path)
+    const block = el("section", "filediff")
+    block.dataset.path = path
+    const head = el("div", "filehead")
+    const name = path.split("/").pop()
+    const dir = path.slice(0, Math.max(0, path.length - name.length)).replace(/\/$/, "")
+    const title = el("span", "fname", name || path)
+    title.title = path
+    head.append(title)
+    if (dir) head.append(el("span", "fdir", dir))
+    const rows = file?.rows ?? []
+    const add = meta?.additions || rows.filter((r) => r.kind === "add").length
+    const del = meta?.deletions || rows.filter((r) => r.kind === "del").length
+    const stat = el("span", "stat")
+    if (add) stat.append(el("span", "add", "+" + add))
+    if (del) stat.append(el("span", "del", "−" + del))
+    head.append(stat)
+    const body = el("div", "dbody")
+    const cap = rows.slice(0, 800)
+    if (!cap.length) body.append(el("div", "dline note", "No textual change."))
+    else body.append(...cap.map(diffLine))
+    if (rows.length > cap.length) body.append(el("div", "dline hunk", `… ${rows.length - cap.length} more lines`))
+    block.append(head, body)
+    wrap.append(block)
+  }
+  if (sidePatch.endsWith("… truncated")) wrap.append(el("div", "empty", "The rest of the diff was cut off."))
+  root.replaceChildren(wrap)
+  sideShown = view
+  if (sideDiff !== "*") wrap.querySelector(`[data-path="${CSS.escape(sideDiff)}"]`)?.scrollIntoView({ block: "start" })
 }
 
 function dividerNode(label, quiet = false) {
@@ -1446,7 +2019,8 @@ function dividerNode(label, quiet = false) {
 }
 const compactionNode = () => dividerNode("compaction complete")
 const autoContinueNode = () => dividerNode("· auto-continued ·", true)
-const loopNode = (l) => dividerNode(`loop ${l.iteration}/${l.max}`, true)
+// jep's turn count and its backstop are internal: the boundary names neither
+const loopNode = () => dividerNode("· jep · keeping going ·", true)
 // jep woke itself for a watch. It is a boundary, not a message: the person did
 // not type it, so it never counts as one of theirs.
 const wakeNode = (n) => dividerNode(
@@ -1461,11 +2035,24 @@ function transcript(all) {
   const out = []
   let run = []
   const flush = (last = false) => {
-    if (run.length === 1) out.push(assistant(workItem(run[0].p)))
-    else if (run.length > 1) out.push(assistant(workFold(run, last && busy())))
+    if (!run.length) return
+    const live = last && busy()
+    if (detailLevel() === "compact") out.push(assistant(workFold(run, live)))
+    else if (run.length === 1) out.push(assistant(workItem(run[0].p)))
+    else out.push(assistant(workFold(run, live)))
     run = []
   }
-  for (const m of settleCompaction(all)) {
+  const list = settleCompaction(all)
+  const turnFailed = (i) => {
+    for (let j = i + 1; j < list.length; j++) {
+      const n = list[j]
+      if (n.role === "user" && !n.loop && !n.notice && !n.from && !saysNothing(n)) return false
+      if (n.error) return true
+    }
+    return false
+  }
+  for (let i = 0; i < list.length; i++) {
+    const m = list[i]
     if (m.role === "user") {
       flush()
       if (isCompactionOnly(m)) { out.push(compactionNode()); continue }
@@ -1474,22 +2061,26 @@ function transcript(all) {
       if (m.notice) { out.push(wakeNode(m.notice)); continue }
       if (m.from) { out.push(guestNode(m)); continue }
       if (saysNothing(m)) continue
-      // a send that failed carries its own Retry; a sent one gets Edit and Retry
-      const failed = !m.queued && !!m.undelivered
-      const node = messageNode("user", m.parts, failed ? m.retry || (() => retryMessage(m)) : null, m.id)
+      if (hiddenFails.has(failKey(m))) continue
+      // a failed send, or a reply that came back as an error, keeps Edit and Retry on screen
+      const noted = m.errorText || notedError(m)
+      const failed = !m.queued && (!!m.undelivered || turnFailed(i) || !!noted)
+      const node = messageNode("user", m.parts, null, m.id)
       node.prepend(userNav(node))
       if (m.time) node.dataset.info = when(m.time)
       if (m.queued) queuedMark(node, m.queued)
       else if (m.sending) {
         node.classList.add("sending")
         node.querySelector(".body").dataset.state = "Sending…"
-      } else if (!failed) sentActions(node, m)
+      } else sentActions(node, m)
+      if (failed) node.classList.add("keep-actions")
+      if (m.errorText || noted) node.append(failNote(m.errorText || noted))
       out.push(node)
       continue
     }
     const before = out.length
     for (const p of m.parts) {
-      if (isWork(p)) run.push({ p, m })
+      if (isWork(p) || (detailLevel() === "compact" && isEdit(p))) run.push({ p, m })
       else if (p.kind === "tool") {
         flush()
         out.push(assistant(toolNode(p)))
@@ -1500,12 +2091,39 @@ function transcript(all) {
     }
     // a reply's details ride on the last thing it said
     if (out.length > before && !run.length) out[out.length - 1].dataset.info = replyInfo(m)
+    if (m.error && !/abort/i.test(errorText(m.error))) out.push(failNote(errorText(m.error)))
   }
   flush(true)
   return out
 }
 
 // "14:32 · claude-opus-5-5 · 1m 13s · 171k in, 300 out · $0.42", whatever the harness reported
+function noteTurnError(text, at, error) {
+  const t = (text || "").trim()
+  if (!t || !error) return
+  const i = turnErrors.findIndex((e) => e.text === t && Math.abs(e.at - at) < 20_000)
+  if (i >= 0) turnErrors[i] = { text: t, at, error }
+  else turnErrors.push({ text: t, at, error })
+  if (turnErrors.length > 40) turnErrors.shift()
+}
+function notedError(m) {
+  const t = textOf(m).trim()
+  const at = m.time || 0
+  return turnErrors.find((e) => e.text === t && (!at || Math.abs(e.at - at) < 20_000))?.error || ""
+}
+function errorText(e) {
+  if (!e) return ""
+  if (typeof e === "string") return e
+  const loc = e.provider && e.model ? `${e.provider}/${e.model}` : (e.provider || e.model || "")
+  const tags = [loc, e.status ? `HTTP ${e.status}` : ""].filter(Boolean).join(", ")
+  const name = e.name && !/^error$/i.test(e.name) ? e.name : ""
+  return [name && tags ? `${name} (${tags})` : name || tags, e.message || "The turn failed"].filter(Boolean).join(": ")
+}
+function failNote(text) {
+  const n = el("div", "fail-note", "⚠️ " + text)
+  return n
+}
+
 function replyInfo(m) {
   const t = m.tokens
   return [
@@ -1576,10 +2194,17 @@ function assistant(child) {
 function workFold(run, active) {
   const parts = run.map((r) => r.p)
   const timed = [...new Set(run.map((r) => r.m))].filter((m) => m.time)
-  const span = timed.length ? Math.max(...timed.map((m) => m.time + (m.durationMs || 0))) - Math.min(...timed.map((m) => m.time)) : 0
+  const spanMs = timed.length ? Math.max(...timed.map((m) => m.time + (m.durationMs || 0))) - Math.min(...timed.map((m) => m.time)) : 0
   const failed = parts.some((p) => p.status === "error")
+  const title = workTitle(parts, spanMs, active)
+  if (detailLevel() === "compact") {
+    const line = el("div", "work compact" + (failed ? " failed" : "") + (active ? " active" : ""))
+    line.textContent = title
+    return line
+  }
   const d = keep(el("details", "work" + (failed ? " failed" : "") + (active ? " active" : "")), "work:" + (parts[0].id || ""))
-  d.append(el("summary", "", workTitle(parts, span, active)))
+  if (detailLevel() === "detailed") d.open = true
+  d.append(el("summary", "", title))
   const body = el("div", "workbody")
   body.dataset.keep = "wb:" + (parts[0].id || "")
   for (const p of parts) body.append(workItem(p))
@@ -1591,6 +2216,7 @@ function workItem(p) {
   if (p.kind === "reasoning") {
     const key = "r:" + (p.id || p.text.slice(0, 40))
     const d = keep(fold(p.durationMs >= 1000 ? `Thought for ${span(p.durationMs)}` : "Thought", p.text), key)
+    if (detailLevel() === "detailed") d.open = true
     const pre = d.querySelector("pre")
     if (pre) pre.dataset.keep = key
     return d
@@ -1605,7 +2231,7 @@ function workTitle(parts, ms, active) {
   const tools = parts.filter((p) => p.kind === "tool")
   if (!tools.length) return active ? "Thinking" : ms >= 1000 ? `Thought for ${span(ms)}` : "Thought"
   const counts = {}
-  for (const t of tools) { const k = t.name.toLowerCase(); counts[k] = (counts[k] || 0) + 1 }
+  for (const t of tools) { const k = String(t.name || "").toLowerCase(); counts[k] = (counts[k] || 0) + 1 }
   const said = Object.entries(counts).map(([k, n]) => {
     const noun = NOUN[k] || "call"
     return `${VERB[k] || k} ${n} ${n === 1 ? noun : noun.endsWith("ch") ? noun + "es" : noun + "s"}`
@@ -1662,13 +2288,69 @@ function bytes(n) {
 
 // A loop is visible over the composer while it runs, and once it is over it
 // stays until dismissed, so a stop or an exhausted cap is not a silent thing.
+// The daemon declares what a conversation can have (`/conversation-settings`),
+// so this draws a row per option instead of knowing about keep going at all.
+async function loadConversationSettings() {
+  if (!current || !token) return
+  try {
+    const { options = [], values = {}, mode = "normal", modes = [] } = await call("/conversation-settings", { id: current })
+    const host = $("convSettings")
+    host.hidden = options.length === 0 && modes.length === 0
+    host.textContent = ""
+    // one button, tapped round the modes: normal, keep going, relentless
+    if (modes.length) {
+      const names = { normal: "Normal", keep: "Keep going", relentless: "Relentless" }
+      const hints = {
+        normal: "One turn per request.",
+        keep: "Carries on past one turn until the agent says it is done (jep-end-turn). Questions time out after 15 minutes.",
+        relentless: "The agent cannot stop. It improves the work, finds more when none is left, and decides for itself instead of waiting for answers. Only Stop ends it. Questions time out after 5 minutes.",
+      }
+      const btn = document.createElement("button")
+      btn.type = "button"
+      btn.className = "modebtn"
+      btn.dataset.mode = mode
+      btn.textContent = names[mode] ?? mode
+      btn.title = hints[mode] ?? ""
+      btn.onclick = async () => {
+        const next = modes[(modes.indexOf(btn.dataset.mode) + 1) % modes.length]
+        btn.disabled = true
+        try {
+          const res = await call("/set-conversation-mode", { id: current, mode: next })
+          btn.dataset.mode = res.mode
+          btn.textContent = names[res.mode] ?? res.mode
+          btn.title = hints[res.mode] ?? ""
+        } catch (err) { fail(err) } finally { btn.disabled = false }
+      }
+      host.append(btn)
+    }
+    for (const option of options) {
+      const row = document.createElement("label")
+      const box = document.createElement("input")
+      box.type = "checkbox"
+      box.checked = values[option.id] === true
+      box.dataset.setting = option.id
+      box.onchange = async () => {
+        box.disabled = true
+        try {
+          const res = await call("/set-conversation-setting", { id: current, key: option.id, enabled: box.checked })
+          box.checked = res.values?.[option.id] === true
+        } catch (err) { box.checked = !box.checked; fail(err) } finally { box.disabled = false }
+      }
+      row.append(box, Object.assign(document.createElement("span"), { textContent: option.label }))
+      row.title = option.description
+      host.append(row)
+    }
+  } catch { /* a gateway without the route: the compose box still works */ }
+}
+
 function renderLoop() {
   const bar = $("loopBar")
   const running = loop?.status === "running"
   const turn = loop ? Math.min(loop.spec.max, loop.iteration + (running ? 1 : 0)) : 0
   const state = $("loopState")
   if (state) {
-    const bits = loop ? [loop.status, `${turn}/${loop.spec.max}`, loop.spec.goal] : ["No loop."]
+    // the max is jep's backstop, not a budget the person chose: never shown
+    const bits = loop ? [loop.status, `turn ${turn}`, loop.spec.goal] : ["Nothing is being kept going."]
     if (loop?.lastVerify && loop.lastVerify.code !== null && loop.lastVerify.code !== 0) bits.push(`verify exit ${loop.lastVerify.code}`)
     if (loop?.error) bits.push(loop.error)
     state.textContent = bits.join(" · ")
@@ -1678,9 +2360,23 @@ function renderLoop() {
     $("loopMax").disabled = running
   }
   if (!bar) return
-  bar.hidden = !loop
-  if (!loop) return
-  const label = running ? `Loop ${turn}/${loop.spec.max}` : `Loop ${loop.status} · ${loop.iteration}/${loop.spec.max}`
+  // keep going is not news: its turns are right there in the transcript, and a
+  // bar saying "turn 1 starting" is noise on top of them. An explicit loop (a
+  // goal with a check) still gets its bar, because that one has a reason.
+  const keepingGoing = loop?.spec?.stop === "tool"
+  bar.hidden = !loop || keepingGoing
+  if (!loop || keepingGoing) return
+  // same words as the phone: it is keeping going, or it stopped, never "1/200"
+  const plural = (n) => `${n} ${n === 1 ? "turn" : "turns"}`
+  const done = loop.status === "done"
+  const label = running
+    ? `Keeping going · turn ${turn}`
+    : done
+      ? `Finished after ${plural(loop.iteration)}`
+      : `Stopped after ${plural(loop.iteration)}`
+  // ended because the agent said it was finished: no bar left to dismiss.
+  // Anything else (out of time, turning in place, a Stop) stays and explains.
+  if (!running && loop.status === "done") void call("/loop/clear", { id: current }).catch(() => {})
   const detail = running ? (loop.iteration ? "working" : "starting") : (loop.error || loop.spec.goal)
   const text = el("span", "grow", detail)
   text.title = detail
@@ -1780,6 +2476,7 @@ function sendPending(id, pending, how, throwOnFailure = false) {
       .catch((err) => {
         if (id === current) {
           pending.failed = true
+          pending.error = String(err.message || err)
           render()
           fail(err)
           if (retry || throwOnFailure) throw err
@@ -1808,6 +2505,8 @@ function sentActions(node, m) {
   retry.type = "button"
   retry.onclick = () => {
     retry.disabled = true
+    hiddenFails.add(failKey(m))
+    forgetTurnError(text)
     retryMessage(m).catch(fail).finally(() => { retry.disabled = false })
   }
   actions.append(edit, retry)
@@ -1836,7 +2535,7 @@ function retryMessage(m) {
 // "Ran" and the command. Opened, an edit is its diff and anything else its
 // output, never the call's raw JSON.
 function toolNode(p) {
-  const name = p.name.toLowerCase()
+  const name = String(p.name || "").toLowerCase()
   const args = typeof p.input === "object" && p.input ? p.input : {}
   const arg = (...keys) => keys.map((k) => args[k]).find((v) => typeof v === "string")
   const selected = arg("file_path", "filePath", "path") || p.title || ""
@@ -1870,6 +2569,11 @@ function toolNode(p) {
     : null
   const body = diff ? diffNode(diff, langOf(file)) : picture || outputNode(p, name, arg("command"))
   if (body) body.dataset.keep = "t:" + p.id
+  if (detailLevel() === "detailed" && body && !diff && (name === "bash" || name === "run")) {
+    const box = el("div", "tool")
+    box.append(head, body)
+    return box
+  }
   if (!body) {
     const line = el("div", "tool")
     line.append(head)
@@ -1929,9 +2633,7 @@ function outputNode(p, name, command) {
 // a read of an image is the image, not "Read image successfully": /file is the
 // same bytes route attachments use, and it already scopes to the workspace
 function imageNode(filePath) {
-  const a = el("a", "tool-image-link")
-  a.href = fileUrl(filePath)
-  a.target = "_blank"; a.rel = "noopener"
+  const a = previewLink(el("a", "tool-image-link"), filePath, () => imageGallery(filePath))
   const img = el("img", "tool-image")
   img.src = a.href
   img.alt = filePath.split("/").pop() || "image"
@@ -1950,15 +2652,11 @@ const IMAGE = /\.(png|jpe?g|gif|webp|avif|bmp|svg|heic|heif)$/i
 const isImage = (file) => IMAGE.test(file || "")
 
 function fileNode(p) {
-  const url = fileUrl(p.filePath)
-  if ((p.mimeType || "").startsWith("image/")) {
-    const img = el("img")
-    img.src = url
-    return img
+  if ((p.mimeType || "").startsWith("image/") || isImage(p.filePath)) {
+    previewImages.add(p.filePath)
+    return imageNode(p.filePath)
   }
-  const a = el("a", "", "📎 " + (p.fileName || p.filePath.split("/").pop()))
-  a.href = url; a.target = "_blank"
-  return a
+  return previewLink(el("a", "", "📎 " + (p.fileName || p.filePath.split("/").pop())), p.filePath, [p.filePath])
 }
 
 function askNode(a) {
@@ -2007,7 +2705,87 @@ $("compose").onsubmit = (e) => {
   sendPending(id, pending, how)
 }
 
+// ── slash commands ───────────────────────────────────────────────────────
+// Type "/" first and the conversation's harness lists the commands it accepts,
+// each with its description. Sending one is an ordinary message: the gateway
+// and the harness do the rest. A harness that cannot list its commands answers
+// 501 and the menu stays out of the way.
+const slashCache = new Map()   // conversation id -> { at, list } (list null: this harness can't)
+const slash = { items: [], sel: 0, open: false }
+const slashQuery = () => { const m = /^\/(\S*)$/.exec($("input").value); return m ? m[1].toLowerCase() : null }
+async function slashList(id) {
+  const hit = slashCache.get(id)
+  if (hit && Date.now() - hit.at < 60000) return hit.list
+  try {
+    const { commands } = await call("/commands", { id })
+    slashCache.set(id, { at: Date.now(), list: commands || [] })
+  } catch (err) {
+    if (/can't list commands/i.test(err.message)) slashCache.set(id, { at: Date.now(), list: null })
+    else return null   // a failed fetch is tried again on the next keystroke
+  }
+  return slashCache.get(id)?.list ?? null
+}
+function slashClose() { slash.open = false; $("slashMenu").hidden = true }
+function slashRender() {
+  const menu = $("slashMenu")
+  if (!slash.items.length) { menu.replaceChildren(el("div", "none", "No matching command")); menu.hidden = false; return }
+  menu.replaceChildren(...slash.items.map((c, i) => {
+    const row = el("div", "slashrow" + (i === slash.sel ? " on" : ""))
+    row.setAttribute("role", "option")
+    const name = el("div", "name")
+    name.append(el("b", "", "/" + c.name), el("span", "src", c.source || ""))
+    row.append(name)
+    if (c.description) row.append(el("small", "", c.description))
+    // pointerdown, not click: the box keeps its focus while a row is chosen
+    row.onpointerdown = (e) => { e.preventDefault(); slashAccept(i) }
+    return row
+  }))
+  menu.hidden = false
+  menu.querySelector(".on")?.scrollIntoView({ block: "nearest" })
+}
+async function slashUpdate() {
+  const q = slashQuery()
+  if (q === null || !current) return slashClose()
+  const id = current
+  const list = await slashList(id)
+  if (id !== current || slashQuery() !== q) return   // typed on, or switched conversation, while it loaded
+  if (!list || !list.length) return slashClose()
+  // names only: matching the words of a description made "/su" find a command because "pursue" has "su" in it
+  const rank = (c) => (c.name.toLowerCase().startsWith(q) ? 0 : c.name.toLowerCase().includes(q) ? 1 : 2)
+  slash.items = list.map((c) => [rank(c), c]).filter(([r]) => r < 2).sort((a, b) => a[0] - b[0] || a[1].name.localeCompare(b[1].name)).map(([, c]) => c).slice(0, 40)
+  slash.sel = 0
+  slash.open = true
+  slashRender()
+}
+function slashAccept(i = slash.sel) {
+  const c = slash.items[i]
+  if (!c) return
+  const t = $("input")
+  t.value = "/" + c.name + " "
+  t.setSelectionRange(t.value.length, t.value.length)
+  grow(); saveDraft(); slashClose(); t.focus()
+}
+// moving the highlight, accepting, leaving: true when the key was the menu's
+function slashKey(e) {
+  if (!slash.open) return false
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    if (!slash.items.length) return false
+    e.preventDefault()
+    slash.sel = (slash.sel + (e.key === "ArrowDown" ? 1 : slash.items.length - 1)) % slash.items.length
+    slashRender()
+    return true
+  }
+  if (e.key === "Tab" && !e.shiftKey && slash.items.length) { e.preventDefault(); slashAccept(); return true }
+  // Enter takes the highlighted command, unless the box already holds exactly that name: then it sends
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing && slash.items.length && $("input").value !== "/" + slash.items[slash.sel].name) { e.preventDefault(); slashAccept(); return true }
+  if (e.key === "Escape") { e.preventDefault(); slashClose(); return true }
+  return false
+}
+$("input").addEventListener("blur", () => setTimeout(slashClose, 150))
+$("compose").addEventListener("submit", slashClose, true)
+
 $("input").onkeydown = (e) => {
+  if (slashKey(e)) return
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
     e.preventDefault()
     $("compose").requestSubmit()
@@ -2022,7 +2800,7 @@ $("input").onkeydown = (e) => {
   }
 }
 const grow = () => { const t = $("input"); t.style.height = "auto"; t.style.height = t.scrollHeight + "px" }
-$("input").oninput = () => { grow(); saveDraft() }
+$("input").oninput = () => { grow(); saveDraft(); slashUpdate() }
 
 // what was typed and not sent stays with its conversation, across reloads
 const draftKey = (id) => "jep.draft." + id
@@ -2152,8 +2930,10 @@ function renderQueue() {
   if (key === queueShown || dragging) return
   queueShown = key
   // jep's own notes are in the daemon's line but not in a person's: they are
-  // drawn as boundaries in the transcript, never as rows they can drag or drop
-  const line = queue.filter((q) => !q.notice)
+  // drawn as boundaries in the transcript, never as rows they can drag or drop.
+  // A loop's next step is jep's too: its text is the instruction to the agent
+  // (with the loop marker in front), so it is never a row the person can read
+  const line = queue.filter((q) => !q.notice && !q.loop)
   const box = $("queue")
   box.hidden = line.length < 2
   if (line.length < 2) return box.replaceChildren()
@@ -2247,7 +3027,7 @@ function stopAll() {
   return call("/stop", { id, all: true }).then(({ dropped = [] }) => {
     const ours = new Set(dropped)
     pendingText = pendingText.filter((p) => !ours.has(p.text))
-    queue = []
+    // the queue is held on the daemon, not dropped: it stays on screen until the daemon says otherwise
     if (id !== current || !dropped.length) return render()
     const typed = $("input").value.trim()
     $("input").value = [...dropped, ...(typed ? [typed] : [])].join("\n\n")
@@ -2292,7 +3072,10 @@ function follow() {
     }
     if (evt.type === "session.idle" || evt.type === "turn.aborted") { markSeen(); loadStatus() }
     if (evt.type === "session.error") {
-      if (evt.sessionID !== current) notifyFailure(evt.sessionID, evt.message)
+      if (evt.sessionID === current) {
+        const last = [...messages].reverse().find((m) => m.role === "user" && textOf(m).trim())
+        if (last) { noteTurnError(textOf(last), last.time || Date.now(), evt.message); render() }
+      } else notifyFailure(evt.sessionID, evt.message)
       fail(new Error(evt.message))
     }
     // the record itself moved: read it again, but not on every event
@@ -2501,8 +3284,14 @@ function renderStatus() {
 // The ring under Send is the last reply's prompt against the model's window.
 // The slices are the token counts the harness reported. jep does not split
 // that prompt into rules, skills, or tools.
+function tokenCount(t) {
+  if (!t) return 0
+  return (t.input || 0) + (t.output || 0) + (t.reasoning || 0) + (t.cache?.read || 0) + (t.cache?.write || 0)
+}
 function contextNow() {
-  const last = [...messages].reverse().find((m) => m.role === "assistant" && m.tokens)
+  // a failed turn still carries a tokens object of zeros and would hide the
+  // last reply that actually reported usage
+  const last = [...messages].reverse().find((m) => m.role === "assistant" && tokenCount(m.tokens) > 0)
   const running = choices?.current || choices?.default
   const t = last?.tokens
   const used = t ? t.input + t.cache.read + t.cache.write : 0
@@ -2518,6 +3307,10 @@ function renderContext() {
   arc.style.stroke = pct >= 0.8 ? "var(--accent)" : "currentColor"
   $("ctxRing").title = limit ? `${tokens(used)} / ${tokens(limit)} context` : used ? `${tokens(used)} context` : "No context yet"
   if ($("ctx").hidden) return
+  if (!t) {
+    $("ctx").replaceChildren(el("h3", "", "Context"), el("div", "ctx-top", "No token use reported for this chat yet."))
+    return
+  }
   const slices = [
     ["Input", t?.input || 0, "#5b8def"],
     ["Cache read", t?.cache.read || 0, "#c4a35a"],
@@ -2688,6 +3481,7 @@ function closeTerm() {
 }
 function sideTab(name) {
   const term = name === "term"
+  if (term) closePreview(false)
   $("inspectorBody").hidden = term
   $("termPane").hidden = !term
   $("tabDetails").classList.toggle("on", !term)
@@ -2699,6 +3493,7 @@ let termAllowed = false
 let termWatch = null
 let termLog = ""
 let jobsKey = ""
+const shellSeen = new Map()
 function shells() {
   const byId = new Map()
   const parts = []
@@ -2711,36 +3506,46 @@ function shells() {
     const args = typeof p.input === "object" && p.input ? p.input : {}
     const command = String(args.command || args.cmd || p.title || "shell").split("\n")[0]
     const text = (p.output == null || p.output === "" ? "" : typeof p.output === "string" ? p.output : JSON.stringify(p.output, null, 2)).replace(/<\/?shell_metadata>/g, "").trim()
-    byId.set(p.id || command, { id: p.id || command, command, running: p.status === "running" || p.status === "pending", text })
+    const id = p.id || command
+    const started = typeof p.startedAt === "number" ? p.startedAt : shellSeen.get(id)
+    if (started == null) shellSeen.set(id, Date.now())
+    byId.set(id, { id, command, running: p.status === "running" || p.status === "pending", text, started: started ?? shellSeen.get(id) })
   }
   const rows = [...byId.values()]
   return [...rows.filter((r) => r.running), ...rows.filter((r) => !r.running).slice(-6).reverse()]
 }
 function syncTermBtn() {
-  const running = shells().some((s) => s.running)
-  $("termBtn").hidden = !termAllowed && !running
-  const n = shells().filter((s) => s.running).length
-  $("termCount").hidden = !n
-  $("termCount").textContent = n ? String(n) : ""
+  $("termBtn").hidden = !termAllowed
+  const jobs = shells().filter((s) => s.running)
+  const chip = $("termChip")
+  chip.hidden = !jobs.length
+  $("termChipLabel").textContent = jobs.length === 1 ? "1 Terminal" : jobs.length + " Terminals"
+  if (!jobs.length) $("termChipList").hidden = true
+  const key = jobs.map((j) => j.id).join("|")
+  if (key === jobsKey) { chipAges(); return }
+  jobsKey = key
+  $("termChipList").replaceChildren(...jobs.map((j) => {
+    const name = el("button", "name")
+    name.type = "button"
+    name.title = j.command
+    name.append(el("span", "cmd", j.command), el("span", "age", j.started ? span(Date.now() - j.started) : ""))
+    name.onclick = () => openShell(j.id).catch((err) => fail(err))
+    return name
+  }))
 }
+function chipAges() {
+  if ($("termChip").hidden || $("termChipList").hidden) return
+  const jobs = shells().filter((s) => s.running)
+  const buttons = [...$("termChipList").querySelectorAll(".name")]
+  if (buttons.length !== jobs.length) { jobsKey = ""; syncTermBtn(); return }
+  jobs.forEach((j, i) => {
+    const age = buttons[i].querySelector(".age")
+    if (age && j.started) age.textContent = span(Date.now() - j.started)
+  })
+}
+setInterval(chipAges, 1000)
 function renderShells() {
   syncTermBtn()
-  if ($("termPane").hidden) return
-  const jobs = shells()
-  const key = jobs.map((j) => j.id + (j.running ? "!" : "")).join("|") + ":" + (termWatch || "")
-  if (key !== jobsKey) {
-    jobsKey = key
-    const box = $("termJobs")
-    box.hidden = !jobs.length
-    box.replaceChildren(...jobs.map((j) => {
-      const b = el("button", (j.id === termWatch ? "on" : "") + (j.running ? " run" : ""))
-      b.type = "button"
-      b.title = j.command
-      b.textContent = (j.running ? "● " : "") + j.command
-      b.onclick = () => watchJob(j.id)
-      return b
-    }))
-  }
   if (termWatch) paintLog()
 }
 function paintLog() {
@@ -2760,7 +3565,6 @@ function watchJob(id) {
     termView.options.cursorBlink = false
   }
   $("termLive").hidden = !termAllowed
-  jobsKey = ""
   renderShells()
 }
 async function termAvailable() {
@@ -2874,9 +3678,20 @@ function rebindTerm() {
 async function openTerm() {
   if (!current) return
   if (!$("termPane").hidden) { closeTerm(); return }
-  const running = shells().find((s) => s.running)
-  if (!termAllowed && !running) return
+  if (!termAllowed) return
   await showPane()
+  armTerm()
+  const st = await call("/term", {})
+  let unlocked = st.authorized
+  if (!unlocked) {
+    const code = window.prompt("Pairing code to unlock the terminal")
+    if (code) { await call("/term/unlock", { code: code.trim() }); unlocked = true }
+    else { closeTerm(); return }
+  }
+  if (unlocked) await startLive()
+  else renderShells()
+}
+async function armTerm() {
   if (termResize) termResize.disconnect()
   termResize = new ResizeObserver(() => {
     clearTimeout(termFitTimer)
@@ -2889,18 +3704,21 @@ async function openTerm() {
     if (termWatch) paintLog()
     else if (current && termAllowed) paintTerm().catch(() => {})
   }, 200)
-  if (termAllowed) {
-    const st = await call("/term", {})
-    let unlocked = st.authorized
-    if (!unlocked) {
-      const code = window.prompt("Pairing code to unlock the terminal")
-      if (code) { await call("/term/unlock", { code: code.trim() }); unlocked = true }
-      else if (!running) { closeTerm(); return }
-    }
-    if (unlocked) await startLive()
+}
+async function openShell(id) {
+  if (!current) return
+  $("termChipList").hidden = true
+  $("termChipBtn").setAttribute("aria-expanded", "false")
+  if ($("termPane").hidden) {
+    await showPane()
+    armTerm()
   }
-  if (running) watchJob(running.id)
-  else renderShells()
+  watchJob(id)
+}
+$("termChipBtn").onclick = () => {
+  const list = $("termChipList")
+  list.hidden = !list.hidden
+  $("termChipBtn").setAttribute("aria-expanded", String(!list.hidden))
 }
 $("termBtn").onclick = () => openTerm().catch((err) => fail(err))
 $("tabTerm").onclick = () => { if ($("termPane").hidden) openTerm().catch((err) => fail(err)) }
@@ -2996,19 +3814,39 @@ $("model").onclick = () => {
     b.onclick = pick(ref)
     return b
   }
-  showMenu("model", [
-    item(`Default · ${short(choices.default) || "harness"}`, "", !choices.current, null),
-    ...choices.models.map((m) => {
-      const ref = `${m.providerID}/${m.modelID}`
-      return item(m.modelID, [m.image ? "images" : "", m.contextLimit ? tokens(m.contextLimit) : ""].filter(Boolean).join(" · "), choices.current === ref, ref)
-    }),
-  ], true)
+  // A harness can offer dozens of models through several providers (pi lists its own, a
+  // router's, a subscription's). One flat list hides the ones you went looking for, so
+  // each provider gets a heading, and the model you are on is scrolled into view.
+  const rows = [item(`Default · ${short(choices.default) || "harness"}`, "", !choices.current, null)]
+  const grouped = new Set(choices.models.map((m) => m.providerID)).size > 1
+  let group = null
+  for (const m of choices.models) {
+    if (grouped && m.providerID !== group) {
+      group = m.providerID
+      rows.push(el("h4", "", group))
+    }
+    const ref = `${m.providerID}/${m.modelID}`
+    rows.push(item(m.modelID, [m.image ? "images" : "", m.contextLimit ? tokens(m.contextLimit) : ""].filter(Boolean).join(" · "), choices.current === ref, ref))
+  }
+  showMenu("model", rows, true)
+  $("menu").querySelector("button.on")?.scrollIntoView({ block: "nearest" })
 }
+
+$("detail").onchange = () => {
+  localStorage.setItem("jep.detail", $("detail").value)
+  if (current) render(false)
+}
+function detailLevel() {
+  const v = localStorage.getItem("jep.detail")
+  return v === "compact" || v === "detailed" ? v : "default"
+}
+$("detail").value = detailLevel()
 
 $("gear").onclick = async () => {
   const id = current
   const s = sessions.find((x) => x.id === id)
   $("rename").value = s?.title || ""
+  $("detail").value = detailLevel()
   $("notifyAnswers").checked = notificationsEnabled("answers")
   $("notifyAsks").checked = notificationsEnabled("asks")
   $("notifyFailures").checked = notificationsEnabled("failures")
@@ -3053,6 +3891,33 @@ $("gear").onclick = async () => {
     : "No usage reported yet"
 }
 
+// ── general settings: this browser's preferences, and what jep has used ────
+// The conversation gear holds what belongs to one conversation; the rest lives
+// here, reachable when nothing is open too.
+const themed = () => localStorage.getItem("jep.theme") || "system"
+function applyTheme() {
+  const theme = themed()
+  if (theme === "system") delete document.documentElement.dataset.theme
+  else document.documentElement.dataset.theme = theme
+  document.documentElement.style.colorScheme = theme === "system" ? "" : theme
+  for (const r of document.querySelectorAll("#theme input")) r.checked = r.value === theme
+}
+function applyMotion() {
+  const reduce = localStorage.getItem("jep.motion") === "off"
+  if (reduce) document.documentElement.dataset.motion = "off"
+  else delete document.documentElement.dataset.motion
+  $("prefMotion").checked = reduce
+}
+for (const r of document.querySelectorAll("#theme input")) {
+  r.onchange = () => { localStorage.setItem("jep.theme", r.value); applyTheme() }
+}
+$("prefMotion").onchange = () => { localStorage.setItem("jep.motion", $("prefMotion").checked ? "off" : "on"); applyMotion() }
+// the details column has a switch in the header; this is the same state
+$("prefDetails").checked = inspectorOpen()
+$("prefDetails").onchange = () => {
+  localStorage.setItem("jep.inspector", $("prefDetails").checked ? "on" : "off")
+  applyInspector()
+}
 $("notifyAnswers").onchange = () => remember("jep.notify.answers", String($("notifyAnswers").checked))
 $("notifyAsks").onchange = () => remember("jep.notify.asks", String($("notifyAsks").checked))
 $("notifyFailures").onchange = () => remember("jep.notify.failures", String($("notifyFailures").checked))
@@ -3103,7 +3968,17 @@ $("carry").onclick = async () => {
 }
 $("compact").onclick = async () => {
   $("compact").disabled = true
-  try { await call("/compact", { id: current }); readHistory().catch(() => {}) } catch (err) { fail(err) } finally { $("compact").disabled = false }
+  const btn = $("compact")
+  const original = btn.textContent
+  btn.textContent = "Compacting…"
+  try {
+    await call("/compact", { id: current })
+    readHistory().catch(() => {})
+    noticeNode("jep", "Context compacted", current, 3000)
+  } catch (err) { fail(err) } finally {
+    btn.disabled = false
+    btn.textContent = original
+  }
 }
 $("loopForm").onsubmit = async (e) => {
   e.preventDefault()
@@ -3137,8 +4012,20 @@ $("delete").onclick = () => {
   $("settings").close()
   remove(sessions.find((s) => s.id === current) ?? { id: current })
 }
-$("unpair").onclick = () => { if (confirm("Unpair this browser? You will need a pairing code again.")) { $("settings").close(); unpair() } }
+$("unpair").onclick = () => { if (confirm("Unpair this browser? You will need a pairing code again.")) { $("general").close(); unpair() } }
+$("forceRefresh").onclick = () => {
+  const button = $("forceRefresh")
+  button.disabled = true
+  button.textContent = "Refreshing…"
+  // Keep the pairing token, preferences, gateway origin, and current chat. A
+  // new URL makes the browser fetch the current web client and its assets.
+  localStorage.removeItem("jep.sessions")
+  const url = new URL(location.href)
+  url.searchParams.set("_jep_refresh", String(Date.now()))
+  location.replace(url.href)
+}
 $("closeSettings").onclick = () => $("settings").close()
+
 // A click outside the settings is Done. Outside is the dialog itself (its
 // backdrop belongs to it), and only when the press began there too: a drag
 // that starts selecting in the title box and ends past the edge is not one.
@@ -3150,6 +4037,131 @@ function outsideBox(e) {
   return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom
 }
 
+// Opening the general sheet: this browser's own choices and the roll-up of
+// every conversation jep can read. Devices and the daemon status are shared
+// with the conversation sheet, so they are the same nodes.
+let statsDays = 30
+async function loadExecutionSettings() {
+  const data = await call("/execution-settings")
+  $("executionSettings").replaceChildren(...data.options.map((option) => {
+    const label = el("label", "toggle")
+    const box = el("input")
+    box.type = "checkbox"
+    box.checked = data.values[option.id] === true
+    const words = el("span", "", option.label)
+    words.append(el("small", "", option.description))
+    box.onchange = async () => {
+      const enabled = box.checked
+      box.disabled = true
+      try {
+        const saved = await call("/set-execution-setting", { key: option.id, enabled })
+        box.checked = saved.values[option.id] === true
+      } catch (err) {
+        box.checked = !enabled
+        fail(err)
+      } finally { box.disabled = false }
+    }
+    label.append(box, words)
+    return label
+  }))
+}
+function openGeneral() {
+  $("notifyAnswers").checked = notificationsEnabled("answers")
+  $("notifyAsks").checked = notificationsEnabled("asks")
+  $("notifyFailures").checked = notificationsEnabled("failures")
+  notificationButton()
+  applyTheme()
+  applyMotion()
+  $("prefDetails").checked = inspectorOpen()
+  $("general").showModal()
+  loadExecutionSettings().catch((err) => fail(err))
+  loadDevices().catch((err) => fail(err))
+  loadStats().catch((err) => fail(err))
+}
+for (const b of document.querySelectorAll(".openSettings")) b.onclick = openGeneral
+$("closeGeneral").onclick = () => $("general").close()
+$("closeGeneralTop").onclick = () => $("general").close()
+let pressedGeneralOutside = false
+$("general").addEventListener("mousedown", (e) => { pressedGeneralOutside = e.target === $("general") && outsideGeneralBox(e) })
+$("general").addEventListener("click", (e) => { if (pressedGeneralOutside && e.target === $("general") && outsideGeneralBox(e)) $("general").close() })
+function outsideGeneralBox(e) {
+  const r = $("general").getBoundingClientRect()
+  return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom
+}
+
+// Stats are the transcripts themselves: the gateway reads every conversation
+// and adds them up, so opening this costs one sweep and then nothing.
+const statMoney = (n) => (n >= 10 ? "$" + n.toFixed(0) : "$" + (n < 0.01 ? n.toFixed(4) : n.toFixed(2)))
+// "no price" is a harness that never said; "free" is one that said zero — the
+// same distinction /usage draws, kept here in words rather than in "$0.00"
+const statCost = (u) => (!u.priced ? "no price" : u.cost === 0 ? "free" : statMoney(u.cost))
+const statTurns = (u) => `${u.turns} turn${u.turns === 1 ? "" : "s"}`
+// stats run into billions where a context window runs into thousands
+const statTokens = (n) => (n >= 1e9 ? +(n / 1e9).toFixed(1) + "B" : tokens(n))
+// a turn whose harness never named its model still spent tokens; rank it, but
+// say what it is rather than pretending to know a name
+const statName = (key) => (key === "unreported" ? "(model not reported)" : key)
+function statCard(label, big, small) {
+  const card = el("div", "statcard")
+  card.append(el("span", "", label), el("b", "", big))
+  if (small) card.append(el("small", "", small))
+  return card
+}
+function renderStats(stats) {
+  const root = $("stats")
+  if (!stats) return root.replaceChildren(el("span", "spin", "No usage reported yet"))
+  const days = stats.days || []
+  const peak = Math.max(1, ...days.map((d) => d.total))
+  const all = stats.all || {}
+  const bar = (d) => {
+    const i = el("i")
+    i.style.height = Math.max(1, Math.round((d.total / peak) * 100)) + "%"
+    i.title = `${d.day} · ${statTokens(d.total)} tokens · ${statTurns(d)}`
+    return i
+  }
+  const todayBar = days.length ? bar(days[days.length - 1]) : null
+  if (todayBar) todayBar.classList.add("today")
+  const chart = el("div", "statchart")
+  for (let i = 0; i < days.length; i++) chart.append(i === days.length - 1 && todayBar ? todayBar : bar(days[i]))
+  const scale = el("div", "statscale")
+  scale.append(
+    el("span", "", days.length ? days[0].day.slice(5) : ""),
+    el("span", "", `${statTokens(peak)} busiest day`),
+    el("span", "", days.length ? days[days.length - 1].day.slice(5) : ""),
+  )
+  const rank = (rows, limit = 6) => {
+    const top = rows.slice(0, limit)
+    if (!top.length) return el("div", "statnote", "Nothing recorded yet.")
+    const first = top[0].total || 1
+    const list = el("div")
+    for (const r of top) {
+      const row = el("div", "statrank")
+      const meter = el("span", "meter")
+      const fill = el("i")
+      fill.style.width = Math.round((r.total / first) * 100) + "%"
+      meter.append(fill)
+      row.append(el("span", "name", statName(r.key)), meter, el("span", "num", `${statTokens(r.total)} · ${statCost(r)}`))
+      list.append(row)
+    }
+    return list
+  }
+  const cards = el("div", "statcards")
+  cards.append(
+    statCard("Today", statTokens(stats.today.total), `${statTurns(stats.today)} · ${statCost(stats.today)}`),
+    statCard("7 days", statTokens(stats.week.total), `${statTurns(stats.week)} · ${statCost(stats.week)}`),
+    statCard("All time", statTokens(all.total), `${statTurns(all)} · ${statCost(all)}`),
+  )
+  const note = `${stats.sessions} conversation${stats.sessions === 1 ? "" : "s"} with usage${stats.last ? " · last turn " + new Date(stats.last).toLocaleString() : ""}`
+  root.replaceChildren(cards, chart, scale, el("div", "statnote", note), el("h3", "", "Models"), rank(stats.models || []), el("h3", "", "Harnesses"), rank(stats.harnesses || [], 5))
+}
+async function loadStats() {
+  $("stats").replaceChildren(el("span", "spin", "Reading conversations"))
+  try {
+    renderStats(await call("/stats", { days: statsDays }))
+  } catch (err) {
+    $("stats").replaceChildren(el("span", "statnote", "Could not read usage: " + (err?.message || err)))
+  }
+}
 const markSeen = () => { if (current && !document.hidden) call("/seen", { id: current }).catch(() => {}) }
 
 function remembered(key) { try { return localStorage.getItem(key) } catch { return null } }
@@ -3212,6 +4224,15 @@ function textNode(src, messageID, hold) {
     code.replaceWith(a)
   }
   for (const a of n.querySelectorAll("a[href]")) { a.target = "_blank"; a.rel = "noreferrer" }
+  for (const img of n.querySelectorAll("img[src]")) {
+    const src = img.getAttribute("src")
+    const url = completeLink(src)
+    if (!url) continue
+    previewImages.add(url)
+    let link = img.closest("a")
+    if (!link) { link = el("a"); img.replaceWith(link); link.append(img) }
+    previewLink(link, url, () => imageGallery(url))
+  }
   // a wide table scrolls on its own instead of widening the page
   for (const t of n.querySelectorAll("table")) {
     const wrap = el("div", "table")

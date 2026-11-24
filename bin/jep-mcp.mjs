@@ -60,6 +60,12 @@ const TOOLS = [
     inputSchema: { type: "object", properties: { paths: { type: "array", items: { type: "string" } } }, required: ["paths"] },
   },
   {
+    name: "jep_end_turn",
+    description:
+      "Say this turn finished everything you were asked. In a conversation set to keep going, jep starts another turn until you call this — so call it only when the request is done, never to buy time or to hand back a question you have not asked yet.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
     name: "jep_send",
     description: "Send files to the person in this Telegram chat. Use when they ask for a file. Each path is a file under 50 MB.",
     inputSchema: { type: "object", properties: { paths: { type: "array", items: { type: "string" } } }, required: ["paths"] },
@@ -117,6 +123,10 @@ async function call(name, args = {}) {
       else lines.push(`showing ${abs} (${size} bytes)`)
     }
     return text(lines.join("\n"), bad > 0)
+  }
+  if (name === "jep_end_turn") {
+    const r = await ask({ op: "end-turn", done: true, session: SESSION, cwd: process.cwd() })
+    return text(r.message, !r.ok)
   }
   if (name === "jep_send") {
     const paths = Array.isArray(args.paths) ? args.paths.filter((p) => typeof p === "string" && p) : []

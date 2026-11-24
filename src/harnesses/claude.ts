@@ -8,12 +8,13 @@ import { existsSync, readFileSync, watch, type FSWatcher } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import type { AgentRef, HarnessAdapter, HarnessSettingSpec, ModelRef, ModelCaps } from "../core/ports.ts"
+import type { AgentRef, HarnessAdapter, HarnessCommand, HarnessSettingSpec, ModelRef, ModelCaps } from "../core/ports.ts"
 import type { AskRequest, DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionHold, SessionSummary, SkillDirs } from "../core/types.ts"
 import { hasMcp, type ConversationMcp } from "../core/mcp.ts"
 import { MCP_SERVER_PATH, TOOL_NAMES, TOOLS_SERVER, toolsMode, wantsMcp } from "../core/tools.ts"
 import { resolveAgent } from "../core/agents.ts"
-import { quoteBlock, readQuoteBlock, withAttachments, contextFor, transcriptText } from "../core/transcript.ts"
+import { listSkills } from "../core/skills.ts"
+import { JEP_CONTEXT_VERSION, quoteBlock, readQuoteBlock, withAttachments, contextFor, transcriptText } from "../core/transcript.ts"
 import { questionAsk, answersFor, type GroupedQuestions } from "../core/questions.ts"
 import { detach } from "../core/detach.ts"
 
@@ -206,6 +207,25 @@ async function parseMeta(file: string): Promise<TranscriptMeta | null> {
 // The entry holds the parse while it runs, so adapters listing at once share it.
 const META_CACHE = new Map<string, { size: number; mtimeMs: number; meta: Promise<TranscriptMeta | null> }>()
 
+/** what Claude Code's `init` event says it accepts: commands, and which of them are skills */
+export interface ClaudeInit {
+  commands: string[]
+  skills: string[]
+}
+
+/**
+ * The listing a client shows. A name is a skill, and gets a skill's description,
+ * only when Claude itself reports it among its skills; anything else it names is
+ * a command of its own (a built-in like /compact) and has no file to read.
+ */
+export function claudeCommandsFromInit(init: ClaudeInit, described: Map<string, string>): HarnessCommand[] {
+  const skills = new Set(init.skills)
+  return init.commands.map((name) => {
+    const description = skills.has(name) ? described.get(name) : undefined
+    return { name, ...(description ? { description } : {}), source: skills.has(name) ? "skill" : "command" }
+  })
+}
+
 export class ClaudeAdapter implements HarnessAdapter {
   // every turn can be given servers of its own (--mcp-config, added beside the person's)
   readonly takesMcp = true
@@ -235,7 +255,7 @@ export class ClaudeAdapter implements HarnessAdapter {
   // conversations that already got jep's context header, so it is sent once
   // (see contextFor); keyed by native id, with the placeholder a fresh session
   // starts under swapped for the real id once Claude names it
-  #briefed = new Set<string>()
+  #briefed = new Map<string, number>()
   // the last compaction handled per conversation, so a boundary already in the
   // transcript does not un-brief on every read: only a *new* compaction folds
   // the header away and earns another one
@@ -646,7 +666,7 @@ export class ClaudeAdapter implements HarnessAdapter {
                 this.#track(realID, child)
                 // the next turn arrives under the real id; it is the same
                 // conversation, so it must not be briefed a second time
-                this.#briefed.add(realID)
+                this.#briefed.set(realID, JEP_CONTEXT_VERSION)
               }
             }
             const sid = toInternalId(realID || native)
@@ -801,9 +821,9 @@ export class ClaudeAdapter implements HarnessAdapter {
   // print mode (supportsNonInteractive). It writes a compact_boundary and the
   // summary into the transcript, and the next --resume carries only those
   // forward. Refused (false) while a turn owns the conversation.
-  async compact(sessionID: string): Promise<boolean> {
+  async compact(sessionID: string): Promise<{ ok: boolean; error?: string }> {
     const native = this.#real(sessionID)
-    if (isPending(native) || this.#running.has(native)) return false
+    if (isPending(native) || this.#running.has(native)) return { ok: false, error: "a turn is running on this session" }
     const child = spawn(CLAUDE_BIN, ["-p", "--output-format", "json", "--resume", native, "/compact"], {
       cwd: this.workspace,
       env: process.env,
@@ -819,11 +839,13 @@ export class ClaudeAdapter implements HarnessAdapter {
         child.once("error", () => resolve(null))
       })
       if (child.killed) throw new Error(`compacting timed out after ${Math.round(COMPACT_TIMEOUT_MS / 1000)}s`)
-      if (code !== 0) return false
+      if (code !== 0) return { ok: false, error: `claude exited ${code}` }
       try {
-        return (JSON.parse(out) as { is_error?: boolean }).is_error !== true
+        const parsed = JSON.parse(out) as { is_error?: boolean }
+        if (parsed.is_error === true) return { ok: false, error: "claude returned error" }
+        return { ok: true }
       } catch {
-        return false
+        return { ok: false, error: "failed to parse claude output" }
       }
     } finally {
       clearTimeout(timer)
@@ -1050,6 +1072,62 @@ export class ClaudeAdapter implements HarnessAdapter {
 
   async setMcpEnabled(name: string, enabled: boolean): Promise<void> {
     await writeClaudeProjectEnabled(mcpPaths().claude, this.workspace, name, enabled)
+  }
+
+  // The slash commands Claude Code accepts here. It names them in the `init`
+  // event it prints before the model is called, so one throwaway run, killed
+  // at that event and kept off disk (--no-session-persistence), reads the list
+  // without a turn or a transcript. The event carries names only. Descriptions
+  // come from skill files, and only for names Claude itself reports as skills:
+  // the folders jep scans are shared between harnesses, so a name match alone
+  // pinned another tool's skill text on Claude's own built-in command.
+  async commands(_sessionID: string): Promise<HarnessCommand[]> {
+    const init = await this.#initSlashCommands()
+    if (!init.commands.length) return []
+    const dirs = this.skillDirs()
+    const found = await listSkills(dirs.userDirs, dirs.projectDirs).catch(() => [])
+    return claudeCommandsFromInit(init, new Map(found.map((sk) => [sk.name, sk.description])))
+  }
+
+  #initSlashCommands(timeoutMs = 20_000): Promise<ClaudeInit> {
+    return new Promise((resolve) => {
+      const child = spawn(CLAUDE_BIN, ["-p", "--no-session-persistence", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"], {
+        cwd: this.workspace,
+        env: process.env,
+        stdio: ["pipe", "pipe", "ignore"],
+      })
+      let buf = ""
+      let done = false
+      const none: ClaudeInit = { commands: [], skills: [] }
+      const finish = (init: ClaudeInit) => {
+        if (done) return
+        done = true
+        clearTimeout(timer)
+        child.kill("SIGTERM")
+        resolve(init)
+      }
+      const timer = setTimeout(() => finish(none), timeoutMs)
+      child.once("error", () => finish(none))
+      child.once("close", () => finish(none))
+      child.stdout?.on("data", (chunk: Buffer) => {
+        buf += chunk.toString()
+        let nl: number
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl)
+          buf = buf.slice(nl + 1)
+          try {
+            const rec = JSON.parse(line) as { type?: string; slash_commands?: unknown; skills?: unknown }
+            if (rec.type === "system" && Array.isArray(rec.slash_commands)) {
+              const names = (v: unknown): string[] => (Array.isArray(v) ? v.filter((n): n is string => typeof n === "string") : [])
+              return finish({ commands: names(rec.slash_commands), skills: names(rec.skills) })
+            }
+          } catch {}
+        }
+      })
+      // the init event only prints once Claude has a first message to start on
+      child.stdin?.on("error", () => {})
+      child.stdin?.write(JSON.stringify({ type: "user", message: { role: "user", content: "." } }) + "\n")
+    })
   }
 
   // claude scans the cross-agent user dirs plus its own project root

@@ -55,7 +55,27 @@ test("INFO noise is ignored", () => {
   assert.equal(parseOpencodeLogError(line), null)
 })
 
-test("an error with no session can't be attributed to a turn", () => {
+test("a failed prompt with no session still yields the provider sentence", () => {
+  const line =
+    'timestamp=2026-11-11T13:41:31.000Z level=ERROR run=f57050cb message=failed ref=err_9ee4d727 ' +
+    'error="APIError: User not found. \\"statusCode\\":401 responseBody=ignored"'
+  const parsed = parseOpencodeLogError(line)
+  assert.equal(parsed?.sessionID, "")
+  assert.equal(parsed?.error.name, "APIError")
+  assert.equal(parsed?.error.message, "User not found.")
+  assert.equal(parsed?.error.status, 401)
+})
+
+test("a model lookup failure keeps the sentence and drops the stack", () => {
+  const line =
+    'timestamp=2026-11-11T13:30:42.045Z level=ERROR run=abc message=failed ' +
+    'error="ProviderModelNotFoundError: Model not found: openrouter/baidu/ernie-5.5-flash-preview:free. Did you mean: baidu/ernie-5.5-flash-preview?\\n    at SessionPrompt.getModel"'
+  assert.equal(
+    parseOpencodeLogError(line)?.error.message,
+    "Model not found: openrouter/baidu/ernie-5.5-flash-preview:free. Did you mean: baidu/ernie-5.5-flash-preview?",
+  )
+})
+test("an error with no session and no provider text is ignored", () => {
   const line = 'timestamp=2026-09-20T20:40:00.000Z level=ERROR message="boom"'
   assert.equal(parseOpencodeLogError(line), null)
 })

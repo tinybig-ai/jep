@@ -1,19 +1,31 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { TurnEngine, type PendingTurn, type TurnEnv, type TurnResult } from "../src/core/turn-engine.ts"
+import { TurnEngine, type PendingTurn, type QueueStore, type SavedQueue, type TurnEnv, type TurnResult } from "../src/core/turn-engine.ts"
 import { LIVENESS } from "../src/core/liveness.ts"
 import { fakeAdapter } from "./support/gateway.ts"
 import type { LoopState } from "../src/core/loops.ts"
 
 // The engine with no HTTP in sight: a fake harness and the smallest environment.
 
-function engineOf(opts: { prompt?: (text: string) => Promise<void> } = {}) {
+/** a queue store that keeps what was saved, as the file does between two daemon runs */
+function memoryStore(): QueueStore & { saved: () => SavedQueue } {
+  let last: SavedQueue = {}
+  return {
+    load: () => JSON.parse(JSON.stringify(last)) as SavedQueue,
+    save: (queue) => void (last = JSON.parse(JSON.stringify(queue)) as SavedQueue),
+    saved: () => last,
+  }
+}
+
+function engineOf(opts: { prompt?: (text: string) => Promise<void>; queueStore?: QueueStore; driveOf?: TurnEnv["driveOf"]; modelOf?: TurnEnv["modelOf"] } = {}) {
   const base = fakeAdapter()
   const prompts: string[] = []
+  const models: Array<PendingTurn["model"]> = []
   const adapter = {
     ...base,
-    async prompt(sessionID: string, text: string) {
+    async prompt(sessionID: string, text: string, options?: { model?: PendingTurn["model"] }) {
       prompts.push(text)
+      models.push(options?.model)
       await opts.prompt?.(text)
       return { id: "m", sessionID, role: "assistant" as const, time: 1, parts: [{ kind: "text" as const, text: `echo: ${text}` }] }
     },
@@ -24,12 +36,14 @@ function engineOf(opts: { prompt?: (text: string) => Promise<void> } = {}) {
     adapterOf: () => adapter,
     find: async () => adapter,
     settingsOf: () => undefined,
+    ...(opts.driveOf ? { driveOf: opts.driveOf } : {}),
+    ...(opts.modelOf ? { modelOf: opts.modelOf } : {}),
     openAsks: () => 0,
     recordChanged: () => {},
     loopChanged: (_all, id) => void changed.push(id),
   }
-  const engine = new TurnEngine(env, { liveness: { ...LIVENESS, settleMs: 20 }, loops })
-  return { engine, prompts, adapter, changed }
+  const engine = new TurnEngine(env, { liveness: { ...LIVENESS, settleMs: 20 }, loops, ...(opts.queueStore ? { queueStore: opts.queueStore } : {}) })
+  return { engine, prompts, models, adapter, changed, loops }
 }
 
 const pending = (text: string, extra: Partial<PendingTurn> = {}): { turn: PendingTurn; done: Promise<TurnResult> } => {
@@ -46,6 +60,49 @@ test("a submitted prompt runs and its answer comes back", async () => {
   assert.equal(result.status, 200)
   assert.deepEqual(prompts, ["hello"])
   engine.close()
+})
+
+test("an error returned by the harness is a failed send, not a successful empty reply", async () => {
+  const { engine, adapter } = engineOf()
+  adapter.prompt = async (sessionID: string) => ({ id: "m", sessionID, role: "assistant" as const, time: 1, parts: [], error: { name: "CodexError", message: "No prompt provided via stdin" } })
+  const p = pending("my screenshot")
+  engine.submit("s1", p.turn)
+  const result = await p.done
+  assert.equal(result.status, 502)
+  assert.match(result.error ?? "", /No prompt provided via stdin/)
+  assert.equal(result.message, undefined)
+  engine.close()
+})
+
+test("conversation mode arms a queued prompt without attaching mode to its message", async () => {
+  let mode: "normal" | "keep" | "relentless" = "normal"
+  let releaseFirst!: () => void
+  let releaseSecond!: () => void
+  const firstGate = new Promise<void>((resolve) => (releaseFirst = resolve))
+  const secondGate = new Promise<void>((resolve) => (releaseSecond = resolve))
+  const r = engineOf({
+    driveOf: () => mode,
+    prompt: async (text) => {
+      if (text === "first") await firstGate
+      if (text === "second") await secondGate
+    },
+  })
+  const first = pending("first")
+  const second = pending("second")
+  r.engine.submit("s1", first.turn)
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  r.engine.submit("s1", second.turn)
+  mode = "relentless"
+  r.engine.setDrive("s1", mode)
+  releaseFirst()
+  await first.done
+  for (let i = 0; i < 100 && r.prompts.length < 2; i++) await new Promise((resolve) => setTimeout(resolve, 5))
+  assert.deepEqual(r.prompts, ["first", "second"])
+  assert.equal(r.loops.get("s1")?.spec.relentless, true)
+  releaseSecond()
+  await second.done
+  r.engine.stopLoop("s1", "stopped")
+  r.engine.close()
 })
 
 test("prompts that wait behind a running turn run together as one", async () => {
@@ -106,19 +163,101 @@ test("the daemon's services see what the engine runs, and a turn it cuts off at 
   assert.deepEqual(events, ["start s1", "end s1 true"])
 })
 
-test("stopping everything does not hand jep's own note back as the person's words", async () => {
+test("stopping everything holds the queue: nothing is dropped, nothing starts", async () => {
   let release!: () => void
   const gate = new Promise<void>((r) => (release = r))
-  const { engine, adapter } = engineOf({ prompt: () => gate })
+  const { engine, adapter, prompts } = engineOf({ prompt: (text) => (text === "first" ? gate : Promise.resolve()) })
   engine.submit("s1", pending("first").turn)
   await new Promise((r) => setTimeout(r, 30))
-  engine.enqueue("s1", "<!-- jep:notice done -->\nthe wait is over", { notice: true })
-  engine.enqueue("s1", "mine")
+  engine.submit("s1", pending("mine", { clientID: "m1" }).turn)
   const stopped = await engine.stop("s1", true, adapter)
-  // the notice stops too, but Stop hands back only what the person typed
-  assert.deepEqual(stopped.dropped, ["mine"])
+  // Stop never throws the queue away, so there is nothing to hand back
+  assert.deepEqual(stopped.dropped, [])
   release()
+  await new Promise((r) => setTimeout(r, 120))
+  assert.deepEqual(engine.queueOf("s1").map((q) => q.clientID), ["m1"], "the queue is still there")
+  assert.deepEqual(prompts, ["first"], "and it did not start on its own")
   engine.close()
+})
+
+test("the prompt sent after a stop goes first, and the held queue follows it", async () => {
+  let release!: () => void
+  const gate = new Promise<void>((r) => (release = r))
+  const { engine, adapter, prompts } = engineOf({ prompt: (text) => (text === "first" ? gate : Promise.resolve()) })
+  engine.submit("s1", pending("first").turn)
+  await new Promise((r) => setTimeout(r, 30))
+  engine.submit("s1", pending("queued one", { clientID: "q1" }).turn)
+  await engine.stop("s1", true, adapter)
+  release()
+  await new Promise((r) => setTimeout(r, 120))
+  const next = pending("next")
+  engine.submit("s1", next.turn)
+  await next.done
+  await new Promise((r) => setTimeout(r, 120))
+  // waiting prompts run together as one turn, as they do without a stop: the new
+  // prompt leads and the held queue follows it
+  assert.match(prompts[1] ?? "", /^next[\s\S]*queued one/, "the new prompt is first and the held queue follows it")
+  engine.close()
+})
+
+test("sending after Stop releases a held Keep Going or Relentless conversation", async (t) => {
+  for (const mode of ["keep", "relentless"] as const) {
+    await t.test(mode, async () => {
+      const r = engineOf({ driveOf: () => mode })
+      try {
+        const first = pending("old request")
+        r.engine.submit("s1", first.turn)
+        await first.done
+        await r.engine.stop("s1", true, r.adapter)
+        const next = pending("new request")
+        r.engine.submit("s1", next.turn)
+        for (let i = 0; i < 50 && !r.prompts.includes("new request"); i++) await new Promise((resolve) => setTimeout(resolve, 5))
+        assert.ok(r.prompts.includes("new request"), "the new message must reach the harness instead of staying held")
+        await next.done
+        assert.deepEqual(r.prompts.slice(0, 2), ["old request", "new request"])
+      } finally {
+        r.engine.stopLoop("s1", "stopped")
+        r.engine.close()
+      }
+    })
+  }
+})
+
+test("automatic continuation uses the conversation's current model", async () => {
+  let selected = { providerID: "litellm", modelID: "gpt-6.1-sol" }
+  const r = engineOf({ driveOf: () => "keep", modelOf: () => selected })
+  try {
+    const first = pending("work", { model: selected })
+    r.engine.submit("s1", first.turn)
+    await first.done
+    selected = { providerID: "litellm", modelID: "chatgpt/gpt-5.6-luna" }
+    for (let i = 0; i < 100 && r.models.length < 2; i++) await new Promise((resolve) => setTimeout(resolve, 5))
+    assert.ok(r.models.length >= 2)
+    assert.deepEqual(r.models[1], selected, "the continuation must not fall back to Pi's previous provider")
+  } finally {
+    r.engine.stopLoop("s1", "stopped")
+    r.engine.close()
+  }
+})
+
+test("the waiting queue is saved as it changes and comes back after a restart", async () => {
+  const store = memoryStore()
+  let release!: () => void
+  const gate = new Promise<void>((r) => (release = r))
+  const one = engineOf({ prompt: () => gate, queueStore: store })
+  one.engine.submit("s1", pending("running").turn)
+  await new Promise((r) => setTimeout(r, 30))
+  one.engine.submit("s1", pending("waits for the restart", { clientID: "w1" }).turn)
+  assert.deepEqual(store.saved().s1?.waiting.map((p) => p.text), ["waits for the restart"])
+  // the daemon goes down: a new engine reads what the old one saved
+  one.engine.close()
+  release()
+  const two = engineOf({ queueStore: store })
+  assert.deepEqual(two.engine.queueOf("s1"), [], "nothing runs or shows until the harness is up")
+  await two.engine.resumeQueues()
+  await new Promise((r) => setTimeout(r, 120))
+  assert.deepEqual(two.prompts, ["waits for the restart"])
+  two.engine.close()
 })
 
 test("stopping a loop takes back what it queued", async () => {

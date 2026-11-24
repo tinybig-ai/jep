@@ -1,5 +1,116 @@
 # Changelog — the HA app
 
+## 0.4.0
+
+This version combines the upstream release, Alberto's later improvements, and local Jep changes. It updates installations from both repositories.
+
+The details column keeps one resize control. Files and images open beside the chat, with gallery navigation and a fullscreen button. The same column contains the terminal, running commands, and file differences. Phones have a close button inside the panel.
+
+Telegram keeps native topic creation, pinned context status, shared conversation deletion, and file delivery. Compaction uses the selected model. Codex keeps rejected messages visible and sends image arguments correctly.
+
+Home Assistant keeps grouped configuration, older configuration migration, and switches for each harness. The daemon and app use the same version.
+
+## 0.3.20
+
+The Previous fields are gone. Values live only in the groups.
+
+## 0.3.19
+
+Saving configuration works when an older install still has `model` as
+text. The model settings are in the Models block. That text stays as
+Previous default model.
+
+## 0.3.18
+
+Configuration is grouped into collapsible blocks: Telegram, Gateway,
+Workspace, Model, Harnesses, GitHub, Voice notes, and Phone push.
+Harnesses can each be switched on, and one of them is the default.
+Open Configuration after updating and check the token and API keys
+before you save. A grouped field wins over the previous flat value.
+
+## 0.3.17
+
+Compact mode no longer crashes on a step with no name. Letting go of the
+details column ends the resize.
+
+## 0.3.16
+
+The details column drags wider or narrower. Its file header sits flush
+with the top of the column.
+
+## 0.3.15
+
+The sidebar diff is a scrollable list. Each file has a sticky header with
+its name and the added and removed line counts, then the changed lines.
+Activity detail is Compact, Default, or Detailed. Compact is one line.
+Detailed also shows command output.
+
+## 0.3.14
+
+Hover a conversation to see its folder and branch. A change in the
+sidebar opens a diff, and no longer downloads the file.
+
+## 0.3.13
+
+A failed turn's error sits in a card under the message. Retry hides that
+message.
+
+## 0.3.12
+
+A provider failure the harness only writes to its log is sent to the open
+chat. The rate-limit line shows under the message, not only in the log.
+
+## 0.3.11
+
+A provider failure stays in the chat after the message is saved. The
+rate-limit line no longer disappears when the toast does.
+
+## 0.3.10
+
+A failed turn writes the provider's sentence in the chat, under the
+message, not only in a toast or a raw 500.
+
+## 0.3.9
+
+Changes follow the repository the edited files belong to, when that is not
+the workspace itself.
+
+## 0.3.8
+
+When a message fails, Edit and Retry stay under it. They no longer wait
+for a hover.
+
+## 0.3.7
+
+A failed prompt in the chat names the provider error, such as
+`APIError (HTTP 401): User not found.`, instead of a raw 500.
+
+## 0.3.6
+
+Each running command in the terminal list shows how long it has been going.
+The context panel skips a failed turn that reported zero tokens, and says
+when the harness has not reported usage at all.
+
+## 0.3.5
+
+`/model openrouter/baidu/ernie-5.5-flash-preview` stays that id. A longer
+`:free` row is no longer treated as the same model.
+
+## 0.3.4
+
+The app pulls `ghcr.io/<this GitHub repo>/{arch}-jep`. A fork no longer
+asks Home Assistant for the upstream tag. A merge that puts the other
+name back is corrected on the next push to main.
+
+## 0.3.3
+
+The terminal list no longer has a stop button. A row only opens that log.
+
+## 0.3.2
+
+Running commands sit in a chip above the message box. The chip opens a
+list. A row opens that log in the sidebar.
+
 ## 0.3.1
 
 Home Assistant image metadata now identifies the version and architecture.

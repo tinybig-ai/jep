@@ -58,7 +58,7 @@ export class GooseAdapter implements HarnessAdapter {
   /** whether the last listing worked: an empty answer from a failed list is not an empty folder */
   #listOk = true
   // conversations that already got jep's context header (see contextFor)
-  #briefed = new Set<string>()
+  #briefed = new Map<string, number>()
   #running = new Map<string, ChildProcess>()
   #aborting = new Set<string>()
   #bus = new Set<(evt: DomainEvent) => void>()
@@ -203,7 +203,7 @@ export class GooseAdapter implements HarnessAdapter {
   async prompt(
     sessionID: string,
     text: string,
-    opts?: { timeoutMs?: number; signal?: AbortSignal; model?: ModelRef; filePaths?: string[]; agent?: string; quote?: string; brief?: boolean; mcp?: ConversationMcp },
+    opts?: { timeoutMs?: number; signal?: AbortSignal; model?: ModelRef; filePaths?: string[]; agent?: string; quote?: string; brief?: boolean; mcp?: ConversationMcp; harnessSettings?: Record<string, boolean> },
   ): Promise<Message> {
     const native = toNativeId(sessionID)
     let body = withQuoteText(text, opts?.quote)
@@ -235,7 +235,7 @@ export class GooseAdapter implements HarnessAdapter {
     const child = spawn(GOOSE_BIN, args, {
       cwd: this.workspace,
       // how `jep-watch` finds its conversation
-      env: { ...keyEnv(), ...process.env, GOOSE_MODE: process.env.GOOSE_MODE ?? "auto", JEP_SESSION: sessionID },
+      env: { ...keyEnv(), ...process.env, GOOSE_MODE: opts?.harnessSettings?.dangerouslySkipPermissions ? "auto" : process.env.GOOSE_MODE ?? "auto", JEP_SESSION: sessionID },
       stdio: ["ignore", "pipe", "pipe"],
     })
     this.#running.set(native, child)
@@ -517,8 +517,6 @@ export function watchGooseLog(since: number, conversation: string | undefined, o
       }
     }
   }
-  // eslint no-floating-promises has ignoreVoid: false, so `void scan()` inside
-  // the interval was an error; scan catches its own I/O failures already
   const timer = setInterval(() => {
     scan().catch(() => {})
   }, 3_000)

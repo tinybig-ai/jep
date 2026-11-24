@@ -8,6 +8,7 @@ import { setTimeout as delay } from "node:timers/promises"
 const [image, platform] = process.argv.slice(2)
 if (!image || !/^linux\/(amd64|arm64)$/.test(platform ?? "")) throw new Error("Usage: node scripts/smoke-ha-image.mjs IMAGE linux/amd64|linux/arm64")
 const config = JSON.parse(readFileSync(new URL("../homeassistant/config.json", import.meta.url)))
+const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url)))
 const name = `jep-ha-smoke-${process.pid}`
 const docker = (...args) => execFileSync("docker", args, { encoding: "utf8", timeout: 180_000, stdio: "pipe" }).trim()
 const inside = (code, ...args) => docker("exec", name, "node", "--input-type=module", "-e",
@@ -37,13 +38,15 @@ try {
   assert.equal(labels["io.hass.version"], config.version)
   assert.equal(labels["io.hass.arch"], platform === "linux/arm64" ? "aarch64" : "amd64")
   assert.equal(labels["io.hass.type"], "app")
-  const options = Buffer.from(JSON.stringify({...config.options, gateway_pair_code: "SMOKE-ONLY"})).toString("base64")
+  const options = structuredClone(config.options)
+  options.gateway.pair_code = "SMOKE-ONLY"
+  const packed = Buffer.from(JSON.stringify(options)).toString("base64")
   docker("run", "--detach", "--name", name, "--platform", platform,
-    "--env", `JEP_SMOKE_OPTIONS=${options}`, "--entrypoint", "/bin/sh", image, "-c",
+    "--env", `JEP_SMOKE_OPTIONS=${packed}`, "--entrypoint", "/bin/sh", image, "-c",
     `node -e "require('node:fs').writeFileSync('/data/options.json', Buffer.from(process.env.JEP_SMOKE_OPTIONS, 'base64'))" && exec /run.sh`)
   await ready()
   assert.match(docker("exec", name, "opencode", "--version"), /\d+\.\d+\.\d+/)
-  assert.equal(docker("exec", name, "jep", "--version"), config.version)
+  assert.equal(docker("exec", name, "jep", "--version"), pkg.version)
   for (const tool of ["jep-watch", "jep-send", "jep-show", "jep-rename", "jep-read", "jep-tell", "jep-restart"]) {
     docker("exec", name, "test", "-x", `/usr/local/bin/${tool}`)
   }
@@ -60,7 +63,7 @@ try {
   const token = pairing.body.token
   const workspaces = request("/workspaces", {}, token)
   assert.equal(workspaces.status, 200)
-  assert.ok(workspaces.body.items.some(w=>w.harness === "opencode" && w.dir === config.options.workspace_dir))
+  assert.ok(workspaces.body.items.some(w=>w.harness === "opencode" && w.dir === config.options.workspace.dir))
   const created = request("/new", {title:"HA restart smoke"}, token)
   assert.equal(created.status, 200, JSON.stringify(created.body))
   const id = created.body.session.id

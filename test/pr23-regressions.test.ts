@@ -97,7 +97,7 @@ function setup() {
   return { store, adapter, calls, bot, say, workspace, faults }
 }
 
-test("/new and a command in an unfamiliar topic preserve existing history", async () => {
+test("/new explains native topics and unfamiliar-topic commands preserve existing history", async () => {
   const r = setup()
   r.store.rememberForumPeer(9_000_000_001, { chatID: 42, threadID: 901 })
   r.store.setChatContext(9_000_000_001, r.workspace, "s1", "fake")
@@ -108,9 +108,8 @@ test("/new and a command in an unfamiliar topic preserve existing history", asyn
   await b.drain()
   assert.equal(r.calls.some((c) => c.method === "deleteForumTopic"), false)
   assert.equal(r.store.chatContext(9_000_000_001)?.sessionID, "s1")
-  const fresh = r.store.allForumPeers().find((p) => p.threadID === 903)!
-  assert.equal(r.store.model(fresh.syn, "fake"), "chosen/model")
-  assert.equal(r.store.chatContext(fresh.syn)?.dir, r.workspace)
+  assert.equal(r.calls.some((c) => c.method === "createForumTopic"), false, "native New Topic owns topic creation")
+  assert.equal(r.store.model(9_000_000_001, "fake"), "chosen/model")
 })
 
 test("threadless Stop selects its draft when two topics run at once", async () => {

@@ -27,6 +27,11 @@ process.env.CODEX_HOME = home
 
 const { CodexAdapter } = await import("../src/harnesses/codex.ts")
 
+test("the Codex picker includes GPT-6.1 Sol", async () => {
+  const a = new CodexAdapter(home)
+  assert.ok((await a.models()).some((m) => m.modelID === "gpt-6.1-sol"))
+})
+
 test("a quote goes in as the headed block, and comes back as a quote part", async () => {
   const a = new CodexAdapter(home)
   await a.prompt(`codex://${TID}`, "yes, that", { quote: "shall I?" })
@@ -50,4 +55,18 @@ test("a quote goes in as the headed block, and comes back as a quote part", asyn
     [{ kind: "text", text: "> my own quote\n\nand my words" }],
   ])
   await a.close?.()
+})
+
+test("images belong to resume and end before the prompt; documents are path references", async () => {
+  const a = new CodexAdapter(home)
+  await a.prompt(`codex://${TID}`, "look at this", { filePaths: ["/tmp/screen.jpg", "/tmp/context.md"] })
+  const args = (await readFile(argsSeen, "utf8")).trimEnd().split("\n")
+  const resume = args.indexOf("resume")
+  assert.ok(resume > 0)
+  assert.deepEqual(args.slice(resume, resume + 5), ["resume", TID, "-i", "/tmp/screen.jpg", "--"])
+  const prompt = args.slice(resume + 5).join("\n")
+  assert.match(prompt, /look at this/)
+  assert.match(prompt, /Attached files:\n- \/tmp\/screen.jpg\n- \/tmp\/context.md/)
+  assert.equal(args.filter((arg) => arg === "-i").length, 1)
+  await a.close()
 })

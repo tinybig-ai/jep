@@ -3,7 +3,7 @@ import { mkdir, readdir, readFile, stat, unlink } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { randomUUID } from "node:crypto"
-import type { HarnessAdapter, ModelCaps, ModelRef } from "../core/ports.ts"
+import type { HarnessAdapter, HarnessCommand, ModelCaps, ModelRef } from "../core/ports.ts"
 import type { DomainEvent, FileDiff, Message, Part, ProjectSummary, SessionSummary, SkillDirs } from "../core/types.ts"
 import { splitQuoteText, transcriptText, withQuoteText, stripInjectedContext, contextFor, isScaffold } from "../core/transcript.ts"
 import { TurnAbortedError } from "../core/types.ts"
@@ -20,6 +20,11 @@ const PI_BIN = process.env.JEP_PI_BIN ?? "pi"
 const PI_AGENT_DIR = process.env.JEP_PI_AGENT_DIR ?? process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent")
 const PI_PROVIDER = process.env.JEP_PI_PROVIDER
 const PI_MODEL = process.env.JEP_PI_MODEL
+// Pi extensions are part of the provider/model contract (for example,
+// pi-litellm registers the dynamic `litellm` provider). Keep them enabled by
+// default; an operator can opt into the old isolated behavior explicitly.
+const PI_NO_EXTENSIONS = /^(1|true|yes)$/i.test(process.env.JEP_PI_NO_EXTENSIONS ?? "")
+const piExtensionArgs = (): string[] => PI_NO_EXTENSIONS ? ["--no-extensions"] : []
 const HARNESS_NS = "pi"
 
 const toInternalId = (native: string) => `${HARNESS_NS}://${native}`
@@ -72,7 +77,7 @@ export class PiAdapter implements HarnessAdapter {
   #capsCache = new Map<string, ModelCaps>()
   #capsAt = 0
   // conversations that already got jep's context header (see contextFor)
-  #briefed = new Set<string>()
+  #briefed = new Map<string, number>()
   #pendingTitles = new Map<string, { title: string; createdAt: number }>()
   #running = new Map<string, ChildProcess>()
   #aborting = new Set<string>()
@@ -207,11 +212,12 @@ export class PiAdapter implements HarnessAdapter {
       native,
       ...(model ? ["--provider", model.providerID, "--model", model.modelID] : []),
       "--approve",
-      "--no-extensions",
+      ...piExtensionArgs(),
       ...((opts?.filePaths ?? []).map((file) => `@${file}`)),
       prompt,
     ]
     const child = spawn(PI_BIN, args, { cwd: this.workspace, env: piEnv(), stdio: ["ignore", "pipe", "pipe"] })
+    console.error(`[pi] prompt spawn session=${sessionID} pid=${child.pid ?? "?"} chars=${text.length} model=${model ? `${model.providerID}/${model.modelID}` : "default"} files=${opts?.filePaths?.length ?? 0}`)
     this.#running.set(native, child)
     this.#aborting.delete(native)
 
@@ -253,6 +259,7 @@ export class PiAdapter implements HarnessAdapter {
         })
         child.on("error", reject)
         child.on("close", (code) => {
+          console.error(`[pi] prompt close session=${sessionID} pid=${child.pid ?? "?"} code=${code ?? "?"} failure=${failure?.message ? "yes" : "no"} stderr=${stderr.trim() ? "yes" : "no"}`)
           if (this.#aborting.has(native) || opts?.signal?.aborted) return reject(new TurnAbortedError())
           if (code !== 0 && !failure) failure = { name: "PiError", message: stderr.trim().slice(0, 500) || `pi exited ${code}` }
           if (buf.trim()) consume(`${buf}\n`)
@@ -267,8 +274,19 @@ export class PiAdapter implements HarnessAdapter {
     }
 
     const history = await this.messages(sessionID)
+    // A failed Pi process often leaves the previous assistant message as the last
+    // transcript row. Returning that row made the gateway answer 200 for a prompt
+    // that never reached the provider, so the web client discarded the person's
+    // optimistic bubble with no indication. A provider failure is a failure even
+    // when an older answer exists in the session.
+    if (failure) {
+      const detail = (failure.message || stderr.trim()).replace(/\bsk-[A-Za-z0-9_-]+\b/g, "sk-<redacted>").slice(0, 500)
+      console.error(`[pi] prompt failure session=${sessionID} model=${model ? `${model.providerID}/${model.modelID}` : "default"} ${detail}`)
+      throw new Error(failure.message)
+    }
     const answer = [...history].reverse().find((message) => message.role === "assistant") ?? finalAssistant ?? lastAssistant
-    if (answer) return failure ? { ...answer, error: failure } : answer
+    console.error(`[pi] prompt result session=${sessionID} model=${model ? `${model.providerID}/${model.modelID}` : "default"} answer=${answer ? "yes" : "no"} failure=no`)
+    if (answer) return answer
     return {
       id: toInternalId(`${native}:turn-${Date.now()}`),
       sessionID: toInternalId(native),
@@ -286,6 +304,90 @@ export class PiAdapter implements HarnessAdapter {
     this.#aborting.add(native)
     child.kill("SIGTERM")
     return true
+  }
+
+  // The header as a message of its own (see HarnessAdapter.brief): a normal turn
+  // carrying only the header, stopped the moment Pi has written the user
+  // message, before the model answers. A running turn already has its header.
+  async brief(sessionID: string, opts?: { model?: ModelRef }): Promise<boolean> {
+    const native = toNativeId(sessionID)
+    if (this.#running.has(native)) return false
+    const header = contextFor("", this.#briefed, native, true).trim()
+    if (!header) return true
+    const model = opts?.model ?? (PI_PROVIDER && PI_MODEL ? { providerID: PI_PROVIDER, modelID: PI_MODEL } : undefined)
+    const ok = await this.#recordOnly(native, header, model)
+    // contextFor spent the header; if it never landed, the next message must carry it
+    if (!ok) this.#briefed.delete(native)
+    return ok
+  }
+
+  async #recordOnly(native: string, text: string, model?: ModelRef): Promise<boolean> {
+    const args = [
+      "--mode", "json", "--session-dir", this.#sessionDir, "--session-id", native,
+      ...(model ? ["--provider", model.providerID, "--model", model.modelID] : []),
+      "--approve", ...piExtensionArgs(), text,
+    ]
+    const child = spawn(PI_BIN, args, { cwd: this.workspace, env: piEnv(), stdio: ["ignore", "pipe", "ignore"] })
+    return new Promise<boolean>((resolve) => {
+      let buf = ""
+      let recorded = false
+      const stop = () => {
+        clearTimeout(timer)
+        child.kill("SIGTERM")
+        resolve(recorded)
+      }
+      // never wait on a Pi that does not answer: the command still goes out
+      const timer = setTimeout(stop, 15_000)
+      child.once("close", () => { clearTimeout(timer); resolve(recorded) })
+      child.once("error", stop)
+      child.stdout?.on("data", (chunk: Buffer) => {
+        buf += chunk.toString()
+        let nl: number
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl)
+          buf = buf.slice(nl + 1)
+          try {
+            const rec = JSON.parse(line) as { type?: string; message?: { role?: string } }
+            if (rec.type === "message_end" && rec.message?.role === "user") {
+              recorded = true
+              return stop()
+            }
+          } catch {}
+        }
+      })
+    })
+  }
+
+  // Compress the conversation with Pi's own RPC `compact`. Turns stay one-shot
+  // `--mode json` runs; this starts a second, short-lived `pi --mode rpc` on the
+  // same session file, sends the one command and exits. Refused while a turn is
+  // running, so two processes never append to one file.
+  async compact(sessionID: string): Promise<{ ok: boolean; error?: string }> {
+    const native = toNativeId(sessionID)
+    if (this.#running.has(native)) return { ok: false, error: "a turn is running on this session" }
+    const file = await this.#findFile(native)
+    if (!file) return { ok: false, error: "session file not found" }
+    const res = await piRpc(PI_BIN, ["--mode", "rpc", "--session", file, ...piExtensionArgs()], this.workspace, piEnv(), { type: "compact" }, PI_COMPACT_TIMEOUT_MS)
+    if (!res.success) {
+      const msg = res.error ?? "unknown"
+      console.error(`[pi] compact ${native} refused: ${msg}`)
+      return { ok: false, error: msg }
+    }
+    return { ok: true }
+  }
+
+  // The commands Pi would accept here: prompt templates and skills, found from
+  // the workspace folder. No session is involved, so nothing is written.
+  // `--approve` matches the turn runs: without Pi's trust flag it skips the
+  // project's own prompt templates, and the list would show fewer commands than
+  // a turn can run.
+  async commands(_sessionID: string): Promise<HarnessCommand[]> {
+    const res = await piRpc(PI_BIN, ["--mode", "rpc", "--no-session", "--approve", ...piExtensionArgs()], this.workspace, piEnv(), { type: "get_commands" }, 30_000)
+    if (!res.success) return []
+    const list = (res.data as { commands?: Array<{ name?: string; description?: string; source?: string }> } | undefined)?.commands ?? []
+    return list
+      .filter((c) => typeof c.name === "string" && c.name)
+      .map((c) => ({ name: c.name!, ...(c.description ? { description: c.description } : {}), source: c.source ?? "other" }))
   }
 
   async respondAsk(_sessionID: string, _askID: string, _optionID: string): Promise<boolean> {
@@ -417,6 +519,63 @@ export class PiAdapter implements HarnessAdapter {
     }
     return null
   }
+}
+
+// Compacting runs a summarizing model turn: 48s on an 80-message session, so a
+// generous budget for a long one. Overridable for slow providers.
+const PI_COMPACT_TIMEOUT_MS = Number(process.env.JEP_PI_COMPACT_TIMEOUT_MS) || 10 * 60_000
+
+/**
+ * Send one command to a short-lived `pi --mode rpc` process and return its
+ * response. The child is always killed afterwards. A command carries an id and
+ * Pi echoes it, so stray session events on stdout are skipped, not mistaken for
+ * the answer. Resolves with success:false (never rejects) on a spawn failure,
+ * a timeout, or the process exiting first.
+ */
+export function piRpc(
+  bin: string,
+  args: string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  command: Record<string, unknown>,
+  timeoutMs: number,
+): Promise<{ success: boolean; data?: unknown; error?: string }> {
+  return new Promise((resolve) => {
+    const id = `jep-${randomUUID()}`
+    const child = spawn(bin, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"] })
+    let buf = ""
+    let done = false
+    const finish = (r: { success: boolean; data?: unknown; error?: string }) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      child.kill("SIGTERM")
+      resolve(r)
+    }
+    const timer = setTimeout(() => finish({ success: false, error: `no answer within ${Math.round(timeoutMs / 1000)}s` }), timeoutMs)
+    child.once("error", (err) => finish({ success: false, error: err.message }))
+    child.once("close", () => finish({ success: false, error: "pi exited before it answered" }))
+    child.stdout?.on("data", (chunk: Buffer) => {
+      buf += chunk.toString()
+      let nl: number
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl)
+        buf = buf.slice(nl + 1)
+        let rec: { type?: string; id?: string; success?: boolean; data?: unknown; error?: string }
+        try {
+          rec = JSON.parse(line)
+        } catch {
+          continue
+        }
+        if (rec.type === "response" && rec.id === id) {
+          finish(rec.success ? { success: true, data: rec.data } : { success: false, error: rec.error ?? "refused" })
+          return
+        }
+      }
+    })
+    child.stdin?.on("error", () => {})
+    child.stdin?.write(JSON.stringify({ id, ...command }) + "\n")
+  })
 }
 
 function piEnv(): NodeJS.ProcessEnv {
@@ -569,8 +728,30 @@ interface HandledPiEvent {
   failure?: { name: string; message: string }
 }
 
+// Pi restamps its message on every update, so keying the id on that timestamp
+// gave each chunk its own message — and so its own part, which a client drew as
+// one more block instead of one growing paragraph. The id is remembered per
+// conversation from the message's start until it ends, so every delta in a reply
+// lands in the same part.
+const openMessages = new Map<string, string>()
+
+/** exported for tests: the id every event of the message now in flight uses */
+export function messageIdFor(event: any, sessionID: string): string {
+  if (event.type === "message_start") {
+    const id = `${sessionID}:${String(event.message?.timestamp ?? Date.now())}`
+    openMessages.set(sessionID, id)
+    return id
+  }
+  if (event.type === "message_end") {
+    const id = openMessages.get(sessionID) ?? `${sessionID}:${String(event.message?.timestamp ?? Date.now())}`
+    openMessages.delete(sessionID)
+    return id
+  }
+  return openMessages.get(sessionID) ?? `${sessionID}:${String(event.message?.timestamp ?? Date.now())}`
+}
+
 function handlePiEvent(event: any, sessionID: string, emit: (event: DomainEvent) => void): HandledPiEvent {
-  const messageID = `${sessionID}:${String(event.message?.timestamp ?? Date.now())}`
+  const messageID = messageIdFor(event, sessionID)
   if (event.type === "message_update") {
     const delta = event.assistantMessageEvent
     if (delta?.type === "text_delta" || delta?.type === "thinking_delta") {

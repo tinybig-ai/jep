@@ -144,6 +144,15 @@ public final class GatewayChatRepository: ChatRepository, @unchecked Sendable {
         try await ok("/set-harness-setting", ["id": sessionId, "key": key, "enabled": enabled])
     }
 
+    public func conversationMode(sessionId: String) async throws -> ConversationMode {
+        let r = try await decode("/conversation-settings", ConversationModeRes.self, ["id": sessionId])
+        return ConversationMode(mode: r.mode, modes: r.modes.isEmpty ? ConversationMode().modes : r.modes)
+    }
+
+    public func setConversationMode(sessionId: String, mode: String) async throws -> String {
+        try await decode("/set-conversation-mode", ConversationModeSetRes.self, ["id": sessionId, "mode": mode]).mode
+    }
+
     public func models(sessionId: String) async throws -> ModelChoices {
         let r = try await decode("/models", ModelsRes.self, ["id": sessionId])
         return ModelChoices(all: r.models.map { $0.toDomain() }, current: r.current, defaultRef: r.defaultRef, contextLimit: r.contextLimit)

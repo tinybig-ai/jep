@@ -64,6 +64,10 @@ Once paired, `/pair_status` shows the owner and the current code.
 
 ## Commands
 
+Use `/compact` or **Settings → Compact context** to compress the current
+conversation's context. The settings button appears when the harness supports
+compaction, including Codex. Wait for the current turn to finish first.
+
 | Command | What it does |
 |---|---|
 | `text` | a prompt on the current conversation |
@@ -101,27 +105,14 @@ return to the default).
 - **Asks** (permission prompts, questions the model asks) arrive as buttons you
   tap; the safe answer is green, the destructive one red.
 
-## Forum topics (Threaded mode)
+## Topics
 
-With **"Threaded mode"** enabled for the bot in @BotFather, each conversation
-becomes its own **forum topic** in your private chat with the bot — the topic
-list is the conversation list, rendered by Telegram itself:
+With Threaded Mode enabled in @BotFather, use Telegram's **New Topic** action
+to start a conversation. Jep creates a separate chat and pins its context
+status in that topic. Later messages continue the same chat.
 
-- A message typed (or spoken) in **General** opens a topic titled with the
-  prompt's first words, and the conversation starts inside it.
-- Inside a topic, everything keys to that conversation: replies, the pinned
-  status chip, the streaming draft, ask buttons, /settings, the /queue — as the
-  conversation continues, so does the messaging.
-- **/new** in a topic preserves it and opens a fresh one; from General it opens a
-  new topic outright. Renaming a conversation renames its topic; deleting the
-  conversation from inside its own topic deletes the topic too.
-- A conversation is pinned to one topic by design: opening the same one from a
-  second topic is refused, so a session never forks into two addresses.
-- Topics you create yourself in your own client are adopted: the first message
-  you send there starts the conversation and titles the topic.
-- An empty topic spawn (Telegram refuses, or Threaded mode is off) falls back
-  to plain-chat behaviour automatically, and is probed again after 10 minutes.
-  `JEP_TG_FORUM=off` never tries.
+`/new` is hidden from the command menu in topics mode. Typing it explains how
+to use New Topic. In plain-chat mode, `/new` still starts a fresh conversation.
 
 The full surface, environment variables, and deploy ritual live in
 [docs/PROCESSES.md](../PROCESSES.md).
