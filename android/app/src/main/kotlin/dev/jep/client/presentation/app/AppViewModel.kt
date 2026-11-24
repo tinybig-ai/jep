@@ -8,6 +8,8 @@ import androidx.lifecycle.viewModelScope
 import dev.jep.client.data.GatewayChatRepository
 import dev.jep.client.device.AppSettings
 import dev.jep.client.device.JepHttp
+import dev.jep.client.domain.model.Device
+import dev.jep.client.domain.model.UsageStats
 import dev.jep.client.domain.model.HarnessMark
 import dev.jep.client.domain.model.TextSize
 import dev.jep.client.domain.model.ThemeMode
@@ -181,6 +183,48 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _screen.value = Screen.Settings
         refreshTerminalAccess()
         refreshPairCode()
+        refreshDevices()
+        refreshStats()
+        _daemonNote.value = null
+    }
+
+    private val _devices = MutableStateFlow<List<Device>>(emptyList())
+    val devices = _devices.asStateFlow()
+    private val _daemonNote = MutableStateFlow<String?>(null)
+    val daemonNote = _daemonNote.asStateFlow()
+
+    private val _stats = MutableStateFlow<UsageStats?>(null)
+    val stats = _stats.asStateFlow()
+
+    fun refreshStats() {
+        val r = repo ?: return
+        viewModelScope.launch { runCatching { r.stats() }.onSuccess { _stats.value = it } }
+    }
+
+    fun refreshDevices() {
+        val r = repo ?: return
+        viewModelScope.launch { runCatching { r.devices() }.onSuccess { _devices.value = it } }
+    }
+
+    fun renameDevice(id: String, name: String) {
+        val r = repo ?: return
+        viewModelScope.launch { runCatching { r.renameDevice(id, name) }; refreshDevices() }
+    }
+
+    fun revokeDevice(id: String) {
+        val r = repo ?: return
+        viewModelScope.launch {
+            val wasThis = runCatching { r.revokeDevice(id) }.getOrDefault(false)
+            if (wasThis) forgetPairing() else refreshDevices()
+        }
+    }
+
+    fun restartDaemon() {
+        val r = repo ?: return
+        viewModelScope.launch {
+            val ok = runCatching { r.restartDaemon() }.getOrDefault(false)
+            _daemonNote.value = if (ok) "Restart queued: it happens once every turn has ended." else "Couldn't queue the restart."
+        }
     }
 
     fun refreshPairCode() {

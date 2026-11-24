@@ -37,3 +37,19 @@ The rules, in `docs/PROCESSES.md` § launchd:
   subprocess has hung harness bash tools for 20+ minutes (twice).
 - Serialize: if another agent (or the user) is mid-deploy or mid-turn on the
   daemon, do not restart concurrently. Announce, wait, or defer.
+
+## Features that reach a person (read before adding one)
+
+jep has four clients: Telegram, web, Android and iOS. Anything the daemon shows
+a person must reach all four, or the person is left waiting on a question they
+never saw (a permission card once reached web and never Telegram).
+
+- Send it through a shared port in `src/core/ports.ts` that every client
+  subscribes to (`DaemonAskPort` is the example). Do not send it only through
+  the gateway's `broadcast`: that reaches the gateway's own clients, not Telegram.
+- Adding a `DomainEvent` type fails `test/client-parity.test.ts` until you
+  record a decision for each client: handled, not needed (say why), or a gap.
+  A gap is allowed, but it is listed, so it stays in view.
+- When you finish, say which clients you changed and which you did not.
+- The daemon sends the words (`describeAsk` is the example), so a client does
+  not format them itself and two clients cannot word one thing differently.

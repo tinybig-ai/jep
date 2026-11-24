@@ -83,12 +83,20 @@ fun SettingsScreen(
     onGroupByProject: (Boolean) -> Unit = {},
     onReconnect: (String, String, (Boolean) -> Unit) -> Unit,
     onForgetPairing: () -> Unit,
+    stats: dev.jep.client.domain.model.UsageStats? = null,
+    devices: List<dev.jep.client.domain.model.Device> = emptyList(),
+    onRenameDevice: (String, String) -> Unit = { _, _ -> },
+    onRevokeDevice: (String) -> Unit = {},
+    daemonNote: String? = null,
+    onRestartDaemon: () -> Unit = {},
 ) {
     BackHandler { onBack() }
     var codeOpen by remember { mutableStateOf(false) }
     var reconnectOpen by remember { mutableStateOf(false) }
     var howOpen by remember { mutableStateOf(false) }
     var forgetOpen by remember { mutableStateOf(false) }
+    var deviceOpen by remember { mutableStateOf<dev.jep.client.domain.model.Device?>(null) }
+    var restartOpen by remember { mutableStateOf(false) }
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -197,6 +205,26 @@ fun SettingsScreen(
                 )
             }
 
+            stats?.let { st ->
+                item { SectionTitle("USAGE", top = 18.dp) }
+                item { InfoRow("Today", usageLine(st.today)) }
+                item { InfoRow("7 days", usageLine(st.week)) }
+                item { InfoRow("All time", usageLine(st.all)) }
+            }
+            if (devices.isNotEmpty()) {
+                item { SectionTitle("DEVICES", top = 18.dp) }
+                items(devices.size) { i ->
+                    val d = devices[i]
+                    InfoRow(
+                        label = if (d.current) "${d.name} (this device)" else d.name,
+                        value = relativeAgo(d.lastSeen),
+                        onClick = { deviceOpen = d },
+                    )
+                }
+            }
+            item { SectionTitle("DAEMON", top = 18.dp) }
+            item { InfoRow("Restart jep", daemonNote ?: "after every turn has ended", onClick = { restartOpen = true }) }
+
             item { SectionTitle("PAIRING", top = 18.dp) }
             item {
                 Column(Modifier.padding(horizontal = Spacing.gutter, vertical = 13.dp)) {
@@ -232,6 +260,27 @@ fun SettingsScreen(
         current = gateway,
         onDismiss = { reconnectOpen = false },
         onSubmit = onReconnect,
+    )
+    deviceOpen?.let { d ->
+        var name by remember(d.id) { mutableStateOf(d.name) }
+        AlertDialog(
+            onDismissRequest = { deviceOpen = null },
+            title = { Text(d.name) },
+            text = { OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true, label = { Text("Name") }) },
+            confirmButton = { TextButton(onClick = { deviceOpen = null; onRenameDevice(d.id, name.trim()) }, enabled = name.isNotBlank()) { Text("Rename") } },
+            dismissButton = {
+                TextButton(onClick = { deviceOpen = null; onRevokeDevice(d.id) }) {
+                    Text(if (d.current) "Sign out this device" else "Revoke", color = MaterialTheme.colorScheme.error)
+                }
+            },
+        )
+    }
+    if (restartOpen) AlertDialog(
+        onDismissRequest = { restartOpen = false },
+        title = { Text("Restart jep?") },
+        text = { Text("The daemon restarts once every running turn has ended. A turn it cuts off is picked up again.") },
+        confirmButton = { TextButton(onClick = { restartOpen = false; onRestartDaemon() }) { Text("Restart") } },
+        dismissButton = { TextButton(onClick = { restartOpen = false }) { Text("Cancel") } },
     )
     if (forgetOpen) AlertDialog(
         onDismissRequest = { forgetOpen = false },
@@ -469,4 +518,26 @@ private fun InfoRow(label: String, value: String, onClick: (() -> Unit)? = null)
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
+}
+
+
+private fun relativeAgo(at: Long): String {
+    if (at <= 0) return "never"
+    val mins = (System.currentTimeMillis() - at) / 60_000
+    return when {
+        mins < 1 -> "now"
+        mins < 60 -> "${mins}m ago"
+        mins < 60 * 24 -> "${mins / 60}h ago"
+        else -> "${mins / (60 * 24)}d ago"
+    }
+}
+
+private fun usageLine(u: dev.jep.client.domain.model.UsageTotal): String {
+    val tokens = when {
+        u.tokens >= 1_000_000 -> "%.1fM".format(u.tokens / 1_000_000.0)
+        u.tokens >= 1_000 -> "${u.tokens / 1_000}k"
+        else -> "${u.tokens}"
+    }
+    val cost = if (u.cost > 0) " · $%.2f".format(u.cost) else ""
+    return "$tokens tokens · ${u.turns} turns$cost"
 }

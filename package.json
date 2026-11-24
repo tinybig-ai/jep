@@ -33,7 +33,8 @@
     "jep-restart": "bin/jep-restart.mjs",
     "jep-rename": "bin/jep-rename.mjs",
     "jep-read": "bin/jep-read.mjs",
-    "jep-tell": "bin/jep-tell.mjs"
+    "jep-tell": "bin/jep-tell.mjs",
+    "jep-end-turn": "bin/jep-end-turn.mjs"
   },
   "engines": {
     "node": ">=22.6.0"

@@ -13,7 +13,7 @@ export interface ControlReply {
   message: string
 }
 
-/** one request: `op` names what is asked ("restart", "rename", "read", "tell"; absent means a watch) */
+/** one request: `op` names what is asked ("restart", "rename", "read", "tell", "end-turn"; absent means a watch) */
 export interface ControlRequest {
   op?: unknown
   // a watch (core/watches.ts) and where it comes from
@@ -33,12 +33,16 @@ export interface ControlRequest {
   message?: unknown
   // a restart (core/restarts.ts)
   wait_minutes?: unknown
+  // `jep-end-turn`: the agent says this turn finishes everything it was asked
+  done?: unknown
 }
 
 export interface ControlHandlers {
   watch(req: ControlRequest): Promise<ControlReply>
   restart(req: ControlRequest): ControlReply
   rename(req: ControlRequest): Promise<ControlReply>
+  /** `jep-end-turn` (core/keepgoing.ts): the keep going this conversation is in stops when this turn ends */
+  endTurn(req: ControlRequest): Promise<ControlReply>
   read(req: ControlRequest): Promise<ControlReply>
   tell(req: ControlRequest): Promise<ControlReply>
 }
@@ -64,6 +68,7 @@ export async function startControl(dataHome: string, handlers: ControlHandlers):
       if (req.op === "tell") return void detach("control tell", handlers.tell(req).then(reply))
       if (req.op === "read") return void detach("control read", handlers.read(req).then(reply))
       if (req.op === "rename") return void detach("control rename", handlers.rename(req).then(reply))
+      if (req.op === "end-turn") return void detach("control end turn", handlers.endTurn(req).then(reply))
       detach("control request", handlers.watch(req).then(reply))
     })
     conn.on("error", () => {})

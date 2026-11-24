@@ -86,6 +86,29 @@ data class HarnessSettings(
     val canCompact: Boolean = false,
 )
 
+/**
+ * What the daemon says this conversation can be set to, as data. `modes` is the order a tap
+ * walks through (the daemon names them: the phone knows none of the words), and `options` are
+ * plain switches drawn like a harness's own.
+ */
+data class ConversationSettings(
+    val mode: String = "normal",
+    val modes: List<String> = emptyList(),
+    val options: List<HarnessSetting> = emptyList(),
+    val values: Map<String, Boolean> = emptyMap(),
+)
+
+/** tokens, price and turns over a window; the daemon sums them across conversations */
+data class UsageTotal(val tokens: Long, val cost: Double, val turns: Int)
+
+data class UsageStats(val today: UsageTotal, val week: UsageTotal, val all: UsageTotal, val sessions: Int)
+
+/** a phone, browser or other client paired with the daemon; `current` is the one asking */
+data class Device(val id: String, val name: String, val pairedAt: Long, val lastSeen: Long, val current: Boolean)
+
+/** a slash command the conversation's harness offers; `description` may be empty */
+data class SlashCommand(val name: String, val description: String, val source: String)
+
 /** a SKILL.md the harness loads; `disabled` hides it from the model */
 data class Skill(val name: String, val description: String, val scope: String, val path: String, val disabled: Boolean)
 

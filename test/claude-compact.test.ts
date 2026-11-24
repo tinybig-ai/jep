@@ -42,7 +42,7 @@ test("a compacted transcript reads as the conversation plus one divider", async 
 
 test("compact runs /compact on the conversation and reports how it went", async () => {
   const a = new ClaudeAdapter(home)
-  assert.equal(await a.compact(`claude://${SID}`), true)
+  assert.deepEqual(await a.compact(`claude://${SID}`), { ok: true })
   const args = (await readFile(argsSeen, "utf8")).trim().split("\n")
   assert.deepEqual(args, ["-p", "--output-format", "json", "--resume", SID, "/compact"])
 })
@@ -52,7 +52,7 @@ test("compact is refused while the conversation is busy, not run twice", async (
   const a = new ClaudeAdapter(home)
   const first = a.compact(`claude://${SID}`)
   await new Promise((r) => setTimeout(r, 200))
-  assert.equal(await a.compact(`claude://${SID}`), false)
-  assert.equal(await first, true)
+  assert.deepEqual(await a.compact(`claude://${SID}`), { ok: false, error: "a turn is running on this session" })
+  assert.deepEqual(await first, { ok: true })
   delete process.env.FAKE_SLOW
 })

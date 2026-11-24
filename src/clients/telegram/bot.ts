@@ -1,10 +1,10 @@
-import { mkdir, readdir, writeFile } from "node:fs/promises"
+import { mkdir, readdir, writeFile, stat } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { homedir } from "node:os"
 import { basename, dirname, join, resolve } from "node:path"
-import type { HarnessAdapter, ModelCaps, ModelRef } from "../../core/ports.ts"
+import type { ConversationDeletionPort, HarnessAdapter, ModelCaps, ModelRef } from "../../core/ports.ts"
 import type { AskOption, AskRequest, FilePart, HarnessError, Part, ProjectSummary, SessionSummary, TextPart, ReasoningPart, ToolCallPart } from "../../core/types.ts"
 import { describeAsk } from "../../core/asks.ts"
 import { describeError } from "../../core/errors.ts"
@@ -18,6 +18,7 @@ import { runComplianceSuite } from "../../core/compliance.ts"
 import { eventMessage, eventSession } from "../../core/types.ts"
 import { transcribe } from "../../core/transcribe.ts"
 import { addUsage, emptyUsage, fmtMoney, usageChip, usageOf } from "../../core/usage.ts"
+import { parseModelRef } from "../../core/models.ts"
 import { JEP_CONTEXT, JEP_CONTEXT_FOOTER, transcriptText } from "../../core/transcript.ts"
 import type { Usage } from "../../core/usage.ts"
 import type { McpServer } from "../../core/types.ts"
@@ -93,7 +94,9 @@ interface ChatState {
     string,
     {
       sessionID: string
-      adapter: HarnessAdapter
+      // only the answer is ever sent through it, so a card the daemon raised (no harness
+      // behind it) answers through the same field
+      adapter: Pick<HarnessAdapter, "respondAsk">
       messageID: number
       ephemeralID?: number
       options: AskOption[]
@@ -255,6 +258,17 @@ const MAX_DETAILS = 12
 // at; past it the quote is clipped rather than bloating the prompt and the
 // replayable queue entry saved to disk.
 const QUOTED_REPLY_CHARS = 2000
+
+// ── bot forums (@BotFather → Threaded mode) ──
+// Every topic of the bot's private chats is presented to the whole bot as a
+// synthetic "chat id", so per-chat state, queues and the store keep keying on
+// a single number; one decode layer (in #recording) turns the synthetic id
+// back into (real chat, message thread) on the wire. The base sits well above
+// any real Telegram chat id, so no real id can be mistaken for a topic.
+// a topic-less free message should open a topic; when createForumTopic is
+// refused (feature off until the grace passes) the chat falls back to its
+// plain-chat behaviour for this long before probing again
+const TOPIC_GRACE_MS = 10 * 60_000
 
 const stringifyTool = (v: unknown): string => {
   if (v == null) return ""
@@ -643,7 +657,7 @@ const buttonsBlock = (row: InlineButton[]): RichBlock => ({
   align: "left",
   buttons: row.map((b) => ({
     text: b.text,
-    callback_data: b.callback_data,
+    ...(b.url ? { url: b.url } : { callback_data: b.callback_data }),
     ...(b.style ? { style: b.style } : {}),
     ...(b.disabled ? { disabled: {} } : {}),
   })),
@@ -660,6 +674,7 @@ const HELP = [
   "/queue · what's running & waiting",
   "/find · search your conversations",
   "/usage · what this has cost",
+  "/compact · compress the current conversation's context",
   "/settings · model, workspace & more",
   "/remind · schedule a nudge (e.g. /remind 2h build)",
   "",
@@ -720,6 +735,8 @@ export class TelegramBot {
   #chats = new Map<number, ChatState>()
   // tail of each chat's turn queue — see #runTurn
   #turns = new Map<number, Promise<void>>()
+  #sessionStarts = new Map<number, Promise<string>>()
+  #statusUpdates = new Map<number, Promise<void>>()
   // Work that runs off *both* the update loop and the turn queue —
   // transcription, so far. drain() waits for it, which is what makes a fixture
   // replay deterministic instead of a race against the dump.
@@ -729,8 +746,23 @@ export class TelegramBot {
   #reminderStore: ReminderStore
   // the daemon's record of running turns, shared with the other clients
   #ledger: TurnLedger | undefined
+  #deletions: ConversationDeletionPort | undefined
   // id -> live timer for every reminder currently scheduled from #reminderStore
   #reminderTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  // ── bot forums: synthetic topic id → its real (chat, thread) peer ──
+  #forumRegistry = new Map<number, { chatID: number; threadID: number }>()
+  // reverse index, for updates that name the topic by its (chat, thread) pair
+  #forumIndex = new Map<string, number>()
+  // topics the bot itself spawned — their title is already right, so a fast
+  // second message must not trip the orphan claim below
+  #forumOwn = new Set<number>()
+  // topics a claim-rename was already sent for: at most one, ever, no matter
+  // how quickly the first messages of a user-created topic stack up
+  #forumRenamed = new Set<number>()
+  // real chat id -> "not until" timestamp of the last failed createForumTopic
+  #forumProbe = new Map<number, number>()
+  // JEP_TG_FORUM=off turns the whole feature off; auto (default) probes
+  #forumOn = (process.env.JEP_TG_FORUM ?? "auto") !== "off"
 
   // ordered by expected use — most-reached-for first. /ws, /abort, /cancel
   // stay fully functional but out of this menu: /ws moved under
@@ -768,6 +800,7 @@ export class TelegramBot {
     harnessList: Array<{ id: string; label: string; icon: string }>,
     reminders: ReminderStore,
     ledger?: TurnLedger,
+    deletions?: ConversationDeletionPort,
   ) {
     this.#tg = this.#recording(tg)
     this.#workspaces = workspaces
@@ -780,6 +813,13 @@ export class TelegramBot {
     this.#harnessList = harnessList
     this.#reminderStore = reminders
     this.#ledger = ledger
+    this.#deletions = deletions
+    // before anything can send into a topic: reminders scheduled last boot
+    // may carry synthetic ids, and their first fire decodes through this map
+    for (const p of store.allForumPeers()) {
+      this.#forumRegistry.set(p.syn, { chatID: p.chatID, threadID: p.threadID })
+      this.#forumIndex.set(`${p.chatID}:${p.threadID}`, p.syn)
+    }
     for (const r of reminders.list()) this.#scheduleReminder(r)
     this.#detach("recover", this.#recoverPending())
   }
@@ -803,45 +843,205 @@ export class TelegramBot {
   }
 
   // renders every outgoing text through markdown → Telegram HTML, and logs
-  // every send for diagnostics
+  // every send for diagnostics. Also THE topic decode layer: the bot addresses
+  // a topic by its synthetic chat id everywhere, and the wire needs
+  // (real chat id, message_thread_id) — translated here, in one place, so none
+  // of the ~dozens of call sites has to know forums exist.
   #recording(tg: TelegramApi): TelegramApi {
     const md = (text: string) => mdToHtml(text)
+    // a plain chat id passes through untouched; a synthetic topic id becomes
+    // its real peer and gains the thread id
+    const dec = <T extends { chatID: number }>(p: T): T & { threadID?: number } => {
+      const peer = this.#peerOf(p.chatID)
+      return peer ? { ...p, chatID: peer.chatID, threadID: peer.threadID } : (p as T & { threadID?: number })
+    }
     return {
       getUpdates: (p) => tg.getUpdates(p),
+      getMe: () => tg.getMe(),
       setMyCommands: (c) => tg.setMyCommands(c),
       setChatMenuButton: (u, t) => tg.setChatMenuButton(u, t),
-      sendChatAction: (p) => tg.sendChatAction(p),
+      sendChatAction: (p) => tg.sendChatAction(dec(p)),
       answerCallbackQuery: (p) => tg.answerCallbackQuery(p),
-      deleteMessage: (p) => tg.deleteMessage(p),
-      setMessageReaction: (p) => tg.setMessageReaction(p),
-      pinChatMessage: (p) => tg.pinChatMessage(p),
-      unpinChatMessage: (p) => tg.unpinChatMessage(p),
-      editRichMessage: (p) => tg.editRichMessage(p),
-      deleteEphemeralMessage: (p) => tg.deleteEphemeralMessage(p),
+      deleteMessage: (p) => tg.deleteMessage(dec(p)),
+      setMessageReaction: (p) => tg.setMessageReaction(dec(p)),
+      pinChatMessage: (p) => tg.pinChatMessage(dec(p)),
+      unpinChatMessage: (p) => tg.unpinChatMessage(dec(p)),
+      editRichMessage: (p) => tg.editRichMessage({ ...p, ...dec(p) }),
+      deleteEphemeralMessage: (p) => tg.deleteEphemeralMessage(dec(p)),
       sendRichMessage: async (p) => {
-        console.error(`[send] sendRichMessage chat=${p.chatID} at=${new Date().toISOString()}`)
-        const r = await tg.sendRichMessage(p)
+        const d = dec(p)
+        console.error(`[send] sendRichMessage chat=${d.chatID}${d.threadID ? ` thread=${d.threadID}` : ""} at=${new Date().toISOString()}`)
+        const r = await tg.sendRichMessage(d)
         console.error(`[send] sendRichMessage -> msg=${r.message_id}`)
         return r
       },
-      sendMessageDraft: (p) => tg.sendMessageDraft({ ...p, text: p.text !== undefined ? md(p.text) : undefined, parseMode: p.text !== undefined ? "HTML" : undefined }),
+      sendMessageDraft: (p) => tg.sendMessageDraft(dec({ ...p, text: p.text !== undefined ? md(p.text) : undefined, parseMode: p.text !== undefined ? "HTML" : undefined })),
       sendRichMessageDraft: (p) => {
-        console.error(`[send] sendRichMessageDraft chat=${p.chatID} draft=${p.draftID} at=${new Date().toISOString()}`)
-        return tg.sendRichMessageDraft(p)
+        const d = dec(p)
+        console.error(`[send] sendRichMessageDraft chat=${d.chatID}${d.threadID ? ` thread=${d.threadID}` : ""} draft=${d.draftID} at=${new Date().toISOString()}`)
+        return tg.sendRichMessageDraft(d)
       },
       getFileContent: (f) => tg.getFileContent(f),
-      editMessageText: (p) => tg.editMessageText({ ...p, text: md(p.text), parseMode: "HTML" }),
+      editMessageText: (p) => tg.editMessageText({ ...p, ...dec(p), text: md(p.text), parseMode: "HTML" }),
       sendMessage: async (p) => {
-        console.error(`[send] sendMessage chat=${p.chatID} at=${new Date().toISOString()} text=${JSON.stringify(p.text.slice(0, 60))}`)
-        return tg.sendMessage({ ...p, text: md(p.text), parseMode: "HTML" })
+        const d = dec(p)
+        console.error(`[send] sendMessage chat=${d.chatID}${d.threadID ? ` thread=${d.threadID}` : ""} at=${new Date().toISOString()} text=${JSON.stringify(p.text.slice(0, 60))}`)
+        return tg.sendMessage({ ...p, ...d, text: md(p.text), parseMode: "HTML" })
       },
-      sendPhoto: (p) => tg.sendPhoto(p),
-      sendDocument: (p) => tg.sendDocument(p),
+      sendPhoto: (p) => tg.sendPhoto(dec(p)),
+      sendDocument: (p) => tg.sendDocument(dec(p)),
+      createForumTopic: (p) => tg.createForumTopic(p),
+      editForumTopic: (p) => tg.editForumTopic(p),
+      deleteForumTopic: (p) => tg.deleteForumTopic(p),
     }
   }
 
   #ws(name: string): Ws {
     return this.#workspaces.find((w) => w.name === name) ?? this.#workspaces[0]!
+  }
+
+  // ── bot forums ──
+
+  // Only registered addresses are topics; real Telegram ids may also be large.
+  #isTopic(chatID: number): boolean {
+    return this.#forumRegistry.has(chatID)
+  }
+
+  // the real peer behind a topic id (null = an ordinary chat id)
+  #peerOf(chatID: number): { chatID: number; threadID: number } | null {
+    if (!this.#isTopic(chatID)) return null
+    return this.#forumRegistry.get(chatID) ?? null
+  }
+
+  #registerForumPeer(realChatID: number, threadID: number): number {
+    const key = `${realChatID}:${threadID}`
+    const known = this.#forumIndex.get(key)
+    if (known) return known
+    const syn = this.#store.allocateForumID()
+    this.#forumRegistry.set(syn, { chatID: realChatID, threadID })
+    this.#forumIndex.set(key, syn)
+    this.#store.rememberForumPeer(syn, { chatID: realChatID, threadID })
+    // Telegram can create the topic before delivering its first message.
+    // Adopt it with the same selected harness/model as the parent chat.
+    this.#inheritTopicSettings(syn, realChatID)
+    return syn
+  }
+
+  #inheritTopicSettings(topicChatID: number, sourceChatID: number): void {
+    const source = this.#chat(sourceChatID)
+    const target = this.#chat(topicChatID)
+    target.workspace = source.workspace
+    target.harness = source.harness
+    target.chatType = source.chatType
+    target.lastUserID = source.lastUserID
+    const harness = this.#activeWs(sourceChatID).adapter.id
+    const model = this.#store.model(sourceChatID, harness)
+    if (model) this.#store.setModel(topicChatID, harness, model)
+  }
+
+  // the conversation this chat was already in, so a command can land there
+  // instead of in a topic Telegram just opened for the command itself
+  #latestTopic(realChatID: number): number | null {
+    let best: number | null = null
+    for (const [syn, peer] of this.#forumRegistry) {
+      if (peer.chatID !== realChatID) continue
+      if (best === null || syn > best) best = syn
+    }
+    return best
+  }
+
+  /** A successful deletion from any client also removes its Telegram address. */
+  async conversationDeleted(sessionID: string): Promise<void> {
+    const matches = (id: string | null | undefined): boolean => !!id && (
+      id === sessionID || this.#workspaces.some((w) => w.adapter.canonicalId?.(id) === sessionID)
+    )
+    for (const [syn, peer] of [...this.#forumRegistry]) {
+      const id = this.#chats.get(syn)?.sessionID ?? this.#store.chatContext(syn)?.sessionID
+      if (!matches(id)) continue
+      const c = this.#chats.get(syn)
+      if (c) {
+        for (const queued of c.queue) queued.cancelled = true
+        c.inflight?.abort()
+      }
+      await this.#turns.get(syn)?.catch(logFail("deleted turn"))
+      await this.#statusUpdates.get(syn)?.catch(logFail("deleted status"))
+      try {
+        await this.#tg.deleteForumTopic({ chatID: peer.chatID, threadID: peer.threadID })
+      } catch (err) {
+        // A previous attempt may already have reached Telegram.
+        if (!/TOPIC_ID_INVALID|message thread not found|topic not found/i.test((err as Error)?.message ?? String(err))) throw err
+      }
+      for (const reminder of this.#reminderStore.list()) {
+        if (reminder.chatID !== syn) continue
+        clearTimeout(this.#reminderTimers.get(reminder.id))
+        this.#reminderTimers.delete(reminder.id)
+        this.#reminderStore.remove(reminder.id)
+      }
+      this.#forumForget(syn)
+      this.#store.forgetChat(syn)
+      this.#chats.delete(syn)
+    }
+    for (const [chatID, c] of this.#chats) {
+      if (!matches(c.sessionID)) continue
+      c.inflight?.abort()
+      c.sessionID = null
+      c.freshOnNext = true
+      this.#rememberChat(chatID)
+    }
+  }
+
+  #forumForget(chatID: number): void {
+    const peer = this.#forumRegistry.get(chatID)
+    if (!peer) return
+    this.#forumRegistry.delete(chatID)
+    this.#forumIndex.delete(`${peer.chatID}:${peer.threadID}`)
+    this.#forumOwn.delete(chatID)
+    this.#forumRenamed.delete(chatID)
+    this.#store.forgetForumPeer(chatID)
+  }
+
+  // whether a topic-less prompt should try to open a topic on this chat:
+  // feature on, and no failed probe still inside its grace window
+  #forumFree(chatID: number): boolean {
+    if (!this.#forumOn) return false
+    const off = this.#forumProbe.get(chatID)
+    return off === undefined || off < Date.now()
+  }
+
+  #forumFail(chatID: number): void {
+    this.#forumProbe.set(chatID, Date.now() + TOPIC_GRACE_MS)
+  }
+
+  // Open a topic on a real chat, hand its synthetic id back. null = no bot
+  // forum here, or Telegram refused — every caller falls back to the plain
+  // chat behaviour then, exactly as if forum support were off.
+  async #spawnTopic(realChatID: number, title: string, sourceChatID = realChatID): Promise<number | null> {
+    if (!this.#forumFree(realChatID)) return null
+    try {
+      const t = await this.#tg.createForumTopic({ chatID: realChatID, title: title.slice(0, 40) || "New conversation" })
+      const syn = this.#registerForumPeer(realChatID, t.threadID)
+      this.#inheritTopicSettings(syn, sourceChatID)
+      this.#rememberChat(syn)
+      this.#forumOwn.add(syn)
+      console.error(`[forum] chat ${realChatID}: topic ${t.threadID} opened as chat ${syn}`)
+      return syn
+    } catch (err) {
+      this.#forumFail(realChatID)
+      console.error(
+        `[forum] createForumTopic on chat ${realChatID} failed (${(err as Error)?.message ?? err}) — plain-chat behaviour for the next 10 min. Enable "Threaded mode" for the bot in @BotFather.`,
+      )
+      return null
+    }
+  }
+
+  // Rename a topic on the wire so the phone's topic list agrees with the
+  // conversation title. No-op for ordinary (non-topic) chats.
+  #syncTopicTitle(chatID: number, title: string): void {
+    const peer = this.#peerOf(chatID)
+    if (!peer) return
+    this.#tg
+      .editForumTopic({ chatID: peer.chatID, threadID: peer.threadID, name: title.slice(0, 40) })
+      .catch((err) => console.error(`[forum] rename topic ${peer.threadID} failed: ${(err as Error)?.message ?? err}`))
   }
 
   // The workspace a chat is actually talking to. A directory can be served by
@@ -997,6 +1197,10 @@ export class TelegramBot {
   // like #ensureSession would, so that call doesn't redo the lookup.
   async #resolveSessionID(chatID: number): Promise<string | null> {
     const c = this.#chat(chatID)
+    // a topic is its own conversation: never adopt the workspace's newest
+    // session, which belongs to some other topic. No remembered context →
+    // #ensureSession creates a fresh one, as a brand-new conversation should.
+    if (this.#isTopic(chatID)) return c.sessionID
     const active = this.#activeWs(chatID)
     if (c.sessionID && !this.#sessionMatches(active, c.sessionID)) {
       console.error(`[session] dropping ${c.sessionID} — ${active.adapter.id} can't read it`)
@@ -1017,17 +1221,29 @@ export class TelegramBot {
   // freshOnNext says the last one was just deleted out from under us, in
   // which case skip straight to creating a new one.
   async #ensureSession(chatID: number, firstText?: string): Promise<string> {
-    const c = this.#chat(chatID)
-    const resolved = await this.#resolveSessionID(chatID)
-    if (resolved) return resolved
-    const ws = this.#activeWs(chatID)
-    c.freshOnNext = false
-    const title = (firstText ?? "").slice(0, 40) || "My chat"
-    const s = await ws.adapter.createSession(title)
-    c.sessionID = s.id
-    c.sessionFresh = true
-    this.#rememberChat(chatID)
-    return s.id
+    const underway = this.#sessionStarts.get(chatID)
+    if (underway) return underway
+    // A topic-created update and its first prompt may arrive together.
+    // They must share the same new conversation.
+    const start = (async () => {
+      const c = this.#chat(chatID)
+      const resolved = await this.#resolveSessionID(chatID)
+      if (resolved) return resolved
+      const ws = this.#activeWs(chatID)
+      c.freshOnNext = false
+      const title = (firstText ?? "").slice(0, 40) || "My chat"
+      const s = await ws.adapter.createSession(title)
+      c.sessionID = s.id
+      c.sessionFresh = true
+      this.#rememberChat(chatID)
+      return s.id
+    })()
+    this.#sessionStarts.set(chatID, start)
+    try {
+      return await start
+    } finally {
+      this.#sessionStarts.delete(chatID)
+    }
   }
 
   async handleUpdate(update: TgUpdate): Promise<void> {
@@ -1152,21 +1368,85 @@ export class TelegramBot {
 
   // the user tapped the native "stop" button on a streaming draft — stop the turn
   async #onStopGeneration(stop: NonNullable<TgUpdate["stopped_message_generation"]>): Promise<void> {
-    const chatID = stop?.chat?.id
-    if (chatID == null) return
-    await this.#stopTurn(chatID)
+    const realID = stop?.chat?.id
+    if (realID == null) return
+    // the update names the topic when the draft was tapped in one (1 = General)
+    if (stop.message_thread_id && stop.message_thread_id !== 1) {
+      const syn = this.#forumIndex.get(`${realID}:${stop.message_thread_id}`)
+      if (syn !== undefined && (stop.draft_id === undefined || this.#chats.get(syn)?.draft === stop.draft_id)) await this.#stopTurn(syn)
+      return
+    }
+    // Without a thread, draft_id is the address. An ambiguous update must
+    // never stop an unrelated topic merely because it was first in the map.
+    const running = [...this.#chats.entries()].filter(
+      ([syn, c]) => c.inflight && (this.#peerOf(syn)?.chatID ?? syn) === realID && (stop.draft_id === undefined || c.draft === stop.draft_id),
+    )
+    if (running.length === 1) await this.#stopTurn(running[0]![0])
   }
 
   async #gatedMessage(m: TgMessage): Promise<void> {
-    const chatID = m.chat.id
+    const realID = m.chat.id
+    if (m.forum_topic_created && m.message_thread_id && m.message_thread_id !== 1) {
+      if (!this.#pairing.isPaired(realID)) return
+      const chatID = this.#registerForumPeer(realID, m.message_thread_id)
+      const c = this.#chat(chatID)
+      c.chatType = m.chat.type
+      c.lastUserID = m.from?.id ?? null
+      // The topic itself creates the chat, even before anyone sends a prompt.
+      await this.#ensureSession(chatID, m.forum_topic_created.name)
+      this.#forumRenamed.add(chatID)
+      await this.#updateStatus(chatID)
+      return
+    }
     const text = (m.text ?? m.caption ?? "").trim()
     const mediaFileID = this.#mediaFileID(m)
     const audio = audioOf(m)
     // an animated sticker with no thumbnail has nothing to download, but its
     // emoji is still a message — don't drop it as empty
     if (!text && !mediaFileID && !m.sticker && !audio) return
-    const c = this.#chat(chatID)
     const [cmd = "", ...rest] = text.split(/\s+/)
+
+    // pairing gates on the REAL chat — a topic rides an already-paired chat
+    if (!this.#pairing.isPaired(realID)) {
+      const c = this.#chat(realID)
+      if (c.awaiting?.kind === "pair") {
+        if (cmd === "/cancel") {
+          c.awaiting = null
+          return this.#say(realID, "canceled.")
+        }
+        if (!text.startsWith("/")) return this.#attemptPair(realID, text)
+      }
+      if (cmd === "/pair") {
+        const code = rest.join(" ")
+        if (!code) {
+          c.awaiting = { kind: "pair" }
+          return this.#say(
+            realID,
+            "🔐 Please enter the pairing code.\n\nJust paste the code and hit send (/cancel to give up).",
+            { inline_keyboard: [], force_reply: true },
+          )
+        }
+        return this.#attemptPair(realID, code)
+      }
+      if (cmd === "start") {
+        return this.#say(realID, "This bot is locked. Tap /pair, then enter the code to authorize this chat.")
+      }
+      return this.#say(realID, "🔒 Not paired. Tap /pair and enter the code.")
+    }
+
+    // bot forum: a message inside a topic IS that conversation, so it is
+    // readdressed to the topic's synthetic chat id before anything else reads
+    // it. A topic-less message (General) stays on the real chat. The topic is
+    // named by message_thread_id alone — is_topic_message is reliably set in
+    // group forums, but private bot forums may only carry the thread id (the
+    // MTProto top_msg_id), which is exactly how the docs define topic
+    // membership. Thread 1 means General in group forums, so it never maps.
+    const threadID = m.message_thread_id && m.message_thread_id !== 1 ? m.message_thread_id : undefined
+    const head = text.split(/\s+/)[0] ?? ""
+    const slash = head.startsWith("/") ? (head.slice(1).split("@")[0] ?? "") : ""
+    // Unknown topics may contain the person's own history. Adopt, never delete.
+    const chatID = threadID !== undefined ? this.#registerForumPeer(realID, threadID) : realID
+    const c = this.#chat(chatID)
 
     // a swipe-reply to a question prompt is the typed answer: the question's
     // turn is already stopped, so it goes back as an ordinary message
@@ -1185,33 +1465,7 @@ export class TelegramBot {
       }
     }
 
-    if (!this.#pairing.isPaired(chatID)) {
-      if (c.awaiting?.kind === "pair") {
-        if (cmd === "/cancel") {
-          c.awaiting = null
-          return this.#say(chatID, "canceled.")
-        }
-        if (!text.startsWith("/")) return this.#attemptPair(chatID, text)
-      }
-      if (cmd === "/pair") {
-        const code = rest.join(" ")
-        if (!code) {
-          c.awaiting = { kind: "pair" }
-          return this.#say(
-            chatID,
-            "🔐 Please enter the pairing code.\n\nJust paste the code and hit send (/cancel to give up).",
-            { inline_keyboard: [], force_reply: true },
-          )
-        }
-        return this.#attemptPair(chatID, code)
-      }
-      if (cmd === "start") {
-        return this.#say(chatID, "This bot is locked. Tap /pair, then enter the code to authorize this chat.")
-      }
-      return this.#say(chatID, "🔒 Not paired. Tap /pair and enter the code.")
-    }
-
-    console.error(`[tg] message from chat=${chatID} (${m.chat.type}) from=${m.from?.username ?? m.from?.id ?? "?"}`)
+    console.error(`[tg] message from chat=${realID} thread=${threadID ?? "-"} as=${chatID} (${m.chat.type}) /${slash || "-"} from=${m.from?.username ?? m.from?.id ?? "?"}`)
     c.chatType = m.chat.type
     if (m.from?.id != null) c.lastUserID = m.from.id
     // A spoken prompt takes seconds to transcribe, which is far too long to
@@ -1230,7 +1484,7 @@ export class TelegramBot {
         return this.#say(chatID, "(nothing to cancel)")
       }
       if (c.awaiting) this.#clearAwaiting(c)
-      await this.#command(chatID, cmd.slice(1), rest.join(" "), m.message_id)
+      await this.#command(chatID, slash, rest.join(" "), m.message_id)
     } else if (c.awaiting) {
       await this.#resolveAwaiting(chatID, text, m.message_id)
     } else {
@@ -1244,7 +1498,7 @@ export class TelegramBot {
             try {
               return [await this.#ingestMedia(chatID, m)]
             } catch (err) {
-              await this.#tg.sendMessage({ chatID, text: `⚠️ couldn't read the attachment: ${(err as Error).message}` })
+              await this.#tg.sendMessage({ chatID: realID, text: `⚠️ couldn't read the attachment: ${(err as Error).message}` })
               return []
             }
           }
@@ -1254,18 +1508,39 @@ export class TelegramBot {
       const base = text || (m.sticker ? stickerPrompt(m.sticker) : text)
       // a swipe-reply to a system message carries that message with the prompt
       const prompt = this.#withQuotedReply(m, base)
+      // ── bot forum ── A free message in General is Telegram's own affordance
+      // for "start a new thread": give it a topic and let the turn run there,
+      // because from here on a topic is what a conversation is. Topics the
+      // user created in their client are claimed the same way — no remembered
+      // conversation under this synthetic id means its first words title it.
+      let turnChat = chatID
+      if (threadID === undefined && prompt) {
+        const spawn = await this.#spawnTopic(realID, prompt)
+        if (spawn !== null) turnChat = spawn
+      } else if (
+        prompt &&
+        !this.#forumOwn.has(chatID) &&
+        !this.#forumRenamed.has(chatID) &&
+        !this.#store.chatContext(chatID)
+      ) {
+        // a topic that materialized without us (the user created it in their
+        // client): claimed by its first words. Renamed at most once — a
+        // message queued before the first turn persisted must not retitle it.
+        this.#forumRenamed.add(chatID)
+        this.#syncTopicTitle(chatID, prompt)
+      }
       // A turn opens with a spinner, but a turn that has to wait its place in
       // the queue opens with nothing — and the screen is already busy with the
       // one in front of it, so a message sent into a working agent looked
       // dropped. The draft belongs to the running turn and cannot say this, so
       // the acknowledgement goes where it is unambiguous: on the message
       // itself. It clears nothing and needs no cleanup.
-      const queued = this.#turns.has(chatID)
+      const queued = this.#turns.has(turnChat)
       this.#runTurn(
-        chatID,
+        turnChat,
         async () => {
-          await this.#freeText(chatID, prompt, { ...(ingest ? { ingest } : {}) })
-          if (mediaFileID) await this.#suggestImageModel(chatID, { text: prompt, ingest: ingest! })
+          await this.#freeText(turnChat, prompt, { ...(ingest ? { ingest } : {}) })
+          if (mediaFileID) await this.#suggestImageModel(turnChat, { text: prompt, ingest: ingest! })
         },
         // A message carrying an attachment is not replayable across a restart:
         // the file is still on Telegram's servers at this point, because the
@@ -1276,7 +1551,7 @@ export class TelegramBot {
         mediaFileID ? { label: prompt } : { prompt: { text: prompt, queuedAt: Date.now() } },
       )
       if (queued) {
-        void this.#tg.setMessageReaction({ chatID, messageID: m.message_id, emoji: "👀" }).catch(logFail("reaction"))
+        void this.#tg.setMessageReaction({ chatID: realID, messageID: m.message_id, emoji: "👀" }).catch(logFail("reaction"))
       }
     }
   }
@@ -1351,9 +1626,14 @@ export class TelegramBot {
 
   async #gatedCallback(cq: NonNullable<TgUpdate["callback_query"]>): Promise<void> {
     if (!cq.message) return this.#tg.answerCallbackQuery({ id: cq.id })
-    const chatID = cq.message.chat.id
-    if (!this.#pairing.isPaired(chatID)) return this.#tg.answerCallbackQuery({ id: cq.id, text: "not paired" })
-    await this.#onCallback(cq)
+    // pairing gates on the real chat, the same as messages do
+    const realID = cq.message.chat.id
+    if (!this.#pairing.isPaired(realID)) return this.#tg.answerCallbackQuery({ id: cq.id, text: "not paired" })
+    // a callback raised on a message inside a topic belongs to that topic's
+    // chat state — readdress it like any message update (thread 1 = General)
+    const threadID = cq.message.message_thread_id && cq.message.message_thread_id !== 1 ? cq.message.message_thread_id : undefined
+    const chatID = threadID !== undefined ? this.#registerForumPeer(realID, threadID) : realID
+    await this.#onCallback({ ...cq, message: { ...cq.message, chat: { ...cq.message.chat, id: chatID } } })
   }
 
   // "answer and stop": the shape of a dozen early exits. None of them wants
@@ -1430,6 +1710,10 @@ export class TelegramBot {
     }
     const t = text.trim()
     this.#store.setTitle(a.sessionID, t)
+    // bot forum: keep the topic's title in step with the conversation's name —
+    // only when the renamed session is the one this topic (or chat) is on;
+    // renaming some other conversation must not steal the topic's title
+    if (this.#chat(chatID).sessionID === a.sessionID) this.#syncTopicTitle(chatID, t)
     // where the harness keeps its own title (opencode), carry the name there
     // too, so its TUI agrees. Only an adapter already running is used: a cold
     // project is not started just to rename it — the store title is enough.
@@ -1524,7 +1808,7 @@ export class TelegramBot {
     c.sessionID = exact.id
     this.#rememberChat(chatID)
     await this.#tg.sendMessage({ chatID, text: `▶ "${this.#displayTitle(exact.id, exact.title)}"` })
-    void this.#updateStatus(chatID).catch(logFail("status"))
+    this.#detach("status", this.#updateStatus(chatID))
   }
 
   async #command(chatID: number, cmd: string, arg: string, messageID: number): Promise<void> {
@@ -1541,6 +1825,9 @@ export class TelegramBot {
         break
       case "settings":
         await this.#settingsRoot(chatID, null)
+        break
+      case "compact":
+        await this.#compactConversation(chatID)
         break
       // Typed only: deliberately not in setMyCommands, so it stays out of the
       // tap menu. A name, part of one, or a typo of one switches the model.
@@ -1560,7 +1847,7 @@ export class TelegramBot {
         if (hit.model === "default") this.#store.clearModel(chatID, harnessID)
         else this.#store.setModel(chatID, harnessID, hit.model)
         await tg.sendMessage({ chatID, text: `model changed ${old} → ${hit.model}` })
-        void this.#updateStatus(chatID).catch(logFail("status"))
+        this.#detach("status", this.#updateStatus(chatID))
         break
       }
       case "ls": {
@@ -1641,7 +1928,7 @@ export class TelegramBot {
           c.del = null
           c.page = 0
           await tg.sendMessage({ chatID, text: `workspace: ${arg}` })
-          void this.#updateStatus(chatID).catch(logFail("status"))
+          this.#detach("status", this.#updateStatus(chatID))
           break
         }
         await this.#settingsWorkspace(chatID, null)
@@ -1702,7 +1989,17 @@ export class TelegramBot {
   // new conversation in whichever directory happened to match first.
   async #newConversation(chatID: number, replyId: number | null, title?: string): Promise<void> {
     const c = this.#chat(chatID)
+    const topicMode = this.#isTopic(chatID) || (c.chatType === "private" && await this.#tg.getMe()
+      .then((me) => me.has_topics_enabled === true)
+      .catch(() => false))
+    if (topicMode) {
+      const text = "Create a topic using Telegram’s New Topic action. Jep will create a fresh chat there automatically."
+      if (replyId === null) await this.#tg.sendMessage({ chatID, text })
+      else await this.#tg.editMessageText({ chatID, messageID: replyId, text, replyMarkup: null })
+      return
+    }
     const ws = this.#activeWs(chatID)
+    c.workspace = ws.name
     c.harness = ws.adapter.id
     const s = await ws.adapter.createSession(title || "New conversation")
     c.sessionID = s.id
@@ -1714,7 +2011,7 @@ export class TelegramBot {
     const text = title ? `💬 new conversation: ${title}` : "💬 new conversation"
     if (replyId === null) await this.#tg.sendMessage({ chatID, text })
     else await this.#tg.editMessageText({ chatID, messageID: replyId, text, replyMarkup: null })
-    void this.#updateStatus(chatID).catch(logFail("status"))
+    this.#detach("status", this.#updateStatus(chatID))
   }
 
   // Every conversation this bot knows about, across every project, without
@@ -1992,7 +2289,7 @@ export class TelegramBot {
     // persisted, so it keeps climbing across restarts — a draft id is consumed
     // once the real message lands, and reusing one is accepted by Telegram but
     // renders nothing at all
-    const draftID = this.#store.nextDraftID(chatID)
+    const draftID = this.#store.nextDraftID(this.#peerOf(chatID)?.chatID ?? chatID)
     c.draft = draftID
     let draftMode: "rich" | "text" | "none" = "none"
     // Whether this client takes rich messages. Unknown until something is
@@ -2065,6 +2362,7 @@ export class TelegramBot {
     let allowContext = false
     try {
       sessionID = await this.#ensureSession(chatID, promptText)
+      if (!this.#store.statusMsg(chatID)) this.#detach("status", this.#updateStatus(chatID))
       ws = this.#activeWs(chatID)
       const injectContext = c.sessionFresh && this.#store.injectContext(chatID)
       allowContext = this.#store.injectContext(chatID)
@@ -2571,6 +2869,13 @@ export class TelegramBot {
               ac.abort()
               void ws.adapter.abort(sessionID).catch(logFail("abort"))
             }
+          } else if (evt.type === "ask.resolved") {
+            // answered on another client, or the turn that raised it ended: the card must not
+            // keep offering buttons for something that is over. A question's ❓ stays: that turn
+            // was stopped on purpose, and the answer still comes back as a message.
+            if (this.#chat(chatID).pending.get(evt.askID)?.kind !== "question") {
+              await this.#standDownCard(chatID, evt.askID, "✔ no longer waiting: answered elsewhere, or the turn ended")
+            }
           } else if (evt.type === "session.idle") {
             // the turn is done. Give prompt() a moment to return with its own
             // accounting (tokens, cost); if it's hung, finalize from liveParts.
@@ -2688,7 +2993,7 @@ export class TelegramBot {
         console.error(`[turn] empty reply with no error (session ${sessionID})`)
         await this.#tg.sendMessage({ chatID, text: "⚠️ the model returned nothing (no text, no error)" })
       }
-      void this.#updateStatus(chatID).catch(logFail("status"))
+      this.#detach("status", this.#updateStatus(chatID))
     } catch (err) {
       // same here: stopping mid-stream must not leave the draft racing the
       // message that replaces it
@@ -2776,8 +3081,21 @@ export class TelegramBot {
   // one pinned, edited-in-place message per chat: workspace, model, agent,
   // and context usage — a live status line so you don't need /settings just
   // to see what you're pointed at. Best-effort: a failure here never breaks
-  // the turn that triggered it (see the void .catch() call site).
+  // the turn that triggered it (background status updates are tracked).
   async #updateStatus(chatID: number): Promise<void> {
+    // Status updates can overlap with a first prompt. Serialize them so only
+    // one status message is created and the latest usage is written last.
+    const previous = this.#statusUpdates.get(chatID) ?? Promise.resolve()
+    const update = previous.catch(() => {}).then(() => this.#writeStatus(chatID))
+    this.#statusUpdates.set(chatID, update)
+    try {
+      await update
+    } finally {
+      if (this.#statusUpdates.get(chatID) === update) this.#statusUpdates.delete(chatID)
+    }
+  }
+
+  async #writeStatus(chatID: number): Promise<void> {
     const c = this.#chat(chatID)
     const ws = this.#activeWs(chatID)
     const modelKey = this.#store.model(chatID, ws.adapter.id)
@@ -2790,9 +3108,9 @@ export class TelegramBot {
       try {
         const msgs = await ws.adapter.messages(sessionID)
         const last = [...msgs].reverse().find((m) => m.tokens)
-        if (last?.tokens) {
-          const t = last.tokens
-          const total = t.input + t.output + t.reasoning + t.cache.read + t.cache.write
+        if (last?.tokens || msgs.length === 0) {
+          const t = last?.tokens
+          const total = t ? t.input + t.output + t.reasoning + t.cache.read + t.cache.write : 0
           const limit = modelKey ? (await ws.adapter.capabilities?.().catch(() => undefined))?.get(modelKey)?.contextLimit : undefined
           tokensLine = limit ? `${fmtCount(total)}/${fmtCount(limit)}` : fmtCount(total)
         }
@@ -2812,25 +3130,30 @@ export class TelegramBot {
       .filter(Boolean)
       .join(" · ")
 
-    const existing = this.#store.statusMsg(chatID)
+    let messageID = this.#store.statusMsg(chatID)
     // the pin is also the tap surface for the introspection screens: usage and
     // queue are ambient state (they live on this line already), so their
     // buttons belong here rather than in the command menu
     const pinButtons = kin([
       [btn("📊 usage", "u:o"), btn("⏳ queue", "q:o")],
     ])
-    if (existing) {
+    if (messageID) {
       try {
-        await this.#tg.editMessageText({ chatID, messageID: existing, text, replyMarkup: pinButtons })
-        return
+        await this.#tg.editMessageText({ chatID, messageID, text, replyMarkup: pinButtons })
       } catch (err) {
         console.error(`[status] edit of pinned msg failed, re-pinning: ${(err as Error)?.message ?? err}`)
+        messageID = null
       }
     }
     try {
-      const sent = await this.#tg.sendMessage({ chatID, text, disableNotification: true, replyMarkup: pinButtons })
-      this.#store.setStatusMsg(chatID, sent.message_id)
-      await this.#tg.pinChatMessage({ chatID, messageID: sent.message_id, disableNotification: true })
+      if (!messageID) {
+        const sent = await this.#tg.sendMessage({ chatID, text, disableNotification: true, replyMarkup: pinButtons })
+        messageID = sent.message_id
+        this.#store.setStatusMsg(chatID, messageID)
+      }
+      // A saved message id doesn't prove that the original pin succeeded.
+      // Reapply the pin after edits too, so a failed attempt heals itself.
+      await this.#tg.pinChatMessage({ chatID, messageID, disableNotification: true })
     } catch (err) {
       console.error(`[status] pin failed: ${(err as Error)?.message ?? err}`)
     }
@@ -3254,7 +3577,7 @@ export class TelegramBot {
   // The option ids go back verbatim. opencode's three are "once", "always" and
   // "reject", and "always" writes a standing rule — flattening that into a
   // boolean would drop the only answer that outlives this call.
-  async #askPrompt(chatID: number, adapter: HarnessAdapter, ask: AskRequest): Promise<void> {
+  async #askPrompt(chatID: number, adapter: Pick<HarnessAdapter, "respondAsk">, ask: AskRequest): Promise<void> {
     const c = this.#chat(chatID)
     // Everything outbound goes through mdToHtml (see #recording), so this is
     // markdown, not HTML. The detail is a command or a path: fenced, both
@@ -3354,6 +3677,55 @@ export class TelegramBot {
       record(msg.message_id)
     } catch (err) {
       console.error(`[tg] ask prompt failed: ${(err as Error).message}`)
+    }
+  }
+
+  /**
+   * A card the daemon raised on its own account (an agent asks to read or message another
+   * conversation). No harness is behind it, so it never came through a turn's event stream the
+   * way a harness's ask does: the gateway hands it over (core/ports.ts, DaemonAskPort).
+   *
+   * It goes to the chats that are on that conversation. If none is, it goes to every paired chat
+   * that has spoken to this bot, because a card shown nowhere makes the agent wait out its ten
+   * minutes and be denied. The card names both conversations, so it reads right in any chat.
+   */
+  async showDaemonAsk(ask: AskRequest, answer: (askID: string, optionID: string) => boolean): Promise<void> {
+    const onIt = (sessionID: string | null): boolean =>
+      sessionID !== null &&
+      (sessionID === ask.sessionID || this.#workspaces.some((w) => w.adapter.canonicalId?.(sessionID) === ask.sessionID))
+    const paired = [...this.#chats.entries()].filter(([id]) => this.#pairing.isPaired(this.#peerOf(id)?.chatID ?? id))
+    const here = paired.filter(([, c]) => onIt(c.sessionID))
+    const targets = (here.length ? here : paired).map(([id]) => id)
+    if (targets.length === 0 && this.#pairing.owner !== null) targets.push(this.#pairing.owner)
+    // answered through the gateway's port, the way any other client answers it
+    const through = { respondAsk: async (_sessionID: string, askID: string, optionID: string) => answer(askID, optionID) }
+    for (const chatID of targets) await this.#askPrompt(chatID, through, ask)
+  }
+
+  /** the card ended on some client (answered, denied or timed out): stand it down here too */
+  async closeDaemonAsk(askID: string, optionID: string | null): Promise<void> {
+    for (const [chatID, c] of this.#chats) {
+      const held = c.pending.get(askID)
+      if (!held) continue
+      const label = optionID ? (held.options.find((o) => o.id === optionID)?.label ?? optionID) : null
+      await this.#standDownCard(chatID, askID, label ? `✅ ${label} (answered elsewhere)` : "⏱ no answer in time, so it was denied")
+    }
+  }
+
+  /**
+   * A card in this chat that is over (answered on another client, timed out, or its turn ended):
+   * its buttons go and it says so, so nobody taps something that can no longer be answered. A
+   * card that is not here, or was already answered with a tap here, finds nothing to do.
+   */
+  async #standDownCard(chatID: number, askID: string, text: string): Promise<void> {
+    const c = this.#chat(chatID)
+    const held = c.pending.get(askID)
+    if (!held) return
+    c.pending.delete(askID)
+    if (held.ephemeralID !== undefined) {
+      await this.#tg.deleteEphemeralMessage({ chatID, ephemeralMessageID: held.ephemeralID }).catch(logFail("ask stand down"))
+    } else {
+      await this.#tg.editMessageText({ chatID, messageID: held.messageID, text, replyMarkup: null }).catch(logFail("ask stand down"))
     }
   }
 
@@ -3472,8 +3844,15 @@ export class TelegramBot {
       await this.#resolveAwaiting(chatID, prompt, m.message_id)
       return
     }
-    const queued = this.#turns.has(chatID)
-    this.#runTurn(chatID, () => this.#freeText(chatID, prompt), { prompt: { text: prompt, queuedAt: Date.now() } })
+    // bot forum: the same "free prompt in General opens a topic" rule a typed
+    // message follows — the turn (and everything after it) lands in the topic
+    let turnChat = chatID
+    if (!this.#isTopic(chatID)) {
+      const spawn = await this.#spawnTopic(chatID, prompt)
+      if (spawn !== null) turnChat = spawn
+    }
+    const queued = this.#turns.has(turnChat)
+    this.#runTurn(turnChat, () => this.#freeText(turnChat, prompt), { prompt: { text: prompt, queuedAt: Date.now() } })
     if (queued) {
       void this.#tg.setMessageReaction({ chatID, messageID: m.message_id, emoji: "👀" }).catch(logFail("reaction"))
     }
@@ -3483,8 +3862,13 @@ export class TelegramBot {
   async #sendPartFile(chatID: number, f: FilePart): Promise<void> {
     if (!f.filePath) return
     try {
-      if (IMAGE_RE.test(f.filePath)) await this.#tg.sendPhoto({ chatID, filePath: f.filePath })
-      else await this.#tg.sendDocument({ chatID, filePath: f.filePath })
+      const info = await stat(f.filePath)
+      if (!info.isFile() || info.size > 50 * 1024 * 1024) throw new Error("file must be no larger than 50 MB")
+      if (IMAGE_RE.test(f.filePath) && info.size <= 10 * 1024 * 1024) {
+        // Telegram also limits dimensions and aspect ratio. A photo refusal
+        // must still deliver the original as a document.
+        await this.#tg.sendPhoto({ chatID, filePath: f.filePath }).catch(() => this.#tg.sendDocument({ chatID, filePath: f.filePath }))
+      } else await this.#tg.sendDocument({ chatID, filePath: f.filePath })
     } catch (err) {
       await this.#tg.sendMessage({ chatID, text: `⚠️ couldn't send a produced file: ${(err as Error).message}` })
     }
@@ -3596,6 +3980,28 @@ export class TelegramBot {
     return {}
   }
 
+  async #compactConversation(chatID: number): Promise<void> {
+    const adapter = this.#activeWs(chatID).adapter
+    if (!adapter.compact) return this.#say(chatID, "This harness does not support compaction.")
+    if (this.#turns.has(chatID)) return this.#say(chatID, "Wait for the running turn to finish before compacting.")
+    const sessionID = await this.#resolveSessionID(chatID)
+    if (!sessionID) return this.#say(chatID, "Send a message before compacting this conversation.")
+    this.#runTurn(chatID, async () => {
+      const progress = await this.#tg.sendMessage({ chatID, text: "Compacting context…" })
+      let text: string
+      try {
+        const model = parseModelRef(this.#store.model(chatID, adapter.id) ?? undefined)
+        const result = await adapter.compact!(sessionID, model ? { model } : undefined)
+        text = result.ok ? "Context compacted." : `Couldn't compact: ${result.error ?? "the harness refused"}`
+      } catch (err) {
+        text = `Couldn't compact: ${(err as Error)?.message ?? String(err)}`
+      }
+      await this.#tg.editMessageText({ chatID, messageID: progress.message_id, text })
+        .catch(() => this.#tg.sendMessage({ chatID, text }))
+      this.#detach("status", this.#updateStatus(chatID))
+    }, { label: "Compact context" })
+  }
+
   async #settingsRoot(chatID: number, messageID: number | null): Promise<void> {
     const c = this.#chat(chatID)
     const ws = this.#activeWs(chatID)
@@ -3628,6 +4034,7 @@ export class TelegramBot {
       [btn("🔌 MCP servers", "set:mcp"), btn("🧩 Skills", "set:skills")],
       [btn(`🔎 Verbosity · ${verbosityPreset(this.#store.verbosity(chatID))}`, "set:verbosity")],
       [btn("📜 Conversation log", "set:log")],
+      ...(ws.adapter.compact ? [[btn("Compact context", "set:compact")]] : []),
       [btn(`🧩 Context · ${this.#store.injectContext(chatID) ? "on" : "off"}`, "ctx:toggle")],
       [btn("✏️ Rename conversation", "set:rename")],
       // always shown, even with a single workspace: this is now the only way
@@ -3893,7 +4300,7 @@ export class TelegramBot {
     c.del = null
     c.page = 0
     c.browse = null
-    void this.#updateStatus(chatID).catch(logFail("status"))
+    this.#detach("status", this.#updateStatus(chatID))
     await this.#settingsWorkspace(chatID, messageID)
   }
 
@@ -3974,7 +4381,10 @@ export class TelegramBot {
     // blind pick — it is the one row whose meaning isn't written on it
     const defaultRef = (await ws.adapter.defaultModel?.().catch(() => null)) ?? null
     const caps = (await ws.adapter.capabilities?.().catch(() => new Map<string, ModelCaps>())) ?? new Map<string, ModelCaps>()
-    const labels = await this.#modelLabels(chatID)
+    const all = await this.#modelLabels(chatID)
+    // OpenRouter is hundreds of rows. /model can name any of them; the menu
+    // keeps the short list, plus the one currently pinned so it stays visible.
+    const labels = all.filter((l) => l === "default" || l === current || !l.startsWith("openrouter/"))
     const pages = Math.max(1, Math.ceil(labels.length / MAX_LIST))
     c.modelList = labels
     // Opening the picker jumps to whichever page holds the current model, so
@@ -4157,6 +4567,7 @@ export class TelegramBot {
         else if (rest === "mcp") await this.#settingsMcp(chatID, msg.message_id)
         else if (rest === "skills") await this.#settingsSkills(chatID, msg.message_id)
         else if (rest === "log") await this.#logView(chatID)
+        else if (rest === "compact") await this.#compactConversation(chatID)
         // a new message rather than an edit of this one: the picker's own
         // "‹ Back" cleans itself up, and Settings is still there behind it
         else if (rest === "ls") await this.#listPicker(chatID, "Conversations:", false)
@@ -4272,7 +4683,7 @@ export class TelegramBot {
         else this.#store.setModel(chatID, harnessID, label)
         await this.#settingsModel(chatID, msg.message_id)
         await tg.answerCallbackQuery({ id: cq.id, text: label === "default" ? "back to default" : `model: ${label}` })
-        void this.#updateStatus(chatID).catch(logFail("status"))
+        this.#detach("status", this.#updateStatus(chatID))
         break
       }
       case "mdli": {
@@ -4293,7 +4704,7 @@ export class TelegramBot {
           replyMarkup: null,
         })
         await tg.answerCallbackQuery({ id: cq.id, text: `model: ${label}` })
-        void this.#updateStatus(chatID).catch(logFail("status"))
+        this.#detach("status", this.#updateStatus(chatID))
         if (retry) {
           // label-only queue payload: the ingest thunk can't survive a restart
           this.#runTurn(chatID, () => this.#freeText(chatID, retry.text, { ingest: retry.ingest }), {
@@ -4306,7 +4717,7 @@ export class TelegramBot {
         this.#store.setAgent(chatID, rest || null)
         await this.#settingsAgent(chatID, msg.message_id)
         await tg.answerCallbackQuery({ id: cq.id, text: `agent: ${rest || "default"}` })
-        void this.#updateStatus(chatID).catch(logFail("status"))
+        this.#detach("status", this.#updateStatus(chatID))
         break
       }
       // rename the conversation this chat is currently in, from the list
@@ -4461,6 +4872,14 @@ export class TelegramBot {
         if (!p) return tg.answerCallbackQuery({ id: cq.id, text: "menu expired - run /ls again" })
         const row = p.sessions[i]
         if (!row) return tg.answerCallbackQuery({ id: cq.id, text: "no such conversation" })
+        // bot forum: a conversation already lives in exactly one topic —
+        // opening it elsewhere would fork it into two addresses
+        const holder = [...this.#forumRegistry.keys()].find(
+          (syn) => syn !== chatID && (this.#chats.get(syn)?.sessionID ?? this.#store.chatContext(syn)?.sessionID) === row.id,
+        )
+        if (holder !== undefined) {
+          return tg.answerCallbackQuery({ id: cq.id, text: "already open in its own topic — messages there" })
+        }
         // opening a conversation from another project switches the chat into
         // that project too, so the next message routes to the right place.
         // A row from the cached index has no server yet — this is where one
@@ -4490,7 +4909,7 @@ export class TelegramBot {
           replyMarkup: null,
         })
         await tg.answerCallbackQuery({ id: cq.id, text: movedFrom ? `opened · ${target.name}` : "opened" })
-        void this.#updateStatus(chatID).catch(logFail("status"))
+        this.#detach("status", this.#updateStatus(chatID))
         break
       }
       case "deld": {
@@ -4515,7 +4934,14 @@ export class TelegramBot {
         const row = p.sessions[d.i]
         if (row) {
           const target = await this.#wsForRow(row)
-          await target.adapter.deleteSession(row.id)
+          const deletingThisTopic = this.#isTopic(chatID) && c.sessionID === row.id
+          if (!(await target.adapter.deleteSession(row.id))) return tg.answerCallbackQuery({ id: cq.id, text: "couldn't delete the conversation" })
+          if (this.#deletions) await this.#deletions.deleted(row.id)
+          else await this.conversationDeleted(row.id)
+          if (deletingThisTopic) {
+            c.del = null
+            return tg.answerCallbackQuery({ id: cq.id, text: "deleted" })
+          }
           if (c.sessionID === row.id && c.workspace === target.name) {
             // fall back to whatever's now the most recently active
             // conversation, so the refreshed list still has one highlighted
@@ -4643,7 +5069,7 @@ export class TelegramBot {
           c.freshOnNext = false
           c.picker = null
           c.del = null
-          void this.#updateStatus(chatID).catch(logFail("status"))
+          this.#detach("status", this.#updateStatus(chatID))
         }
         await this.#settingsWorkspace(chatID, msg.message_id)
         await tg.answerCallbackQuery({ id: cq.id, text: `removed ${w.name}` })
@@ -4675,7 +5101,7 @@ export class TelegramBot {
         c.picker = null
         c.del = null
         this.#rememberChat(chatID)
-        void this.#updateStatus(chatID).catch(logFail("status"))
+        this.#detach("status", this.#updateStatus(chatID))
         await this.#settingsHarness(chatID, msg.message_id)
         break
       }

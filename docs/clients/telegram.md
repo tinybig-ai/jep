@@ -64,6 +64,10 @@ Once paired, `/pair_status` shows the owner and the current code.
 
 ## Commands
 
+Use `/compact` or **Settings → Compact context** to compress the current
+conversation's context. The settings button appears when the harness supports
+compaction, including Codex. Wait for the current turn to finish first.
+
 | Command | What it does |
 |---|---|
 | `text` | a prompt on the current conversation |
@@ -100,6 +104,15 @@ return to the default).
   default model can't read them and offers vision-capable ones.
 - **Asks** (permission prompts, questions the model asks) arrive as buttons you
   tap; the safe answer is green, the destructive one red.
+
+## Topics
+
+With Threaded Mode enabled in @BotFather, use Telegram's **New Topic** action
+to start a conversation. Jep creates a separate chat and pins its context
+status in that topic. Later messages continue the same chat.
+
+`/new` is hidden from the command menu in topics mode. Typing it explains how
+to use New Topic. In plain-chat mode, `/new` still starts a fresh conversation.
 
 The full surface, environment variables, and deploy ritual live in
 [docs/PROCESSES.md](../PROCESSES.md).

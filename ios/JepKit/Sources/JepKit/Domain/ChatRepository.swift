@@ -108,6 +108,10 @@ public protocol ChatRepository: AnyObject, Sendable {
     func harnessOptions(harness: String) async throws -> [HarnessSetting]
     func sessionHarnessSettings(sessionId: String) async throws -> HarnessSettings
     func setSessionHarnessSetting(sessionId: String, key: String, enabled: Bool) async throws -> Bool
+    /// how this conversation keeps going, and the order a tap walks through (`/conversation-settings`)
+    func conversationMode(sessionId: String) async throws -> ConversationMode
+    /// set the conversation's mode; returns the mode the daemon now holds
+    func setConversationMode(sessionId: String, mode: String) async throws -> String
     func models(sessionId: String) async throws -> ModelChoices
     func setModel(sessionId: String, ref: String?) async throws -> Bool
     func agent(sessionId: String) async throws -> String?

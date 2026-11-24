@@ -70,6 +70,17 @@ class FakeChatRepository(
     override suspend fun newSession(title: String?, workspace: String?, path: String?, harness: String?, harnessSettings: Map<String, Boolean>, pod: Boolean, carryover: String?) =
         SessionSummary("new-session", title ?: "new", workspace ?: "", 0, 0, workspace, harness, pod = pod)
     override suspend fun harnessOptions(harness: String) = this.harness.options
+    override suspend fun stats() = dev.jep.client.domain.model.UsageStats(
+        dev.jep.client.domain.model.UsageTotal(0, 0.0, 0), dev.jep.client.domain.model.UsageTotal(0, 0.0, 0), dev.jep.client.domain.model.UsageTotal(0, 0.0, 0), 0,
+    )
+    override suspend fun devices() = emptyList<dev.jep.client.domain.model.Device>()
+    override suspend fun renameDevice(id: String, name: String) = true
+    override suspend fun revokeDevice(id: String) = false
+    override suspend fun restartDaemon() = true
+    override suspend fun conversationSettings(sessionId: String) = dev.jep.client.domain.model.ConversationSettings()
+    override suspend fun setConversationMode(sessionId: String, mode: String) = dev.jep.client.domain.model.ConversationSettings(mode)
+    override suspend fun setConversationSetting(sessionId: String, key: String, enabled: Boolean) = true
+    override suspend fun commands(sessionId: String) = emptyList<dev.jep.client.domain.model.SlashCommand>()
     override suspend fun sessionHarnessSettings(sessionId: String) = this.harness
     override suspend fun setSessionHarnessSetting(sessionId: String, key: String, enabled: Boolean): Boolean {
         harnessWrites += key to enabled

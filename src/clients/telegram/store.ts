@@ -67,6 +67,13 @@ export interface StoreData {
   // The counter lived only in memory, so every first turn after a restart
   // asked for draft 1 again and silently got no preview at all.
   draftSeq?: Record<string, number>
+  // bot forums: "synthetic topic id" -> the real peer it decodes to. Each topic
+  // of a private chat is presented to the bot as its own chat id, so every
+  // per-chat structure (state, queues, this store) keys on it unchanged. The
+  // map must outlive a restart, or the synthetic ids would reshuffle and the
+  // saved chatContexts would strand.
+  forumPeers?: Record<string, { chatID: number; threadID: number }>
+  forumSeq?: number
 }
 
 /** a queued prompt, in the only form worth replaying: what to say, and when it was said */
@@ -119,6 +126,8 @@ export class ChatStore {
   #draftSeq: Record<string, number>
   #pending: Record<string, PendingPrompt[]>
   #held: Record<string, HeldPrompt>
+  #forumPeers: Record<string, { chatID: number; threadID: number }>
+  #forumSeq: number
   #file: string | null
 
   // takes the persisted shape as-is: this grew to seven positional args and
@@ -126,6 +135,13 @@ export class ChatStore {
   constructor(d: StoreData, file: string | null) {
     this.#titles = d.titles ?? {}
     this.#models = migrateModelKeys(d.models ?? {})
+    // Preserve the effective choice of existing chats from older releases,
+    // while new conversations stop inheriting another chat's paid model.
+    const legacy = (d as StoreData & { lastModel?: Record<string, string> }).lastModel
+    for (const [chat, context] of Object.entries(d.chatContext ?? {})) {
+      const harness = context.harness
+      if (harness && legacy?.[harness] && !this.#models[`${chat}:${harness}`]) this.#models[`${chat}:${harness}`] = legacy[harness]!
+    }
     // read the old "internals" key as a fallback, so the rename does not reset
     // a chat that had already tuned it
     this.#verbosity = d.verbosity ?? (d as { internals?: Record<string, VerbositySettings> }).internals ?? {}
@@ -138,6 +154,8 @@ export class ChatStore {
     this.#draftSeq = d.draftSeq ?? {}
     this.#pending = d.pending ?? {}
     this.#held = d.held ?? {}
+    this.#forumPeers = d.forumPeers ?? {}
+    this.#forumSeq = Math.max(d.forumSeq ?? 9_000_000_000, ...Object.keys(this.#forumPeers).map(Number), ...Object.keys(d.chatContext ?? {}).map(Number))
     this.#file = file
   }
 
@@ -266,6 +284,51 @@ export class ChatStore {
     this.#save()
   }
 
+  /** bot forums: the real peer a synthetic topic id decodes to, or null */
+  allocateForumID(): number {
+    this.#forumSeq++
+    this.#save()
+    return this.#forumSeq
+  }
+
+  forumPeer(chatID: number): { chatID: number; threadID: number } | null {
+    return this.#forumPeers[String(chatID)] ?? null
+  }
+
+  /** every remembered topic peer, for the boot-time decode layer */
+  allForumPeers(): Array<{ syn: number; chatID: number; threadID: number }> {
+    return Object.entries(this.#forumPeers).map(([syn, v]) => ({ syn: Number(syn), chatID: v.chatID, threadID: v.threadID }))
+  }
+
+  rememberForumPeer(syn: number, peer: { chatID: number; threadID: number }): void {
+    this.#forumSeq = Math.max(this.#forumSeq, syn)
+    // the mapping is permanent once claimed (synthetic ids are monotonic and
+    // never reused), but the write happens anyway so a first allocation sticks
+    const prev = this.#forumPeers[String(syn)]
+    if (prev && prev.chatID === peer.chatID && prev.threadID === peer.threadID) return
+    this.#forumPeers[String(syn)] = peer
+    this.#save()
+  }
+
+  forgetForumPeer(syn: number): void {
+    if (String(syn) in this.#forumPeers === false) return
+    delete this.#forumPeers[String(syn)]
+    this.#save()
+  }
+
+  forgetChat(chatID: number): void {
+    const key = String(chatID)
+    delete this.#chatContext[key]
+    delete this.#statusMsgs[key]
+    delete this.#pending[key]
+    delete this.#held[key]
+    delete this.#verbosity[key]
+    delete this.#agents[key]
+    delete this.#injectContext[key]
+    for (const modelKey of Object.keys(this.#models)) if (modelKey.startsWith(`${key}:`)) delete this.#models[modelKey]
+    this.#save()
+  }
+
   /** last known sessions for a workspace dir, newest first */
   indexedSessions(dir: string, harness?: string | null): IndexedSession[] {
     return this.#sessionIndex[indexKey(dir, harness)] ?? []
@@ -326,6 +389,8 @@ export class ChatStore {
           draftSeq: this.#draftSeq,
           pending: this.#pending,
           held: this.#held,
+          forumPeers: this.#forumPeers,
+          forumSeq: this.#forumSeq,
         },
         null,
         2,

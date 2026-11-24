@@ -8,21 +8,30 @@ import assert from "node:assert/strict"
 import { mkdtemp, writeFile, chmod, readFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { JEP_CONTEXT, JEP_CONTEXT_FOOTER, contextFor } from "../src/core/transcript.ts"
+import { JEP_CONTEXT, JEP_CONTEXT_FOOTER, JEP_CONTEXT_VERSION, contextFor } from "../src/core/transcript.ts"
 
 const HEADER = `${JEP_CONTEXT}\n\n${JEP_CONTEXT_FOOTER}\n\n`
 
 test("the header is added once, then the conversation is briefed", () => {
-  const briefed = new Set<string>()
+  const briefed = new Map<string, number>()
   assert.equal(contextFor("hello", briefed, "s1"), HEADER)
-  assert.ok(briefed.has("s1"))
+  assert.equal(briefed.get("s1"), JEP_CONTEXT_VERSION)
   assert.equal(contextFor("again", briefed, "s1"), "")
   // another conversation is its own
   assert.equal(contextFor("hello", briefed, "s2"), HEADER)
 })
 
+test("a newer header briefs a conversation that was briefed before", () => {
+  const briefed = new Map<string, number>()
+  assert.equal(contextFor("hello", briefed, "s1"), HEADER)
+  // the daemon moved on and its header gained something the agent has not seen
+  briefed.set("s1", JEP_CONTEXT_VERSION - 1)
+  assert.equal(contextFor("again", briefed, "s1"), HEADER)
+  assert.equal(contextFor("once more", briefed, "s1"), "")
+})
+
 test("a text that already carries the header is not given a second one", () => {
-  const briefed = new Set<string>()
+  const briefed = new Map<string, number>()
   const text = `${JEP_CONTEXT}\n${JEP_CONTEXT_FOOTER}\n\nhello`
   assert.equal(contextFor(text, briefed, "s1"), "")
   // the client briefed it, so the adapter must not repeat it later either
@@ -30,9 +39,9 @@ test("a text that already carries the header is not given a second one", () => {
 })
 
 test("brief:false keeps the header off, and does not mark the conversation briefed", () => {
-  const briefed = new Set<string>()
+  const briefed = new Map<string, number>()
   assert.equal(contextFor("hello", briefed, "s1", false), "")
-  assert.ok(!briefed.has("s1"))
+  assert.equal(briefed.get("s1"), undefined)
   // turning the toggle back on briefs exactly once
   assert.equal(contextFor("hello", briefed, "s1", true), HEADER)
 })

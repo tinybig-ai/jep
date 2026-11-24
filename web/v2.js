@@ -321,6 +321,8 @@
       run: () => { if (current && $("attachInput")) $("attachInput").click() } },
     { keys: [CMD, SHIFT, "E"], label: "Change the model", button: () => $("model"), at: () => current && $("model"), match: (e) => mine(e) && e.shiftKey && e.code === "KeyE",
       run: () => { if (current && !$("model").hidden) $("model").click() } },
+    { keys: [CMD, ","], label: "Settings", button: () => $("brandSettings"), at: () => $("brandSettings") && $("general") && !$("general").open, match: (e) => mine(e) && !e.shiftKey && e.code === "Comma",
+      run: () => { $("brandSettings").click() } },
     { keys: [CMD, SHIFT, ","], label: "Conversation settings", button: () => $("gear"), at: () => current && $("gear"), match: (e) => mine(e) && e.shiftKey && e.code === "Comma",
       run: () => { if (current) $("gear").click() } },
     { keys: [CMD, SHIFT, "C"], label: "Copy the last reply", at: () => lastReply(), corner: "bottom", match: (e) => mine(e) && e.shiftKey && e.code === "KeyC",

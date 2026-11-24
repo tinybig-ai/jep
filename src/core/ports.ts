@@ -68,6 +68,10 @@ export interface TurnHost {
   enqueue(key: string, text: string, opts?: { resume?: boolean; notice?: boolean }): void
   /** after a restart: pick up every loop that was running; the conversations resumed. Absent, loops end with the restart. */
   resumeLoops?(): Promise<string[]>
+  /** after a restart: start the waiting prompts a restart kept (unless a stop held them); the conversations started. Absent, they wait for the next prompt. */
+  resumeQueues?(): Promise<string[]>
+  /** `jep-end-turn` from the agent: this turn is the last one a keep going runs (core/keepgoing.ts). Absent, the command stopped nothing. */
+  declareDone?(key: string): { keeping: boolean; declared: boolean; relentless?: boolean }
   /** conversations with a turn running, settling or waiting */
   busy(): number
   /** told as turns begin and end */
@@ -99,6 +103,54 @@ export interface ChatDirectory {
   askPerson(key: string, ask: { title: string; detail: string; options: { id: string; label: string; style?: "success" | "danger" }[] }, waitMs: number): Promise<string | null>
 }
 
+/**
+ * The cards the daemon raises on its own account (`askPerson`: an agent asks to read or message
+ * another conversation). A harness's ask reaches a client through that harness's event stream, but
+ * these have no harness behind them, so the gateway's own broadcast was the only road, and it
+ * reaches only the gateway's clients. Every other client that can put a card in front of the
+ * person (Telegram) subscribes here instead, so a card is never shown on one client and missing
+ * on another.
+ */
+export interface DaemonAskPort {
+  /** a card was raised: show it where the person is */
+  onRequested(listener: (ask: AskRequest) => void): () => void
+  /** a card ended: answered (on any client), denied, or timed out (`optionID` null) */
+  onResolved(listener: (askID: string, optionID: string | null) => void): () => void
+  /** answer a card from this client; false when it is already settled */
+  answer(askID: string, optionID: string): boolean
+}
+
+/** Successful conversation deletion, shared by every client. */
+export interface ConversationDeletionPort {
+  onDeleted(listener: (sessionID: string) => Promise<void> | void): () => void
+  deleted(sessionID: string): Promise<void>
+}
+
+export interface ConversationSnapshot {
+  info: ChatInfo
+  model: string | null
+  agent: string | null
+  archived: boolean
+  busy: boolean
+  messages: Message[]
+}
+
+/** Shared conversation access and change notifications for every client. */
+export interface ConversationSyncSource {
+  list(): Promise<ChatInfo[]>
+  read(id: string, limit: number): Promise<ConversationSnapshot | null>
+  update(id: string, patch: { title?: string; model?: string | null; agent?: string | null }): Promise<void>
+  prompt(id: string, text: string, opts?: Parameters<HarnessAdapter["prompt"]>[2]): Promise<Message>
+  stop(id: string): Promise<boolean>
+}
+
+export interface ConversationSyncPort extends ConversationSyncSource {
+  ready: boolean
+  connect(source: ConversationSyncSource): void
+  onChanged(listener: (id: string) => Promise<void> | void): () => void
+  changed(id: string): Promise<void>
+}
+
 export interface TurnListener {
   /** `resume`: this turn is itself a pick-up of one a restart cut off */
   started?(key: string, resume: boolean): void
@@ -110,6 +162,22 @@ export interface TurnListener {
 export interface HarnessMark {
   box: number
   path: string
+}
+
+/** One slash command a harness offers, as a client lists it. */
+export interface HarnessCommand {
+  /** without the leading slash */
+  name: string
+  description?: string
+  /** where the harness found it: "skill", "prompt", "extension", "builtin", … */
+  source: string
+}
+
+/** Daemon-wide execution policy, shared by every client and turn runner. */
+export interface ExecutionPolicyPort {
+  enabled(): boolean
+  setEnabled(enabled: boolean): void
+  apply(settings?: Record<string, boolean>): Record<string, boolean> | undefined
 }
 
 export interface HarnessAdapter {
@@ -232,9 +300,23 @@ export interface HarnessAdapter {
   diff?(sessionID: string): Promise<FileDiff[]>
   /** compress the conversation's context ("compact" in opencode). Optional:
    * only harnesses that expose it declare it, and a client hides the control
-   * when the adapter doesn't. False when the harness refused (a turn may be
-   * mid-flight). */
-  compact?(sessionID: string): Promise<boolean>
+   * when the adapter doesn't. Returns { ok: false, error: "..." } when the
+   * harness refused (a turn may be mid-flight, session not found, etc.). The
+   * selected model is supplied when known; adapters can recover it from the
+   * native conversation when omitted. */
+  compact?(sessionID: string, opts?: { model?: ModelRef }): Promise<{ ok: boolean; error?: string }>
+  /** The slash commands this harness accepts for a conversation (prompt
+   * templates, skills, built-ins), for a client to list. Optional: only
+   * harnesses with a way to ask declare it. Running one is a normal prompt that
+   * starts with "/" + name. Empty when the harness has none. */
+  commands?(sessionID: string): Promise<HarnessCommand[]>
+  /** Put jep's context header into the conversation as a message of its own,
+   * if it is due, without the model answering it. The turn engine calls this
+   * before a slash command, which must reach the harness as the first thing in
+   * its prompt. Optional: without it a command skips the header and the next
+   * ordinary message carries it. True when the header was recorded or was not
+   * due; false when it could not be recorded. */
+  brief?(sessionID: string, opts?: { model?: ModelRef }): Promise<boolean>
   /** Stop the child server. Sessions stay on disk for the next boot. */
   close(): Promise<void>
 }

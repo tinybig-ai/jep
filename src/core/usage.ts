@@ -70,6 +70,168 @@ export function usageOf(messages: Message[]): Usage {
   return u
 }
 
+export interface UsageDay extends Usage {
+  /** local calendar day, YYYY-MM-DD */
+  day: string
+}
+
+export interface UsageRank extends Usage {
+  key: string
+}
+
+export interface UsageStats {
+  /** the requested window, oldest first, with empty days kept (a chart needs them) */
+  days: UsageDay[]
+  /** by model, most tokens first */
+  models: UsageRank[]
+  /** by harness, most tokens first */
+  harnesses: UsageRank[]
+  today: Usage
+  week: Usage
+  all: Usage
+  /** conversations that held at least one priced or token-counted turn */
+  sessions: number
+  /** conversations read to build this answer */
+  scanned: number
+  /** the first and last counted turn, epoch ms */
+  first: number | null
+  last: number | null
+  busiest: UsageDay | null
+}
+
+export interface UsageSample {
+  harness: string
+  messages: Message[]
+}
+
+const dayKey = (t: number): string => {
+  const d = new Date(t)
+  const month = String(d.getMonth() + 1).padStart(2, "0")
+  const day = String(d.getDate()).padStart(2, "0")
+  return `${d.getFullYear()}-${month}-${day}`
+}
+
+const startOfDay = (t: number): number => {
+  const d = new Date(t)
+  d.setHours(0, 0, 0, 0)
+  return d.getTime()
+}
+
+function tally(u: Usage, m: Message): void {
+  u.turns++
+  if (m.tokens) {
+    u.input += m.tokens.input
+    u.output += m.tokens.output
+    u.reasoning += m.tokens.reasoning
+    u.cacheRead += m.tokens.cache.read
+    u.cacheWrite += m.tokens.cache.write
+    u.total = u.input + u.output + u.reasoning + u.cacheRead + u.cacheWrite
+  }
+  if (typeof m.cost === "number") {
+    u.cost += m.cost
+    u.priced++
+  } else {
+    u.unpriced++
+  }
+  if (m.model && !u.models.includes(m.model)) u.models.push(m.model)
+}
+
+const finish = (u: Usage): Usage => {
+  u.total = u.input + u.output + u.reasoning + u.cacheRead + u.cacheWrite
+  return u
+}
+
+/**
+ * Usage across conversations, by day, model and harness. The transcripts are
+ * the only ledger jep keeps, so this is a pure roll-up of what they already
+ * hold — open a stats view rarely, and let it read the conversations it can
+ * reach; it does not invent history it never saw.
+ */
+export function statsOf(samples: UsageSample[], opts: { days?: number; now?: number } = {}): UsageStats {
+  const now = opts.now ?? Date.now()
+  const span = Math.max(1, Math.min(366, Math.floor(opts.days ?? 30)))
+  const byDay = new Map<string, Usage>()
+  const byModel = new Map<string, Usage>()
+  const byHarness = new Map<string, Usage>()
+  const all = emptyUsage()
+  let sessions = 0
+  let scanned = 0
+  let first: number | null = null
+  let last: number | null = null
+
+  for (const sample of samples) {
+    scanned++
+    let counted = false
+    const harness = sample.harness || "unknown"
+    for (const m of sample.messages) {
+      if (!m.tokens && m.cost === undefined) continue
+      const key = dayKey(m.time)
+      const day = byDay.get(key) ?? emptyUsage()
+      const model = m.model || "unreported"
+      const modelUsage = byModel.get(model) ?? emptyUsage()
+      const harnessUsage = byHarness.get(harness) ?? emptyUsage()
+      tally(day, m)
+      tally(modelUsage, m)
+      tally(harnessUsage, m)
+      tally(all, m)
+      byDay.set(key, day)
+      byModel.set(model, modelUsage)
+      byHarness.set(harness, harnessUsage)
+      counted = true
+      if (first === null || m.time < first) first = m.time
+      if (last === null || m.time > last) last = m.time
+    }
+    if (counted) sessions++
+  }
+
+  // a real calendar walk, so a DST change does not slide the labels
+  const days: UsageDay[] = []
+  const midnight = startOfDay(now)
+  for (let i = span - 1; i >= 0; i--) {
+    const d = new Date(midnight)
+    d.setDate(d.getDate() - i)
+    const bucket = byDay.get(dayKey(d.getTime())) ?? emptyUsage()
+    days.push({ day: dayKey(d.getTime()), ...finish(bucket) })
+  }
+
+  const weekStart = new Date(midnight)
+  weekStart.setDate(weekStart.getDate() - 6)
+  const week = emptyUsage()
+  for (const d of days) {
+    if (new Date(d.day + "T00:00:00").getTime() < weekStart.getTime()) continue
+    // add without touching model lists (the ranks carry those)
+    week.input += d.input
+    week.output += d.output
+    week.reasoning += d.reasoning
+    week.cacheRead += d.cacheRead
+    week.cacheWrite += d.cacheWrite
+    week.total += d.total
+    week.cost += d.cost
+    week.priced += d.priced
+    week.unpriced += d.unpriced
+    week.turns += d.turns
+  }
+
+  const today = days[days.length - 1] ?? { day: dayKey(now), ...emptyUsage() }
+  const rank = (map: Map<string, Usage>): UsageRank[] =>
+    [...map].map(([key, u]) => ({ key, ...finish(u) })).sort((a, b) => b.total - a.total)
+
+  return {
+    days,
+    models: rank(byModel),
+    harnesses: rank(byHarness),
+    today,
+    week,
+    all: finish(all),
+    sessions,
+    scanned,
+    first,
+    last,
+    // on a tie the more recent day wins: "busiest" should read as "latest best"
+    busiest: days.reduce<UsageDay | null>((best, d) => (!best || d.total >= best.total ? d : best), null),
+  }
+}
+
 export function addUsage(a: Usage, b: Usage): Usage {
   return {
     input: a.input + b.input,

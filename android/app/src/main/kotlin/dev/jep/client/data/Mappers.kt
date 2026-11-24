@@ -12,6 +12,8 @@ import dev.jep.client.data.dto.DirEntryDto
 import dev.jep.client.data.dto.FileDiffDto
 import dev.jep.client.data.dto.GitCommitDto
 import dev.jep.client.data.dto.GitRes
+import dev.jep.client.data.dto.ConversationSettingsRes
+import dev.jep.client.data.dto.SlashCommandDto
 import dev.jep.client.data.dto.HarnessSettingDto
 import dev.jep.client.data.dto.HarnessSettingsRes
 import dev.jep.client.data.dto.ImportableDto
@@ -38,6 +40,8 @@ import dev.jep.client.domain.model.DirEntry
 import dev.jep.client.domain.model.FileDiff
 import dev.jep.client.domain.model.GitCommit
 import dev.jep.client.domain.model.GitSnapshot
+import dev.jep.client.domain.model.ConversationSettings
+import dev.jep.client.domain.model.SlashCommand
 import dev.jep.client.domain.model.HarnessSetting
 import dev.jep.client.domain.model.HarnessSettings
 import dev.jep.client.domain.model.ImportableSession
@@ -97,6 +101,10 @@ fun GitCommitDto.toDomain() = GitCommit(hash, shortHash, subject, author, time)
 fun GitRes.toDomain() = GitSnapshot(isRepository, branch, head?.toDomain(), changedFiles, commits.map { it.toDomain() })
 
 fun HarnessSettingDto.toDomain() = HarnessSetting(id, label, description, default, danger)
+
+fun ConversationSettingsRes.toDomain() = ConversationSettings(mode, modes, options.map { it.toDomain() }, values)
+
+fun SlashCommandDto.toDomain() = SlashCommand(name, description, source)
 
 fun HarnessSettingsRes.toDomain() = HarnessSettings(options.map { it.toDomain() }, values, compact)
 

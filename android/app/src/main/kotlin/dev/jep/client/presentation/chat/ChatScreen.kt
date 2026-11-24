@@ -246,6 +246,8 @@ import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 import java.net.URLEncoder
 import dev.jep.client.domain.model.SendMode
+import dev.jep.client.domain.model.ConversationSettings
+import dev.jep.client.domain.model.SlashCommand
 import dev.jep.client.domain.model.ChatMessage
 import dev.jep.client.domain.model.ChatPart
 import dev.jep.client.domain.model.Role
@@ -906,6 +908,11 @@ fun ChatScreen(
                             leadingIcon = { Icon(Icons.Filled.Settings, null) },
                             onClick = { menu = false; settingsOpen = true },
                         )
+                        if (state.conversation.modes.isNotEmpty()) DropdownMenuItem(
+                            text = { Text(modeLabel(state.conversation)) },
+                            leadingIcon = { Icon(Icons.Filled.Refresh, null) },
+                            onClick = { vm.cycleMode() },
+                        )
                         DropdownMenuItem(
                             text = { Text("Loop") },
                             leadingIcon = { Icon(Icons.Filled.Refresh, null) },
@@ -996,6 +1003,10 @@ fun ChatScreen(
                 )
             }
         }
+        state.loop?.let { LoopBar(it, onStop = { vm.stopLoop() }, onClear = { vm.clearLoop() }) }
+        // sticky, so it must say so while nothing is running: a switch you
+        // cannot see is how every later request keeps going without being asked
+        if (state.loop == null && state.conversation.mode != "normal") KeepGoingArmedRow(modeLabel(state.conversation)) { vm.cycleMode() }
         AnimatedVisibility(state.failure != null || state.notice != null) {
             Surface(color = MaterialTheme.colorScheme.surfaceVariant) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -1188,7 +1199,6 @@ fun ChatScreen(
                 }
             }
         }
-        state.loop?.let { LoopBar(it, onStop = { vm.stopLoop() }, onClear = { vm.clearLoop() }) }
         Composer(
             vm,
             replyTo,
@@ -1351,6 +1361,15 @@ private fun SettingsSheet(
                     subtitle = state.mcp?.let { if (it.isEmpty()) "none configured" else "${it.size} configured" } ?: "loading…",
                     onPick = onMcp,
                     leading = { SettingIcon(Icons.Filled.Dns) },
+                )
+
+                // Whatever switches the daemon declares for a conversation (its mode has
+                // its own control above): rendered from data, like the harness's own.
+                HarnessSettingsSection(
+                    options = state.conversation.options,
+                    values = state.conversation.values,
+                    onChange = { id: String, enabled: Boolean -> vm.setConversationSetting(id, enabled) },
+                    title = "CONVERSATION",
                 )
 
                 // Last, and the only destructive thing here: whatever this
@@ -3924,6 +3943,9 @@ private fun Composer(
                     }
                 }
             }
+            // A message that starts with a slash offers the harness's commands. The
+            // names come from the daemon; nothing here knows what a harness has.
+            SlashSuggestions(draft, state.commands) { vm.setDraft("/$it ") }
             // How tall the draft really is, measured the way the field will lay
             // it out: the same style, the same width, the reader's own text
             // size. A character count cannot do this — the characters per line
@@ -4200,7 +4222,8 @@ internal fun AutoContinueRow(m: ChatMessage) {
         HorizontalDivider(Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant)
         Text(
             when (val part = m.parts.firstOrNull()) {
-                is ChatPart.LoopTurn -> "· loop ${part.iteration}/${part.max} ·"
+                // jep's turn count and its backstop are internal: the boundary names neither
+                is ChatPart.LoopTurn -> "· jep · keeping going ·"
                 is ChatPart.NoticeTurn -> when (part.kind) {
                     "resumed" -> "· jep · restarted, picking the work back up ·"
                     "retry" -> "· jep · a tool call came out as text and did not run, asking again ·"
@@ -4328,12 +4351,36 @@ private fun OlderPullIndicator(pull: OlderPull, modifier: Modifier = Modifier) {
 }
 
 /**
- * A loop, over the composer while it runs and after it ends: where it is, what the goal is, and the one
- * button that matters (Stop while it runs, Dismiss once it is over). One quiet line, not another bubble.
+ * Keep going, under the title rather than over the composer: it says what the conversation is doing for
+ * as long as it is doing it, and where you read the conversation's name from. One quiet line, not another
+ * bubble, with the one button that matters (Stop while it runs, Dismiss once it is over).
  */
+/** a mode other than normal is on for this chat and nothing is in flight: one line,
+ *  because forgetting it costs a turn on every request from here on */
+@Composable
+private fun KeepGoingArmedRow(label: String, onNext: () -> Unit) {
+    Surface(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp).testTag("keep-going-armed"),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(Radius.card),
+    ) {
+        Row(Modifier.padding(start = 12.dp, end = 4.dp, top = 2.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                label,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            TextButton(onClick = onNext) { Text("Next mode") }
+        }
+    }
+}
+
 @Composable
 private fun LoopBar(loop: dev.jep.client.domain.repository.LoopInfo, onStop: () -> Unit, onClear: () -> Unit) {
     val turn = (loop.iteration + if (loop.running) 1 else 0).coerceAtMost(loop.max)
+    // it ended the way everyone wanted: no bar left behind for the person to
+    // dismiss. Anything else (out of time, turning in place, a Stop) stays.
+    LaunchedEffect(loop.status, loop.running) { if (!loop.running && loop.status == "done") onClear() }
     val detail = buildList {
         add(loop.goal)
         loop.verifyCode?.let { add("verify exit $it") }
@@ -4345,8 +4392,14 @@ private fun LoopBar(loop: dev.jep.client.domain.repository.LoopInfo, onStop: () 
         shape = RoundedCornerShape(Radius.card),
     ) {
         Row(Modifier.padding(start = 12.dp, end = 4.dp, top = 2.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+            // the 200 is jep's backstop, not a budget the person chose, so it
+            // never reaches this line; and a keep going that ended because the
+            // agent said it was finished is not news worth a bar, so it clears
+            // itself below
             Text(
-                "Loop ${loop.status} $turn/${loop.max}",
+                if (loop.running) "Keeping going · turn $turn"
+                else if (loop.status == "done") "Finished after $turn ${if (turn == 1) "turn" else "turns"}"
+                else "Stopped after $turn ${if (turn == 1) "turn" else "turns"}",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurface,
             )
@@ -4430,6 +4483,57 @@ private fun GuestCard(message: ChatMessage, onInfo: (ChatMessage) -> Unit, cards
                     overflow = TextOverflow.Ellipsis,
                 )
                 AssistantBody(message, onInfo, false, false, cards, cardView)
+            }
+        }
+    }
+}
+
+
+/** the mode's own name as the daemon gave it, capitalised for the button */
+private fun modeLabel(c: ConversationSettings): String =
+    c.mode.replaceFirstChar { it.uppercase() }.let { if (c.modes.size > 1) "Mode: $it" else it }
+
+
+/** matching rule shared with the web client: names only, a prefix before a substring */
+internal fun slashMatches(draft: String, commands: List<SlashCommand>): List<SlashCommand> {
+    if (!draft.startsWith("/") || draft.any { it.isWhitespace() }) return emptyList()
+    val q = draft.drop(1).lowercase()
+    return commands
+        .mapNotNull { c ->
+            val n = c.name.lowercase()
+            val rank = if (n.startsWith(q)) 0 else if (n.contains(q)) 1 else return@mapNotNull null
+            rank to c
+        }
+        .sortedBy { it.first }
+        .map { it.second }
+        .take(8)
+}
+
+@Composable
+private fun SlashSuggestions(draft: String, commands: List<SlashCommand>, onPick: (String) -> Unit) {
+    val hits = remember(draft, commands) { slashMatches(draft, commands) }
+    if (hits.isEmpty()) return
+    Surface(
+        Modifier.fillMaxWidth().padding(bottom = 6.dp).testTag("slash-menu"),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(Radius.card),
+    ) {
+        Column {
+            hits.forEach { c ->
+                Column(
+                    Modifier.fillMaxWidth().clickable { onPick(c.name) }.padding(horizontal = 12.dp, vertical = 6.dp),
+                ) {
+                    Text("/${c.name}", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
+                    if (c.description.isNotBlank()) {
+                        Text(
+                            c.description,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
             }
         }
     }

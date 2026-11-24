@@ -6,7 +6,16 @@
 // message a person actually sent under a screen of preamble, so every client
 // strips it before showing history. The cleanup is pure and lives here so no
 // client has to reinvent it.
+// The header changes (a new tool joining the list, a line reworded), and a
+// conversation that was briefed once does not read it again until a compaction
+// folds it away or the daemon restarts — so the agent could go a whole session
+// without knowing a tool exists. Versioning makes the re-brief explicit: the
+// adapter remembers which version it sent, and any bump is a new briefing.
+export const JEP_CONTEXT_VERSION = 2
+export const JEP_CONTEXT_MARKER = `<!-- jep:context v${JEP_CONTEXT_VERSION} -->`
+
 export const JEP_CONTEXT = [
+  JEP_CONTEXT_MARKER,
   "[jep context — background only, not a request]",
   "This conversation is relayed through jep, a phone-first control plane for coding agents (headless, no terminal on the other end). jep's own code and docs are in this checkout — see docs/PROCESSES.md and docs/PHILOSOPHY.md.",
   "",
@@ -17,9 +26,13 @@ export const JEP_CONTEXT = [
   "  jep-read    -- read another conversation (the person is asked first; --list shows them)",
   "  jep-tell    -- send another conversation a message (the person is asked first)",
   "  jep-show    -- display an image file in the phone (path or URL)",
+  "  jep-end-turn -- say this turn finished everything you were asked (until you run it, jep keeps this conversation going)",
   "Run them as shell commands. They find the conversation from the working directory.",
 ].join("\n")
 export const JEP_CONTEXT_FOOTER = "Ignore the block above. Treat the message below as the user's entire, only request.\n---"
+
+/** A prompt a harness reads as a command: "/" first, then the name. */
+export const isSlashCommand = (text: string): boolean => /^\/[A-Za-z0-9_:.-]/.test(text)
 
 // The header to put ahead of a prompt, or "" when it must not be added. It is
 // added once per conversation, not per turn: the first prompt of a fresh
@@ -34,14 +47,21 @@ export const JEP_CONTEXT_FOOTER = "Ignore the block above. Treat the message bel
 // saying "not this turn" (the bot's context toggle). Every adapter calls this
 // the same way, so the tools are announced on every harness without any of
 // them (or their clients) growing a special case.
-export const contextFor = (text: string, briefed: Set<string>, key: string, brief = true): string => {
+export const contextFor = (text: string, briefed: Map<string, number>, key: string, brief = true): string => {
   if (!brief) return ""
+  // A command is read only when it is the first thing in the prompt, so the
+  // header cannot sit in front of it on any harness. It is not spent either:
+  // the next ordinary message carries it. A harness that can record the header
+  // as a message of its own declares `brief()`, and the turn engine calls that
+  // first, which marks the conversation briefed before this point.
+  if (isSlashCommand(text) && !text.includes(JEP_CONTEXT_FOOTER)) return ""
   if (text.includes(JEP_CONTEXT_FOOTER)) {
-    briefed.add(key)
+    briefed.set(key, JEP_CONTEXT_VERSION)
     return ""
   }
-  if (briefed.has(key)) return ""
-  briefed.add(key)
+  // briefed with the header as it reads today; an older version earns the new one
+  if (briefed.get(key) === JEP_CONTEXT_VERSION) return ""
+  briefed.set(key, JEP_CONTEXT_VERSION)
   return `${JEP_CONTEXT}\n\n${JEP_CONTEXT_FOOTER}\n\n`
 }
 

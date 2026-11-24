@@ -204,7 +204,7 @@ test("a placeholder id and the real id it became share one line", { timeout: 500
   }
 })
 
-test("stop with all drops what waits, and hands its words back", async () => {
+test("stop with all holds what waits: nothing is dropped, and the next prompt goes first", async () => {
   const a = stallable()
   const { base, headers, g } = await startWith(a)
   try {
@@ -216,13 +216,18 @@ test("stop with all drops what waits, and hands its words back", async () => {
     await sleep(50)
     const stop = await fetch(`${base}/stop`, { method: "POST", headers, body: JSON.stringify({ id: "s1", all: true }) })
     const j = (await stop.json()) as { dropped: string[] }
-    assert.deepEqual(j.dropped, ["second"])
-    const j2 = (await (await second).json()) as { cancelled?: boolean }
-    assert.equal(j2.cancelled, true)
+    assert.deepEqual(j.dropped, [], "a stop never throws the queue away")
     a.release("first")
     await first
-    await sleep(50)
-    assert.deepEqual(a.calls, ["first"], "nothing started after the stop")
+    await sleep(100)
+    assert.deepEqual(a.calls, ["first"], "the held queue did not start on its own")
+    // the person's next prompt runs first and the held queue follows it, in one turn as any queue does
+    const third = post("third")
+    const answered = (await (await third).json()) as { cancelled?: boolean; message?: unknown }
+    assert.notEqual(answered.cancelled, true)
+    const held = (await (await second).json()) as { cancelled?: boolean }
+    assert.notEqual(held.cancelled, true, "the held prompt was answered, not cancelled")
+    assert.match(a.calls[1] ?? "", /^third[\s\S]*second/)
   } finally {
     await g.close()
   }
@@ -586,6 +591,61 @@ test("paired devices can be renamed and revoked individually", async () => {
     assert.equal(((await revoked.json()) as { current: boolean }).current, false)
     const dead = await fetch(base + "/devices", { method: "POST", headers: { authorization: "Bearer " + second, "content-type": "application/json" }, body: "{}" })
     assert.equal(dead.status, 401)
+  } finally {
+    await g.close()
+  }
+})
+
+test("stats sum tokens and cost across conversations, and stay behind the token gate", async () => {
+  const now = Date.now()
+  const one: SessionSummary = { id: "s1", title: "One", workspace: "/tmp/ws", createdAt: 1, updatedAt: now }
+    const assistantTurn: Message = {
+      id: "m1",
+      sessionID: "s1",
+      role: "assistant",
+      time: now,
+      parts: [],
+      model: "a/one",
+      tokens: { input: 10, output: 5, reasoning: 1, cache: { read: 2, write: 3 } },
+      cost: 0.25,
+    }
+      const userTurn: Message = { id: "m2", sessionID: "s1", role: "user", time: now, parts: [] }
+      const adapter = {
+        ...fakeAdapter(),
+        listSessions: async () => [one],
+        messages: async () => [assistantTurn, userTurn],
+      }
+  const g = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter }],
+    dataHome: mkdtempSync(join(tmpdir(), "gw-stats-")),
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+  })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const denied = await fetch(`${base}/stats`, { method: "POST", body: "{}" })
+    assert.equal(denied.status, 401)
+
+    const token = await pair(base, "TESTCODE")
+    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" }
+    const stats = (await (
+      await fetch(`${base}/stats`, { method: "POST", headers, body: JSON.stringify({ days: 30 }) })
+    ).json()) as {
+      days: unknown[]
+      sessions: number
+      models: Array<{ key: string; total: number }>
+      all: { total: number; turns: number; cost: number }
+      today: { total: number }
+    }
+    assert.equal(stats.days.length, 30)
+    assert.equal(stats.sessions, 1, "one conversation held a counted turn")
+    assert.equal(stats.all.turns, 1, "the user message is not a turn with usage")
+    assert.equal(stats.all.total, 21)
+    assert.equal(stats.today.total, 21)
+    assert.equal(stats.all.cost, 0.25)
+    assert.equal(stats.models[0]?.key, "a/one")
+    assert.equal(stats.models[0]?.total, 21)
   } finally {
     await g.close()
   }
@@ -1272,6 +1332,7 @@ test("a harness that misses its listing budget degrades instead of hanging the l
 test("/compact advances to the harness and 501s when it isn't offered", async () => {
   const a = fakeAdapter()
   const calls: string[] = []
+  const compactModels: unknown[] = []
   const g = await startGateway({
     adapters: () => [{ name: "fake-ws", adapter: a }],
     dataHome: mkdtempSync(join(tmpdir(), "gw-test-")),
@@ -1289,16 +1350,21 @@ test("/compact advances to the harness and 501s when it isn't offered", async ()
     // no adapter-declared compact: the control is hidden, not broken — 501 says so
     assert.equal((await post("/compact")).status, 501)
 
-    a.compact = async (sessionID) => {
+    a.compact = async (sessionID, opts) => {
       calls.push(sessionID)
-      return true
+      compactModels.push(opts?.model)
+      return { ok: true }
     }
     const ok = await post("/compact")
     assert.equal(ok.status, 200)
     assert.deepEqual(calls, ["s1"])
+    assert.deepEqual(compactModels, [undefined])
+    await fetch(`${base}/setmodel`, { method: "POST", headers, body: JSON.stringify({ id: "s1", model: "provider/nested/model" }) })
+    assert.equal((await post("/compact")).status, 200)
+    assert.deepEqual(compactModels[1], { providerID: "provider", modelID: "nested/model" })
 
     // a harness refusing (a turn mid-flight) is a 409, not a 500
-    a.compact = async () => false
+    a.compact = async () => ({ ok: false, error: "refused" })
     assert.equal((await post("/compact")).status, 409)
 
     // A summarize that ran out of time is not a refusal: reporting it as one
@@ -1612,6 +1678,44 @@ test("a relative link is read from the session's own workspace", async () => {
   }
 })
 
+test("a file the agent read outside the roots can be previewed as text, like /file", async () => {
+  // The right column lists every file a tool named, including one outside the
+  // workspace (a /tmp log, say). /file already serves those because the
+  // transcript shows them; /read must agree, or clicking one in the preview
+  // says 403 for a file the conversation already displayed.
+  const ws = mkdtempSync(join(tmpdir(), "gw-ws-"))
+  const outside = mkdtempSync(join(tmpdir(), "gw-out-"))
+  const readByAgent = join(outside, "notes.txt")
+  const secret = join(outside, "secret.txt")
+  writeFileSync(readByAgent, "read by the agent\n")
+  writeFileSync(secret, "never in the transcript\n")
+  const a = stallable()
+  const adapter = {
+    ...a.adapter,
+    async messages(): Promise<Message[]> {
+      return [{
+        id: "m0", sessionID: "s1", role: "assistant", time: 1,
+        parts: [{ kind: "tool", id: "t1", name: "Read", input: { filePath: readByAgent }, output: {} }],
+      }]
+    },
+  }
+  const g = await startGateway({ adapters: () => [{ name: "fake-ws", adapter: { ...adapter, workspace: ws } }], dataHome: mkdtempSync(join(tmpdir(), "gw-q-")), port: 0, pairCode: "TESTCODE", pairLimit: 100 })
+  const base = `http://127.0.0.1:${g.port}`
+  const headers = { authorization: `Bearer ${await pair(base, "TESTCODE")}`, "content-type": "application/json" }
+  const read = async (path: string) => {
+    const res = await fetch(`${base}/read`, { method: "POST", headers, body: JSON.stringify({ id: "s1", path }) })
+    return { status: res.status, body: (await res.json()) as { text?: string; error?: string } }
+  }
+  try {
+    const ok = await read(readByAgent)
+    assert.equal(ok.status, 200, `expected the transcript's file to be readable, got ${ok.status} ${ok.body.error ?? ""}`)
+    assert.match(ok.body.text ?? "", /read by the agent/)
+    assert.equal((await read(secret)).status, 403, "a path no tool named is still refused")
+  } finally {
+    await g.close()
+  }
+})
+
 test("the served roots hold workspaces and uploads, never jep's own stores or a symlink out", async () => {
   // dataHome also holds the device tokens and the mirrored provider
   // credentials; a paired phone must not be able to read either
@@ -1741,6 +1845,38 @@ test("/history carries every ask the conversation raised, and how each ended", a
     )
     assert.equal(asks[2]!.messageID, "m1", "the anchor rides along, so the card can be placed")
     assert.equal(asks[2]!.at, 30)
+  } finally {
+    await g.close()
+  }
+})
+
+test("an ask in a relentless conversation is stood down when nobody answers, and a normal one is left waiting", async () => {
+  const a = stallable()
+  let rejected = 0
+  a.adapter.rejectAsk = async () => { rejected++; return true }
+  const g = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter: a.adapter }],
+    dataHome: mkdtempSync(join(tmpdir(), "gw-test-")),
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+    askExpiryMs: { keep: 40, relentless: 40 },
+  })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const token = await pair(base, "TESTCODE")
+    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" }
+    const ask = (id: string) =>
+      ({ type: "ask.requested", sessionID: "s1", ask: { id, sessionID: "s1", title: "question", options: [{ id: "a", label: "A" }], kind: "question" } }) as DomainEvent
+    a.feed(ask("q_normal"))
+    await sleep(120)
+    assert.equal(rejected, 0, "a normal conversation waits for the person")
+    await fetch(`${base}/set-conversation-mode`, { method: "POST", headers, body: JSON.stringify({ id: "s1", mode: "relentless" }) })
+    a.feed(ask("q_relentless"))
+    await sleep(200)
+    assert.equal(rejected, 1, "the relentless one is stood down so the agent decides")
+    const hist = (await (await fetch(`${base}/history`, { method: "POST", headers, body: JSON.stringify({ id: "s1" }) })).json()) as { asks: Array<{ id: string; state: string }> }
+    assert.equal(hist.asks.find((x) => x.id === "q_relentless")?.state, "closed")
   } finally {
     await g.close()
   }
@@ -1900,8 +2036,35 @@ test("/harness-settings says whether the conversation's harness can compact", as
     const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" }
     const ask = async () => ((await (await fetch(`${base}/harness-settings`, { method: "POST", headers, body: JSON.stringify({ id: "s1" }) })).json()) as { compact: boolean }).compact
     assert.equal(await ask(), false, "no compact port: the phone shows no Compact row")
-    a.compact = async () => true
+    a.compact = async () => ({ ok: true })
     assert.equal(await ask(), true)
+  } finally {
+    await g.close()
+  }
+})
+
+test("/conversation-settings names the modes and /set-conversation-mode walks them", async () => {
+  const a = fakeAdapter()
+  const g = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter: a }],
+    dataHome: mkdtempSync(join(tmpdir(), "gw-test-")),
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+  })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const token = await pair(base, "TESTCODE")
+    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" }
+    const call = async (path: string, body: object) => (await fetch(`${base}${path}`, { method: "POST", headers, body: JSON.stringify(body) })).json() as Promise<Record<string, unknown>>
+    const first = await call("/conversation-settings", { id: "s1" })
+    assert.equal(first.mode, "normal")
+    assert.deepEqual(first.modes, ["normal", "keep", "relentless"])
+    // the mode has its own control: it is not also offered as a switch
+    assert.deepEqual((first.options as { id: string }[]).map((o) => o.id), [])
+    assert.equal((await call("/set-conversation-mode", { id: "s1", mode: "relentless" })).mode, "relentless")
+    assert.equal((await call("/conversation-settings", { id: "s1" })).mode, "relentless")
+    assert.equal((await fetch(`${base}/set-conversation-mode`, { method: "POST", headers, body: JSON.stringify({ id: "s1", mode: "bogus" }) })).status, 400)
   } finally {
     await g.close()
   }

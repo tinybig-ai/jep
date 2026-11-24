@@ -13,6 +13,31 @@ import { OpenCodeAdapter, mergeSessionRows } from "../src/harnesses/opencode.ts"
 
 const WS = "/Users/me/jep"
 
+test("Markdown carryovers are text/plain files so OpenCode reads them before calling the model", async () => {
+  let sent: any
+  const server = createServer((req, res) => {
+    let body = ""
+    req.on("data", (chunk) => { body += chunk })
+    req.on("end", () => {
+      if (new URL(req.url ?? "/", "http://local").pathname.endsWith("/message")) sent = JSON.parse(body)
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ info: { id: "m", role: "assistant" }, parts: [] }))
+    })
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  try {
+    const adapter = new OpenCodeAdapter({} as any, WS, `http://127.0.0.1:${(server.address() as { port: number }).port}`)
+    await adapter.prompt("opencode://ses_a", "continue", { filePaths: ["/tmp/carryover.md", "/tmp/screen.png", "/tmp/source.ts"] })
+    assert.deepEqual(sent.parts.filter((p: any) => p.type === "file").map((p: any) => ({ mime: p.mime, url: p.url })), [
+      { mime: "text/plain", url: "file:///tmp/carryover.md" },
+      { mime: "image/png", url: "file:///tmp/screen.png" },
+      { mime: "text/plain", url: "file:///tmp/source.ts" },
+    ])
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
+})
+
 const row = (id: string, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
   id,
   title: id,

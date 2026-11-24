@@ -69,6 +69,22 @@ bubble, and `/history` hides the instruction itself.
   fail and carries on. Harnesses that start tools as child processes (goose,
   claude, codex) support this.
 
+## Daemon-wide execution permissions
+
+General settings → Agent permissions offers **Run all harnesses in their most
+permissive mode**. It is off by default and saved in
+`<DATA_HOME>/execution-settings.json`. Turning it on forces the adapters' existing
+permission-bypass option on future turns across all clients, including Telegram
+and automatic continuations. Codex bypasses its sandbox and approvals, Claude
+and OpenCode skip tool permission checks, and Goose uses auto mode. Pi has no
+built-in permission gate. Running processes keep the permissions they started
+with. Turning the override off restores each conversation's saved settings.
+
+Paired clients can read `POST /execution-settings` (`{options,values}`) and update
+`POST /set-execution-setting` with `{key:"mostPermissive",enabled:boolean}`.
+The web general settings expose the global control; native clients receive the
+effective values through the existing `/harness-settings` schema.
+
 ## One agent reading another conversation
 
 `jep-read CONVERSATION [--last N]` (and the `jep_read` MCP tool) lets an agent read a different
@@ -104,6 +120,9 @@ answers, it does so with `jep-tell` and the answer arrives as a message.
 | `POST /browse` | `{path?}` | `{cwd,root,parent,dirs[]}`: folders under `cwd` (`{name,git}`), bounded to `JEP_BROWSE_ROOT` (default `$HOME`); `parent` is null at the root |
 | `POST /new` | `{title?,workspace?,path?,harness?,harnessSettings?,pod?,mcp?,carryover?}` | `{session}`: created in a named workspace, at an absolute `path` (spawning that workspace under `harness` if it isn't served yet), and/or under a harness; with none, the first served workspace. `pod: true` asks for a throwaway directory instead — the daemon conjures one under `<DATA_HOME>/pods/` and serves it under `harness`, so a quick conversation needs no folder of its own. `harnessSettings` (`{key: bool}`) must name settings the harness declares, or 400. `mcp` (`{name: {command, args?, env?}}`, at most 8, no spaces in any value, `jep` and `jep-tools` reserved) gives the conversation MCP servers of its own: kept in `<DATA_HOME>/gateway-mcp.json` (mode 0600), added to every turn beside the person's own servers, their tools allowed without asking. A harness that cannot take them per conversation (opencode, pi) answers 400 rather than dropping them. A server must answer an unknown method with JSON-RPC error -32601: goose opens with a newer handshake and only falls back when it gets that error. The returned session carries `adapter`+`harness`+`pod` |
 | `POST /mkdir` | `{path?,name}` | `{ok,path}`: create a folder inside the browse root (409 if it exists), so a conversation can start in a new one |
+| `POST /conversation-settings` | `{id}` | `{options[],values,mode,modes[]}`: the daemon's per-conversation controls as data. `modes` is the order a client walks with one button (`normal`, `keep`, `relentless`); `options` are plain switches drawn like a harness's. A client names no mode itself |
+| `POST /set-conversation-mode` | `{id,mode}` | `{mode,values}`: set the mode. `keep` carries on until the agent calls `jep-end-turn`; `relentless` ignores that call and tells the agent to improve, find work and decide alone. Both drop an unanswered ask after 15 / 5 minutes |
+| `POST /set-conversation-setting` | `{id,key,enabled}` | `{values}`: flip one declared switch |
 | `POST /harness-settings` | `{id}` or `{harness}` | `{options[],values,compact?}`: the boolean settings a harness declares (`{id,label,description,default,danger?}`) and, by session, that conversation's values (by harness, the defaults) plus `compact`, whether its harness can compact (so a client offers the control only where it works) |
 | `POST /set-harness-setting` | `{id,key,enabled}` | `{ok,values}`: flip one declared setting for this conversation; persisted in `<DATA_HOME>/gateway-harness-settings.json` and handed to every prompt |
 | `POST /carryover` | `{id}` | `{path,messages}`: write the whole conversation as a markdown file under the system temp directory (`jep-carryover/`), with a note to the reader on top. Hand the file to an agent on another harness to move the work. `POST /new` with `carryover: <conversation id>` does this and attaches the file to the new conversation's first prompt; the answer then also holds `carryover:{path,messages}` |
@@ -115,13 +134,15 @@ answers, it does so with `jep-tell` and the answer arrives as a message.
 | `POST /queue/move` | `{id,clientID,to}` | `{ok,queue}`: put a waiting prompt at index `to` of the line. The waiting prompts run as one turn, their words in this order. Forced prompts stay first: nothing moves ahead of one (409 for a forced prompt). `queue` is the new order, as `/history` reports it |
 | `POST /respond` | `{askID,optionID}` | `{ok}` or 409 already answered. Keyed by the ask alone (no `id` needed) |
 | `POST /reject` | `{askID,id?}` | `{ok}`: stand an ask down without choosing (the person answered in their own words), so the turn can finish |
-| `POST /stop` | `{id,all?}` | `{stopped,dropped}`: stop the running turn. With `all:true`, the prompts waiting behind it are dropped too (each `/prompt` resolves `{cancelled:true}`), so the next one does not start the moment this turn ends. `dropped` holds their words, for the client to give back to its composer |
+| `POST /stop` | `{id,all?}` | `{stopped,dropped}`: stop the running turn. With `all:true`, the queue behind it is held, never dropped: nothing waiting starts when this turn ends, and the next prompt the person sends goes first, with the held queue following it. The waiting prompts are also kept in `gateway-queued.json`, so a daemon restart puts them back in line. `dropped` is always empty, and stays in the answer for older clients |
 | `POST /models` | `{id}` | `{models[],current,default,contextLimit}`: the models this conversation's harness can run on, each with `image`/`attachment`/`contextLimit`; `current` is the set one (null = harness default); `default` is what "default" resolves to; `contextLimit` is the window of the model the conversation actually runs on (0 when unknown) |
 | `POST /setmodel` | `{id,model?}` | `{ok,model}`: set (`"provider/model"`) or clear (omit) this conversation's model; persisted in `<DATA_HOME>/gateway-models.json`, applied to the next `/prompt` |
 | `POST /agents` | `{id}` | `{agents[],current,default}`: the primary agents this conversation's harness offers (`{id,label,detail,default?}`), the current choice, and the harness default; the adapter owns the ids, so the client renders whatever it declares |
 | `POST /agent` | `{id}` | `{current}`: the primary agent set for this conversation (null = harness default) |
 | `POST /setagent` | `{id,agent?}` | `{ok,agent}`: set or clear this conversation's primary agent; a harness that names its agents refuses one it doesn't offer (400 `unknown agent`), one that names none accepts the id and ignores it. Persisted in `<DATA_HOME>/gateway-agents.json`, applied to the next `/prompt` |
+| `POST /stats` | `{days?}` | usage across conversations touched in the window (default 30 days, at most 400 read): `{days[],today,week,all,models[],harnesses[],sessions,last}` (`statsOf` in `core/usage.ts`) |
 | `POST /usage` | `{id}` | `{usage}`: tokens (in/out/thinking/cache) and reported cost summed over the conversation, plus turns and models (`core/usage.ts`) |
+| `POST /stats` | `{days?}` | the same usage, rolled up over every conversation jep can read — no `id`, because it belongs to the device and not to one conversation. `{days[],models[],harnesses[],today,week,all,sessions,scanned,first,last,busiest}`: `days` is the window asked for (default 30, clamped 7–365), oldest first with empty days kept so a chart has its axis; `today`, `week` (the last seven of those days) and `all` are `usage` shapes; `models` and `harnesses` are `{key,...usage}` ranked by tokens; `sessions` counts the conversations that held a counted turn and `scanned` how many were read. It is bounded and cheap to re-open: at most 300 conversations, six transcripts read at a time, and the answer is cached for three minutes. Nothing is stored — it is the transcripts, added up (`core/usage.ts`, `statsOf`) |
 | `POST /diff` | `{id}` | `{files[]}`: files this conversation changed (`{file,additions,deletions,status?}`) |
 | `POST /git` | `{id}` | `{isRepository,branch,head,changedFiles,files[],commits[]}`: the conversation's workspace repo (`files` names up to 60 changed files as `{path,code,staged,additions,deletions}`, for the web app's details column), read through `core/git.ts` like Telegram's /git: branch, changed files (untracked included), last 30 commits (`{hash,shortHash,subject,author,time}`, hash is the short one, time in seconds). The client supplies no command and no path |
 | `POST /compact` | `{id}` | `{ok}`: compress the conversation's context (opencode's summarize, Claude Code's `/compact`). 501 when the harness has no such control, 409 when it refused (a turn in flight), 504 when the summarize ran out of time |
@@ -129,7 +150,7 @@ answers, it does so with `jep-tell` and the answer arrives as a message.
 | `POST /loop/stop` | `{id}` | `{loop}`: end future turns, drop what it queued, and abort its own running turn. A turn a person started is left to finish |
 | `POST /loop/clear` | `{id}` | `{ok}`: forget a finished loop |
 | `POST /subagents` | `{id}` | `{items[]}`: the subagent sessions this conversation spawned |
-| `POST /read` | `{id,path}` | `{path,text}`: a file the transcript linked to, as text; relative paths resolve in the conversation's workspace; only under served roots (403), at most `READ_MAX` (413) |
+| `POST /read` | `{id,path}` | `{path,text}`: a file the transcript linked to, as text; relative paths resolve in the conversation's workspace; served roots and files the agent itself read in that conversation (403 otherwise), at most `READ_MAX` (413) |
 | `GET /file` | `?p=<base64url path>` | the file's bytes, for inline images; only uploaded files (`attachments/`, `uploads/`) or a served workspace, symlinks resolved (403) |
 | `POST /term` | (none) | `{authorized}`: whether *this* device token may open a shell (see below) |
 | `POST /term/unlock` | `{code}` | `{ok}` or 403: prove the pairing code a second time to allow a terminal from this device |

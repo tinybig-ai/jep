@@ -6,21 +6,28 @@
 // which stays in step with this file.
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
+import { readFileSync, renameSync, writeFileSync } from "node:fs"
 import { chmod, mkdir, open, readdir, readFile, realpath, stat, unlink, writeFile } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path"
-import type { ChatDirectory, ChatInfo, HarnessAdapter, HarnessMark, HarnessSettingSpec, SessionImport, Terminal, TurnHost } from "../../core/ports.ts"
+import type { ChatDirectory, ChatInfo, ConversationDeletionPort, ConversationSyncPort, DaemonAskPort, HarnessAdapter, HarnessMark, HarnessSettingSpec, SessionImport, Terminal, TurnHost } from "../../core/ports.ts"
+import { knownSetting, settingValues, driveOf, withDrive, switchSettings } from "../../core/settings.ts"
 import { newPairCode, normalizePairCode, type PairingAdmin } from "../../core/pairing.ts"
 import { describeAsk } from "../../core/asks.ts"
+import { parseModelRef } from "../../core/models.ts"
+import { ExecutionPolicy, EXECUTION_SETTING } from "../../core/execution-policy.ts"
+import type { ExecutionPolicyPort } from "../../core/ports.ts"
+import { DRIVE_MODES, ASK_EXPIRY_KEEP_MS, ASK_EXPIRY_RELENTLESS_MS } from "../../core/keepgoing.ts"
 import { hasMcp, parseConversationMcp, type ConversationMcp } from "../../core/mcp.ts"
 import { pushFor, UnregisteredToken, type PushNotifier } from "../../core/push.ts"
 import { LIVENESS, type LivenessConfig } from "../../core/liveness.ts"
 import { isRepo, repoStatus } from "../../core/git.ts"
 import { listSkills, defaultSkillDirs, writeSkillModelInvocation } from "../../core/skills.ts"
-import type { AskRequest, DomainEvent, Message, Part } from "../../core/types.ts"
+import type { AskRequest, DomainEvent, Message, Part, SessionSummary } from "../../core/types.ts"
+import { TurnAbortedError } from "../../core/types.ts"
 import { renderCarryover } from "../../core/carryover.ts"
-import { usageOf } from "../../core/usage.ts"
+import { usageOf, statsOf, type UsageSample } from "../../core/usage.ts"
 import { attachedPaths, readGuest, readLoopMarker, readNoticeMarker, stripInjectedContext, transcriptText } from "../../core/transcript.ts"
 import {
   LOOP_DEFAULT_TURNS,
@@ -30,7 +37,7 @@ import {
 import { shownFrom, withShown } from "../../core/show.ts"
 import { detach } from "../../core/detach.ts"
 import type { TurnLedger } from "../../core/ledger.ts"
-import { TurnEngine, type PendingTurn, type TurnResult } from "../../core/turn-engine.ts"
+import { TurnEngine, type PendingTurn, type QueueStore, type SavedQueue, type TurnResult } from "../../core/turn-engine.ts"
 
 // web/ at the package root: three levels up from this file, from src/ and from
 // the compiled dist/ alike. index.html and the scripts it loads.
@@ -38,6 +45,10 @@ const WEB_DIR = fileURLToPath(new URL("../../../web/", import.meta.url))
 const WEB_TYPES: Record<string, string> = { ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8" }
 
 export interface GatewayDeps {
+  deletions?: ConversationDeletionPort
+  conversationSync?: ConversationSyncPort
+  /** Same policy the daemon applies to Telegram and future workspace adapters. */
+  executionPolicy?: ExecutionPolicyPort
   // called lazily and repeatedly: the Telegram bot can spawn more workspace
   // servers at any time (project discovery), and the gateway must pick up
   adapters(): Array<{ name: string; adapter: HarnessAdapter }>
@@ -82,6 +93,8 @@ export interface GatewayDeps {
    * than the JEP_TURN_IDLE_MS / JEP_TOOL_IDLE_MS defaults (and for tests, which
    * cannot wait out five real minutes) */
   liveness?: Partial<LivenessConfig>
+  /** how long an ask may wait in a keep-going or relentless conversation before it is stood down (tests shorten it) */
+  askExpiryMs?: { keep?: number; relentless?: number }
   /** how long a harness' session listing may take before it is reported as
    * degraded instead of holding the whole list up (and tests, which cannot wait
    * six real seconds) */
@@ -104,6 +117,8 @@ export interface GatewayHandle {
   rename(id: string, title: string): Promise<void>
   /** the conversations, readable by one agent with the person's yes (`jep-read`) */
   chats: ChatDirectory
+  /** the cards the daemon raises itself, for the clients that are not the gateway's own (Telegram) */
+  daemonAsks: DaemonAskPort
 }
 
 const TOKEN_FILE = "gateway-tokens.json"
@@ -121,6 +136,32 @@ const HARNESS_SETTINGS_FILE = "gateway-harness-settings.json"
 // readable by this user only.
 const MCP_FILE = "gateway-mcp.json"
 const LOOPS_FILE = "gateway-loops.json"
+// conversation settings (core/settings.ts): per session, owned by the daemon
+const CONVERSATION_SETTINGS_FILE = "gateway-conversation-settings.json"
+// the waiting prompts of every conversation: a restart puts them back in line. They are the
+// person's words, so the file is readable by this user only.
+const QUEUE_FILE = "gateway-queued.json"
+
+/** the waiting queue, kept on disk so a restart does not lose it (core/turn-engine.ts) */
+function queueStoreIn(dataHome: string): QueueStore {
+  const file = join(dataHome, QUEUE_FILE)
+  return {
+    load: () => {
+      try {
+        const raw = JSON.parse(readFileSync(file, "utf8")) as unknown
+        return raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as SavedQueue) : {}
+      } catch {
+        return {}
+      }
+    },
+    save: (queue) => {
+      // written beside the file and renamed over it, so a crash mid-write keeps the last whole copy
+      const tmp = `${file}.tmp`
+      writeFileSync(tmp, JSON.stringify(queue), { mode: 0o600 })
+      renameSync(tmp, file)
+    },
+  }
+}
 // asks remembered per conversation for /history; pending ones are never dropped
 const ASK_LEDGER_MAX = 50
 const BODY_MAX = 1 << 20
@@ -383,6 +424,23 @@ async function saveConversationMcp(dataHome: string, all: Map<string, Conversati
   const file = join(dataHome, MCP_FILE)
   await writeFile(file, JSON.stringify(Object.fromEntries(all), null, 2), { mode: 0o600 })
   await chmod(file, 0o600)
+}
+
+async function loadConversationSettings(dataHome: string): Promise<Map<string, Record<string, boolean>>> {
+  try {
+    const raw = JSON.parse(await readFile(join(dataHome, CONVERSATION_SETTINGS_FILE), "utf8")) as Record<string, unknown>
+    return new Map(Object.entries(raw).flatMap(([sessionID, value]) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return []
+      const settings = Object.fromEntries(Object.entries(value).filter((row): row is [string, boolean] => typeof row[1] === "boolean"))
+      return [[sessionID, settings]]
+    }))
+  } catch {
+    return new Map()
+  }
+}
+
+async function saveConversationSettings(dataHome: string, settings: Map<string, Record<string, boolean>>): Promise<void> {
+  await writeFile(join(dataHome, CONVERSATION_SETTINGS_FILE), JSON.stringify(Object.fromEntries(settings), null, 1))
 }
 
 async function loadHarnessSettings(dataHome: string): Promise<Map<string, SessionHarnessSettings>> {
@@ -677,6 +735,8 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   const models = await loadModels(deps.dataHome)
   const agents = await loadAgents(deps.dataHome)
   const harnessSettings = await loadHarnessSettings(deps.dataHome)
+  const executionPolicy = deps.executionPolicy ?? new ExecutionPolicy(deps.dataHome)
+  const conversationSettings = await loadConversationSettings(deps.dataHome)
   const conversationMcp = await loadConversationMcp(deps.dataHome)
   const loops = await loadLoops(deps.dataHome, deps.resumesLoops === true)
   // A loop the previous daemon was driving stays "running": the daemon's continuity service resumes it
@@ -698,7 +758,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   // starts streaming; the phone moves to the real id right then, mid-turn,
   // while the settings still sat under the placeholder. Read by the real id,
   // "skip permissions" showed off, and a toggle there started a fresh record.
-  function settingsOf(adapter: HarnessAdapter, id: string): Record<string, boolean> | undefined {
+  function ownSettingsOf(adapter: HarnessAdapter, id: string): Record<string, boolean> | undefined {
     const own = harnessSettings.get(id)
     if (own || !adapter.canonicalId) return own
     for (const [key, values] of harnessSettings) {
@@ -709,7 +769,11 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       return values
     }
     return undefined
-  }  // the same move to the real id as the settings above, for a client's MCP servers
+  }
+  function settingsOf(adapter: HarnessAdapter, id: string): Record<string, boolean> | undefined {
+    return executionPolicy.apply(ownSettingsOf(adapter, id))
+  }
+  // the same move to the real id as the settings above, for a client's MCP servers
   function mcpOf(adapter: HarnessAdapter, id: string): ConversationMcp | undefined {
     const own = conversationMcp.get(id)
     if (own || !adapter.canonicalId) return own
@@ -747,7 +811,15 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     asksBySession.set(sessionID, fresh)
     return fresh
   }
+  // In keep going and relentless, nobody may be at the screen: an ask that waits
+  // past its limit is stood down so the agent decides instead of the turn hanging.
+  const askTimers = new Map<string, ReturnType<typeof setTimeout>>()
   const closeAsk = (askID: string): void => {
+    const t = askTimers.get(askID)
+    if (t) {
+      clearTimeout(t)
+      askTimers.delete(askID)
+    }
     const sid = askSessions.get(askID)
     if (sid) asksBySession.get(sid)?.delete(askID)
   }
@@ -795,11 +867,42 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         console.error(`[gw] ${owner.id} rename failed: ${(err as Error)?.message ?? err}`)
       })
     }
+    if (deps.conversationSync) detach("sync title", deps.conversationSync.changed(id))
   }
   // A card the daemon itself raises (an agent asks to read another conversation), not a harness. It
   // is an ask like any other to every client: recorded, broadcast, answered through /respond. What
   // differs is who hears the answer: a waiting promise here, not an adapter.
   const daemonAsks = new Map<string, (optionID: string | null) => void>()
+  // The gateway's broadcast reaches only the gateway's own clients. A client that is not one
+  // (Telegram) hears the same cards through this port, so a card is never on one client and
+  // missing on another (core/ports.ts, DaemonAskPort).
+  const askRequested = new Set<(ask: AskRequest) => void>()
+  const askResolved = new Set<(askID: string, optionID: string | null) => void>()
+  const tell = <A extends unknown[]>(listeners: Set<(...args: A) => void>, ...args: A): void => {
+    for (const listener of [...listeners]) {
+      try {
+        listener(...args)
+      } catch (err) {
+        console.error(`[ask] a client could not take the card: ${(err as Error)?.message ?? err}`)
+      }
+    }
+  }
+  const daemonAskPort: DaemonAskPort = {
+    onRequested: (listener) => {
+      askRequested.add(listener)
+      return () => void askRequested.delete(listener)
+    },
+    onResolved: (listener) => {
+      askResolved.add(listener)
+      return () => void askResolved.delete(listener)
+    },
+    answer: (askID, optionID) => {
+      const settle = daemonAsks.get(askID)
+      if (!settle) return false
+      settle(optionID)
+      return true
+    },
+  }
   const askPerson: ChatDirectory["askPerson"] = (key, ask, waitMs) =>
     new Promise((resolve) => {
       const id = `jep-ask-${randomBytes(6).toString("hex")}`
@@ -811,6 +914,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         closeAsk(id)
         settleAsk(id, optionID ? "answered" : "closed", optionID ?? undefined)
         broadcast({ type: "ask.resolved", sessionID: key, askID: id } as DomainEvent)
+        tell(askResolved, id, optionID)
         engine.touch(key)
         resolve(optionID)
       }
@@ -818,11 +922,38 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       askSessions.set(id, key)
       openAsks(key).add(id)
       recordAsk(request)
-      broadcast({ type: "ask.requested", ask: { ...request, display: describeAsk(request) } } as DomainEvent)
-      console.error(`[ask] surfaced ${id} (${ask.title})`)
+      // `sessionID` rides on the event as the type requires: a client that filters events by
+      // conversation reads it there, and the cast that used to hide its absence is gone
+      broadcast({ type: "ask.requested", sessionID: key, ask: { ...request, display: describeAsk(request) } })
+      tell(askRequested, request)
+      // how many clients could show it: a card that reaches none is a person who never sees the
+      // question, and the agent waits out its time and is denied. Say so instead of staying quiet.
+      const reach = clients.size + askRequested.size
+      console.error(`[ask] surfaced ${id} (${ask.title}) to ${clients.size} gateway client(s) and ${askRequested.size} other(s)`)
+      if (reach === 0) console.error(`[ask] WARNING: ${id} reached no client at all, so nobody can answer it before it times out`)
       timer = setTimeout(() => finish(null), waitMs)
       timer.unref()
     })
+  const armAskExpiry = (ask: AskRequest): void => {
+    const mode = driveOf(conversationSettings.get(ask.sessionID))
+    if (mode === "normal" || askTimers.has(ask.id)) return
+    const wait = mode === "relentless" ? (deps.askExpiryMs?.relentless ?? ASK_EXPIRY_RELENTLESS_MS) : (deps.askExpiryMs?.keep ?? ASK_EXPIRY_KEEP_MS)
+    const timer = setTimeout(() => {
+      askTimers.delete(ask.id)
+      void (async () => {
+        const sid = askSessions.get(ask.id)
+        if (!sid || !asksBySession.get(sid)?.has(ask.id)) return
+        const owner = await ensureListed(sid)
+        const ok = (await owner?.rejectAsk(sid, ask.id).catch(() => false)) ?? false
+        closeAsk(ask.id)
+        if (ok) settleAsk(ask.id, "closed")
+        engine.touch(sid)
+        console.error(`[ask] expired ${ask.id} after ${Math.round(wait / 1000)}s with no answer (${mode}) -> ${ok ? "stood down" : "could not stand down"}`)
+      })().catch((err) => console.error(`[ask] expiry failed for ${ask.id}: ${(err as Error)?.message ?? err}`))
+    }, wait)
+    timer.unref()
+    askTimers.set(ask.id, timer)
+  }
   const chatDirectory: ChatDirectory = {
     async list() {
       const out: ChatInfo[] = []
@@ -886,6 +1017,10 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       }
     }
   }
+  const stopDeletionUpdates = deps.deletions?.onDeleted((sessionID) => {
+    sessionAdapters.delete(sessionID)
+    broadcast({ type: "session.changed", sessionID })
+  })
 
   // The harness hands back a conversation's *entire* message list — megabytes
   // for a long one — and the phone pages it 30 at a time. Without this, every
@@ -939,16 +1074,36 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     {
       adapterOf: (id) => sessionAdapters.get(id),
       find: (id) => ensureListed(id),
+      exists: async (id, workspace) => {
+        if (await ensureListed(id)) return "yes"
+        const served = deps.adapters()
+        // nobody serves the folder it ran in: nothing could have answered
+        if (workspace && !served.some(({ adapter }) => adapter.workspace === workspace)) return "unknown"
+        // "no" only when every harness said so itself; one that threw said nothing
+        for (const { adapter } of served) {
+          try {
+            if (await adapter.getSession(id)) return "yes"
+          } catch {
+            return "unknown"
+          }
+        }
+        return "no"
+      },
       settingsOf,
+      driveOf: (id) => driveOf(conversationSettings.get(id)),
+      modelOf: (id) => parseModelRef(models.get(id)),
       mcpOf,
       openAsks: (id) => asksBySession.get(id)?.size ?? 0,
-      recordChanged: (id) => void msgCache.delete(id),
+      recordChanged: (id) => {
+        msgCache.delete(id)
+        if (deps.conversationSync) detach("sync conversation", deps.conversationSync.changed(id))
+      },
       loopChanged: (all, sessionID) => {
         detach("save loops", saveLoops(deps.dataHome, all))
         broadcast({ type: "session.changed", sessionID })
       },
     },
-    { liveness, loops, ...(deps.ledger ? { ledger: deps.ledger } : {}) },
+    { liveness, loops, ...(deps.ledger ? { ledger: deps.ledger } : {}), queueStore: queueStoreIn(deps.dataHome) },
   )
 
   const pumps = new Map<HarnessAdapter, AbortController>()
@@ -968,6 +1123,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
             openAsks(evt.ask.sessionID).add(evt.ask.id)
             recordAsk(evt.ask)
             console.error(`[ask] surfaced ${evt.ask.id} (${evt.ask.title})`)
+            armAskExpiry(evt.ask)
           }
           // the ask is spent, wherever it was answered: stop holding the
           // watchdog off, or a turn parked on a card nobody can answer any
@@ -984,6 +1140,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           if (out.type === "ask.requested") out = { ...out, ask: { ...out.ask, display: describeAsk(out.ask) } }
           // the same for a picture the agent showed: say so as a field, not as a command line
           if (out.type === "part.updated" && out.part) out = { ...out, part: withShown(out.part) }
+          if (evt.type === "message.created" && deps.conversationSync) detach("sync new message", deps.conversationSync.changed(evt.sessionID))
           broadcast(out)
           detach("wake a waiting turn", wake(evt))
         }
@@ -1217,6 +1374,16 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         return json(res, 200, { devices, pairCode })
       }
 
+      if (path === "/execution-settings") {
+        return json(res, 200, { options: [EXECUTION_SETTING], values: { mostPermissive: executionPolicy.enabled() } })
+      }
+
+      if (path === "/set-execution-setting") {
+        if (b.key !== EXECUTION_SETTING.id || typeof b.enabled !== "boolean") return json(res, 400, { error: "key and boolean enabled required" })
+        executionPolicy.setEnabled(b.enabled)
+        return json(res, 200, { values: { mostPermissive: executionPolicy.enabled() } })
+      }
+
       if (path === "/devices/rename") {
         const id = str("id")
         const name = (str("name") ?? "").trim().slice(0, 80)
@@ -1307,6 +1474,38 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
 
       // The same adapter-declared schema powers creation-time controls (by
       // harness id) and per-conversation settings (by session id).
+      if (path === "/conversation-settings") {
+        const sessionID = str("id")
+        if (!sessionID) return json(res, 400, { error: "id required" })
+        const stored = conversationSettings.get(sessionID)
+        return json(res, 200, { options: switchSettings(), values: settingValues(stored), mode: driveOf(stored), modes: DRIVE_MODES })
+      }
+
+      // normal -> keep going -> relentless: one control, cycled by the client
+      if (path === "/set-conversation-mode") {
+        const sessionID = str("id")
+        const mode = DRIVE_MODES.find((m) => m === b.mode)
+        if (!sessionID || !mode) return json(res, 400, { error: "id and mode (normal, keep, relentless) required" })
+        const values = withDrive(conversationSettings.get(sessionID), mode)
+        conversationSettings.set(sessionID, values)
+        detach("save conversation settings", saveConversationSettings(deps.dataHome, conversationSettings))
+        engine.setDrive(sessionID, mode)
+        console.error(`[keep] mode ${mode} (gateway session ${sessionID})`)
+        return json(res, 200, { mode, values: settingValues(values) })
+      }
+
+      if (path === "/set-conversation-setting") {
+        const sessionID = str("id")
+        const key = str("key")
+        const enabled = typeof b.enabled === "boolean" ? b.enabled : null
+        if (!sessionID || !key || enabled == null) return json(res, 400, { error: "id, key and boolean enabled required" })
+        if (!knownSetting(key)) return json(res, 400, { error: "unknown setting" })
+        const values = { ...(conversationSettings.get(sessionID) ?? {}), [key]: enabled }
+        conversationSettings.set(sessionID, values)
+        detach("save conversation settings", saveConversationSettings(deps.dataHome, conversationSettings))
+        return json(res, 200, { values: settingValues(values) })
+      }
+
       if (path === "/harness-settings") {
         const sessionID = str("id")
         if (sessionID) {
@@ -1315,7 +1514,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           const options = adapter.settings?.() ?? deps.harnessSettings?.(adapter.id) ?? []
           // `compact`: whether this conversation's harness can compress its
           // context, so a client offers the control only where it works
-          return json(res, 200, { options, values: valuesForSettings(options, settingsOf(adapter, sessionID)), compact: typeof adapter.compact === "function" })
+          return json(res, 200, { options, values: valuesForSettings(options, settingsOf(adapter, sessionID)), compact: typeof adapter.compact === "function", commands: typeof adapter.commands === "function" })
         }
         const harnessID = str("harness")
         if (!harnessID) return json(res, 400, { error: "harness required" })
@@ -1470,6 +1669,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           conversationMcp.set(s.id, mcp.value)
           await saveConversationMcp(deps.dataHome, conversationMcp)
         }
+        if (deps.conversationSync) detach("sync new conversation", deps.conversationSync.changed(s.id))
         return json(res, 200, { session: { ...s, adapter: picked.name, harness: picked.adapter.id, pod: isPod(picked.adapter.workspace, deps.dataHome) }, ...(carried ? { carryover: carried } : {}) })
       }
 
@@ -1623,6 +1823,32 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         return json(res, ok ? 200 : 409, ok ? { ok: true } : { error: "ask already answered" })
       }
 
+      // Usage across every conversation the harnesses list, rolled up by day, model
+      // and harness. Only conversations touched inside the window are read, a few at
+      // a time, so opening the view never reads the whole archive at once.
+      if (path === "/stats") {
+        const days = typeof b.days === "number" && Number.isFinite(b.days) ? Math.max(1, Math.min(366, Math.floor(b.days))) : 30
+        const since = Date.now() - (days + 1) * 86_400_000
+        const owners: Array<{ id: string; harness: string; owner: HarnessAdapter }> = []
+        for (const { adapter: a } of deps.adapters()) {
+          for (const row of await a.listSessions().catch(() => [] as SessionSummary[])) {
+            if (row.updatedAt >= since) owners.push({ id: row.id, harness: a.id, owner: a })
+          }
+        }
+        owners.sort((x, y) => x.id.localeCompare(y.id))
+        const samples: UsageSample[] = []
+        const queue = owners.slice(0, 400)
+        await Promise.all(
+          Array.from({ length: 4 }, async () => {
+            for (let next = queue.shift(); next; next = queue.shift()) {
+              const messages = await next.owner.messages(next.id).catch(() => [] as Message[])
+              samples.push({ harness: next.harness, messages })
+            }
+          }),
+        )
+        return json(res, 200, statsOf(samples, { days }))
+      }
+
       const id = str("id")
       if (!id) return json(res, 400, { error: "id required" })
       const adapter = await ensureListed(id)
@@ -1638,14 +1864,19 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const abs = isAbsolute(readPath)
           ? resolve(readPath)
           : resolve(adapter.workspace, readPath)
-        if (!within(abs, rootsFor())) return json(res, 403, { error: OUTSIDE })
+        // a file the agent itself read in this conversation is shown as text too,
+        // the same rule as /file: the transcript already names it, so /read must
+        // agree or the preview says 403 for a file the conversation displayed
+        const read = id ? (await readPaths(adapter, id)).has(abs) || (await readPaths(adapter, id, true)).has(abs) : false
+        const inRoots = within(abs, rootsFor())
+        if (!inRoots && !read) return json(res, 403, { error: OUTSIDE })
         try {
-          const real = await servedPath(abs)
-          if (!real) return json(res, 403, { error: OUTSIDE })
-          const info = await stat(real)
+          const target = inRoots ? await servedPath(abs) : abs
+          if (!target) return json(res, 403, { error: OUTSIDE })
+          const info = await stat(target)
           if (!info.isFile()) return json(res, 404, { error: "no such file" })
           if (info.size > READ_MAX) return json(res, 413, { error: "too large to read here" })
-          return json(res, 200, { path: readPath, text: (await readFile(real)).toString("utf8") })
+          return json(res, 200, { path: readPath, text: (await readFile(target)).toString("utf8") })
         } catch {
           return json(res, 404, { error: "no such file" })
         }
@@ -1674,6 +1905,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         if (path === "/archive") archived.add(id)
         else archived.delete(id)
         await saveArchived(deps.dataHome, archived)
+        if (deps.conversationSync) detach("sync archive", deps.conversationSync.changed(id))
         return json(res, 200, { ok: true, archived: archived.has(id) })
       }
 
@@ -1687,6 +1919,8 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       }
 
       if (path === "/delete") {
+        const gone = await adapter.deleteSession(id).catch(() => false)
+        if (!gone) return json(res, 404, { error: "couldn't delete" })
         sessionAdapters.delete(id)
         attachments.forEach((v, k) => {
           if (v.sessionID === id) attachments.delete(k)
@@ -1697,7 +1931,6 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         await saveArchived(deps.dataHome, archived)
         if (pinned.delete(id)) await savePinned(deps.dataHome, pinned)
         if (seen.delete(id)) await saveSeen(deps.dataHome, seen)
-        const gone = await adapter.deleteSession(id).catch(() => false)
         if (gone) {
           harnessSettings.delete(id)
           // under the id the client knows, or still under the placeholder a new conversation
@@ -1710,6 +1943,8 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           for (const r of askLedger.get(id) ?? []) askRecords.delete(r.ask.id)
           askLedger.delete(id)
           await saveHarnessSettings(deps.dataHome, harnessSettings)
+          await deps.deletions?.deleted(id)
+          if (!deps.deletions) broadcast({ type: "session.changed", sessionID: id })
         }
         return json(res, gone ? 200 : 404, gone ? { ok: true } : { error: "couldn't delete" })
       }
@@ -1720,11 +1955,11 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         if (!key || enabled == null) return json(res, 400, { error: "key and boolean enabled required" })
         const specs = adapter.settings?.() ?? deps.harnessSettings?.(adapter.id) ?? []
         if (!specs.some((setting) => setting.id === key)) return json(res, 400, { error: "unknown harness setting" })
-        const current = valuesForSettings(specs, settingsOf(adapter, id))
+        const current = valuesForSettings(specs, ownSettingsOf(adapter, id))
         current[key] = enabled
         harnessSettings.set(id, current)
         await saveHarnessSettings(deps.dataHome, harnessSettings)
-        return json(res, 200, { ok: true, values: current })
+        return json(res, 200, { ok: true, values: executionPolicy.apply(current) })
       }
 
       // the pickable models for this conversation's harness, plus the one it is
@@ -1778,6 +2013,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           agents.delete(id)
         }
         await saveAgents(deps.dataHome, agents)
+        if (deps.conversationSync) detach("sync agent", deps.conversationSync.changed(id))
         return json(res, 200, { ok: true, agent: agent || null })
       }
 
@@ -1816,20 +2052,34 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         // reporting a timed-out summarize as "refused" sent the phone chasing the
         // wrong thing. Keep them apart.
         let failure: string | null = null
-        const ok = await adapter.compact(id).catch((err) => {
+        const model = parseModelRef(models.get(id))
+        const result = await adapter.compact(id, model ? { model } : undefined).catch((err) => {
           const msg = (err as Error)?.message ?? String(err)
           console.error(`[gw] compact ${id} failed: ${msg}`)
           failure = /timeout|abort/i.test(msg) ? "compacting took too long and was given up on" : msg
-          return false
+          return { ok: false, error: msg }
         })
         if (failure) return json(res, 504, { error: failure })
         // the adapter names its own refusal in the daemon log (40x from the
         // harness); here it is relayed as-is so a phone shows the truth
-        if (!ok) return json(res, 409, { error: "the harness refused to compact" })
+        if (!result.ok) return json(res, 409, { error: result.error ?? "the harness refused to compact" })
         // the summarize rewrites the transcript; a cached frame from before it
         // must not be served afterwards
         msgCache.delete(id)
         return json(res, 200, { ok: true })
+      }
+
+      // The slash commands this conversation's harness accepts, for a client to
+      // list. Running one is an ordinary prompt starting with "/" + name, so no
+      // second route is needed. 501 when the harness cannot list them.
+      if (path === "/commands") {
+        if (!adapter.commands) return json(res, 501, { error: "this harness can't list commands" })
+        try {
+          return json(res, 200, { commands: await adapter.commands(id) })
+        } catch (err) {
+          console.error(`[gw] commands ${id} failed: ${(err as Error)?.message ?? err}`)
+          return json(res, 502, { error: "the harness could not list its commands" })
+        }
       }
 
       // ── the in-chat terminal ────────────────────────────────────────────
@@ -1913,6 +2163,8 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         if (ref) models.set(id, ref)
         else models.delete(id)
         await saveModels(deps.dataHome, models)
+        console.error(`[model] set session=${id} ref=${ref || "default"}`)
+        if (deps.conversationSync) detach("sync model", deps.conversationSync.changed(id))
         return json(res, 200, { ok: true, model: ref || null })
       }
 
@@ -1931,18 +2183,36 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         // mapping all of it to serve 30 messages, once per page, is what kept
         // taking the daemon down. `before` is unusable on opencode, so an older
         // page is "the window plus what the phone holds", then sliced here.
-        const want = limit > 0 ? limit + have + 1 : 0
-        const rows = want > 0 ? await adapter.messages(id, { limit: want }) : await adapter.messages(id)
-        const window = rows
-          .filter((m) => !before || m.time < before)
-          .sort((a, b) => a.time - b.time)
-        const hasMore = limit > 0 && window.length > limit
-        const messages = (limit > 0 ? window.slice(-limit) : window)
-          .map(cleanForDisplay)
-          .map((m) => ({ ...m, parts: m.parts.map(withShown) }))
-          // a loop turn and a watch's notice have no words left after their
-          // marker: keep them so the client can still draw the boundary
-          .filter((m) => m.role !== "user" || m.parts.length > 0 || m.loop || m.notice)
+        //
+        // The window is sized in what the phone is SHOWN. A row with no words left after
+        // cleaning (a user message that was only jep's context, a tool result) is dropped
+        // from the page, and the phone's `have` counts only what was shown. Counting the
+        // dropped rows as shown made the window too short: one real conversation (536
+        // messages) returned 17 of 30 on its first page, then 9 more, then said there was
+        // nothing older, on web and Android alike. So the window grows (doubling, in a few
+        // reads) until it holds a full page past what the phone has, or the harness has
+        // nothing older to give.
+        const present = (all: Message[]) =>
+          all
+            .filter((m) => !before || m.time < before)
+            .sort((a, b) => a.time - b.time)
+            .map(cleanForDisplay)
+            .map((m) => ({ ...m, parts: m.parts.map(withShown) }))
+            // a loop turn and a watch's notice have no words left after their
+            // marker: keep them so the client can still draw the boundary
+            .filter((m) => m.role !== "user" || m.parts.length > 0 || m.loop || m.notice)
+        let want = limit > 0 ? limit + have + 1 : 0
+        let rows = want > 0 ? await adapter.messages(id, { limit: want }) : await adapter.messages(id)
+        let shown = present(rows)
+        for (let pass = 0; limit > 0 && shown.length <= limit && rows.length >= want && pass < 6; pass++) {
+          want *= 2
+          rows = await adapter.messages(id, { limit: want })
+          shown = present(rows)
+        }
+        // more to read when a full page is left past this one, or the harness still had rows
+        // beyond the window it gave (it returned as many as asked for)
+        const hasMore = limit > 0 && (shown.length > limit || rows.length >= want)
+        const messages = limit > 0 ? shown.slice(-limit) : shown
         // the asks ride along whole (they are few): each is placed by its own
         // anchor, and the pending one is what holds the composer
         const asks = (askLedger.get(id) ?? []).map((r) => ({
@@ -1985,8 +2255,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const text = asked || "see the attached file"
         // this conversation's chosen model, if the phone set one in Settings
         const ref = models.get(id)
-        const [providerID = "", modelID = ""] = ref ? ref.split("/") : []
-        const model = providerID && modelID ? { providerID, modelID } : undefined
+        const model = parseModelRef(ref)
+        const trace = str("clientID") ?? "none"
+        console.error(`[prompt] received session=${id} client=${trace} chars=${text.length} files=${filePaths.length} model=${ref || "default"} busy=${engine.isBusy(id)}`)
         const agent = agents.get(id)
         let settle!: (r: TurnResult) => void
         const done = new Promise<TurnResult>((r) => { settle = r })
@@ -1998,12 +2269,18 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
           steer: b.steer !== false,
           clientID: str("clientID") ?? undefined,
           quote: str("quote") ?? undefined,
+          // `keep` is an explicit one-shot loop request. The conversation's
+          // durable mode is supplied to TurnEngine as session policy, so an
+          // ordinary prompt never receives keep/relentless message metadata.
+          ...(b.keep === true ? { keepGoing: true } : {}),
           resolve: settle,
         }
         // queued behind the running turn and steered in at the next tool
         // boundary, or (force) run next with the running turn ended cleanly
         engine.submit(id, pending, b.force === true)
+        console.error(`[prompt] accepted session=${id} client=${trace} model=${ref || "default"} busy=${engine.isBusy(id)} queue=${engine.queueOf(id).length}`)
         const result = await done
+        console.error(`[prompt] settled session=${id} client=${trace} status=${result.status}${result.error ? ` error=${String(result.error).slice(0, 240)}` : result.message ? " message=yes" : ""}`)
         if (result.message) return json(res, 200, { message: result.message })
         if (result.aborted) return json(res, 200, { aborted: true })
         if (result.cancelled) return json(res, 200, { cancelled: true })
@@ -2017,18 +2294,21 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const max = Math.max(1, Math.min(LOOP_MAX_TURNS, asked))
         const verify = (str("verify") ?? "").trim()
         const until = (str("until") ?? "").trim()
-        if (!verify && !until && max < 2) return json(res, 400, { error: "a loop without a stop condition needs more than one turn" })
+        // a keep going has a stop condition, just not one jep can check: the
+        // agent's own word (core/keepgoing.ts)
+        const byWord = b.stop === "tool"
+        if (!verify && !until && !byWord && max < 2) return json(res, 400, { error: "a loop without a stop condition needs more than one turn" })
         const adapter = await ensureListed(id)
         if (!adapter) return json(res, 404, { error: "no such session" })
         const key = engine.turnKey(id)
         const existing = loops.get(key)
         if (existing?.status === "running") return json(res, 409, { error: "a loop is already running" })
         const ref = models.get(id)
-        const [providerID = "", modelID = ""] = ref ? ref.split("/") : []
+        const model = parseModelRef(ref)
         const loop: LoopState = {
           sessionID: key,
           workspace: adapter.workspace,
-          spec: { goal, max, ...(verify ? { verify } : {}), ...(until ? { until } : {}) },
+          spec: { goal, max, ...(verify ? { verify } : {}), ...(until ? { until } : {}), ...(byWord ? { stop: "tool" as const } : {}) },
           iteration: 0,
           status: "running",
           startedAt: Date.now(),
@@ -2039,7 +2319,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         engine.startLoop(loop, {
           text: goal,
           filePaths: [],
-          ...(providerID && modelID ? { model: { providerID, modelID } } : {}),
+          ...(model ? { model } : {}),
           ...(agents.get(id) ? { agent: agents.get(id) } : {}),
           steer: false,
           loop: true,
@@ -2061,8 +2341,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
 
       if (path === "/stop") {
         console.error(`[stop] origin=client (gateway session ${id}, device ${token.slice(0, 6)}, from ${req.socket.remoteAddress ?? "?"})`)
-        // all: the prompts waiting behind the turn stop too (their words come
-        // back, so the client can hand them to its composer), and so does a loop
+        // all: the queue behind the turn is held, never dropped (the next prompt
+        // goes first and the queue follows it), and a loop stops. `dropped` stays in
+        // the answer, always empty, for clients that still read it.
         const { stopped, dropped } = await engine.stop(id, b.all === true, adapter)
         return json(res, 200, { stopped, dropped })
 
@@ -2122,6 +2403,70 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   listening = bound
   console.error(`[gw] listening on :${bound}  ·  pairing code: ${pairCode}`)
 
+  deps.conversationSync?.connect({
+    async list() {
+      const rows = await Promise.all(deps.adapters().map(async ({ adapter }) => {
+        const sessions = await raceTimeout(adapter.listSessions(), listBudgetMs, adapter.id).catch(() => [] as SessionSummary[])
+        return sessions.filter((s) => !archived.has(s.id)).map((s) => {
+          sessionAdapters.set(s.id, adapter)
+          return { id: s.id, title: titles.get(s.id) ?? s.title, harness: adapter.id, workspace: adapter.workspace, updatedAt: s.updatedAt }
+        })
+      }))
+      return [...new Map(rows.flat().map((s) => [s.id, s])).values()].sort((a, b) => b.updatedAt - a.updatedAt)
+    },
+    async read(id, limit) {
+      const owner = sessionAdapters.get(id) ?? await ensureListed(id)
+      if (!owner) return null
+      const session = await owner.getSession(id)
+      if (!session) return null
+      return {
+        info: { id: session.id, title: titles.get(id) ?? titles.get(session.id) ?? session.title, harness: owner.id, workspace: owner.workspace, updatedAt: session.updatedAt },
+        model: models.get(id) ?? models.get(session.id) ?? null,
+        agent: agents.get(id) ?? null,
+        archived: archived.has(id),
+        busy: engine.isBusy(id),
+        messages: (await owner.messages(id, { limit })).map(cleanForDisplay),
+      }
+    },
+    async update(id, patch) {
+      if (patch.title !== undefined) await renameConversation(id, patch.title)
+      if (patch.model !== undefined) {
+        if (patch.model) models.set(id, patch.model)
+        else models.delete(id)
+        await saveModels(deps.dataHome, models)
+      }
+      if (patch.agent !== undefined) {
+        if (patch.agent) agents.set(id, patch.agent)
+        else agents.delete(id)
+        await saveAgents(deps.dataHome, agents)
+      }
+      broadcast({ type: "session.changed", sessionID: id })
+    },
+    async prompt(id, text, opts) {
+      const owner = sessionAdapters.get(id) ?? await ensureListed(id)
+      if (!owner) throw new Error("Conversation no longer exists")
+      if (opts?.signal?.aborted) throw new TurnAbortedError()
+      ensurePumps()
+      const abort = () => detach("stop Telegram turn", engine.stop(id, false, owner))
+      opts?.signal?.addEventListener("abort", abort, { once: true })
+      try {
+        const result = await new Promise<TurnResult>((resolve) => engine.submit(id, {
+          text, filePaths: opts?.filePaths ?? [], model: opts?.model ?? parseModelRef(models.get(id)),
+          agent: opts?.agent ?? agents.get(id), quote: opts?.quote, steer: false, resolve,
+        }))
+        if (result.message) return result.message
+        if (result.aborted || result.cancelled) throw new TurnAbortedError()
+        throw new Error(result.error ?? "Prompt failed")
+      } finally {
+        opts?.signal?.removeEventListener("abort", abort)
+      }
+    },
+    async stop(id) {
+      const owner = sessionAdapters.get(id) ?? await ensureListed(id)
+      return owner ? (await engine.stop(id, true, owner)).stopped : false
+    },
+  })
+
   return {
     pairCode,
     port: bound,
@@ -2130,7 +2475,9 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
     turns: engine,
     rename: renameConversation,
     chats: chatDirectory,
+    daemonAsks: daemonAskPort,
     close: async () => {
+      stopDeletionUpdates?.()
       engine.close()
       clearInterval(pumpTimer)
       clearInterval(pingTimer)

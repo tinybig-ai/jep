@@ -112,6 +112,8 @@ public struct ChatState: Equatable, Sendable {
     public var gitError: String?
     public var harnessSettings = HarnessSettings()
     public var harnessSettingsLoading = false
+    /// how this conversation keeps going, as the daemon says it (`/conversation-settings`)
+    public var conversationMode = ConversationMode()
     public var subagents: [SessionSummary]?
     public var skills: SkillSet?
     public var mcp: [McpServer]?
@@ -864,6 +866,38 @@ public final class ChatStore {
                 update { st in
                     st.harnessSettingsLoading = false
                     if !quiet { st.notice = describe(error, "couldn't load the options") }
+                }
+            }
+        }
+    }
+
+    /// read the mode from the daemon; a failed read keeps what the screen had
+    @discardableResult
+    public func loadConversationMode(quiet: Bool = true) -> Task<Void, Never> {
+        Task {
+            do {
+                let m = try await repo.conversationMode(sessionId: sessionId)
+                update { $0.conversationMode = m }
+            } catch {
+                update { st in if !quiet { st.notice = describe(error, "couldn't load the mode") } }
+            }
+        }
+    }
+
+    /// one tap walks the daemon's modes; the screen shows the new one at once and
+    /// goes back to what the daemon holds if it refuses
+    public func cycleConversationMode() {
+        let before = state.conversationMode
+        let next = before.next
+        update { $0.conversationMode.mode = next }
+        Task {
+            do {
+                let held = try await repo.setConversationMode(sessionId: sessionId, mode: next)
+                update { $0.conversationMode.mode = held }
+            } catch {
+                update { st in
+                    st.conversationMode = before
+                    st.notice = describe(error, "couldn't change the mode")
                 }
             }
         }

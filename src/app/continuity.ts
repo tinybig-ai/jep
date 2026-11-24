@@ -169,6 +169,19 @@ export async function startContinuity(opts: ContinuityOpts): Promise<{ close(): 
     return { ok: true, message: `renamed to "${title}"` }
   }
 
+  // `jep-end-turn`: the only normal way a keep going (core/keepgoing.ts) ends.
+  // It is the agent grading its own work, which every other stop condition here
+  // refuses to do — so the brakes that matter stay outside the model: a
+  // deadline, turns that ran no tool, and the person's Stop.
+  const endTurnRequest = async (req: ControlRequest): Promise<ControlReply> => {
+    const owner = await turns.resolve(typeof req.session === "string" ? req.session : undefined, typeof req.cwd === "string" ? req.cwd : undefined)
+    if (typeof owner === "string") return { ok: false, message: owner }
+    const r = turns.declareDone?.(owner.key)
+    if (!r?.keeping) return { ok: true, message: "noted. This conversation is not set to keep going, so it ends when your turn ends anyway." }
+    if (r.relentless) return { ok: true, message: "refused: this conversation is in relentless mode, so jep-end-turn does not end it. Make the work better, or take the decision you were waiting on, and go on." }
+    return { ok: true, message: "noted: this turn is the last one. The conversation stops when you stop; do not call this again." }
+  }
+
   // ─── read another conversation ──────────────────────────────────────
   // `jep-read` lets an agent look at a different conversation, but only with the person's yes: a
   // card in the asking conversation names both and waits. "Always" is remembered for that pair.
@@ -277,7 +290,7 @@ export async function startContinuity(opts: ContinuityOpts): Promise<{ close(): 
     return { ok: true, message: `sent to "${target.title.slice(0, 60)}". It reads it when its current turn ends. Do not wait for a reply: if it answers, that arrives as a message to you.` }
   }
 
-  const control = await startControl(dataHome, { watch: watchRequest, restart: restartRequest, rename: renameRequest, read: readRequest, tell: tellRequest })
+  const control = await startControl(dataHome, { watch: watchRequest, restart: restartRequest, rename: renameRequest, read: readRequest, tell: tellRequest, endTurn: endTurnRequest })
 
   // ─── pick up what the last run left ─────────────────────────────────
   // Watches that were waiting, and turns a restart or a crash cut off. After a
@@ -308,6 +321,9 @@ export async function startContinuity(opts: ContinuityOpts): Promise<{ close(): 
       console.error(`[restart] picking up the turn a restart cut off (${key})`)
       turns.enqueue(key, RESUME_TEXT, { resume: true, notice: true })
     }
+    // the restored waiting prompts run after the turn a restart cut off, so the resume above
+    // is already in line ahead of them
+    await turns.resumeQueues?.()
     saveJournal()
   }
   const restoreTimer = setTimeout(() => detach("restore after start", restore()), opts.restoreAfterMs ?? 2_000)
