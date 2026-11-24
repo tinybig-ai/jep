@@ -11,8 +11,10 @@ concurrency:
 
 jobs:
   # JepKit is Foundation-only: its logic tests run on Linux in seconds.
+  # 24.04 pinned: swift-actions/setup-swift can't provision Swift on the
+  # ubuntu-26 image ubuntu-latest migrated to (Oct 19, 2026)
   jepkit:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: swift-actions/setup-swift@v2

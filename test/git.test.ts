@@ -6,10 +6,10 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { fileDiff, fullDiff, isRepo, parseNumstat, parsePorcelain, push, repoStatus } from "../src/core/git.ts"
+import { displayPath, fileDiff, fullDiff, isRepo, parseNumstat, parsePorcelain, patchFile, push, remoteSlug, repoContaining, repoStatus } from "../src/core/git.ts"
 
 test("porcelain: branch, upstream and ahead/behind", () => {
   const out = [
@@ -106,6 +106,14 @@ function tempRepo(): string {
   return dir
 }
 
+test("a remote url is owner/name, and a home path starts with ~", () => {
+  assert.equal(remoteSlug("git@github.com:rippling/rippling-main.git"), "rippling/rippling-main")
+  assert.equal(remoteSlug("https://github.com/albertoxamin/jep"), "albertoxamin/jep")
+  assert.equal(remoteSlug("not a url"), null)
+  assert.equal(displayPath("/Users/me/github/jep", "/Users/me"), "~/github/jep")
+  assert.equal(displayPath("/tmp/x", "/Users/me"), "/tmp/x")
+})
+
 test("a directory that is not a repo says so", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "jep-plain-"))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
@@ -126,6 +134,8 @@ test("before the first commit: unborn HEAD, untracked files still counted", asyn
 
   const a = st.files.find((f) => f.path === "a.txt")!
   assert.equal(a.code, "?")
+  assert.match(await patchFile(dir, "a.txt"), /\+one/)
+  assert.equal(await patchFile(dir, "../secret"), "")
   assert.equal(a.additions, 2, "every line of a new file is an addition")
   const bin = st.files.find((f) => f.path === "blob.bin")!
   assert.equal(bin.binary, true, "a NUL in the first bytes means don't count lines")
@@ -354,4 +364,19 @@ test("push refuses to guess when there is no upstream and no remote named", asyn
   const r = await push(dir, { setUpstream: true })
   assert.equal(r.ok, false)
   assert.match(r.message, /no remote/)
+})
+
+test("edited files name their own repo when the workspace is not one", async (t) => {
+  const parent = mkdtempSync(join(tmpdir(), "jep-git-parent-"))
+  const child = join(parent, "proj")
+  mkdirSync(child)
+  t.after(() => rmSync(parent, { recursive: true, force: true }))
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: child })
+  execFileSync("git", ["config", "user.email", "t@t"], { cwd: child })
+  execFileSync("git", ["config", "user.name", "T"], { cwd: child })
+  writeFileSync(join(child, "a.txt"), "a\n")
+  execFileSync("git", ["add", "a.txt"], { cwd: child })
+  execFileSync("git", ["commit", "-qm", "init"], { cwd: child })
+  assert.equal(await repoContaining([join(child, "src", "main.ts"), join(child, "src", "main.ts")], parent), realpathSync(child))
+  assert.equal(await repoContaining([], parent), parent)
 })

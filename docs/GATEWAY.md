@@ -109,8 +109,8 @@ answers, it does so with `jep-tell` and the answer arrives as a message.
 
 | route | body | returns |
 |---|---|---|
-| `POST /pair` | `{code}` | `{token}` (5 tries / 60 s) |
-| `GET /health` | (none) | `{ok,paired,devices,pushConfigured,uptimeMs}` |
+| `POST /pair` | `{code}` | `{token,nextCode}` (5 tries / 60 s). With `JEP_GW_INGRESS_TRUST=1`, a socket peer of `172.30.32.2` (Supervisor), and `X-Remote-User-Id`, the code is skipped, the pairing code is not spent, and `nextCode` is omitted |
+| `GET /health` | (none) | `{ok,paired,devices,pushConfigured,uptimeMs,trustedIngress}` — `trustedIngress` requires the Supervisor's socket address, its identity header, and the ingress opt-in |
 | `POST /devices` | (none) | `{devices[]}`: paired device fingerprints, names, pairing/last-seen times, and whether each is the calling device |
 | `POST /devices/rename` | `{id,name}` | `{ok,id,name}`: rename one paired device |
 | `POST /devices/revoke` | `{id}` | `{ok,current}`: revoke one device token; `current` says whether the caller revoked itself |
@@ -144,7 +144,9 @@ answers, it does so with `jep-tell` and the answer arrives as a message.
 | `POST /usage` | `{id}` | `{usage}`: tokens (in/out/thinking/cache) and reported cost summed over the conversation, plus turns and models (`core/usage.ts`) |
 | `POST /stats` | `{days?}` | the same usage, rolled up over every conversation jep can read — no `id`, because it belongs to the device and not to one conversation. `{days[],models[],harnesses[],today,week,all,sessions,scanned,first,last,busiest}`: `days` is the window asked for (default 30, clamped 7–365), oldest first with empty days kept so a chart has its axis; `today`, `week` (the last seven of those days) and `all` are `usage` shapes; `models` and `harnesses` are `{key,...usage}` ranked by tokens; `sessions` counts the conversations that held a counted turn and `scanned` how many were read. It is bounded and cheap to re-open: at most 300 conversations, six transcripts read at a time, and the answer is cached for three minutes. Nothing is stored — it is the transcripts, added up (`core/usage.ts`, `statsOf`) |
 | `POST /diff` | `{id}` | `{files[]}`: files this conversation changed (`{file,additions,deletions,status?}`) |
-| `POST /git` | `{id}` | `{isRepository,branch,head,changedFiles,files[],commits[]}`: the conversation's workspace repo (`files` names up to 60 changed files as `{path,code,staged,additions,deletions}`, for the web app's details column), read through `core/git.ts` like Telegram's /git: branch, changed files (untracked included), last 30 commits (`{hash,shortHash,subject,author,time}`, hash is the short one, time in seconds). The client supplies no command and no path |
+| `POST /git` | `{id}` | `{isRepository,branch,head,changedFiles,files[],commits[],root,folder,repo}`: the conversation's workspace repo (`files` names up to 60 changed files as `{path,code,staged,additions,deletions}`, for the web app's details column), read through `core/git.ts` like Telegram's /git: branch, changed files (untracked included), last 30 commits (`{hash,shortHash,subject,author,time}`, hash is the short one, time in seconds). `folder` is the repo root with `~` for home. `repo` is `owner/name` from the first remote that has one. The client supplies no command and no path |
+| `POST /git/patch` | `{id}` | `{patch}`: every uncommitted change as one unified diff, untracked files included. Truncated past 400k characters |
+| `POST /git/file` | `{id,path}` | `{patch}`: that file's diff against HEAD, path relative to the repo from `POST /git`. A path that leaves the repo is an empty patch. Truncated past 200k characters |
 | `POST /compact` | `{id}` | `{ok}`: compress the conversation's context (opencode's summarize, Claude Code's `/compact`). 501 when the harness has no such control, 409 when it refused (a turn in flight), 504 when the summarize ran out of time |
 | `POST /loop` | `{id,goal,max?,verify?,until?}` | `{loop}`: start a loop and queue the goal as its first turn. `max` is 1–50 (default 8); `verify` is a shell command whose exit 0 ends it; `until` is a substring the reply must contain. 409 when one is already running, 404 for an unknown session |
 | `POST /loop/stop` | `{id}` | `{loop}`: end future turns, drop what it queued, and abort its own running turn. A turn a person started is left to finish |
@@ -155,9 +157,9 @@ answers, it does so with `jep-tell` and the answer arrives as a message.
 | `POST /term` | (none) | `{authorized}`: whether *this* device token may open a shell (see below) |
 | `POST /term/unlock` | `{code}` | `{ok}` or 403: prove the pairing code a second time to allow a terminal from this device |
 | `POST /term/lock` | (none) | `{ok}`: drop that grant |
-| `POST /term/open` | `{id}` | `{ok,name}`: start (or reattach) the conversation's tmux shell in its workspace |
-| `POST /term/frame` | `{id}` | `{text}`: the shell's screen as rendered text |
-| `POST /term/input` | `{id,text?,key?}` | `{ok}`: type `text`, or press a named `key` (Enter/Tab/C-c/…) |
+| `POST /term/open` | `{id, cols?, rows?}` | `{ok,name}`: start (or reattach) the conversation's tmux shell in its workspace. `cols` and `rows` resize it to the widget |
+| `POST /term/frame` | `{id, ansi?}` | `{text, gen, cursor?}`: the shell's screen. `ansi: true` keeps colors, `cursor` is `{x, y}`, and `gen` counts keystrokes already applied |
+| `POST /term/input` | `{id,text?,key?}` | `{ok, gen}`: type `text`, or press a named `key` (Enter/Tab/C-c/…). `gen` is how many inputs this shell has applied |
 | `POST /term/close` | `{id}` | `{ok}`: kill the shell |
 | `POST /skills` | `{id}` | `{skills[],toggleable}`: the SKILL.md dirs this harness loads (`{name,description,scope,path,disableModelInvocation}`) |
 | `POST /setskill` | `{id,path,disabled}` | `{ok}`: hide (or allow) a skill for the model; flips `disable-model-invocation` in its frontmatter |

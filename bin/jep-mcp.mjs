@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// jep's own tools as an MCP server (stdio): the same three things the `jep-watch`,
-// `jep-restart` and `jep-show` commands do, for a harness that is better at
+// jep's own tools as an MCP server (stdio): the same things the `jep-watch`,
+// `jep-restart`, `jep-rename`, `jep-show` and `jep-send` commands do, for a harness that is better at
 // calling a tool than at finding a shell command. Which conversation it serves
 // comes from `--session ID` (or JEP_SESSION); without one the daemon picks the
 // only turn running in the agent's directory.
@@ -14,6 +14,7 @@ import { ask } from "./lib/control.mjs"
 const argAt = process.argv.indexOf("--session")
 const SESSION = (argAt > 0 ? process.argv[argAt + 1] : process.env.JEP_SESSION) ?? ""
 const IMAGE = /\.(png|jpe?g|gif|webp|avif|bmp|svg|heic|heif)$/i
+const SEND_MAX = 50 * 1024 * 1024
 
 const TOOLS = [
   {
@@ -63,6 +64,11 @@ const TOOLS = [
     description:
       "Say this turn finished everything you were asked. In a conversation set to keep going, jep starts another turn until you call this — so call it only when the request is done, never to buy time or to hand back a question you have not asked yet.",
     inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "jep_send",
+    description: "Send files to the person in this Telegram chat. Use when they ask for a file. Each path is a file under 50 MB.",
+    inputSchema: { type: "object", properties: { paths: { type: "array", items: { type: "string" } } }, required: ["paths"] },
   },
 ]
 
@@ -121,6 +127,24 @@ async function call(name, args = {}) {
   if (name === "jep_end_turn") {
     const r = await ask({ op: "end-turn", done: true, session: SESSION, cwd: process.cwd() })
     return text(r.message, !r.ok)
+  }
+  if (name === "jep_send") {
+    const paths = Array.isArray(args.paths) ? args.paths.filter((p) => typeof p === "string" && p) : []
+    if (!paths.length) return text("paths is required", true)
+    const lines = []
+    let bad = 0
+    for (const p of paths) {
+      const abs = resolve(p)
+      let size = -1
+      try {
+        const info = statSync(abs)
+        if (info.isFile()) size = info.size
+      } catch {}
+      if (size < 0) lines.push(`not a file: ${abs}`), bad++
+      else if (size > SEND_MAX) lines.push(`too big for Telegram (50 MB): ${abs}`), bad++
+      else lines.push(`sending ${abs} (${size} bytes)`)
+    }
+    return text(lines.join("\n"), bad > 0)
   }
   return text(`unknown tool: ${name}`, true)
 }

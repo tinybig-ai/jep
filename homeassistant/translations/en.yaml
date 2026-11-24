@@ -1,0 +1,119 @@
+configuration:
+  telegram:
+    name: Telegram
+    description: The bot. Leave the token empty to run without Telegram.
+    fields:
+      token:
+        name: Bot token
+        description: Token from @BotFather.
+      forum:
+        name: Forum topics
+        description: 'auto tries Threaded mode (each conversation is its own topic). off never tries.'
+  gateway:
+    name: Gateway
+    description: The web client and the phone apps.
+    fields:
+      enabled:
+        name: Enable gateway
+        description: Serve the web client and the phone apps. Works without Telegram.
+      port:
+        name: Port
+        description: Port inside the app. Ingress uses 8099. Leave the Network host port empty unless a phone needs it.
+      bind:
+        name: Bind address
+        description: Empty listens on every interface. 127.0.0.1 stays inside the container.
+      pair_code:
+        name: Pairing code
+        description: Pin the code a phone pairs with. Empty prints a fresh code at each boot.
+      ingress_trust:
+        name: Trust Home Assistant ingress
+        description: The sidebar skips pairing. A phone on the raw port still needs a code.
+      terminal:
+        name: Web terminal
+        description: A tmux shell for the open conversation, from the Terminal button.
+  workspace:
+    name: Workspace
+    description: Where conversations start, and which folders a client may browse.
+    fields:
+      dir:
+        name: Workspace folder
+        description: The folder conversations start in. Throwaway pods live under the app data.
+      browse_root:
+        name: Browse root
+        description: What Add project can list, inside the container.
+  models:
+    name: Models
+    description: The model new conversations start on.
+    fields:
+      id:
+        name: Default model
+        description: 'Provider and model, such as openrouter/anthropic/claude-sonnet-4. Empty uses the harness default.'
+      openrouter_api_key:
+        name: OpenRouter API key
+        description: Handed to OpenCode as OPENROUTER_API_KEY. Empty if you do not use OpenRouter.
+  harnesses:
+    name: Harnesses
+    description: Which coding agents jep may start. One that is not installed is skipped.
+    fields:
+      default:
+        name: Default harness
+        description: The agent a new conversation uses when you do not pick one.
+      opencode:
+        name: OpenCode
+      codex:
+        name: Codex
+      claude:
+        name: Claude
+      pi:
+        name: Pi
+      goose:
+        name: Goose
+      opencode_auth:
+        name: OpenCode auth.json
+        description: Paste ~/.local/share/opencode/auth.json from a machine where you ran opencode auth login.
+      opencode_config:
+        name: OpenCode config
+        description: Paste ~/.config/opencode/opencode.json (providers, MCP servers, agents).
+  github:
+    name: GitHub
+    description: Optional. The app starts without it.
+    fields:
+      token:
+        name: Token
+        description: Supplied as GH_TOKEN. Empty leaves GitHub signed out.
+  voice:
+    name: Voice notes
+    description: Off unless a command or a whisper folder is set.
+    fields:
+      command:
+        name: Transcription command
+        description: Reads a WAV on stdin and prints the transcript.
+      timeout:
+        name: Timeout
+        description: Seconds a transcription may run.
+      whisper_dir:
+        name: Whisper folder
+        description: Path to a whisper .venv, for example under /config.
+      whisper_model:
+        name: Whisper model
+        description: Model name, such as medium. Empty uses medium.
+  push:
+    name: Phone push
+    description: Optional notifications for the Android and iOS apps.
+    fields:
+      fcm_key:
+        name: Android key
+        description: Firebase service-account JSON.
+      apns_key:
+        name: Apple key path
+        description: Path to the .p8 inside the container, such as /config/AuthKey_XXXX.p8.
+      apns_key_id:
+        name: Apple key id
+      apns_team_id:
+        name: Apple team id
+      apns_topic:
+        name: Apple topic
+        description: The app bundle id.
+      apns_sandbox:
+        name: Apple sandbox
+        description: On for a development or TestFlight build.

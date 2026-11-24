@@ -90,6 +90,8 @@ test("thinking or tools can be hidden, each independently", () => {
   assert.doesNotMatch(blocks(seg, { thinking: false })[0]!.text as string, /💭/)
   assert.match(blocks(seg, { tools: false })[0]!.text as string, /💭/)
   assert.doesNotMatch(blocks(seg, { tools: false })[0]!.text as string, /⚙/)
+  const quiet = blocks(seg, { thinking: false, tools: false })
+  assert.deepEqual(quiet.map((x) => x.text), ["out"])
 })
 
 test("a marker-only icon line renders nothing", () => {

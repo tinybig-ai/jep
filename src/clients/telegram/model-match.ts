@@ -34,6 +34,16 @@ export function matchModel(query: string, labels: string[]): ModelMatch {
   const exact = labels.find((l) => l.toLowerCase() === q.toLowerCase())
     ?? labels.find((l) => modelPart(l).toLowerCase() === q.toLowerCase())
   if (exact) return { model: exact, close: [] }
+  // A typed provider/model is that id. A longer row that only adds a colon
+  // suffix (`:free`, `:nitro`) is a different model, not a completion of it.
+  if (q.includes("/")) {
+    const ql = q.toLowerCase()
+    const suffixOnly = labels.filter((l) => {
+      const lower = l.toLowerCase()
+      return lower.startsWith(ql) && lower.slice(ql.length).startsWith(":")
+    })
+    if (suffixOnly.length) return { model: q, close: [] }
+  }
   // part of a name ("opus", "gpt5") — separators ignored. Several can contain
   // it: one whose model id is exactly it wins, else the first in the list.
   // "/model opus" should just work, not ask which opus.

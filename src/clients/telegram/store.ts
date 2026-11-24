@@ -12,11 +12,12 @@ export interface VerbositySettings {
   layout: VerbosityLayout
 }
 
-// Minimal by default: an icon line for thinking and tools, then the answer.
-// Anyone who wants the collapsed per-step detail turns it up in Settings.
+// Telegram only. The answer streams; thinking and tool calls stay out of the
+// chat unless turned up in Settings. The web client draws those parts itself
+// and does not read this.
 export const DEFAULT_VERBOSITY: VerbositySettings = {
-  thinking: "collapsed",
-  tools: "collapsed",
+  thinking: "off",
+  tools: "off",
   layout: "minimal",
 }
 

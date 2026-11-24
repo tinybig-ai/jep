@@ -10,7 +10,7 @@ jep is a remote control for **opencode**, **codex** and **claude**, **pi** and m
 from **Telegram**, the **Android app**, or any client behind the
 [gateway](docs/GATEWAY.md). 
 
-[![](https://img.shields.io/badge/version-0.2.0-3d6aa8)](package.json)
+[![](https://img.shields.io/badge/version-0.3.0-3d6aa8)](package.json)
 [![](https://img.shields.io/badge/Node-%E2%89%A526-339933)](package.json)
 [![](https://img.shields.io/badge/adapters-opencode%20%C2%B7%20codex%20%C2%B7%20claude-26a269)](src/app/harnesses.ts)
 [![](https://img.shields.io/badge/clients-Telegram%20%C2%B7%20Android%20%C2%B7%20iOS%20%C2%B7%20macOS-643891)](docs/GATEWAY.md)
@@ -48,7 +48,8 @@ rest.
   **Codex**, so any harness behind the layer is reachable from any device.
 - **📱 Clients wherever you are.** A **Telegram bot** with native rich messages
   (tables, collapsible thinking and tool calls, stop buttons, permission
-  prompts) and a **Jetpack Compose Android app**. The
+  prompts — and, with @BotFather's Threaded mode, one **forum topic per
+  conversation**) and a **Jetpack Compose Android app**. The
   [gateway](docs/GATEWAY.md) makes a web dashboard, Slack bot, or desktop
   widget a client too.
 - **⚡ Live from the first word.** Turns stream into an animated draft: a 💭
@@ -88,16 +89,18 @@ Every [release](https://github.com/tinybig-ai/jep/releases/latest) carries:
 - **iOS**: not on the App Store or TestFlight yet. Build it from Xcode; see
   [clients/ios](docs/clients/ios.md).
 
-The daemon is on npm: `npm install -g @tinybig-ai/jep`, then run `jep`.
+The daemon ships as an installable tarball on the same release:
+`npm install -g https://github.com/tinybig-ai/jep/releases/download/v0.3.1/tinybig-ai-jep-0.3.1.tgz`, then run `jep`.
 
 ### 0. One command, no checkout
 
 ```sh
-JEP_TG_TOKEN=<from @BotFather> npx --yes @tinybig-ai/jep
+JEP_GW_PORT=8099 npx --yes --package=https://github.com/tinybig-ai/jep/releases/download/v0.3.1/tinybig-ai-jep-0.3.1.tgz jep
 ```
 
-This runs the Telegram bot. The same daemon serves the Android app and other
-clients through the [gateway](docs/GATEWAY.md) (set `JEP_GW_PORT`); the client
+Open `http://localhost:8099` and enter the pairing code from the log. For
+Telegram, also set `JEP_TG_TOKEN` to the token from @BotFather. The same daemon
+serves the Android app and other clients through the [gateway](docs/GATEWAY.md); the client
 guides are in [docs/clients](docs/clients/). For the launchd daemon, the Android
 build, or hacking on jep, clone below.
 
@@ -140,6 +143,10 @@ npm start
 > service** that restarts on a crash and, with `loginctl enable-linger`, comes
 > back after a reboot. Logs: `journalctl --user -u jep-tg -f`. CI boots the
 > daemon on Debian in mock mode, and has systemd verify the unit, on every push.
+
+> On **Home Assistant**, `homeassistant/` ships the same daemon as an **app**:
+> add this repository to the app store and both clients are options. See
+> [homeassistant/DOCS.md](homeassistant/DOCS.md).
 
 ### 3. Pick a client
 

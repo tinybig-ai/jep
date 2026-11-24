@@ -27,21 +27,42 @@ const splitError = (raw: string): { name?: string; message: string } => {
   return i <= 0 ? { message: raw } : { name: raw.slice(0, i), message: raw.slice(i + 2) }
 }
 
+// The log line keeps the provider's JSON, headers and stack. The chat wants
+// the one sentence OpenRouter (or the model lookup) actually said.
+function readable(raw: string): { name?: string; message: string; status?: number } {
+  const { name, message } = splitError(raw)
+  const body = message.match(/"responseBody":"((?:\\.|[^"\\])*)"/)
+  if (body) {
+    try {
+      const inner = JSON.parse(JSON.parse(`"${body[1]}"`)) as { error?: { message?: string; code?: number } }
+      if (typeof inner.error?.message === "string") {
+        return { name, message: inner.error.message, ...(typeof inner.error.code === "number" ? { status: inner.error.code } : {}) }
+      }
+    } catch { /* the rest of the line is still usable */ }
+  }
+  let text = message.split("\n")[0] ?? message
+  for (const mark of [" cause=", " responseHeaders=", " responseBody=", " statusCode", ' "statusCode"']) {
+    const at = text.indexOf(mark)
+    if (at > 0) text = text.slice(0, at)
+  }
+  const status = /"statusCode":(\d+)/.exec(message)?.[1]
+  return { name, message: text.trim().slice(0, 500), ...(status ? { status: Number(status) } : {}) }
+}
+
 export function parseOpencodeLogError(line: string): OpenCodeLogError | null {
   const level = /\blevel=(\w+)\b/.exec(line)?.[1]
   if (level !== "ERROR" && level !== "WARN") return null
   const fields: Record<string, string> = {}
   for (const m of line.matchAll(KV)) {
     const key = m[1]
-    if (key) fields[key] = (m[2] ?? m[3] ?? "").replace(/\\(.)/g, "$1")
+    if (key) fields[key] = (m[2] ?? m[3] ?? "").replace(/\\(.)/g, (_, c) => (c === "n" ? "\n" : c === "t" ? "\t" : c))
   }
-  const sessionID = fields["session.id"] ?? fields["sessionID"]
-  if (!sessionID) return null
-  // the provider failure that never makes it onto the event stream
-  const isStreamError = fields["message"] === "stream error"
   const raw = fields["error.error"] ?? fields["error"]
+  const sessionID = fields["session.id"] ?? fields["sessionID"] ?? ""
+  if (!sessionID && !raw) return null
+  const isStreamError = fields["message"] === "stream error"
   if (!isStreamError && !raw) return null
-  const { name, message } = splitError(raw ?? fields["message"] ?? "stream error")
+  const { name, message, status: innerStatus } = readable(raw ?? fields["message"] ?? "stream error")
   // opencode logs every stop as `error=Aborted` on the session. That is jep's
   // own abort (a steer, a force, a stop) echoing back, not a provider failure;
   // recorded as one, it landed after the next turn began and the watchdog
@@ -54,7 +75,7 @@ export function parseOpencodeLogError(line: string): OpenCodeLogError | null {
     message,
     ...(fields["providerID"] ? { provider: fields["providerID"] } : {}),
     ...(fields["modelID"] ? { model: fields["modelID"] } : {}),
-    ...(status ? { status } : {}),
+    ...(status || innerStatus ? { status: status ?? innerStatus } : {}),
   }
   return { sessionID, error }
 }

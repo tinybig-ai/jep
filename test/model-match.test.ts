@@ -28,6 +28,20 @@ test("a typo", () => {
   assert.equal(matchModel("claude-sonet-5", labels).model, "anthropic/claude-sonnet-5")
 })
 
+test("a full id is not extended with a colon suffix", () => {
+  const ernie = [
+    "default",
+    "openrouter/baidu/ernie-5.5-flash-preview:free",
+  ]
+  assert.equal(
+    matchModel("openrouter/baidu/ernie-5.5-flash-preview", ernie).model,
+    "openrouter/baidu/ernie-5.5-flash-preview",
+  )
+  assert.equal(
+    matchModel("openrouter/baidu/ernie-5.5-flash-preview:free", ernie).model,
+    "openrouter/baidu/ernie-5.5-flash-preview:free",
+  )
+})
 test("several matches take the first in the list", () => {
   // "/model opus" should just work, however many opuses there are
   const many = [...labels, "openrouter/claude-opus-4"]

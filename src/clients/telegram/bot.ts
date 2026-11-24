@@ -19,6 +19,7 @@ import { eventMessage, eventSession } from "../../core/types.ts"
 import { transcribe } from "../../core/transcribe.ts"
 import { addUsage, emptyUsage, fmtMoney, usageChip, usageOf } from "../../core/usage.ts"
 import { parseModelRef } from "../../core/models.ts"
+import { sentFrom } from "../../core/send.ts"
 import { JEP_CONTEXT, JEP_CONTEXT_FOOTER, transcriptText } from "../../core/transcript.ts"
 import type { Usage } from "../../core/usage.ts"
 import type { McpServer } from "../../core/types.ts"
@@ -28,7 +29,7 @@ import { matches, rankHits, snippet } from "./search.ts"
 import type { Hit } from "./search.ts"
 import { IMAGE_RE, VOICE_MAX_SEC, audioOf, imageExt, sniffAudioExt, sniffImageExt, stickerPrompt } from "./media.ts"
 import type { AudioIn } from "./media.ts"
-import { commits as gitCommits, fileDiff, fullDiff, isRepo, push as gitPush, repoStatus } from "../../core/git.ts"
+import { commits as gitCommits, fileDiff, fullDiff, isRepo, push as gitPush, repoContaining, repoStatus } from "../../core/git.ts"
 import type { GitFile, GitStatus } from "../../core/git.ts"
 import { judgeTurn, LIVENESS } from "../../core/liveness.ts"
 import { clipTitle, fmtCount, fmtDuration, fmtHome, fmtWsPath, timeAgo } from "./fmt.ts"
@@ -633,7 +634,7 @@ function partsToMarkdown(parts: Part[], s: VerbositySettings): string {
 }
 
 const PRESETS: Record<"simple" | "minimal" | "detailed" | "debug", VerbositySettings> = {
-  simple: { thinking: "off", tools: "off", layout: "per-step" },
+  simple: { thinking: "off", tools: "off", layout: "minimal" },
   minimal: { thinking: "collapsed", tools: "collapsed", layout: "minimal" },
   detailed: { thinking: "collapsed", tools: "collapsed", layout: "per-step" },
   debug: { thinking: "expanded", tools: "expanded", layout: "per-section" },
@@ -2277,6 +2278,9 @@ export class TelegramBot {
 
     const ac = new AbortController()
     c.inflight = ac
+    // files this turn already uploaded, so a tool update that repeats a path
+    // does not send it twice
+    const sentFiles = new Set<string>()
 
     // The spinner goes out BEFORE any harness work. #ensureSession below can
     // list sessions and create one — two round trips to opencode — and while
@@ -2834,6 +2838,7 @@ export class TelegramBot {
             let settled = false
             if (evt.part.kind === "tool" && (evt.part.status === "completed" || evt.part.status === "error")) {
               await flushTool(evt.part)
+              await this.#deliverSent(chatID, evt.part, sentFiles)
               settled = true
             } else if (evt.part.kind === "other" && evt.part.nativeType === "step-finish") {
               await flushPendingReasoning()
@@ -3044,7 +3049,10 @@ export class TelegramBot {
           if (shown) await this.#tg.sendMessage({ chatID, text: "⚠️ the AI server dropped the connection — the answer above may be incomplete." })
           else await this.#tg.sendMessage({ chatID, text: "⚠️ the AI server dropped the connection before an answer arrived." })
         } else {
-          const text = (dropped ? "⚠️ the AI server dropped the connection." : `⚠️ ${msg}`).slice(-MAX_MSG)
+          let msg = (err as Error).message
+        const named = ws?.adapter.providerError?.(sessionID)
+        if (named && /unexpected server error|prompt -> \d+/i.test(msg)) msg = describeError(named)
+        const text = (dropped ? "⚠️ the AI server dropped the connection." : `⚠️ ${msg}`).slice(0, MAX_MSG)
           if (placeholder) {
             lastText = text
             lastHadMarkup = false
@@ -3339,7 +3347,24 @@ export class TelegramBot {
   // not a side effect of looking.
   async #gitView(chatID: number, messageID: number | null): Promise<void> {
     const c = this.#chat(chatID)
-    const dir = this.#activeWs(chatID).dir
+    const ws = this.#activeWs(chatID)
+    let dir = ws.dir
+    if (c.sessionID) {
+      const rows = await ws.adapter.messages(c.sessionID, { limit: 100 }).catch(() => [])
+      const files: string[] = []
+      for (const message of rows) {
+        for (const part of message.parts) {
+          if (part.kind !== "tool" || !part.input || typeof part.input !== "object") continue
+          const input = part.input as Record<string, unknown>
+          for (const key of ["filePath", "file_path", "path"]) {
+            const value = input[key]
+            if (typeof value !== "string" || !value || value.startsWith("-")) continue
+            files.push(value.startsWith("/") ? value : `${ws.dir}/${value}`)
+          }
+        }
+      }
+      dir = await repoContaining(files, ws.dir)
+    }
     const fail = async (text: string) => {
       c.git = null
       if (messageID === null) await this.#tg.sendMessage({ chatID, text })
@@ -3855,6 +3880,16 @@ export class TelegramBot {
     this.#runTurn(turnChat, () => this.#freeText(turnChat, prompt), { prompt: { text: prompt, queuedAt: Date.now() } })
     if (queued) {
       void this.#tg.setMessageReaction({ chatID, messageID: m.message_id, emoji: "👀" }).catch(logFail("reaction"))
+    }
+  }
+
+  // the agent asked to hand these files to the person (jep-send / jep_send)
+  async #deliverSent(chatID: number, part: ToolCallPart, sent: Set<string>): Promise<void> {
+    for (const p of sentFrom(part.name, part.input, part.output)) {
+      const abs = resolve(p)
+      if (sent.has(abs)) continue
+      sent.add(abs)
+      await this.#sendPartFile(chatID, { kind: "file", filePath: abs })
     }
   }
 

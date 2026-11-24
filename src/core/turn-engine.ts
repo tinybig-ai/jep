@@ -153,6 +153,8 @@ export interface TurnEnv {
   recordChanged(id: string): void
   /** a loop's state changed: keep it, and tell every client to read it again */
   loopChanged(loops: Map<string, LoopState>, sessionID: string): void
+  /** a failure the harness never emitted, so the chat can show it */
+  report?(event: DomainEvent): void
 }
 
 /** a person's waiting prompt as it is kept across a daemon restart: what it needs to run, not its callback */
@@ -563,7 +565,9 @@ export class TurnEngine implements TurnHost {
       // stall: the turn is not coming back, and now we can say why.
       const pe = adapter?.providerError?.(id)
       if (pe) {
-        console.error(`[watchdog] provider error (gateway session ${id}): ${describeError(pe)}`)
+        const message = describeError(pe)
+        console.error(`[watchdog] provider error (gateway session ${id}): ${message}`)
+        this.#env.report?.({ type: "session.error", sessionID: id, message })
         this.#endTurn(id, st, { kind: "provider", error: pe }, "watchdog-provider-error")
         detach(`abort ${id}`, adapter?.abort(id))
         continue

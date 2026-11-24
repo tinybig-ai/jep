@@ -104,8 +104,12 @@ struct ChatHost: View {
         guard case .chat(let id, let title, let workspace, let harness) = store.screen else { return }
         if chat?.sessionId == id { return }
         chat?.close()
-        chat = store.makeChatStore(sessionId: id, title: title, workspace: workspace, harness: harness)
-        if let shared = store.consumeShared(id) { chat?.sendShared(shared) }
+        let opened = store.makeChatStore(sessionId: id, title: title, workspace: workspace, harness: harness)
+        chat = opened
+        // `chat` is @State, so its assignment is applied after this body returns.
+        // Use the local instance or shared content can be consumed without ever
+        // being sent into the newly opened conversation.
+        if let shared = store.consumeShared(id) { opened.sendShared(shared) }
     }
 }
 

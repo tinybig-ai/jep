@@ -29,14 +29,32 @@ export function tmuxTerminal(opts: { bin: string; cols: number; rows: number }):
       }
     },
 
-    async frame(sessionID) {
-      const { stdout } = await run(opts.bin, ["capture-pane", "-p", "-t", nameFor(sessionID), "-S", "-200"])
+    async frame(sessionID, ansi) {
+      // -e keeps the colors. The visible pane only: a web terminal repaints
+      // that grid, and a 200-line scrollback would scroll it off.
+      const args = ["capture-pane", "-p", "-t", nameFor(sessionID)]
+      if (ansi) args.splice(1, 0, "-e")
+      else args.push("-S", "-200")
+      const { stdout } = await run(opts.bin, args)
       return stdout
+    },
+
+    async cursor(sessionID) {
+      const { stdout } = await run(opts.bin, ["display-message", "-p", "-t", nameFor(sessionID), "#{cursor_x} #{cursor_y}"])
+      const [x, y] = stdout.trim().split(/\s+/).map((n) => Number(n) || 0)
+      return { x: x ?? 0, y: y ?? 0 }
+    },
+
+    async resize(sessionID, cols, rows) {
+      const c = Math.max(40, Math.min(200, Math.floor(cols)))
+      const r = Math.max(10, Math.min(80, Math.floor(rows)))
+      await run(opts.bin, ["resize-window", "-t", nameFor(sessionID), "-x", String(c), "-y", String(r)])
     },
 
     async send(sessionID, input) {
       const name = nameFor(sessionID)
       if (input.key) await run(opts.bin, ["send-keys", "-t", name, input.key])
+      // literal bytes, so a terminal emulator can send Enter, arrows, and paste
       else if (input.text != null) await run(opts.bin, ["send-keys", "-t", name, "-l", input.text])
     },
 

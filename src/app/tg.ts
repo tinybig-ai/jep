@@ -192,19 +192,25 @@ async function buildMockApi(): Promise<MockApi> {
     async sendRichMessageDraft(params) {
       calls.push({ method: "sendRichMessageDraft", chatID: params.chatID, rich: { draft: params.draftID, ...(params.rich_message as Record<string, unknown>) }, text: `draft=${params.draftID}` })
     },
-    async sendChatAction(params) {
-      calls.push({ method: "sendChatAction", chatID: params.chatID })
-    },
     async createForumTopic(params) {
+      // the call only ever succeeds when "Threaded mode" is on in @BotFather —
+      // fixtures assert this too: the classic replay must keep its plain-chat
+      // behaviour, the forum fixture turns the capability on explicitly
       if (process.env.JEP_TG_MOCK_FORUM !== "1") throw new Error("telegram createForumTopic: TOPIC_CLOSED")
+      // own counter from 901: dumps read chat=/thread= pairs unambiguously and
+      // fixtures can name thread ids that actually match what was opened
+      const id = nextTopicID++
       calls.push({ method: "createForumTopic", chatID: params.chatID, text: `title=${JSON.stringify(params.title)}` })
-      return { threadID: nextTopicID++ }
+      return { threadID: id }
     },
     async editForumTopic(params) {
-      calls.push({ method: "editForumTopic", chatID: params.chatID, messageID: params.threadID, text: params.name })
+      calls.push({ method: "editForumTopic", chatID: params.chatID, messageID: params.threadID, text: params.name ? `name=${JSON.stringify(params.name)}` : "" })
     },
     async deleteForumTopic(params) {
       calls.push({ method: "deleteForumTopic", chatID: params.chatID, messageID: params.threadID })
+    },
+    async sendChatAction(params) {
+      calls.push({ method: "sendChatAction", chatID: params.chatID })
     },
     async answerCallbackQuery(params) {
       calls.push({ method: "answerCallbackQuery", text: params.text })
@@ -429,10 +435,16 @@ async function main() {
   })
 
   // only offer harnesses that are actually installed here — a picker row that
-  // always fails is worse than no row
+  // always fails is worse than no row. JEP_HARNESSES (comma list) drops one
+  // the configuration switched off; unset means every installed harness.
+  const harnessAllow = new Set((process.env.JEP_HARNESSES ?? "").split(",").map((s) => s.trim()).filter(Boolean))
   const available: Array<{ id: string; label: string; icon: string; settings: HarnessSettingSpec[] }> = []
   for (const h of harnesses) {
     if (mockMode && h.id !== DEFAULT_HARNESS) continue
+    if (harnessAllow.size && !harnessAllow.has(h.id)) {
+      console.error(`[harness] ${h.id} switched off — not offering it`)
+      continue
+    }
     if (await h.available()) available.push({ id: h.id, label: h.label, icon: h.icon, settings: h.settings?.() ?? [] })
     else console.error(`[harness] ${h.id} unavailable — not offering it`)
   }
@@ -559,6 +571,7 @@ async function main() {
       port: Number(process.env.JEP_GW_PORT),
       host: process.env.JEP_GW_BIND || undefined,
       pairCode: process.env.JEP_GW_PAIR_CODE,
+      ingressTrust: process.env.JEP_GW_INGRESS_TRUST === "1",
     })
     console.error(`gateway: POST /pair {"code":…} on http://<tailscale-or-lan-ip>:${process.env.JEP_GW_PORT}`)
     gwPairingAdmin = gw.pairingAdmin

@@ -10,6 +10,7 @@ import { tmpdir } from "node:os"
 import net from "node:net"
 import { fakeAdapter, pair, spawnGateway, stallable } from "./support/gateway.ts"
 import { join } from "node:path"
+import { displayPath } from "../src/core/git.ts"
 
 async function startWith(
   a: ReturnType<typeof stallable>,
@@ -34,6 +35,25 @@ async function startWith(
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const textOf = (j: { message?: Message }) => (j.message?.parts[0] as { text?: string } | undefined)?.text
+
+test("a configured pairing code accepts its displayed hyphens and case", async () => {
+  const g = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter: fakeAdapter() }],
+    dataHome: mkdtempSync(join(tmpdir(), "gw-pinned-")),
+    port: 0,
+    pairCode: "ha-12 ab",
+  })
+  try {
+    const base = `http://127.0.0.1:${g.port}`
+    const token = await pair(base, "ha-12 ab")
+    const res = await fetch(`${base}/workspaces`, { method: "POST", headers: { authorization: `Bearer ${token}` } })
+    assert.equal(res.status, 200)
+    const spent = await fetch(`${base}/pair`, { method: "POST", body: JSON.stringify({ code: "HA12AB" }) })
+    assert.equal(spent.status, 403, "the configured code is still single-use")
+  } finally {
+    await g.close()
+  }
+})
 
 test("a prompt sent mid-turn is queued, not refused, and runs when the turn ends", async () => {
   const a = stallable()
@@ -444,7 +464,10 @@ test("prompts waiting behind a turn run together as one turn", async () => {
       fetch(`${base}/prompt`, { method: "POST", headers, body: JSON.stringify({ id: "s1", text, steer: false }) })
     const first = post("first")
     await sleep(50)
+    // one at a time: two posts in flight can be read in either order, and the
+    // merged turn is the queue order, which would then fail this assertion
     const second = post("second")
+    await sleep(50)
     const third = post("third")
     await sleep(50)
     a.release("first")
@@ -2015,7 +2038,7 @@ test("/git reads the workspace through core/git, and says so when there is no re
     assert.equal(v.head.shortHash, v.head.hash)
     assert.ok(v.head.time > 1_700_000_000, "seconds, as the phone expects")
     where = plain
-    assert.deepEqual(await view(), { isRepository: false, branch: null, head: null, changedFiles: 0, files: [], commits: [] })
+    assert.deepEqual(await view(), { isRepository: false, branch: null, head: null, changedFiles: 0, files: [], commits: [], root: null, folder: displayPath(plain), repo: null })
   } finally {
     await g.close()
   }
@@ -2315,6 +2338,69 @@ test("/carryover writes the whole conversation to a temp markdown file", async (
     assert.match(text, /\nhi\n/)
   } finally {
     await g.close()
+  }
+})
+
+test("ingress trust: a forged HA header from a non-Supervisor peer cannot pair", async () => {
+  const dataHome = mkdtempSync(join(tmpdir(), "gw-ing-"))
+  const g = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter: fakeAdapter() }],
+    dataHome,
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+    ingressTrust: true,
+  })
+  const base = `http://127.0.0.1:${g.port}`
+  const ha = { "x-remote-user-id": "ha-user" }
+  try {
+    const health = (await (await fetch(`${base}/health`, { headers: ha })).json()) as { trustedIngress?: boolean }
+    assert.equal(health.trustedIngress, false)
+    const bare = (await (await fetch(`${base}/health`)).json()) as { trustedIngress?: boolean }
+    assert.equal(bare.trustedIngress, false)
+    const blank = (await (await fetch(`${base}/health`, { headers: { "x-remote-user-id": "  " } })).json()) as { trustedIngress?: boolean }
+    assert.equal(blank.trustedIngress, false)
+    const refused = await fetch(`${base}/pair`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })
+    assert.equal(refused.status, 403)
+    const paired = await fetch(`${base}/pair`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...ha },
+      body: "{}",
+    })
+    assert.equal(paired.status, 403)
+    const body = (await paired.json()) as { token?: string; nextCode?: string }
+    assert.equal(body.token, undefined)
+    assert.equal(body.nextCode, undefined, "the ingress browser must not learn the phone code")
+    // the code was not spent, so a phone can still pair with it
+    const phone = await fetch(`${base}/pair`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: "TESTCODE" }),
+    })
+    assert.equal(phone.status, 200)
+    const open = await fetch(`${base}/devices`, { method: "POST", headers: ha })
+    assert.equal(open.status, 401)
+    const anon = await fetch(`${base}/devices`, { method: "POST" })
+    assert.equal(anon.status, 401)
+  } finally {
+    await g.close()
+  }
+
+  const closed = await startGateway({
+    adapters: () => [{ name: "fake-ws", adapter: fakeAdapter() }],
+    dataHome: mkdtempSync(join(tmpdir(), "gw-ing-")),
+    port: 0,
+    pairCode: "TESTCODE",
+    pairLimit: 100,
+  })
+  try {
+    const forged = await fetch(`http://127.0.0.1:${closed.port}/devices`, {
+      method: "POST",
+      headers: { "x-remote-user-id": "ha-user" },
+    })
+    assert.equal(forged.status, 401, "without the flag the header is just a header")
+  } finally {
+    await closed.close()
   }
 })
 

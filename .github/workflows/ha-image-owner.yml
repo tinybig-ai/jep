@@ -1,0 +1,59 @@
+name: ha-image-owner
+
+# Home Assistant reads image from the git file, not from the registry that
+# built it. After a merge from the other fork, rewrite that line to this
+# repository and push. The next ha-app run then publishes the tag HA will pull.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  align:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Point the addon at this repository
+        env:
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.repository }}
+        run: |
+          owner="${OWNER,,}"
+          image="ghcr.io/${owner}/{arch}-jep"
+          repo_url="https://github.com/${REPO}"
+          app_url="${repo_url}/tree/main/homeassistant"
+          python3 - "$image" "$repo_url" "$app_url" <<'PY'
+          import json, pathlib, sys
+          image, repo_url, app_url = sys.argv[1:]
+          changed = False
+          cfg_path = pathlib.Path("homeassistant/config.json")
+          cfg = json.loads(cfg_path.read_text())
+          if cfg.get("image") != image or cfg.get("url") != app_url:
+              cfg["image"] = image
+              cfg["url"] = app_url
+              cfg_path.write_text(json.dumps(cfg, indent=2) + "\n")
+              changed = True
+          repo_path = pathlib.Path("repository.json")
+          repo = json.loads(repo_path.read_text())
+          if repo.get("url") != repo_url:
+              repo["url"] = repo_url
+              repo_path.write_text(json.dumps(repo, indent=2) + "\n")
+              changed = True
+          pathlib.Path(".ha-image-changed").write_text("1" if changed else "0")
+          PY
+
+      - name: Commit the registry correction
+        run: |
+          if [ "$(cat .ha-image-changed)" != "1" ]; then
+            echo "image already matches ${GITHUB_REPOSITORY}"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add homeassistant/config.json repository.json
+          git commit -m "ha: pull images from this repository"
+          git push
