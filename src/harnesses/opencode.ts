@@ -540,10 +540,10 @@ export class OpenCodeAdapter implements HarnessAdapter {
       for (const provider of data.all ?? []) {
         for (const [key, m] of Object.entries(provider.models ?? {})) {
           const caps = m.capabilities ?? {}
-          // registry providers (opencode, opencode-go, localfree-models-proxy)
-          // key models bare (`qwen3.7-max`); config providers use the full
-          // `provider/model` key. Normalize so every key matches picker labels.
-          const normalized = key.includes("/") ? key : `${m.providerID ?? provider.id}/${key}`
+          // A bare model id can itself contain slashes (LiteLLM's
+          // `go/kimi-k3`). Only an actual provider prefix makes it qualified.
+          const owner = m.providerID ?? provider.id
+          const normalized = key.startsWith(`${owner}/`) ? key : `${owner}/${key}`
           out.set(normalized, {
             image: caps.input?.image === true,
             attachment: caps.attachment === true,
@@ -1245,7 +1245,9 @@ export class OpenCodeAdapter implements HarnessAdapter {
       if (props.permission == null && props.action != null) props = { ...props, permission: props.action, patterns: props.patterns ?? props.resources ?? [] }
     }
     const type = typeRaw === "permission.v2.asked" ? "permission.asked" : typeRaw
-    const rawSession = props.sessionID as string | undefined
+    // Message/part snapshots carry their session on the nested object. Delta
+    // events carry it at the top level. Both must reach the same conversation.
+    const rawSession = (props.sessionID ?? props.info?.sessionID ?? props.part?.sessionID) as string | undefined
     const sessionID = rawSession ? toInternalId(rawSession) : undefined
     const messageID = props.messageID as string | undefined
     const partID = props.partID as string | undefined

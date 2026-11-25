@@ -12,7 +12,7 @@ import { homedir, tmpdir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path"
 import type { ChatDirectory, ChatInfo, ConversationDeletionPort, ConversationSyncPort, DaemonAskPort, HarnessAdapter, HarnessMark, HarnessSettingSpec, SessionImport, Terminal, TurnHost } from "../../core/ports.ts"
-import { knownSetting, settingValues, driveOf, withDrive, switchSettings } from "../../core/settings.ts"
+import { knownSetting, settingValues, driveOf, withDrive, switchSettings, keepUntilOf, KEEP_UNTIL_MAX, type ConversationSettings } from "../../core/settings.ts"
 import { newPairCode, normalizePairCode, type PairingAdmin } from "../../core/pairing.ts"
 import { describeAsk } from "../../core/asks.ts"
 import { parseModelRef } from "../../core/models.ts"
@@ -302,7 +302,13 @@ function cleanForDisplay(m: Message): Message {
     const text = transcriptText(p.text)
     if (text.trim()) parts.push({ ...p, text })
   }
-  return { ...m, parts: [...parts, ...files], ...(loop ? { loop } : {}), ...(notice ? { notice } : {}), ...(from ? { from } : {}) }
+  const existingFiles = new Set(parts.flatMap((p) => p.kind === "file" && p.filePath ? [p.filePath] : []))
+  const restoredFiles = files.filter((p) => {
+    if (p.kind !== "file" || !p.filePath || existingFiles.has(p.filePath)) return false
+    existingFiles.add(p.filePath)
+    return true
+  })
+  return { ...m, parts: [...parts, ...restoredFiles], ...(loop ? { loop } : {}), ...(notice ? { notice } : {}), ...(from ? { from } : {}) }
 }
 
 // A pod: a conversation that needs a harness but no folder of its own. The
@@ -457,12 +463,12 @@ async function saveConversationMcp(dataHome: string, all: Map<string, Conversati
   await chmod(file, 0o600)
 }
 
-async function loadConversationSettings(dataHome: string): Promise<Map<string, Record<string, boolean>>> {
+async function loadConversationSettings(dataHome: string): Promise<Map<string, ConversationSettings>> {
   try {
     const raw = JSON.parse(await readFile(join(dataHome, CONVERSATION_SETTINGS_FILE), "utf8")) as Record<string, unknown>
     return new Map(Object.entries(raw).flatMap(([sessionID, value]) => {
       if (!value || typeof value !== "object" || Array.isArray(value)) return []
-      const settings = Object.fromEntries(Object.entries(value).filter((row): row is [string, boolean] => typeof row[1] === "boolean"))
+      const settings = Object.fromEntries(Object.entries(value).filter(([key, v]) => typeof v === "boolean" || (key === "keep_until" && typeof v === "string"))) as ConversationSettings
       return [[sessionID, settings]]
     }))
   } catch {
@@ -470,7 +476,7 @@ async function loadConversationSettings(dataHome: string): Promise<Map<string, R
   }
 }
 
-async function saveConversationSettings(dataHome: string, settings: Map<string, Record<string, boolean>>): Promise<void> {
+async function saveConversationSettings(dataHome: string, settings: Map<string, ConversationSettings>): Promise<void> {
   await writeFile(join(dataHome, CONVERSATION_SETTINGS_FILE), JSON.stringify(Object.fromEntries(settings), null, 1))
 }
 
@@ -768,6 +774,20 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
   const harnessSettings = await loadHarnessSettings(deps.dataHome)
   const executionPolicy = deps.executionPolicy ?? new ExecutionPolicy(deps.dataHome)
   const conversationSettings = await loadConversationSettings(deps.dataHome)
+  function conversationSettingsOf(id: string): ConversationSettings | undefined {
+    const own = conversationSettings.get(id)
+    if (own) return own
+    // A new harness session can replace its provisional id after the first
+    // prompt. Its mode and condition belong to the same conversation.
+    for (const [key, values] of conversationSettings) {
+      if (!deps.adapters().some(({ adapter }) => adapter.canonicalId?.(key) === id)) continue
+      conversationSettings.set(id, values)
+      conversationSettings.delete(key)
+      detach("move conversation settings", saveConversationSettings(deps.dataHome, conversationSettings))
+      return values
+    }
+    return undefined
+  }
   const conversationMcp = await loadConversationMcp(deps.dataHome)
   const loops = await loadLoops(deps.dataHome, deps.resumesLoops === true)
   // A loop the previous daemon was driving stays "running": the daemon's continuity service resumes it
@@ -969,7 +989,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       timer.unref()
     })
   const armAskExpiry = (ask: AskRequest): void => {
-    const mode = driveOf(conversationSettings.get(ask.sessionID))
+    const mode = driveOf(conversationSettingsOf(ask.sessionID))
     if (mode === "normal" || askTimers.has(ask.id)) return
     const wait = mode === "relentless" ? (deps.askExpiryMs?.relentless ?? ASK_EXPIRY_RELENTLESS_MS) : (deps.askExpiryMs?.keep ?? ASK_EXPIRY_KEEP_MS)
     const timer = setTimeout(() => {
@@ -1124,7 +1144,8 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         return "no"
       },
       settingsOf,
-      driveOf: (id) => driveOf(conversationSettings.get(id)),
+      driveOf: (id) => driveOf(conversationSettingsOf(id)),
+      keepUntilOf: (id) => keepUntilOf(conversationSettingsOf(id)),
       modelOf: (id) => parseModelRef(models.get(id)),
       mcpOf,
       openAsks: (id) => asksBySession.get(id)?.size ?? 0,
@@ -1550,8 +1571,8 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
       if (path === "/conversation-settings") {
         const sessionID = str("id")
         if (!sessionID) return json(res, 400, { error: "id required" })
-        const stored = conversationSettings.get(sessionID)
-        return json(res, 200, { options: switchSettings(), values: settingValues(stored), mode: driveOf(stored), modes: DRIVE_MODES })
+        const stored = conversationSettingsOf(sessionID)
+        return json(res, 200, { options: switchSettings(), values: settingValues(stored), mode: driveOf(stored), modes: DRIVE_MODES, until: keepUntilOf(stored) })
       }
 
       // normal -> keep going -> relentless: one control, cycled by the client
@@ -1559,12 +1580,15 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const sessionID = str("id")
         const mode = DRIVE_MODES.find((m) => m === b.mode)
         if (!sessionID || !mode) return json(res, 400, { error: "id and mode (normal, keep, relentless) required" })
-        const values = withDrive(conversationSettings.get(sessionID), mode)
+        if (b.until !== undefined && (typeof b.until !== "string" || b.until.length > KEEP_UNTIL_MAX))
+          return json(res, 400, { error: `until must be text of at most ${KEEP_UNTIL_MAX} characters` })
+        const values = withDrive(conversationSettingsOf(sessionID), mode)
+        if (typeof b.until === "string") values.keep_until = b.until.trim()
         conversationSettings.set(sessionID, values)
-        detach("save conversation settings", saveConversationSettings(deps.dataHome, conversationSettings))
+        await saveConversationSettings(deps.dataHome, conversationSettings)
         engine.setDrive(sessionID, mode)
         console.error(`[keep] mode ${mode} (gateway session ${sessionID})`)
-        return json(res, 200, { mode, values: settingValues(values) })
+        return json(res, 200, { mode, values: settingValues(values), until: keepUntilOf(values) })
       }
 
       if (path === "/set-conversation-setting") {
@@ -1573,7 +1597,7 @@ export async function startGateway(deps: GatewayDeps): Promise<GatewayHandle> {
         const enabled = typeof b.enabled === "boolean" ? b.enabled : null
         if (!sessionID || !key || enabled == null) return json(res, 400, { error: "id, key and boolean enabled required" })
         if (!knownSetting(key)) return json(res, 400, { error: "unknown setting" })
-        const values = { ...(conversationSettings.get(sessionID) ?? {}), [key]: enabled }
+        const values = { ...(conversationSettingsOf(sessionID) ?? {}), [key]: enabled }
         conversationSettings.set(sessionID, values)
         detach("save conversation settings", saveConversationSettings(deps.dataHome, conversationSettings))
         return json(res, 200, { values: settingValues(values) })

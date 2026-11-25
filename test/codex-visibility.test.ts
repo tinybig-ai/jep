@@ -90,4 +90,20 @@ test("Codex only exposes conversation roles, including when the user discusses i
     assert.deepEqual(reply.parts, [{ kind: "text", text: "Fixed the visible transcript." }])
     assert.deepEqual(visible, reply.parts)
   })
+
+  await t.test("nonfatal error items retain their message without failing a successful turn", async () => {
+    await writeFile(join(home, "stream.jsonl"), jsonl([
+      { type: "thread.started", thread_id: "warnings" },
+      { type: "item.completed", item: { type: "error", message: "Stream interrupted. Reconnecting." } },
+      { type: "item.completed", item: { type: "error", error: { message: "Nested diagnostic" } } },
+      { type: "item.completed", item: { type: "error", text: "Legacy diagnostic" } },
+      { type: "item.completed", item: { type: "agent_message", text: "Recovered and finished." } },
+      { type: "turn.completed", usage: {} },
+    ]))
+    const reply = await adapter.prompt("codex://warnings", "Continue")
+    assert.equal(reply.error, undefined)
+    assert.deepEqual(words(reply.parts), [
+      "⚠️ Stream interrupted. Reconnecting.", "⚠️ Nested diagnostic", "⚠️ Legacy diagnostic", "Recovered and finished.",
+    ])
+  })
 })

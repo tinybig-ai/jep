@@ -70,7 +70,7 @@ test("a loop with nothing driving it is found, and a busy one is not", () => {
 
 // ── the engine ───────────────────────────────────────────────────────────
 
-function rig(prompt: (text: string, n: number) => Promise<void>, extra: Partial<ConstructorParameters<typeof TurnEngine>[1]> = {}) {
+function rig(prompt: (text: string, n: number) => Promise<void>, extra: Partial<ConstructorParameters<typeof TurnEngine>[1]> = {}, policy: Partial<TurnEnv> = {}) {
   const base = fakeAdapter()
   const prompts: string[] = []
   const adapter = {
@@ -89,6 +89,7 @@ function rig(prompt: (text: string, n: number) => Promise<void>, extra: Partial<
     openAsks: () => 0,
     recordChanged: () => {},
     loopChanged: () => {},
+    ...policy,
   }
   const engine = new TurnEngine(env, { liveness: { ...LIVENESS, settleMs: 15 }, loops, retryDelayMs: () => 15, ...extra })
   const turn = (text: string, more: Partial<PendingTurn> = {}): PendingTurn => ({ text, filePaths: [], steer: false, resolve: () => {}, ...more })
@@ -302,4 +303,31 @@ test("jep-end-turn is refused in a relentless run", async () => {
   const loop: LoopState = { sessionID: "s1", workspace: "/w", spec: { goal: "g", max: 200, stop: "tool" as const, relentless: true }, iteration: 1, status: "running", startedAt: Date.now(), updatedAt: Date.now() }
   r.loops.set("s1", loop)
   assert.deepEqual(r.engine.declareDone("s1"), { keeping: true, declared: false, relentless: true })
+})
+
+test("Keep going reads a changed condition on the next turn, and clearing it removes it", async (t) => {
+  let condition = "the login tests pass"
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  let r!: ReturnType<typeof rig>
+  r = rig(async (_text, n) => {
+    if (n === 1) await gate
+    else r.engine.declareDone("s1")
+  }, {}, { keepUntilOf: () => condition })
+  t.after(() => r.engine.close())
+  r.engine.submit("s1", r.turn("fix login", { keepGoing: true }))
+  await r.until(() => r.prompts.length === 1)
+  assert.match(r.prompts[0]!, /Keep going until: the login tests pass/)
+  r.engine.declareDone("s1") // completion under the old condition is now stale
+  condition = "the browser login works"
+  r.engine.setDrive("s1", "keep")
+  assert.equal(r.loops.get("s1")?.spec.keepUntil, condition)
+  release()
+  await r.until(() => r.loops.get("s1")?.status === "done")
+  assert.match(r.prompts[1]!, /Keep going until: the browser login works/)
+  assert.doesNotMatch(r.prompts[1]!, /the login tests pass/)
+  condition = ""
+  r.engine.submit("s1", r.turn("one more fix", { keepGoing: true }))
+  await r.until(() => r.prompts.length >= 3)
+  assert.doesNotMatch(r.prompts[2]!, /Keep going until:/)
 })

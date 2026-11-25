@@ -17,6 +17,15 @@
 # failing says nothing about what node is allowed to do.
 set -eu
 
+# Local operator settings are read on every restart, unlike launchd's cached
+# plist environment. This file is optional and must be owned by the operator.
+env_file="${JEP_ENV_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/jep/daemon.env}"
+if [ -f "$env_file" ]; then
+  set -a
+  . "$env_file"
+  set +a
+fi
+
 root="${JEP_ROOT:?JEP_ROOT is not set — re-run scripts/install.sh}"
 node="${JEP_NODE:-node}"
 # A readable tree answers instantly, so this is a deadline, not a wait. It is

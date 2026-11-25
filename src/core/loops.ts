@@ -25,6 +25,8 @@ export interface LoopSpec {
   stop?: "tool"
   /** with `stop: "tool"`: the agent's own word does not end it (core/keepgoing.ts) */
   relentless?: boolean
+  /** the person's completion condition for Keep going, independent of its task */
+  keepUntil?: string
   /** shell command run in the workspace; exit 0 means done */
   verify?: string
   /** text the reply must contain for done, when there is no command */
@@ -123,6 +125,7 @@ export function continuationText(state: LoopState, verify?: LoopVerify, restarte
       max: spec.max,
       elapsedMs: Date.now() - state.startedAt,
       restarted,
+      until: spec.keepUntil,
       ...(spec.relentless ? { relentless: true } : {}),
     })
   const lines = [

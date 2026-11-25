@@ -1943,6 +1943,13 @@ test("an attachment list in a user message comes back as file parts, not text", 
       time: 1,
       parts: [{ kind: "text", text: "look at this\n\nAttached files:\n- /data/attachments/att-1-shot.jpg" }],
     },
+    {
+      id: "u2", sessionID: "s1", role: "user", time: 2,
+      parts: [
+        { kind: "text", text: '<image name=[Image #1] path="/data/attachments/att-1-shot.jpg"></image>why this error?\n\nAttached files:\n- /data/attachments/att-1-shot.jpg' },
+        { kind: "file", filePath: "/data/attachments/att-1-shot.jpg", mimeType: "image/jpeg" },
+      ],
+    },
   ]
   const g = await startGateway({
     adapters: () => [{ name: "fake-ws", adapter: a }],
@@ -1963,6 +1970,10 @@ test("an attachment list in a user message comes back as file parts, not text", 
     assert.deepEqual(messages[0]!.parts, [
       { kind: "text", text: "look at this" },
       { kind: "file", filePath: "/data/attachments/att-1-shot.jpg", fileName: "att-1-shot.jpg", mimeType: "image/jpeg" },
+    ])
+    assert.deepEqual(messages[1]!.parts, [
+      { kind: "text", text: "why this error?" },
+      { kind: "file", filePath: "/data/attachments/att-1-shot.jpg", mimeType: "image/jpeg" },
     ])
   } finally {
     await g.close()

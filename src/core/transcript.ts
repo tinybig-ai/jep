@@ -199,14 +199,30 @@ export const splitQuoteText = (text: string): { quote?: string; text: string } =
 // the blank line before it is gone when the message was only pictures and a harness trimmed the start
 const ATTACHMENT_BLOCK = new RegExp(`(?:^|\\n{2})${ATTACHMENT_HEADER}\\n(?:- [^\\n]+(?:\\n|$))+$`)
 
-export const stripAttachments = (text: string): string => text.replace(ATTACHMENT_BLOCK, "")
+// Codex records image inputs as empty wrappers before the person's words.
+// Match only that generated prefix; quoted examples and ordinary <image>
+// markup remain part of the person's message.
+const IMAGE_PREFIX = /^\s*<image name=\[Image #\d+\] path="([^"\r\n]+)">\s*<\/image>/
+const imageAttachments = (raw: string): { text: string; paths: string[] } => {
+  let text = raw
+  const paths: string[] = []
+  let match: RegExpMatchArray | null
+  while ((match = text.match(IMAGE_PREFIX))) {
+    paths.push(match[1]!)
+    text = text.slice(match[0].length)
+  }
+  return { text, paths }
+}
+
+export const stripAttachments = (text: string): string => imageAttachments(text).text.replace(ATTACHMENT_BLOCK, "")
 
 /** the paths an attachment list names, so a client can show them as files
  *  again once the list itself is stripped from the text */
 export const attachedPaths = (text: string): string[] => {
+  const images = imageAttachments(text)
   const block = text.match(ATTACHMENT_BLOCK)?.[0]
-  if (!block) return []
-  return block.split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2).trim()).filter(Boolean)
+  const listed = block?.split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2).trim()).filter(Boolean) ?? []
+  return [...new Set([...images.paths, ...listed])]
 }
 
 // A harness splices a lot of machinery into the user's half of a transcript:

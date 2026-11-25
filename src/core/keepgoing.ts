@@ -109,12 +109,14 @@ export function keepGoingText(input: {
   /** picked up after a restart, so the last turn was cut off mid-work */
   restarted?: boolean
   relentless?: boolean
+  until?: string
 }): string {
   const { goal, iteration, max, elapsedMs, idleTurns = 0, restarted = false, relentless = false } = input
   if (relentless) return relentlessText({ goal, iteration, max, elapsedMs, idleTurns, restarted })
   const lines = [loopMarker(iteration, keepGoingMaxOf(max)), `Keep going. Turn ${iteration}.`]
   if (elapsedMs !== undefined) lines[1] += ` Running for ${keepGoingHours(elapsedMs)}.`
   lines.push("", `This is jep: you have not called \`jep-end-turn\`, so this conversation continues. What the person asked:`, "", goal.trim())
+  if (input.until?.trim()) lines.push("", keepUntilInstruction(input.until))
   if (restarted) {
     lines.push(
       "",
@@ -136,6 +138,10 @@ export function keepGoingText(input: {
   )
   return lines.join("\n")
 }
+
+/** Shared instruction for the first turn and every continuation. */
+export const keepUntilInstruction = (until: string): string =>
+  `Keep going until: ${until.trim()}\nUse this as the completion condition for the requested work. Call \`jep-end-turn\` when this condition is met. If it cannot be met, explain the blocker and call \`jep-end-turn\`.`
 
 const ASK_EXPIRY_LINE =
   "Nobody is watching live. A question you ask the person is dropped after a few minutes with no answer: choose the most reasonable option yourself, say what you chose, and go on."

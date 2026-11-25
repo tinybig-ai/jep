@@ -13,6 +13,36 @@ import { OpenCodeAdapter, mergeSessionRows } from "../src/harnesses/opencode.ts"
 
 const WS = "/Users/me/jep"
 
+test("message and full-part snapshots route to the same session as text deltas", { timeout: 5000 }, async () => {
+  const frames = [
+    { type: "message.updated", properties: { info: { id: "m1", sessionID: "ses_a", role: "assistant" } } },
+    { type: "message.part.updated", properties: { part: { id: "p1", messageID: "m1", sessionID: "ses_a", type: "text", text: "Hello" } } },
+    { type: "message.part.delta", properties: { sessionID: "ses_a", messageID: "m1", partID: "p1", field: "text", delta: " world" } },
+  ]
+  const server = createServer((req, res) => {
+    if (req.url === "/permission" || req.url === "/question") {
+      res.writeHead(200, { "content-type": "application/json" }); res.end("[]"); return
+    }
+    res.writeHead(200, { "content-type": "text/event-stream" })
+    res.end(frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join(""))
+  })
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r))
+  const adapter = new OpenCodeAdapter({} as any, WS, `http://127.0.0.1:${(server.address() as { port: number }).port}`)
+  const ac = new AbortController()
+  try {
+    const seen = []
+    for await (const event of adapter.events(ac.signal)) { seen.push(event); if (seen.length === 3) break }
+    assert.deepEqual(seen.map((event) => event.type), ["message.updated", "part.updated", "part.delta"])
+    assert.ok(seen.every((event) => "sessionID" in event && event.sessionID === "opencode://ses_a"))
+    assert.ok(seen.every((event) => "messageID" in event && event.messageID === "m1"))
+    assert.equal(seen[1]?.type === "part.updated" && seen[1].partID, "p1")
+    assert.equal(seen[2]?.type === "part.delta" && seen[2].partType, "text")
+  } finally {
+    ac.abort()
+    await new Promise<void>((r) => server.close(() => r()))
+  }
+})
+
 test("Markdown carryovers are text/plain files so OpenCode reads them before calling the model", async () => {
   let sent: any
   const server = createServer((req, res) => {
@@ -118,6 +148,26 @@ async function serve(
     close: () => new Promise((resolve) => server.close(() => resolve())),
   }
 }
+
+test("capabilities qualify slash-containing model aliases without duplicating provider prefixes", async () => {
+  const vision = { capabilities: { attachment: true, input: { image: true } }, limit: { context: 1048576 } }
+  const srv = await serve((pathname) => pathname === "/provider" ? { all: [
+    { id: "litellm", models: {
+      "go/kimi-k3": vision,
+      "litellm/chatgpt/gpt-5.6-luna": vision,
+      "gpt-6.1-sol": vision,
+    } },
+    { id: "opencode-go", models: { "kimi-k3": vision } },
+  ] } : undefined)
+  try {
+    const adapter = new OpenCodeAdapter({} as any, WS, srv.base)
+    const caps = await adapter.capabilities()
+    assert.deepEqual([...caps.keys()], [
+      "litellm/go/kimi-k3", "litellm/chatgpt/gpt-5.6-luna", "litellm/gpt-6.1-sol", "opencode-go/kimi-k3",
+    ])
+    assert.deepEqual(caps.get("litellm/go/kimi-k3"), { image: true, attachment: true, contextLimit: 1048576 })
+  } finally { await srv.close() }
+})
 
 test("listSessions unions the project list with the cross-project one", async () => {
   const seen: string[] = []

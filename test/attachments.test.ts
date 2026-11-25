@@ -25,3 +25,17 @@ test("words that merely mention the header are left alone", () => {
   assert.equal(stripAttachments(words), words)
   assert.deepEqual(attachedPaths(words), [])
 })
+
+test("Codex image wrappers disappear while each attachment survives once", () => {
+  const wrappers = paths.map((p, i) => `<image name=[Image #${i + 1}] path="${p}"></image>`).join("")
+  const raw = withAttachments(`${wrappers}why this error?`, paths)
+  assert.equal(transcriptText(raw), "why this error?")
+  assert.deepEqual(attachedPaths(raw), paths)
+  assert.equal(transcriptText(wrappers), "")
+  assert.deepEqual(attachedPaths(wrappers), paths)
+  for (const text of [
+    'Show <image name=[Image #1] path="/a/one.png"></image> in the docs',
+    '`<image name=[Image #1] path="/a/one.png"></image>`',
+    '<image href="/a/one.png"></image>',
+  ]) assert.equal(transcriptText(text), text)
+})

@@ -580,6 +580,10 @@ export class CodexAdapter implements HarnessAdapter {
             if (evt.type === "item.completed" && evt.item) {
               const part = mapItem(evt.item, this.workspace)
               if (!part) continue
+              // An item warning can precede a successful continuation. Keep
+              // its detail without turning it into a failed turn, and log it
+              // because native response-item history omits these diagnostics.
+              if (evt.item.type === "error" && part.kind === "text") console.error(`[codex] ${part.text}`)
               // codex's injected environment block arrives as an item too — it
               // is not part of the answer
               if (part.kind === "text" && isCodexInjectedContext(part.text)) continue
@@ -876,7 +880,7 @@ function mapItem(item: any, workspace: string): Part | null {
     case "web_search":
       return { kind: "tool", id: String(item.id ?? ""), name: "web_search", input: item.query ?? "", output: "", status: "completed" }
     case "error":
-      return { kind: "text", text: `⚠️ ${textOf(item) || "codex error"}` }
+      return { kind: "text", text: `⚠️ ${str(item.message) || str(item.error?.message) || textOf(item) || "Codex reported an error without details"}` }
     default:
       return { kind: "other", nativeType: type || "unknown" }
   }

@@ -135,6 +135,13 @@ so it survives crashes and the "silent daemon death" failure mode (a transient
 Telegram `getUpdates` 502 used to `process.exit(1)`; now the poll loop retries
 with backoff, and launchd `KeepAlive` restarts anything that still dies):
 
+The launcher also reads `${XDG_CONFIG_HOME:-$HOME/.config}/jep/daemon.env`
+on every restart. `JEP_ENV_FILE` overrides this path. This optional shell file
+exports local operator settings without a plist reload. Keep it private with
+`chmod 600`. For example, `JEP_TERMINAL=1` enables interactive terminals.
+Each device still needs the pairing code to unlock its terminal.
+After changing the file, run `jep-restart` from an agent turn and end the turn.
+
 ```sh
 # reload after a code change: launchd restarts it with the new code
 launchctl kickstart -k gui/$(id -u)/com.jep.tg; sleep 5

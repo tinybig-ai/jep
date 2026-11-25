@@ -17,7 +17,7 @@ import {
   type LoopState,
   type LoopVerify,
 } from "./loops.ts"
-import { KEEP_GOING_MAX_MS, KEEP_GOING_MAX_TURNS, keepGoingStopNote, keepGoingVerdict, type DriveMode } from "./keepgoing.ts"
+import { KEEP_GOING_MAX_MS, KEEP_GOING_MAX_TURNS, keepGoingStopNote, keepGoingVerdict, keepUntilInstruction, type DriveMode } from "./keepgoing.ts"
 import { KEEP_ORPHAN_GRACE_MS, KEEP_SUPERVISE_MS, classifyFailure, isOrphaned, keepRetryDelayMs, outageNote, shouldNoteOutage, type FailureKind } from "./resilience.ts"
 import { detach } from "./detach.ts"
 import { TurnLedger } from "./ledger.ts"
@@ -54,6 +54,8 @@ export type PendingTurn = {
   /** queued by a loop, so this turn advances it and never merges with a
    * person's waiting words */
   loop?: boolean
+  /** this automatic continuation explains a daemon restart */
+  loopRestart?: boolean
   /** queued by the daemon on its own account (a watch's wake-up): it runs
    * alone, never merges with a person's waiting words, and is not theirs to
    * edit or reorder */
@@ -143,6 +145,8 @@ export interface TurnEnv {
   settingsOf(adapter: HarnessAdapter, id: string): Record<string, boolean> | undefined
   /** the conversation's durable drive policy; ordinary prompts never carry this state */
   driveOf?(id: string): DriveMode
+  /** a durable completion condition, read again when a queued turn starts */
+  keepUntilOf?(id: string): string
   /** current model pin for automatic continuations, retries and resumed turns */
   modelOf?(id: string): PendingTurn["model"]
   /** the MCP servers a client defined for the conversation (also carried to a new id) */
@@ -745,7 +749,7 @@ export class TurnEngine implements TurnHost {
       sessionID: key,
       workspace: this.#adapterFor(key)?.workspace ?? "",
       // nothing is verified and no marker is watched: `jep-end-turn` is the stop
-      spec: { goal: pending.text.slice(0, 4000), max: KEEP_GOING_MAX_TURNS, stop: "tool", ...(mode === "relentless" ? { relentless: true } : {}) },
+      spec: { goal: pending.text.slice(0, 4000), max: KEEP_GOING_MAX_TURNS, stop: "tool", keepUntil: this.#env.keepUntilOf?.(key), ...(mode === "relentless" ? { relentless: true } : {}) },
       iteration: 0,
       status: "running",
       startedAt: Date.now(),
@@ -763,7 +767,10 @@ export class TurnEngine implements TurnHost {
     if (loop) {
       if (mode === "normal") return void this.stopLoop(key, "stopped")
       const relentless = mode === "relentless"
-      if ((loop.spec.relentless === true) === relentless) return
+      const until = this.#env.keepUntilOf?.(key)
+      if ((loop.spec.relentless === true) === relentless && loop.spec.keepUntil === until) return
+      if (loop.spec.keepUntil !== until) this.#declared.delete(key)
+      loop.spec.keepUntil = until
       if (relentless) loop.spec.relentless = true
       else delete loop.spec.relentless
       loop.updatedAt = Date.now()
@@ -822,6 +829,7 @@ export class TurnEngine implements TurnHost {
       this.#putLoop(loop)
       this.#state(key).waiting.push({
         text: continuationText(loop, loop.lastVerify, true),
+        loopRestart: true,
         filePaths: [],
         steer: false,
         loop: true,
@@ -1211,7 +1219,18 @@ export class TurnEngine implements TurnHost {
           console.error(`[turn] brief before a command failed: ${(err as Error)?.message ?? err} (gateway session ${this.turnKey(id)})`)
         })
       }
-      const message = await adapter.prompt(id, next.text, {
+      const keep = this.#runningKeepGoing(id)
+      const until = keep && !keep.spec.relentless ? this.#env.keepUntilOf?.(id) ?? keep.spec.keepUntil : ""
+      const automatic = keep && readLoopMarker(stripInjectedContext(next.text))
+      if (automatic) {
+        keep.spec.keepUntil = until || undefined
+        next.text = continuationText(keep, undefined, next.loopRestart === true)
+      }
+      // Read the current condition when execution starts, including queued
+      // turns. The reminder is hidden from the person's saved message.
+      const text = until && !automatic && !next.notice && !isSlashCommand(next.text)
+        ? `${next.text}\n\n<system-reminder>\n${keepUntilInstruction(until)}\n</system-reminder>` : next.text
+      const message = await adapter.prompt(id, text, {
         timeoutMs: 0,
         filePaths: next.filePaths,
         ...(model ? { model } : {}),

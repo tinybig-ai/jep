@@ -4,12 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>jep</title>
+<meta name="theme-color" content="#fcfbfa">
+<script src="themes.js"></script>
 <script>
   // Before the first paint: the look and the motion are this browser's own
   // choice, remembered here, so the page never flashes the other way.
   try {
-    const theme = localStorage.getItem("jep.theme")
-    if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme
+    JepThemes.apply()
     if (localStorage.getItem("jep.motion") === "off") document.documentElement.dataset.motion = "off"
   } catch {}
 </script>
@@ -210,11 +211,11 @@
   .brand { display: flex; align-items: center; gap: 8px; padding: 12px 12px 12px 14px; font-weight: 700; font-size: 17px; letter-spacing: .3px; border-bottom: 1px solid var(--line); }
   .plus {
     margin-left: auto; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center;
-    background: linear-gradient(160deg, #f66676, #c42438); color: #fff; text-decoration: none;
-    font: 400 24px/1 -apple-system, sans-serif; box-shadow: 0 2px 10px #c4243866;
+    background: linear-gradient(160deg, var(--brand-top, #f66676), var(--brand-bottom, #c42438)); color: #fff; text-decoration: none;
+    font: 400 24px/1 -apple-system, sans-serif; box-shadow: 0 2px 10px color-mix(in srgb, var(--brand-shadow, #c42438) 40%, transparent);
     transition: transform .25s cubic-bezier(.3, 1.6, .5, 1), box-shadow .2s;
   }
-  .plus:hover { transform: rotate(90deg) scale(1.12); box-shadow: 0 4px 18px #c4243899; }
+  .plus:hover { transform: rotate(90deg) scale(1.12); box-shadow: 0 4px 18px color-mix(in srgb, var(--brand-shadow, #c42438) 60%, transparent); }
   .plus:active { transform: rotate(90deg) scale(.95); }
   .brand svg { width: 24px; height: 24px; }
   .modes { max-width: 780px; margin: 0 auto 8px; display: flex; gap: 6px; font-size: 13px; }
@@ -224,6 +225,26 @@
   .modebtn { border: 1px solid var(--line); background: none; border-radius: 999px; padding: 2px 11px; font: inherit; color: var(--dim); cursor: pointer; }
   .modebtn[data-mode="keep"] { border-color: var(--text); color: var(--text); }
   .modebtn[data-mode="relentless"] { border-color: #d9534f; color: #d9534f; }
+  .mode-control { position: relative; display: inline-flex; align-items: center; height: 26px; min-width: 0; max-width: 100%; border: 1px solid var(--line); border-radius: 999px; }
+  .mode-control[data-mode="keep"] { border-color: var(--text); }
+  .mode-control[data-mode="relentless"] { border-color: #d9534f; }
+  .mode-control .modebtn { border: 0; white-space: nowrap; }
+  .mode-control .mode-edit, .mode-control .mode-confirm, .mode-control .mode-cancel { display: grid; place-items: center; flex: none; width: 32px; height: 100%; min-height: 0; padding: 0; border: 0; border-radius: 999px; background: none; color: var(--dim); }
+  .mode-control .mode-edit { width: 26px; min-height: 0; align-self: stretch; border-left: 1px solid var(--line); border-top-left-radius: 0; border-bottom-left-radius: 0; }
+  .mode-control svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .mode-control.editing { flex: 1; max-width: 620px; padding-left: 11px; border-radius: 18px; }
+  .mode-until-label { white-space: nowrap; }
+  .mode-control input { display: block; flex: 1; min-width: 0; min-height: 0; width: 100%; height: 100%; margin: 0 4px 0 8px; padding: 0; border: 0; background: none; color: var(--text); font: inherit; line-height: 20px; border-radius: 0; }
+  .mode-control input:focus { outline: none; }
+  .mode-control.editing:focus-within { box-shadow: 0 0 0 3px var(--ring, #8883); }
+  .mode-control .mode-confirm { color: var(--text); }
+  .mode-hint { display: none; position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 10; width: max-content; max-width: min(360px, 80vw); padding: 7px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--bubble); color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; pointer-events: none; }
+  .mode-control:not(.editing):hover .mode-hint, .mode-control:not(.editing):focus-within .mode-hint { display: block; }
+  @media (max-width: 700px) {
+    .mode-control input { font-size: 16px; }
+    .mode-control .mode-confirm, .mode-control .mode-cancel { width: 36px; }
+    .mode-until-label { font-size: 12px; }
+  }
   form.compose { position: relative; }
   .status { max-width: 780px; margin: 6px auto 0; display: flex; align-items: center; gap: 12px; color: var(--dim); font-size: 12px; min-height: 18px; }
   .status:empty { display: none; }
@@ -500,7 +521,7 @@
   }
   /* code colors: highlight.js's GitHub themes (BSD-3-Clause), on our own backgrounds */
   pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#24292e;background:#fff}.hljs-doctag,.hljs-keyword,.hljs-meta .hljs-keyword,.hljs-template-tag,.hljs-template-variable,.hljs-type,.hljs-variable.language_{color:#d73a49}.hljs-title,.hljs-title.class_,.hljs-title.class_.inherited__,.hljs-title.function_{color:#6f42c1}.hljs-attr,.hljs-attribute,.hljs-literal,.hljs-meta,.hljs-number,.hljs-operator,.hljs-selector-attr,.hljs-selector-class,.hljs-selector-id,.hljs-variable{color:#005cc5}.hljs-meta .hljs-string,.hljs-regexp,.hljs-string{color:#032f62}.hljs-built_in,.hljs-symbol{color:#e36209}.hljs-code,.hljs-comment,.hljs-formula{color:#6a737d}.hljs-name,.hljs-quote,.hljs-selector-pseudo,.hljs-selector-tag{color:#22863a}.hljs-subst{color:#24292e}.hljs-section{color:#005cc5;font-weight:700}.hljs-bullet{color:#735c0f}.hljs-emphasis{color:#24292e;font-style:italic}.hljs-strong{color:#24292e;font-weight:700}.hljs-addition{color:#22863a;background-color:#f0fff4}.hljs-deletion{color:#b31d28;background-color:#ffeef0}
-  @media (prefers-color-scheme: dark) { pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#c9d1d9;background:#0d1117}.hljs-doctag,.hljs-keyword,.hljs-meta .hljs-keyword,.hljs-template-tag,.hljs-template-variable,.hljs-type,.hljs-variable.language_{color:#ff7b72}.hljs-title,.hljs-title.class_,.hljs-title.class_.inherited__,.hljs-title.function_{color:#d2a8ff}.hljs-attr,.hljs-attribute,.hljs-literal,.hljs-meta,.hljs-number,.hljs-operator,.hljs-selector-attr,.hljs-selector-class,.hljs-selector-id,.hljs-variable{color:#79c0ff}.hljs-meta .hljs-string,.hljs-regexp,.hljs-string{color:#a5d6ff}.hljs-built_in,.hljs-symbol{color:#ffa657}.hljs-code,.hljs-comment,.hljs-formula{color:#8b949e}.hljs-name,.hljs-quote,.hljs-selector-pseudo,.hljs-selector-tag{color:#7ee787}.hljs-subst{color:#c9d1d9}.hljs-section{color:#1f6feb;font-weight:700}.hljs-bullet{color:#f2cc60}.hljs-emphasis{color:#c9d1d9;font-style:italic}.hljs-strong{color:#c9d1d9;font-weight:700}.hljs-addition{color:#aff5b4;background-color:#033a16}.hljs-deletion{color:#ffdcd7;background-color:#67060c} }
+  :root[data-appearance="dark"] pre code.hljs{display:block;overflow-x:auto;padding:1em}:root[data-appearance="dark"] code.hljs{padding:3px 5px}:root[data-appearance="dark"] .hljs{color:#c9d1d9;background:#0d1117}:root[data-appearance="dark"] .hljs-doctag,:root[data-appearance="dark"] .hljs-keyword,:root[data-appearance="dark"] .hljs-meta .hljs-keyword,:root[data-appearance="dark"] .hljs-template-tag,:root[data-appearance="dark"] .hljs-template-variable,:root[data-appearance="dark"] .hljs-type,:root[data-appearance="dark"] .hljs-variable.language_{color:#ff7b72}:root[data-appearance="dark"] .hljs-title,:root[data-appearance="dark"] .hljs-title.class_,:root[data-appearance="dark"] .hljs-title.class_.inherited__,:root[data-appearance="dark"] .hljs-title.function_{color:#d2a8ff}:root[data-appearance="dark"] .hljs-attr,:root[data-appearance="dark"] .hljs-attribute,:root[data-appearance="dark"] .hljs-literal,:root[data-appearance="dark"] .hljs-meta,:root[data-appearance="dark"] .hljs-number,:root[data-appearance="dark"] .hljs-operator,:root[data-appearance="dark"] .hljs-selector-attr,:root[data-appearance="dark"] .hljs-selector-class,:root[data-appearance="dark"] .hljs-selector-id,:root[data-appearance="dark"] .hljs-variable{color:#79c0ff}:root[data-appearance="dark"] .hljs-meta .hljs-string,:root[data-appearance="dark"] .hljs-regexp,:root[data-appearance="dark"] .hljs-string{color:#a5d6ff}:root[data-appearance="dark"] .hljs-built_in,:root[data-appearance="dark"] .hljs-symbol{color:#ffa657}:root[data-appearance="dark"] .hljs-code,:root[data-appearance="dark"] .hljs-comment,:root[data-appearance="dark"] .hljs-formula{color:#8b949e}:root[data-appearance="dark"] .hljs-name,:root[data-appearance="dark"] .hljs-quote,:root[data-appearance="dark"] .hljs-selector-pseudo,:root[data-appearance="dark"] .hljs-selector-tag{color:#7ee787}:root[data-appearance="dark"] .hljs-subst{color:#c9d1d9}:root[data-appearance="dark"] .hljs-section{color:#1f6feb;font-weight:700}:root[data-appearance="dark"] .hljs-bullet{color:#f2cc60}:root[data-appearance="dark"] .hljs-emphasis{color:#c9d1d9;font-style:italic}:root[data-appearance="dark"] .hljs-strong{color:#c9d1d9;font-weight:700}:root[data-appearance="dark"] .hljs-addition{color:#aff5b4;background-color:#033a16}:root[data-appearance="dark"] .hljs-deletion{color:#ffdcd7;background-color:#67060c}
   pre code.hljs, code.hljs, .hljs { background: none; padding: 0; }
 </style>
 <script>
@@ -511,9 +532,7 @@ document.querySelector("meta[name=viewport]").content += ", viewport-fit=cover, 
 // href/src without a leading slash: the page must work as-is when Home
 // Assistant's ingress proxy mounts it under /api/hassio_ingress/<token>/ (no
 // rewriting happens there), which a relative base makes work at "/" too
-document.write('<link rel="stylesheet" href="v2.css">'
-  + '<meta name="theme-color" content="#fcfbfa" media="(prefers-color-scheme: light)">'
-  + '<meta name="theme-color" content="#111113" media="(prefers-color-scheme: dark)">')
+document.write('<link rel="stylesheet" href="v2.css">')
 </script>
 <script src="highlight.min.js" defer></script>
 <script src="marked.js" defer></script>
@@ -703,7 +722,29 @@ document.write('<link rel="stylesheet" href="v2.css">'
     <h2>Settings</h2>
     <button type="button" id="closeGeneralTop" class="icon" title="Close" aria-label="Close settings">×</button>
   </div>
+  <div class="general-tabs" role="tablist" aria-label="Settings sections">
+    <button type="button" id="settingsGeneralTab" role="tab" aria-selected="true" aria-controls="settingsGeneral" data-settings-tab="general">General</button>
+    <button type="button" id="settingsAppearanceTab" role="tab" aria-selected="false" aria-controls="settingsAppearance" data-settings-tab="appearance" tabindex="-1">Appearance</button>
+  </div>
   <div class="generalbody">
+    <div id="settingsAppearance" role="tabpanel" aria-labelledby="settingsAppearanceTab" hidden>
+    <section aria-labelledby="appearanceHeading">
+      <h3 id="appearanceHeading">Appearance</h3>
+      <div class="field">Color mode
+        <div class="choices" id="theme">
+          <label><input type="radio" name="theme" value="system" checked><span>Auto</span></label>
+          <label><input type="radio" name="theme" value="light"><span>Light</span></label>
+          <label><input type="radio" name="theme" value="dark"><span>Dark</span></label>
+        </div>
+      </div>
+      <h4 id="themesHeading">Themes</h4>
+      <p class="theme-help">Every theme follows your color mode. Auto follows your device.</p>
+      <div id="themes" class="theme-grid" role="group" aria-labelledby="themesHeading"></div>
+      <label class="toggle"><input type="checkbox" id="prefMotion"><span>Reduce motion<small>Turn off transitions and animations.</small></span></label>
+      <label class="toggle"><input type="checkbox" id="prefDetails" checked><span>Details column<small>Files, git and gallery beside a conversation, on a wide window.</small></span></label>
+    </section>
+    </div>
+    <div id="settingsGeneral" role="tabpanel" aria-labelledby="settingsGeneralTab">
     <section>
       <h3>Agent permissions</h3>
       <div id="executionSettings" aria-live="polite"></div>
@@ -711,18 +752,6 @@ document.write('<link rel="stylesheet" href="v2.css">'
     <section>
       <h3>Stats</h3>
       <div id="stats"><span class="spin">Reading conversations</span></div>
-    </section>
-    <section>
-      <h3>Preferences</h3>
-      <div class="field">Theme
-        <div class="choices" id="theme">
-          <label><input type="radio" name="theme" value="system" checked><span>System</span></label>
-          <label><input type="radio" name="theme" value="light"><span>Light</span></label>
-          <label><input type="radio" name="theme" value="dark"><span>Dark</span></label>
-        </div>
-      </div>
-      <label class="toggle"><input type="checkbox" id="prefMotion"><span>Reduce motion<small>Turn off transitions and animations.</small></span></label>
-      <label class="toggle"><input type="checkbox" id="prefDetails" checked><span>Details column<small>Files, git and gallery beside a conversation, on a wide window.</small></span></label>
     </section>
     <section>
       <h3>Notifications</h3>
@@ -747,6 +776,7 @@ document.write('<link rel="stylesheet" href="v2.css">'
       <div class="row"><button type="button" id="forceRefresh">Force refresh</button></div>
       <p class="hint">Reload the web client and re-read harness models without changing the gateway or pairing.</p>
     </section>
+    </div>
   </div>
   <div class="generalfoot"><button type="button" id="closeGeneral">Done</button></div>
 </dialog>
@@ -757,6 +787,8 @@ document.write('<link rel="stylesheet" href="v2.css">'
 </div>
 <div id="notices" aria-live="polite"></div>
 
+<script src="live-history.js"></script>
+<script src="model-search.js"></script>
 <script>
 "use strict"
 // crypto.randomUUID exists only on secure pages (https or localhost); over
@@ -878,6 +910,10 @@ let etag = null
 let hasMore = false
 let loadingOlder = false
 let live = new Map()      // partID → { messageID, part } streamed since the last read
+let liveActive = false    // retained text can outlive the running turn
+let liveRevision = 0      // an old history response cannot undo a newer idle event
+let catchupTimer = null
+let catchupTries = 0
 const roles = new Map()   // messageID → role, as the feed announces them
 const sending = new Map() // session → prompts of ours still in flight
 let pendingText = []      // sends the record does not show yet
@@ -1267,7 +1303,9 @@ async function open(id) {
   $("scroll").hidden = id === "new"
   fillTries = 0
   git = null; inspectorKey = ""; sideDiff = null; sidePatchFor = ""; sideShown = ""
-  messages = []; asks = []; etag = null; hasMore = false; loadingOlder = false; live = new Map(); pendingText = []; queue = []
+  messages = []; asks = []; etag = null; hasMore = false; loadingOlder = false; live = new Map(); liveActive = false; pendingText = []; queue = []
+  liveRevision++
+  clearTimeout(catchupTimer); catchupTries = 0
   loop = null; renderLoop()
   $("input").value = (current && remembered(draftKey(current))) || ""
   grow()
@@ -1293,17 +1331,28 @@ async function open(id) {
 }
 
 // the newest page; older messages already loaded are kept in front of it
+function catchUpHistory(id) {
+  clearTimeout(catchupTimer)
+  if (live.size && !busy() && catchupTries < 8) {
+    catchupTries++
+    catchupTimer = setTimeout(() => { if (id === current) readHistory().catch(() => {}) }, Math.min(2000, 250 * catchupTries))
+  }
+}
 async function readHistory() {
   const id = current
   if (!id) return
   const read = ++historyRead
+  const revision = liveRevision
   const data = await call("/history", { id, limit: PAGE, etag })
-  if (id !== current || read !== historyRead || data.unchanged) return
+  if (id !== current || read !== historyRead) return
+  if (data.unchanged) { catchUpHistory(id); return }
   const first = data.messages[0]?.time ?? Infinity
-  const merged = [...messages.filter((m) => m.time < first), ...data.messages]
-  const unique = new Map()
-  for (const message of merged) unique.set(message.id, message)
-  messages = [...unique.values()]
+  messages = JepTranscript.reconcile(messages, live, data.messages)
+  if (revision === liveRevision && typeof data.busy === "boolean") {
+    liveActive = data.busy
+    const session = sessions.find((s) => s.id === id)
+    if (session) session.active = data.busy
+  }
   if (!messages.some((m) => m.time < first)) hasMore = data.hasMore
   asks = data.asks.filter((a) => a.state === "pending")
   queue = data.queue ?? []
@@ -1325,10 +1374,11 @@ async function readHistory() {
     if ((absorbed || (p.answeredAt && now - p.answeredAt > 15_000)) && p.error) noteTurnError(p.text, p.sentAt || now, p.error)
     return !absorbed && !(p.answeredAt && now - p.answeredAt > 15_000)
   })
-  const seen = new Set(messages.flatMap((m) => [m.id, ...m.parts.map((p) => p.id)]))
-  for (const [pid, l] of live) if (seen.has(pid) || seen.has(l.messageID)) live.delete(pid)
   render()
   fillScreen()
+  // Idle can precede the harness's final disk write. Retain the visible copy
+  // and make a few bounded reads to finish the handoff without another event.
+  catchUpHistory(id)
 }
 
 // A page counts messages, but a long turn's hundreds of steps fold into ONE block, so a page can
@@ -1374,7 +1424,7 @@ async function loadOlder() {
   }
 }
 
-const busy = () => (sending.get(current) || 0) > 0 || live.size > 0 || !!sessions.find((s) => s.id === current)?.active
+const busy = () => (sending.get(current) || 0) > 0 || liveActive || !!sessions.find((s) => s.id === current)?.active
 
 // The turn is over: nothing of it is in flight any more, whatever this page
 // still holds. A send request can outlive its turn on the wire (a Mac asleep,
@@ -1384,7 +1434,7 @@ function settle(id) {
   sending.delete(id)
   const s = sessions.find((x) => x.id === id)
   if (s) s.active = false
-  if (id === current) { live.clear(); loadGit(true) }
+  if (id === current) { liveActive = false; liveRevision++; catchupTries = 0; loadGit(true) }
 }
 
 function render(follow = true) {
@@ -1414,9 +1464,8 @@ function render(follow = true) {
   const visiblePending = pendingText.filter((p) => !hasTranscript(p))
   const inQueue = (p) => queue.some((q) => q.clientID && q.clientID === p.clientID) || !!p.expectQueue
   const all = [
-    ...messages,
+    ...JepTranscript.withLive(messages, live),
     ...visiblePending.filter((p) => !inQueue(p)).map((p) => ({ role: "user", parts: [{ kind: "text", text: p.text }], undelivered: p.failed, errorText: p.error, retry: p.retry, sending: !p.failed })),
-    ...(live.size ? [{ role: "assistant", id: [...live.values()][0].messageID, parts: [...live.values()].map((l) => l.part), live: true }] : []),
   ]
   // what waits for the next turn is not in the agent's reading yet: it comes
   // after the reply running now and after "working", see-through
@@ -2262,7 +2311,11 @@ function messageNode(role, parts, retry, messageID) {
   const body = el("div", "body")
   for (const p of parts) {
     if (p.kind === "text" && p.text.trim()) body.append(textNode(p.text, messageID, role === "assistant"))
-    else if (p.kind === "quote") body.append(fold("↪ " + p.text.slice(0, 80), p.text))
+    else if (p.kind === "quote") {
+      const quoted = fold("↪ " + p.text.slice(0, 80), p.text)
+      quoted.classList.add("quoted")
+      body.append(quoted)
+    }
     else if (p.kind === "file") body.append(fileNode(p))
   }
   if (retry) {
@@ -2292,8 +2345,10 @@ function bytes(n) {
 // so this draws a row per option instead of knowing about keep going at all.
 async function loadConversationSettings() {
   if (!current || !token) return
+  const id = current
   try {
-    const { options = [], values = {}, mode = "normal", modes = [] } = await call("/conversation-settings", { id: current })
+    const { options = [], values = {}, mode = "normal", modes = [], until: savedUntil = "" } = await call("/conversation-settings", { id })
+    if (current !== id) return
     const host = $("convSettings")
     host.hidden = options.length === 0 && modes.length === 0
     host.textContent = ""
@@ -2308,20 +2363,90 @@ async function loadConversationSettings() {
       const btn = document.createElement("button")
       btn.type = "button"
       btn.className = "modebtn"
-      btn.dataset.mode = mode
-      btn.textContent = names[mode] ?? mode
-      btn.title = hints[mode] ?? ""
+      const pill = el("div", "mode-control")
+      pill.setAttribute("role", "group")
+      pill.setAttribute("aria-label", "Conversation mode")
+      const edit = el("button", "mode-edit")
+      edit.type = "button"
+      edit.setAttribute("aria-label", "Edit Keep going condition")
+      edit.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 4 4M4 20l4-1L20 7a3 3 0 0 0-4-4L4 15z"/></svg>'
+      const label = el("label", "mode-until-label", "Keep going until")
+      const input = document.createElement("input")
+      input.type = "text"
+      input.maxLength = 1000
+      input.id = "keepUntil"
+      input.setAttribute("aria-label", "Keep going until")
+      input.placeholder = "condition is met"
+      label.htmlFor = input.id
+      const confirm = el("button", "mode-confirm", "✓")
+      confirm.type = "button"
+      confirm.setAttribute("aria-label", "Save Keep going condition")
+      const cancel = el("button", "mode-cancel", "×")
+      cancel.type = "button"
+      cancel.setAttribute("aria-label", "Cancel condition edit")
+      const hint = el("div", "mode-hint")
+      hint.id = "keepUntilHint"
+      hint.setAttribute("role", "tooltip")
+      let until = savedUntil
+      const paint = (heldMode) => {
+        btn.dataset.mode = heldMode
+        pill.dataset.mode = heldMode
+        btn.textContent = names[heldMode] ?? heldMode
+        btn.title = hints[heldMode] ?? ""
+        edit.hidden = heldMode !== "keep"
+        hint.textContent = until ? `Keep going until ${until}` : ""
+        hint.hidden = heldMode !== "keep" || !until
+        btn.setAttribute("aria-description", heldMode === "keep" && until ? hint.textContent : btn.title)
+      }
+      const finish = () => {
+        pill.classList.remove("editing")
+        btn.hidden = false
+        for (const node of [label, input, confirm, cancel]) node.hidden = true
+        paint(btn.dataset.mode)
+      }
+      edit.onclick = () => {
+        pill.classList.add("editing")
+        btn.hidden = edit.hidden = true
+        for (const node of [label, input, confirm, cancel]) node.hidden = false
+        input.value = until
+        input.focus()
+        input.select()
+      }
+      cancel.onclick = () => { finish(); edit.focus() }
+      const save = async () => {
+        if (confirm.disabled || current !== id) return
+        input.disabled = confirm.disabled = cancel.disabled = true
+        try {
+          const res = await call("/set-conversation-mode", { id, mode: "keep", until: input.value.trim() })
+          if (current !== id) return
+          until = res.until ?? ""
+          paint(res.mode)
+          finish()
+          edit.focus()
+        } catch (err) { fail(err) }
+        finally { input.disabled = confirm.disabled = cancel.disabled = false }
+      }
+      confirm.onclick = save
+      input.onkeydown = (event) => {
+        if (event.isComposing) return
+        event.stopPropagation()
+        if (event.key === "Enter") { event.preventDefault(); save() }
+        if (event.key === "Escape") { event.preventDefault(); cancel.click() }
+      }
+      paint(mode)
+      finish()
       btn.onclick = async () => {
         const next = modes[(modes.indexOf(btn.dataset.mode) + 1) % modes.length]
         btn.disabled = true
         try {
-          const res = await call("/set-conversation-mode", { id: current, mode: next })
-          btn.dataset.mode = res.mode
-          btn.textContent = names[res.mode] ?? res.mode
-          btn.title = hints[res.mode] ?? ""
+          const res = await call("/set-conversation-mode", { id, mode: next })
+          if (current !== id) return
+          until = res.until ?? until
+          paint(res.mode)
         } catch (err) { fail(err) } finally { btn.disabled = false }
       }
-      host.append(btn)
+      pill.append(btn, edit, label, input, confirm, cancel, hint)
+      host.append(pill)
     }
     for (const option of options) {
       const row = document.createElement("label")
@@ -3061,13 +3186,15 @@ function follow() {
     // our own words are already on screen; only the reply streams
     if (evt.partID && roles.get(evt.messageID) === "user") return
     if (evt.type === "part.delta" && (evt.partType ?? "text") === "text") {
-      const l = live.get(evt.partID) ?? { messageID: evt.messageID, part: { kind: "text", text: "", id: evt.partID } }
-      if (l.part.kind === "text") l.part.text += evt.text
-      live.set(evt.partID, l)
+      JepTranscript.update(messages, live, evt)
+      liveActive = true
+      liveRevision++
       return void frame()
     }
     if (evt.type === "part.updated" && evt.part) {
-      live.set(evt.partID, { messageID: evt.messageID, part: { ...evt.part, id: evt.partID } })
+      JepTranscript.update(messages, live, evt)
+      liveActive = true
+      liveRevision++
       frame()
     }
     if (evt.type === "session.idle" || evt.type === "turn.aborted") { markSeen(); loadStatus() }
@@ -3274,6 +3401,8 @@ function renderStatus() {
   // a model picked here names itself straight away; otherwise the one that answered last
   const model = short(choices?.current) || short(last?.model) || short(running)
   $("model").textContent = model ? model + " ▾" : choices ? "default model ▾" : ""
+  $("model").title = "Change the model"
+  $("model").setAttribute("aria-label", `Change model. Current model: ${model || "default"}`)
   $("model").hidden = !choices && !model
   renderContext()
   const spent = usage?.cost || 0
@@ -3353,6 +3482,7 @@ function showMenu(owner, nodes, right = false) {
   const menu = $("menu")
   menu.replaceChildren(...nodes)
   menu.classList.toggle("right", right)
+  menu.classList.toggle("model-picker", owner === "model")
   menu.hidden = false
   menuFor = owner
 }
@@ -3676,12 +3806,16 @@ function rebindTerm() {
   else renderShells()
 }
 async function openTerm() {
-  if (!current) return
+  if (!current) throw new Error("Open a conversation before using the terminal.")
   if (!$("termPane").hidden) { closeTerm(); return }
-  if (!termAllowed) return
+  // Refresh on click: the initial capability probe can fail or become stale.
+  // A visible tab must explain why it cannot open instead of silently returning.
+  const st = await call("/term", {})
+  termAllowed = !!st.allowed
+  syncTermBtn()
+  if (!termAllowed) throw new Error("Interactive terminal access is disabled on this server. Set JEP_TERMINAL=1 and restart the daemon to enable it.")
   await showPane()
   armTerm()
-  const st = await call("/term", {})
   let unlocked = st.authorized
   if (!unlocked) {
     const code = window.prompt("Pairing code to unlock the terminal")
@@ -3800,36 +3934,110 @@ async function remove(s) {
 $("model").onclick = () => {
   if (toggleMenu("model")) return
   if (!choices) return
+  const id = current
+  const catalogue = choices
   const pick = (ref) => async () => {
     $("menu").hidden = true
     try {
-      await call("/setmodel", ref ? { id: current, model: ref } : { id: current })
-      loadStatus()
+      await call("/setmodel", ref ? { id, model: ref } : { id })
+      if (id === current) loadStatus()
     } catch (err) { fail(err) }
   }
   const item = (label, note, on, ref) => {
     const b = el("button", on ? "on" : "", (on ? "✓ " : "") + label)
     b.type = "button"
     if (note) b.append(el("span", "", note))
+    b.dataset.modelRef = ref || ""
     b.onclick = pick(ref)
     return b
   }
-  // A harness can offer dozens of models through several providers (pi lists its own, a
-  // router's, a subscription's). One flat list hides the ones you went looking for, so
-  // each provider gets a heading, and the model you are on is scrolled into view.
-  const rows = [item(`Default · ${short(choices.default) || "harness"}`, "", !choices.current, null)]
-  const grouped = new Set(choices.models.map((m) => m.providerID)).size > 1
-  let group = null
-  for (const m of choices.models) {
-    if (grouped && m.providerID !== group) {
-      group = m.providerID
-      rows.push(el("h4", "", group))
+  const searchbar = el("div", "model-search")
+  const search = document.createElement("input")
+  search.type = "search"
+  search.id = "modelSearch"
+  search.placeholder = "Search models or providers…"
+  search.setAttribute("aria-label", "Search models")
+  search.setAttribute("aria-controls", "modelResults")
+  search.autocomplete = "off"
+  search.spellcheck = false
+  search.maxLength = 128
+  search.hidden = true
+  const searchToggle = el("button", "model-search-toggle")
+  searchToggle.type = "button"
+  searchToggle.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/></svg>'
+  searchToggle.title = "Search models"
+  searchToggle.setAttribute("aria-label", "Search models")
+  searchToggle.setAttribute("aria-controls", "modelSearch")
+  searchToggle.setAttribute("aria-expanded", "false")
+  const status = el("div", "model-search-status")
+  status.setAttribute("role", "status")
+  searchbar.append(status, search, searchToggle)
+  const results = el("div", "model-results")
+  results.id = "modelResults"
+  const renderResults = () => {
+    const query = search.value.trim()
+    const found = JepModelSearch.search(query, catalogue.models)
+    const rows = []
+    if (found.fuzzy) rows.push(el("h4", "", `Closest matches · ${found.models.length}`))
+    if (!query || query.toLowerCase() === "default") rows.push(item(`Default · ${short(catalogue.default) || "harness"}`, "", !catalogue.current, null))
+    const grouped = new Set(catalogue.models.map((m) => m.providerID)).size > 1
+    const groups = new Map()
+    for (const model of found.models) {
+      if (!groups.has(model.providerID)) groups.set(model.providerID, [])
+      groups.get(model.providerID).push(model)
     }
-    const ref = `${m.providerID}/${m.modelID}`
-    rows.push(item(m.modelID, [m.image ? "images" : "", m.contextLimit ? tokens(m.contextLimit) : ""].filter(Boolean).join(" · "), choices.current === ref, ref))
+    for (const [provider, models] of groups) {
+      if (grouped) rows.push(el("h4", "", provider))
+      for (const m of models) {
+        const ref = `${m.providerID}/${m.modelID}`
+        rows.push(item(m.modelID, [m.image ? "images" : "", m.contextLimit ? tokens(m.contextLimit) : ""].filter(Boolean).join(" · "), catalogue.current === ref, ref))
+      }
+    }
+    status.textContent = found.fuzzy ? `Closest matches · ${found.models.length}` : `${found.models.length} model${found.models.length === 1 ? "" : "s"}`
+    if (!rows.length) rows.push(el("div", "empty", "No matching models."))
+    results.replaceChildren(...rows)
+    results.scrollTop = 0
+    if (!query) results.querySelector("button.on")?.scrollIntoView({ block: "nearest" })
   }
-  showMenu("model", rows, true)
-  $("menu").querySelector("button.on")?.scrollIntoView({ block: "nearest" })
+  search.oninput = renderResults
+  const setSearchOpen = (open) => {
+    search.hidden = !open
+    searchbar.classList.toggle("searching", open)
+    searchToggle.setAttribute("aria-expanded", String(open))
+    searchToggle.title = open ? "Hide model search" : "Search models"
+    if (!open && search.value) {
+      search.value = ""
+      renderResults()
+    }
+    ;(open ? search : searchToggle).focus({ preventScroll: true })
+  }
+  searchToggle.onclick = () => setSearchOpen(search.hidden)
+  const panel = el("div", "model-search-panel")
+  panel.append(searchbar, results)
+  panel.onkeydown = (event) => {
+    if (event.isComposing) return
+    if (event.key === "Escape") {
+      event.preventDefault(); event.stopPropagation()
+      $("menu").hidden = true; $("model").focus(); return
+    }
+    const buttons = [...results.querySelectorAll("button")]
+    if (!buttons.length) return
+    if (event.target === search && event.key === "Enter") {
+      event.preventDefault(); event.stopPropagation(); buttons[0].click(); return
+    }
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key) || (event.target === search && ["Home", "End"].includes(event.key))) return
+    event.preventDefault(); event.stopPropagation()
+    const at = buttons.indexOf(document.activeElement)
+    const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1
+      : event.key === "ArrowDown" ? (at + 1) % buttons.length : (at < 0 ? buttons.length - 1 : (at + buttons.length - 1) % buttons.length)
+    buttons[next].focus()
+    buttons[next].scrollIntoView({ block: "nearest" })
+  }
+  showMenu("model", [panel], true)
+  renderResults()
+  // Keep the popup and rows in place when search appears or the results change.
+  panel.style.height = `${panel.offsetHeight}px`
+  searchToggle.focus({ preventScroll: true })
 }
 
 $("detail").onchange = () => {
@@ -3894,14 +4102,36 @@ $("gear").onclick = async () => {
 // ── general settings: this browser's preferences, and what jep has used ────
 // The conversation gear holds what belongs to one conversation; the rest lives
 // here, reachable when nothing is open too.
-const themed = () => localStorage.getItem("jep.theme") || "system"
 function applyTheme() {
-  const theme = themed()
-  if (theme === "system") delete document.documentElement.dataset.theme
-  else document.documentElement.dataset.theme = theme
-  document.documentElement.style.colorScheme = theme === "system" ? "" : theme
-  for (const r of document.querySelectorAll("#theme input")) r.checked = r.value === theme
+  const currentTheme = JepThemes.apply()
+  for (const r of document.querySelectorAll("#theme input")) r.checked = r.value === currentTheme.mode
+  for (const card of document.querySelectorAll("#themes .theme-card")) {
+    const selected = card.dataset.palette === currentTheme.palette
+    card.setAttribute("aria-pressed", String(selected))
+    card.querySelector(".theme-selected").textContent = selected ? "Selected" : ""
+    for (const [key, value] of Object.entries(JepThemes.colors(card.dataset.palette, currentTheme.appearance)))
+      card.querySelector(".theme-preview").style.setProperty("--" + key, value)
+  }
 }
+for (const theme of JepThemes.themes) {
+  const card = el("button", "theme-card")
+  card.type = "button"
+  card.dataset.palette = theme.id
+  card.setAttribute("aria-label", theme.name)
+  const preview = el("div", "theme-preview")
+  preview.setAttribute("aria-hidden", "true")
+  preview.innerHTML = '<div class="theme-mini-side"><i></i><i></i><i></i></div><div class="theme-mini-chat"><div class="theme-mini-heading"></div><div class="theme-mini-user">Looks good</div><div class="theme-mini-reply">Let’s build something.<div></div></div><div class="theme-mini-input"><i></i></div></div>'
+  const caption = el("div", "theme-caption")
+  caption.append(el("strong", "", theme.name), el("small", "theme-selected"))
+  card.append(preview, caption, el("div", "theme-description", theme.description))
+  card.onclick = () => { JepThemes.setPalette(theme.id); applyTheme() }
+  $("themes").append(card)
+}
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme)
+window.addEventListener("storage", (event) => {
+  if (event.key === null || ["jep.theme", "jep.palette"].includes(event.key)) { JepThemes.refresh(); applyTheme() }
+})
+applyTheme()
 function applyMotion() {
   const reduce = localStorage.getItem("jep.motion") === "off"
   if (reduce) document.documentElement.dataset.motion = "off"
@@ -3909,7 +4139,7 @@ function applyMotion() {
   $("prefMotion").checked = reduce
 }
 for (const r of document.querySelectorAll("#theme input")) {
-  r.onchange = () => { localStorage.setItem("jep.theme", r.value); applyTheme() }
+  r.onchange = () => { JepThemes.setMode(r.value); applyTheme() }
 }
 $("prefMotion").onchange = () => { localStorage.setItem("jep.motion", $("prefMotion").checked ? "off" : "on"); applyMotion() }
 // the details column has a switch in the header; this is the same state
@@ -4065,6 +4295,39 @@ async function loadExecutionSettings() {
     return label
   }))
 }
+function loadGeneralData() {
+  loadExecutionSettings().catch((err) => fail(err))
+  loadDevices().catch((err) => fail(err))
+  loadStats().catch((err) => fail(err))
+}
+const settingsTabs = [...document.querySelectorAll("[data-settings-tab]")]
+const settingsScroll = { general: 0, appearance: 0 }
+function selectSettingsTab(selected) {
+  const body = $("general").querySelector(".generalbody")
+  const previous = settingsTabs.find((tab) => tab.getAttribute("aria-selected") === "true")
+  if (previous) settingsScroll[previous.dataset.settingsTab] = body.scrollTop
+  for (const tab of settingsTabs) {
+    const active = tab === selected
+    tab.setAttribute("aria-selected", String(active))
+    tab.tabIndex = active ? 0 : -1
+    $(tab.getAttribute("aria-controls")).hidden = !active
+  }
+  body.scrollTop = settingsScroll[selected.dataset.settingsTab] || 0
+  if (selected.dataset.settingsTab === "general") loadGeneralData()
+}
+for (const [index, tab] of settingsTabs.entries()) {
+  tab.onclick = () => selectSettingsTab(tab)
+  tab.onkeydown = (event) => {
+    const next = event.key === "ArrowRight" ? (index + 1) % settingsTabs.length
+      : event.key === "ArrowLeft" ? (index + settingsTabs.length - 1) % settingsTabs.length
+      : event.key === "Home" ? 0 : event.key === "End" ? settingsTabs.length - 1 : null
+    if (next === null) return
+    event.preventDefault()
+    event.stopPropagation()
+    selectSettingsTab(settingsTabs[next])
+    settingsTabs[next].focus()
+  }
+}
 function openGeneral() {
   $("notifyAnswers").checked = notificationsEnabled("answers")
   $("notifyAsks").checked = notificationsEnabled("asks")
@@ -4074,9 +4337,7 @@ function openGeneral() {
   applyMotion()
   $("prefDetails").checked = inspectorOpen()
   $("general").showModal()
-  loadExecutionSettings().catch((err) => fail(err))
-  loadDevices().catch((err) => fail(err))
-  loadStats().catch((err) => fail(err))
+  if ($("settingsGeneralTab").getAttribute("aria-selected") === "true") loadGeneralData()
 }
 for (const b of document.querySelectorAll(".openSettings")) b.onclick = openGeneral
 $("closeGeneral").onclick = () => $("general").close()

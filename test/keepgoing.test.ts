@@ -65,6 +65,15 @@ test("a turn that ran no tool is told so, and told to stop describing", () => {
   assert.match(text, /instead of describing it/)
 })
 
+test("the completion condition survives continuation and restart instructions", () => {
+  const text = keepGoingText({ goal: "fix login", iteration: 4, until: "the login tests pass", restarted: true })
+  assert.match(text, /Keep going until: the login tests pass/)
+  assert.match(text, /completion condition/)
+  assert.match(text, /daemon restarted/)
+  assert.doesNotMatch(keepGoingText({ goal: "fix login", iteration: 4, until: "  " }), /Keep going until:/)
+  assert.doesNotMatch(keepGoingText({ goal: "fix login", iteration: 4, until: "done", relentless: true }), /Keep going until:/)
+})
+
 test("stopping itself leaves a note a person can act on", () => {
   const note = keepGoingStopNote("deadline", 12, 25 * 60 * 60_000)
   assert.match(note, /going for 25h/)
